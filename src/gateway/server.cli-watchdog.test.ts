@@ -11,13 +11,13 @@ import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry
 import { executeDeps } from "../agents/cli-runner/execute-deps.js";
 import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type {
+  CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendPrepareExecutionContext,
 } from "../plugins/cli-backend.types.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
-import type { GatewayClient } from "./client.js";
 import {
   createWatchdogClock,
   createWatchdogFixture,
@@ -70,24 +70,20 @@ const cases: WatchdogCase[] = [
 describe.skipIf(process.platform === "win32")(
   "CLI watchdog through registered Gateway methods",
   () => {
-    let fixture: WatchdogFixture | undefined;
-    let startup: Promise<WatchdogFixture> | undefined;
-    beforeAll(async () => {
+    let startup: Promise<WatchdogFixture>;
+    beforeAll(() => {
       startup = createWatchdogFixture();
-      fixture = await startup;
+      return startup;
     }, 180_000);
     afterAll(async () => {
-      const owned = await startup?.catch(() => undefined);
+      const owned = await startup.catch(() => undefined);
       await owned?.cleanup();
     });
     it.for(cases)(
       "registered chat.send $name",
       { timeout: 180_000 },
-      (testCase, { signal, onTestFinished }) => {
-        if (!fixture) {
-          throw new Error("The shared watchdog Gateway did not start.");
-        }
-        const work = runWatchdogCase(fixture, testCase, signal);
+      async (testCase, { signal, onTestFinished }) => {
+        const work = runWatchdogCase(await startup, testCase, signal);
         onTestFinished(() => work);
         return work;
       },
@@ -101,11 +97,11 @@ async function runWatchdogCase(
   signal: AbortSignal,
 ) {
   const { state, gateway, backends, token, controllerScript } = fixture;
-  const { overallSeconds = 300, quietMs = 40_000, freezeMs = 60_000 } = testCase;
-  const resume = testCase.behavior === "stall";
+  const { behavior, overallSeconds = 300, quietMs = 40_000, freezeMs = 60_000 } = testCase;
+  const resume = behavior === "stall";
   const requestExecution = await observeGatewayRunExecution();
-  const proof = state.path("proof", testCase.behavior);
-  const nativeRoot = state.path("receipts", testCase.behavior);
+  const proof = state.path("proof", behavior);
+  const nativeRoot = state.path("receipts", behavior);
   const sessionKey = `agent:main:freeze-${randomUUID()}`;
   const clock = createWatchdogClock();
   const realClock = executeDeps.watchdogClock;
@@ -134,7 +130,7 @@ async function runWatchdogCase(
   const completionObserved = createDeferred();
   const originalWait = agentJobs.waitForAgentJob;
   const waitForAgentJob =
-    testCase.behavior === "cancel"
+    behavior === "cancel"
       ? vi.spyOn(agentJobs, "waitForAgentJob").mockImplementation((params) => {
           if (params.runId === completionRunId && params.source === "chat") {
             completionObserved.resolve();
@@ -174,6 +170,35 @@ async function runWatchdogCase(
     completionObserved.resolve();
   };
   signal.addEventListener("abort", abortWaits, { once: true });
+  async function* observeOutput(execute: CliBackendExecute, execution: CliBackendExecuteContext) {
+    execution.abortSignal?.addEventListener(
+      "abort",
+      () => {
+        abortedAt = clock.now();
+      },
+      { once: true },
+    );
+    try {
+      for await (const event of execute(execution)) {
+        const assistant = event.type === "assistant";
+        if (assistant && behavior === "ordered" && orderedOutputAt === undefined) {
+          orderedOutputAt = clock.now();
+          clock.jump(60_000);
+        }
+        yield event;
+        // The consumer has called noteOutput before requesting the next event.
+        if (assistant) {
+          outputs++;
+          const observed = outputChanged;
+          outputChanged = createDeferred();
+          observed.resolve();
+        }
+      }
+    } catch (error) {
+      rejectReceipts(error);
+      throw error;
+    }
+  }
   return await runQaGatewayFixture(
     async () => {
       executeDeps.watchdogClock = clock;
@@ -226,42 +251,11 @@ async function runWatchdogCase(
                   ...prepared,
                   env: {
                     ...prepared.env,
-                    OPENCLAW_TEST_CLI_BEHAVIOR: testCase.behavior,
+                    OPENCLAW_TEST_CLI_BEHAVIOR: behavior,
                     OPENCLAW_TEST_CLI_RECEIPTS: nativeRoot,
                     OPENCLAW_TEST_CLI_RECEIPT_PORT: String(receiptPort),
                   },
-                  async *execute(execution: CliBackendExecuteContext) {
-                    execution.abortSignal?.addEventListener(
-                      "abort",
-                      () => {
-                        abortedAt = clock.now();
-                      },
-                      { once: true },
-                    );
-                    try {
-                      for await (const event of execute(execution)) {
-                        if (
-                          event.type === "assistant" &&
-                          testCase.behavior === "ordered" &&
-                          orderedOutputAt === undefined
-                        ) {
-                          orderedOutputAt = clock.now();
-                          clock.jump(60_000);
-                        }
-                        yield event;
-                        // The consumer has called noteOutput before requesting the next event.
-                        if (event.type === "assistant") {
-                          outputs++;
-                          const observed = outputChanged;
-                          outputChanged = createDeferred();
-                          observed.resolve();
-                        }
-                      }
-                    } catch (error) {
-                      rejectReceipts(error);
-                      throw error;
-                    }
-                  },
+                  execute: (execution) => observeOutput(execute, execution),
                 };
               },
               config: {
@@ -314,8 +308,8 @@ async function runWatchdogCase(
         process.kill(ready.pid, "SIGUSR1");
         await waitForOutputs(expected);
       };
-      const waitForCompletion = (client: GatewayClient) =>
-        client.request<WatchdogCompletion>(
+      const waitForCompletion = () =>
+        gateway.client.request<WatchdogCompletion>(
           "agent.wait",
           {
             runId: accepted.runId,
@@ -323,9 +317,9 @@ async function runWatchdogCase(
           },
           { timeoutMs: 55_000 },
         );
-      if (testCase.behavior === "cancel") {
+      if (behavior === "cancel") {
         completionRunId = accepted.runId;
-        pendingCompletion = waitForCompletion(gateway.client);
+        pendingCompletion = waitForCompletion();
         void pendingCompletion.catch(() => {});
         await withTestTimeout(completionObserved.promise, 5_000, "agent.wait was not registered");
         signal.throwIfAborted();
@@ -339,7 +333,7 @@ async function runWatchdogCase(
           runId: accepted.runId,
         });
         expect(cancelled).toMatchObject({ aborted: true, runIds: [accepted.runId] });
-      } else if (testCase.behavior === "ordered") {
+      } else if (behavior === "ordered") {
         clock.advance(0);
         expect(
           log.mock.calls.some(([message]) => message.includes("cli watchdog credited timer gap")),
@@ -388,7 +382,7 @@ async function runWatchdogCase(
         ownedController.send("resume");
         await controllerExit;
         controller = undefined;
-        if (testCase.behavior === "complete" || testCase.behavior === "quiet") {
+        if (behavior === "complete" || behavior === "quiet") {
           await withTestTimeout(
             resumedReceipt.promise,
             5_000,
@@ -401,12 +395,12 @@ async function runWatchdogCase(
         if (resume) {
           clock.advance(0);
         }
-        if (testCase.behavior === "complete") {
+        if (behavior === "complete") {
           clock.advance(250);
           await pulse();
         }
       }
-      if (testCase.behavior !== "cancel") {
+      if (behavior !== "cancel") {
         await gatewayFixture.disconnectGatewayClient(gateway.client);
         gateway.client = await gatewayFixture.connectGatewayClient({
           url: `ws://127.0.0.1:${gateway.port}`,
@@ -414,52 +408,42 @@ async function runWatchdogCase(
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
       }
-      if (!["complete", "cancel"].includes(testCase.behavior)) {
+      if (!["complete", "cancel"].includes(behavior)) {
         // The overdue one-second tick is active time; only its lateness is credited.
-        const remaining =
-          testCase.behavior === "quiet"
-            ? 20_000
-            : testCase.behavior === "overall"
-              ? 39_000
-              : 40_000;
+        const remaining = behavior === "quiet" ? 20_000 : behavior === "overall" ? 39_000 : 40_000;
         for (let elapsed = 0; elapsed < remaining - 1;) {
           const step = Math.min(5_000, remaining - 1 - elapsed);
           clock.advance(step);
           elapsed += step;
           expect(abortedAt).toBeUndefined();
-          if (testCase.behavior === "overall" && step === 5_000) {
+          if (behavior === "overall" && step === 5_000) {
             await pulse();
           }
         }
         clock.advance(1);
         expect(abortedAt).toBe(clock.now());
       }
-      const completed = await (pendingCompletion ?? waitForCompletion(gateway.client));
+      const completed = await (pendingCompletion ?? waitForCompletion());
       expect(completed.endedAt).toBeGreaterThanOrEqual(acceptedAt);
       expect(clock.pending()).toBe(0);
       const history = await gateway.client.request("chat.history", { sessionKey });
-      await fs.writeFile(
-        path.join(proof, "gateway-result.json"),
-        JSON.stringify({ accepted, completed, history }, null, 2),
-      );
       const timerMessages = log.mock.calls
         .map(([message]) => message)
         .filter((message) => message.includes("cli watchdog credited timer gap"));
-      await fs.writeFile(path.join(proof, "timer-events.json"), JSON.stringify(timerMessages));
-      if (testCase.behavior === "ordered") {
+      if (behavior === "ordered") {
         expect(timerMessages).toHaveLength(1);
         expect(timerMessages[0]).toContain("creditedMs=0");
       }
-      if (testCase.behavior === "complete") {
+      if (behavior === "complete") {
         expect(completed.status).toBe("ok");
         expect(JSON.stringify(history)).toContain("Preserved reply.");
-      } else if (testCase.behavior === "cancel") {
+      } else if (behavior === "cancel") {
         expect(completed.status).not.toBe("timeout");
         expect(JSON.stringify(history)).not.toContain("Preserved reply.");
       } else {
         expect(completed.status).toBe("timeout");
         let elapsedAfterThaw: number;
-        if (testCase.behavior === "ordered") {
+        if (behavior === "ordered") {
           if (orderedOutputAt === undefined) {
             throw new Error("Registered CLI transport did not deliver its ordered output.");
           }
@@ -471,73 +455,57 @@ async function runWatchdogCase(
           expect(freeze.resumedAt).toBeGreaterThanOrEqual(freeze.stoppedAt);
           elapsedAfterThaw = (abortedAt ?? Number.NaN) - (thawedAt ?? Number.NaN);
         }
-        const expectedRemaining = testCase.behavior === "quiet" ? 20_000 : 40_000;
+        const expectedRemaining = behavior === "quiet" ? 20_000 : 40_000;
         expect(elapsedAfterThaw).toBeGreaterThan(expectedRemaining - 5_000);
         expect(elapsedAfterThaw).toBeLessThan(expectedRemaining + 2_000);
         expect(completed.error).toContain(
-          testCase.behavior === "overall" ? "exceeded timeout" : "no output for 40s",
+          behavior === "overall" ? "exceeded timeout" : "no output for 40s",
         );
       }
     },
     async () => {
-      try {
-        await runQaGatewayFixture(
-          async () => {
-            controller?.kill("SIGTERM");
-            await controllerExit?.catch(() => {});
-          },
-          async () => {
-            // agent.wait can observe a terminal attempt while detached chat work settles.
-            await gateway.client.request("chat.abort", { sessionKey });
-          },
-          async () => {
-            const results = await Promise.allSettled(
-              [...preparedContexts].map((context) =>
-                cliLiveSessions.closeCliLiveSession(context, "restart"),
-              ),
-            );
-            const failures = results.filter((result) => result.status === "rejected");
-            if (failures.length > 0) {
-              throw new AggregateError(
-                failures.map((failure) => failure.reason),
-                "CLI session cleanup failed",
-              );
-            }
-          },
-          async () => {
-            await pendingCompletion?.catch(() => {});
-            await requestExecution.waitForCompletion();
-          },
-          async () => {
-            await gateway.client.request("sessions.delete", { key: sessionKey });
-          },
-          async () => {
-            closingReceipts = true;
-            const closed = receipts?.releaseListener();
-            for (const socket of receiptSockets) {
-              socket.destroy();
-            }
-            await closed;
-          },
-          () => receipts?.claim.release(),
+      controller?.kill("SIGTERM");
+      await controllerExit?.catch(() => {});
+    },
+    // agent.wait can observe a terminal attempt while detached chat work settles.
+    () => gateway.client.request("chat.abort", { sessionKey }),
+    async () => {
+      const results = await Promise.allSettled(
+        [...preparedContexts].map((context) =>
+          cliLiveSessions.closeCliLiveSession(context, "restart"),
+        ),
+      );
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "CLI session cleanup failed",
         );
-      } finally {
-        // Restore observation hooks after every owner has had its cleanup attempt.
-        signal.removeEventListener("abort", abortWaits);
-        executeDeps.watchdogClock = realClock;
-        testing.resetDepsForTest();
-        capability.mockRestore();
-        log.mockRestore();
-        waitForAgentJob?.mockRestore();
-        await requestExecution.restore();
       }
     },
     async () => {
-      const evidenceRoot = process.env.OPENCLAW_CLI_WATCHDOG_PROOF_DIR;
-      if (evidenceRoot) {
-        await fs.mkdir(evidenceRoot, { recursive: true });
-        await fs.cp(proof, path.join(evidenceRoot, testCase.behavior), { recursive: true });
+      await pendingCompletion?.catch(() => {});
+      await requestExecution.waitForCompletion();
+    },
+    () => gateway.client.request("sessions.delete", { key: sessionKey }),
+    async () => {
+      closingReceipts = true;
+      const closed = receipts?.releaseListener();
+      for (const socket of receiptSockets) {
+        socket.destroy();
       }
+      await closed;
+    },
+    () => receipts?.claim.release(),
+    async () => {
+      // The fixture attempts every cleanup in order, even after an earlier failure.
+      signal.removeEventListener("abort", abortWaits);
+      executeDeps.watchdogClock = realClock;
+      testing.resetDepsForTest();
+      capability.mockRestore();
+      log.mockRestore();
+      waitForAgentJob?.mockRestore();
+      await requestExecution.restore();
     },
   );
 }

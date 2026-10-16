@@ -52,6 +52,20 @@ function createSession(params: Record<string, unknown>, scope = "operator.admin"
     client: { connect: { scopes: [scope] } } as never,
   });
 }
+function mainSession(params: Record<string, unknown> = {}, scope = "operator.admin") {
+  return createSession(
+    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true, ...params },
+    scope,
+  );
+}
+
+function expectDetached(result: Awaited<ReturnType<typeof createSession>>) {
+  expect(result.ok).toBe(true);
+  expect(result.payload).not.toHaveProperty("worktreePreserved");
+  for (const field of ["spawnedCwd", "sessionRoot", "worktree"] as const) {
+    expect(result.payload?.entry[field], field).toBeUndefined();
+  }
+}
 function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
   return openClient({ scopes: [scope], deviceIdentityPath: path.join(root, `${name}.json`) });
 }
@@ -130,28 +144,52 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
   });
 });
 
-test("sessions.create rejects a regular-file Gateway cwd before creating session state", async () => {
-  const root = tempDirs.make("openclaw-session-file-cwd-");
-  const cwd = path.join(root, "workspace.txt");
-  const key = "agent:main:dashboard:file-cwd";
-  await fs.writeFile(cwd, "not a directory\n");
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openWorkspaceClient(root);
-  try {
-    const created = await rpcReq(ws, "sessions.create", { agentId: "main", key, cwd });
-
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create cwd is not a directory",
-      },
-    });
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
-  } finally {
-    ws.close();
-  }
-});
+test.each([
+  ["file", "INVALID_REQUEST", "sessions.create cwd is not a directory"],
+  ["outside", "FORBIDDEN", "missing scope: operator.admin"],
+  ["escape", "INVALID_REQUEST", "sessions.create cwd is outside the sandboxed agent workspace"],
+] as const)(
+  "sessions.create rejects %s cwd without creating state",
+  async (kind, code, message) => {
+    const root = tempDirs.make("openclaw-session-cwd-");
+    const workspace = path.join(root, "workspace");
+    let cwd = path.join(root, kind === "file" ? "workspace.txt" : "outside");
+    await fs.mkdir(workspace);
+    if (kind === "file") {
+      await fs.writeFile(cwd, "not a directory\n");
+    } else {
+      await fs.mkdir(cwd);
+      testState.agentConfig = {
+        workspace,
+        ...(kind === "escape" ? { sandbox: { mode: "all" as const } } : {}),
+      };
+      if (kind === "escape") {
+        const link = path.join(workspace, "escape");
+        await fs.symlink(cwd, link, directoryLinkType);
+        cwd = link;
+      }
+    }
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openWorkspaceClient(
+      root,
+      kind === "outside" ? "operator.write" : "operator.admin",
+    );
+    const key = `agent:main:dashboard:${kind}-cwd`;
+    try {
+      const created = await rpcReq(ws, "sessions.create", {
+        cwd,
+        ...(kind === "outside" ? {} : { agentId: "main", key }),
+      });
+      expect(created).toMatchObject({ ok: false, error: { code, message } });
+      if (kind !== "outside") {
+        expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+      }
+    } finally {
+      ws.close();
+      testState.agentConfig = undefined;
+    }
+  },
+);
 
 test.each(["operator.admin", "operator.write"])(
   "sessions.create canonicalizes sandbox workspace aliases for %s",
@@ -209,25 +247,6 @@ test("sessions.create requires admin for full permission mode", async () => {
   }
 });
 
-test("sessions.create rejects a write-scoped cwd outside configured workspaces", async () => {
-  const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
-  const outside = tempDirs.make("openclaw-session-cwd-outside-");
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  const { ws } = await openWorkspaceClient(workspace, "operator.write", "outside-cwd-device");
-  try {
-    const created = await rpcReq(ws, "sessions.create", { cwd: outside });
-
-    expect(created).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
-    });
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
-
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
   const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
   const direct = await createSession({ cwd });
@@ -252,37 +271,6 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
   });
 });
 
-test("sessions.create rejects sandboxed admin cwd via a symlink escape without creating a session", async () => {
-  const root = tempDirs.make("openclaw-session-sandbox-workspace-");
-  const workspace = path.join(root, "workspace");
-  const outside = path.join(root, "outside");
-  await fs.mkdir(workspace);
-  await fs.mkdir(outside);
-  const link = path.join(workspace, "escape");
-  await fs.symlink(outside, link, directoryLinkType);
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openWorkspaceClient(root, "operator.admin", "admin-device");
-  try {
-    const key = "agent:main:dashboard:denied-cwd";
-    const created = await rpcReq(ws, "sessions.create", {
-      key,
-      cwd: link,
-    });
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create cwd is outside the sandboxed agent workspace",
-      },
-    });
-    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
-  } finally {
-    ws.close();
-    testState.agentConfig = undefined;
-  }
-});
-
 test.each([
   { name: "a dirty checkout", outcome: "dirty" },
   { name: "a concurrently finalized checkout", outcome: "finalized" },
@@ -298,12 +286,7 @@ test.each([
     let restoreRemoveIfLossless = () => {};
     let worktreeId: string | undefined;
     try {
-      const created = await createSession({
-        agentId: "main",
-        parentSessionKey: "main",
-        emitCommandHooks: true,
-        worktree: true,
-      });
+      const created = await mainSession({ worktree: true });
       expect(created.ok).toBe(true);
       const worktree = created.payload!.worktree;
       worktreeId = worktree.id;
@@ -323,16 +306,8 @@ test.each([
         restoreRemoveIfLossless = () => removeSpy.mockRestore();
       }
 
-      const reset = await createSession(
-        { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
-        "operator.write",
-      );
-
-      expect(reset.ok).toBe(true);
-      expect(reset.payload).not.toHaveProperty("worktreePreserved");
-      expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
-      expect(reset.payload?.entry.sessionRoot).toBeUndefined();
-      expect(reset.payload?.entry.worktree).toBeUndefined();
+      const reset = await mainSession({}, "operator.write");
+      expectDetached(reset);
       expect(
         loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
       ).toBeUndefined();
@@ -369,8 +344,7 @@ test.each([
 );
 
 test("sessions.create reset-in-place detaches the prior worktree permission boundary", async () => {
-  // A remote makes the base commit reachable from `--remotes`, so leaving the worktree via a
-  // plain New Chat is lossless and the reset can remove it (the real leave-worktree flow).
+  // The template remote makes this a lossless leave-worktree flow.
   const { workspace, storePath, cleanup } = await setupResetWorktree(
     "openclaw-reset-session-worktree-",
     { primary: "openai/current-model" },
@@ -379,21 +353,12 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   let worktreeId: string | undefined;
   let releaseWorktreeRemoval = () => {};
   let restoreRemoveIfLossless = () => {};
+  const resolved = { modelProvider: "openai", model: "current-model" };
   try {
-    const created = await createSession({
-      agentId: "main",
-      parentSessionKey: "main",
-      emitCommandHooks: true,
-      worktree: true,
-      permissionMode: "workspace",
-    });
-
+    const created = await mainSession({ worktree: true, permissionMode: "workspace" });
     expect(created.ok).toBe(true);
     expect(created.payload?.key).toBe("agent:main:main");
-    expect(created.payload?.resolved).toEqual({
-      modelProvider: "openai",
-      model: "current-model",
-    });
+    expect(created.payload?.resolved).toEqual(resolved);
     const worktree = created.payload?.worktree;
     worktreeId = worktree?.id;
     expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
@@ -427,10 +392,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
         return await originalRemoveIfLossless(this, id);
       });
     restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
-    const resetPromise = createSession(
-      { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
-      "operator.write",
-    );
+    const resetPromise = mainSession({}, "operator.write");
     await removalStarted;
     let successorSettled = false;
     const successorPromise = createSession({
@@ -446,16 +408,9 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     releaseWorktreeRemoval();
     const [reset, successor] = await Promise.all([resetPromise, successorPromise]);
     restoreRemoveIfLossless();
-    expect(reset.ok).toBe(true);
-    expect(reset.payload).not.toHaveProperty("worktreePreserved");
-    expect(reset.payload?.entry.worktree).toBeUndefined();
-    expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
-    expect(reset.payload?.entry.sessionRoot).toBeUndefined();
+    expectDetached(reset);
     expect(reset.payload?.entry.permissionMode).toBeUndefined();
-    expect(reset.payload?.resolved).toEqual({
-      modelProvider: "openai",
-      model: "current-model",
-    });
+    expect(reset.payload?.resolved).toEqual(resolved);
     expect(getRegistryWorktree(process.env, worktree!.id)?.removedAt).toEqual(expect.any(Number));
     await expect(fs.access(worktree!.path)).rejects.toThrow();
     expect(warnSpy).not.toHaveBeenCalled();

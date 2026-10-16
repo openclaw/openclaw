@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ArtifactsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -109,6 +109,15 @@ vi.mock("./server-request-context.js", async () => {
   };
 });
 
+const skippedServices = {
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_SKIP_PROVIDERS: "1",
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+};
 const ENV_KEYS = [
   "HOME",
   ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
@@ -116,383 +125,284 @@ const ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
+  ...Object.keys(skippedServices),
+];
 
 type Cleanup = () => Promise<void> | void;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("Gateway agent and artifact APIs", () => {
-  const cleanup: Cleanup[] = [];
+const cleanup: Cleanup[] = [];
 
-  beforeEach(() => {
-    injectedWorkerService.reset();
-  });
+beforeEach(injectedWorkerService.reset);
 
-  afterEach(async () => {
-    for (const step of cleanup.splice(0).toReversed()) {
-      await step();
-    }
-    clearSessionStoreCacheForTest();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
-  it("composes agent, environment, and artifact RPCs over one real Gateway", async () => {
-    const envSnapshot = captureEnv([...ENV_KEYS]);
-    cleanup.push(async () => {
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      envSnapshot.restore();
-    });
-
-    const tempHome = tempDirs.make("gateway-agent-artifacts-");
-    const stateDir = path.join(tempHome, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const mainWorkspace = path.join(tempHome, "workspace-main");
-    const createdWorkspace = path.join(tempHome, "workspace-artifact-agent");
-    const token = "gateway-agent-artifacts-token";
-    await fs.mkdir(mainWorkspace, { recursive: true });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          gateway: { auth: { mode: "token", token } },
-          agents: { entries: { main: { workspace: mainWorkspace } } },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-    setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-    setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-    setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-    setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-
-    const claim = await acquireGatewayE2ePortBlock();
-    // Restarts reuse the port, so the claim outlives each server.
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-    let releaseClaim: (() => Promise<void>) | undefined = claim.release;
-    cleanup.push(async () => {
-      await server?.close();
-      await releaseClaim?.();
-    });
-    const recoveryRestart = vi.fn(() => {
-      throw new Error("Agent mutations must hot-apply without a recovery restart");
-    });
-    const startServer = () =>
-      startGatewayServer(claim.port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-        hotReloadRecovery: recoveryRestart,
-      }).catch((error: unknown) => {
-        // Incomplete startup rollback can leave the listener bound; keep the port claimed.
-        if (
-          collectNestedErrorCandidates(error).some(
-            (cause) => cause instanceof GatewayStartupCleanupError,
-          )
-        ) {
-          releaseClaim = undefined;
-        }
-        throw error;
-      });
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
-    server = await startServer();
-
-    const connect = (clientDisplayName: string) =>
-      connectGatewayClient({
-        url: `ws://127.0.0.1:${claim.port}`,
-        token,
-        clientDisplayName,
-        scopes: [ADMIN_SCOPE, READ_SCOPE],
-        timeoutMs: 30_000,
-      });
-    let client = await connect("gateway agent artifact APIs");
-    const expectRpc = async (
-      method: string,
-      params: Record<string, unknown>,
-      expected: unknown,
-    ) => {
-      await expect(client.request(method, params)).resolves.toMatchObject(expected);
-    };
-    const expectListed = (method: string, key: string, entry: Record<string, unknown>) =>
-      expectRpc(method, {}, { [key]: expect.arrayContaining([expect.objectContaining(entry)]) });
-    cleanup.push(() => disconnectGatewayClient(client));
-    const restartGateway = async (clientDisplayName: string) => {
-      await disconnectGatewayClient(client);
-      await server?.close();
-      server = undefined;
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      server = await startServer();
-      client = await connect(clientDisplayName);
-    };
-
-    const createdEnvironment = await client.request<{
-      id: string;
-      status: string;
-      worker: { providerId: string; state: string };
-    }>("environments.create", {
-      profileId: "qa-provider",
-      idempotencyKey: "qa-environment-request",
-    });
-    const replayedEnvironment = await client.request<{ id: string }>("environments.create", {
-      profileId: "qa-provider",
-      idempotencyKey: "qa-environment-request",
-    });
-    expect(createdEnvironment).toMatchObject({
-      id: "worker-qa-1",
-      status: "available",
-      worker: { providerId: "qa-provider", state: "ready" },
-    });
-    expect(replayedEnvironment.id).toBe(createdEnvironment.id);
-    expect(injectedWorkerService.createCount()).toBe(1);
-    const environmentParams = { environmentId: createdEnvironment.id };
-    await expectListed("environments.list", "environments", {
-      id: createdEnvironment.id,
-      status: "available",
-    });
-    await expectRpc("environments.status", environmentParams, {
-      id: createdEnvironment.id,
-      status: "available",
-    });
-    await expectRpc("environments.destroy", environmentParams, {
-      id: createdEnvironment.id,
-      status: "unavailable",
-      worker: { state: "destroyed" },
-    });
-
-    const createdAgent = await client.request<{
-      ok: true;
-      agentId: string;
-      workspace: string;
-    }>("agents.create", {
-      name: "Artifact Agent",
-      workspace: createdWorkspace,
-    });
-    expect(createdAgent).toMatchObject({
-      ok: true,
-      agentId: "artifact-agent",
-      workspace: createdWorkspace,
-    });
-    await restartGateway("gateway agent artifact APIs after create");
-    const createdEnvironmentAfterRestart = await client.request<{ id: string }>(
-      "environments.create",
-      {
-        profileId: "qa-provider",
-        idempotencyKey: "qa-environment-request-after-restart",
-      },
-    );
-    await expectListed("environments.list", "environments", {
-      id: createdEnvironmentAfterRestart.id,
-      status: "available",
-    });
-    await expectListed("agents.list", "agents", {
-      id: createdAgent.agentId,
-      workspace: createdWorkspace,
-    });
-    await expect(
-      client.request("agents.update", {
-        agentId: createdAgent.agentId,
-        name: "Artifact Steward",
-      }),
-    ).resolves.toEqual({ ok: true, agentId: createdAgent.agentId });
-
-    const fileContent = "# Artifact steward\n\nOwns durable artifact verification.\n";
-    const expectedHash = createHash("sha256").update(fileContent).digest("hex");
-    const fileParams = { agentId: createdAgent.agentId, name: "AGENTS.md" };
-    await expectRpc(
-      "agents.files.set",
-      { ...fileParams, content: fileContent },
-      {
-        ok: true,
-        file: { name: "AGENTS.md", content: fileContent, missing: false },
-      },
-    );
-    await expectRpc(
-      "agents.files.list",
-      { agentId: createdAgent.agentId },
-      {
-        files: expect.arrayContaining([
-          expect.objectContaining({
-            name: "AGENTS.md",
-            missing: false,
-            size: Buffer.byteLength(fileContent),
-          }),
-        ]),
-      },
-    );
-    const fileResult = await client.request<{
-      file: { content: string; name: string; missing: boolean };
-    }>("agents.files.get", fileParams);
-    expect(fileResult.file).toMatchObject({
-      name: "AGENTS.md",
-      content: fileContent,
-      missing: false,
-    });
-    expect(createHash("sha256").update(fileResult.file.content).digest("hex")).toBe(expectedHash);
-
-    const sessionKey = "agent:main:artifact-api";
-    const sessionId = "gateway-agent-artifact-session";
-    const messageId = "gateway-agent-artifact-message";
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    const documentFixtures = [
-      {
-        name: "artifact.json",
-        mimeType: "application/json",
-        body: Buffer.from('{"ready":true}\n'),
-      },
-      {
-        name: "report.pdf",
-        mimeType: "application/pdf",
-        body: Buffer.from("%PDF-1.4\n% OpenClaw artifact proof\n"),
-      },
-    ];
-    await Promise.all(
-      documentFixtures.map((fixture) =>
-        fs.writeFile(path.join(mainWorkspace, fixture.name), fixture.body),
-      ),
-    );
-    const managedBlocks = await createManagedOutgoingMediaBlocks({
-      sessionKey,
-      agentId: "main",
-      items: documentFixtures.map((fixture) => ({
-        url: path.join(mainWorkspace, fixture.name),
-        filename: fixture.name,
-        mimeType: fixture.mimeType,
-        trustedLocal: true,
-      })),
-      localRoots: [mainWorkspace],
-      stateDir,
-    });
-    expect(managedBlocks).toHaveLength(2);
-    // Startup maintenance may run after preparation but before transcript commit.
-    await cleanupManagedOutgoingMediaRecords({ stateDir });
-    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
-    await appendTranscriptMessage(scope, {
-      eventId: messageId,
-      message: {
-        role: "assistant",
-        content: managedBlocks,
-        timestamp: Date.now(),
-        __openclaw: {
-          id: messageId,
-          seq: 1,
-        },
-      } as never,
-    });
-    expect(
-      await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
-    ).toBe(true);
-
-    await disconnectGatewayClient(client);
-    client = await connect("gateway artifact APIs after reload");
-    type ArtifactList = {
-      artifacts: Array<{
-        id: string;
-        sessionKey: string;
-        type: string;
-        title: string;
-        mimeType?: string;
-        download: { mode: string };
-      }>;
-    };
-    const reloadedArtifactList = await client.request<ArtifactList>("artifacts.list", {
-      sessionKey,
-    });
-    expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
-      "artifact.json",
-      "report.pdf",
-    ]);
-    expect(reloadedArtifactList.artifacts.every((artifact) => artifact.type === "file")).toBe(true);
-    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
-
-    await restartGateway("gateway artifact APIs after document restart");
-    expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
-    const artifactList = await client.request<ArtifactList>("artifacts.list", {
-      sessionKey,
-    });
-    expect(artifactList.artifacts).toHaveLength(2);
-    for (const fixture of documentFixtures) {
-      const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
-      expect(artifact).toMatchObject({
-        sessionKey,
-        type: "file",
-        title: fixture.name,
-        mimeType: fixture.mimeType,
-        download: { mode: "url" },
-      });
-      const artifactParams = { sessionKey, artifactId: artifact?.id };
-      await expectRpc("artifacts.get", artifactParams, {
-        artifact: { id: artifact?.id, sessionKey },
-      });
-
-      const download = await client.request<{ url: string; expiresAt: string }>(
-        "artifacts.download",
-        artifactParams,
-      );
-      expect(download.url).toContain("mediaTicket=");
-      expect(download.expiresAt).toBeTruthy();
-      const downloadUrl = `http://127.0.0.1:${claim.port}${download.url}`;
-      const response = await fetch(downloadUrl);
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);
-      const head = await fetch(downloadUrl, { method: "HEAD" });
-      expect(head.status).toBe(200);
-      expect((await head.arrayBuffer()).byteLength).toBe(0);
-      const range = await fetch(downloadUrl, { headers: { Range: "bytes=0-3" } });
-      expect(range.status).toBe(206);
-      expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
-    }
-
-    const artifact = artifactList.artifacts[0]!;
-
-    await expect(
-      client.request("artifacts.get", {
-        sessionKey,
-        artifactId: "artifact_unknown",
-      }),
-    ).rejects.toThrow(/artifact not found/i);
-    await expect(
-      client.request("artifacts.get", {
-        sessionKey,
-        agentId: createdAgent.agentId,
-        artifactId: artifact.id,
-      }),
-    ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
-
-    await expectRpc(
-      "agents.delete",
-      { agentId: createdAgent.agentId, deleteFiles: false },
-      { ok: true, agentId: createdAgent.agentId },
-    );
-    await restartGateway("gateway agent artifact APIs after delete");
-    const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
-    expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
-    expect(recoveryRestart).not.toHaveBeenCalled();
-  }, 120_000);
+afterEach(async () => {
+  for (const step of cleanup.splice(0).toReversed()) {
+    await step();
+  }
+  clearSessionStoreCacheForTest();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
 });
+
+it("composes agent, environment, and artifact RPCs over one real Gateway", async () => {
+  const envSnapshot = captureEnv([...ENV_KEYS]);
+  cleanup.push(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    envSnapshot.restore();
+  });
+
+  const tempHome = tempDirs.make("gateway-agent-artifacts-");
+  const stateDir = path.join(tempHome, ".openclaw");
+  const configPath = path.join(stateDir, "openclaw.json");
+  const mainWorkspace = path.join(tempHome, "workspace-main");
+  const createdWorkspace = path.join(tempHome, "workspace-artifact-agent");
+  const token = "gateway-agent-artifacts-token";
+  await fs.mkdir(mainWorkspace, { recursive: true });
+  await fs.mkdir(stateDir, { recursive: true });
+  const config = {
+    gateway: { auth: { mode: "token", token } },
+    agents: { entries: { main: { workspace: mainWorkspace } } },
+  };
+  await fs.writeFile(configPath, JSON.stringify(config), "utf8");
+
+  setTestEnvValue("HOME", tempHome);
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+  setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+  for (const [key, value] of Object.entries(skippedServices)) {
+    setTestEnvValue(key, value);
+  }
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearSessionStoreCacheForTest();
+
+  const claim = await acquireGatewayE2ePortBlock();
+  // Restarts reuse the port, so the claim outlives each server.
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let releaseClaim: (() => Promise<void>) | undefined = claim.release;
+  cleanup.push(async () => {
+    await server?.close();
+    await releaseClaim?.();
+  });
+  const recoveryRestart = vi.fn(() => {
+    throw new Error("Agent mutations must hot-apply without a recovery restart");
+  });
+  const startServer = () =>
+    startGatewayServer(claim.port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
+      hotReloadRecovery: recoveryRestart,
+    }).catch((error: unknown) => {
+      // Incomplete startup rollback can leave the listener bound; keep the port claimed.
+      if (
+        collectNestedErrorCandidates(error).some(
+          (cause) => cause instanceof GatewayStartupCleanupError,
+        )
+      ) {
+        releaseClaim = undefined;
+      }
+      throw error;
+    });
+  setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+  server = await startServer();
+
+  const connect = (clientDisplayName: string) =>
+    connectGatewayClient({
+      url: `ws://127.0.0.1:${claim.port}`,
+      token,
+      clientDisplayName,
+      scopes: [ADMIN_SCOPE, READ_SCOPE],
+      timeoutMs: 30_000,
+    });
+  let client = await connect("gateway agent artifact APIs");
+  const rpc = <T = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}) =>
+    client.request<T>(method, params);
+  const expectRpc = async (method: string, params: Record<string, unknown>, expected: unknown) => {
+    await expect(rpc(method, params)).resolves.toMatchObject(expected);
+  };
+  const containing = (entry: Record<string, unknown>) =>
+    expect.arrayContaining([expect.objectContaining(entry)]);
+  const expectListed = (key: string, entry: Record<string, unknown>) =>
+    expectRpc(`${key}.list`, {}, { [key]: containing(entry) });
+  const createEnvironment = (idempotencyKey: string) =>
+    rpc<{ id: string }>("environments.create", { profileId: "qa-provider", idempotencyKey });
+  cleanup.push(() => disconnectGatewayClient(client));
+  const restartGateway = async (clientDisplayName: string) => {
+    await disconnectGatewayClient(client);
+    await server?.close();
+    server = undefined;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    server = await startServer();
+    client = await connect(clientDisplayName);
+  };
+
+  const createdEnvironment = await createEnvironment("qa-environment-request");
+  const replayedEnvironment = await createEnvironment("qa-environment-request");
+  expect(createdEnvironment).toMatchObject({
+    id: "worker-qa-1",
+    status: "available",
+    worker: { providerId: "qa-provider", state: "ready" },
+  });
+  expect(replayedEnvironment.id).toBe(createdEnvironment.id);
+  expect(injectedWorkerService.createCount()).toBe(1);
+  const environmentParams = { environmentId: createdEnvironment.id };
+  const available = { id: createdEnvironment.id, status: "available" };
+  await expectListed("environments", available);
+  await expectRpc("environments.status", environmentParams, available);
+  await expectRpc("environments.destroy", environmentParams, {
+    id: createdEnvironment.id,
+    status: "unavailable",
+    worker: { state: "destroyed" },
+  });
+
+  const agentId = "artifact-agent";
+  const agentResult = { ok: true, agentId };
+  await expectRpc(
+    "agents.create",
+    { name: "Artifact Agent", workspace: createdWorkspace },
+    {
+      ...agentResult,
+      workspace: createdWorkspace,
+    },
+  );
+  await restartGateway("gateway agent artifact APIs after create");
+  const restartedEnvironment = await createEnvironment("qa-environment-request-after-restart");
+  await expectListed("environments", {
+    id: restartedEnvironment.id,
+    status: "available",
+  });
+  await expectListed("agents", { id: agentId, workspace: createdWorkspace });
+  await expect(rpc("agents.update", { agentId, name: "Artifact Steward" })).resolves.toEqual(
+    agentResult,
+  );
+
+  const fileContent = "# Artifact steward\n\nOwns durable artifact verification.\n";
+  const fileParams = { agentId, name: "AGENTS.md" };
+  const file = { name: "AGENTS.md", content: fileContent, missing: false };
+  await expectRpc("agents.files.set", { ...fileParams, content: fileContent }, { ok: true, file });
+  const fileMetadata = { name: file.name, missing: false, size: Buffer.byteLength(fileContent) };
+  await expectRpc("agents.files.list", { agentId }, { files: containing(fileMetadata) });
+  await expectRpc("agents.files.get", fileParams, { file });
+
+  const sessionKey = "agent:main:artifact-api";
+  const sessionId = "gateway-agent-artifact-session";
+  const messageId = "gateway-agent-artifact-message";
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  const scope = { agentId: "main", sessionId, sessionKey, storePath };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+  const document = (name: string, mimeType: string, body: string) => ({
+    name,
+    mimeType,
+    body: Buffer.from(body),
+  });
+  const documentFixtures = [
+    document("artifact.json", "application/json", '{"ready":true}\n'),
+    document("report.pdf", "application/pdf", "%PDF-1.4\n% OpenClaw artifact proof\n"),
+  ];
+  await Promise.all(
+    documentFixtures.map((fixture) =>
+      fs.writeFile(path.join(mainWorkspace, fixture.name), fixture.body),
+    ),
+  );
+  const managedBlocks = await createManagedOutgoingMediaBlocks({
+    sessionKey,
+    agentId: "main",
+    items: documentFixtures.map((fixture) => ({
+      url: path.join(mainWorkspace, fixture.name),
+      filename: fixture.name,
+      mimeType: fixture.mimeType,
+      trustedLocal: true,
+    })),
+    localRoots: [mainWorkspace],
+    stateDir,
+  });
+  expect(managedBlocks).toHaveLength(2);
+  // Startup maintenance may run after preparation but before transcript commit.
+  await cleanupManagedOutgoingMediaRecords({ stateDir });
+  expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+  await appendTranscriptMessage(scope, {
+    eventId: messageId,
+    message: {
+      role: "assistant",
+      content: managedBlocks,
+      timestamp: Date.now(),
+      __openclaw: { id: messageId, seq: 1 },
+    } as never,
+  });
+  expect(
+    await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+  ).toBe(true);
+
+  await disconnectGatewayClient(client);
+  client = await connect("gateway artifact APIs after reload");
+  const reloadedArtifactList = await rpc<ArtifactsListResult>("artifacts.list", { sessionKey });
+  expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
+    "artifact.json",
+    "report.pdf",
+  ]);
+  expect(reloadedArtifactList.artifacts.every((artifact) => artifact.type === "file")).toBe(true);
+  expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+
+  await restartGateway("gateway artifact APIs after document restart");
+  expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+  const artifactList = await rpc<ArtifactsListResult>("artifacts.list", { sessionKey });
+  expect(artifactList.artifacts).toHaveLength(2);
+  for (const fixture of documentFixtures) {
+    const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
+    expect(artifact).toMatchObject({
+      sessionKey,
+      type: "file",
+      title: fixture.name,
+      mimeType: fixture.mimeType,
+      download: { mode: "url" },
+    });
+    const artifactParams = { sessionKey, artifactId: artifact?.id };
+    await expectRpc("artifacts.get", artifactParams, {
+      artifact: { id: artifact?.id, sessionKey },
+    });
+
+    const download = await rpc<{ url: string; expiresAt: string }>(
+      "artifacts.download",
+      artifactParams,
+    );
+    expect(download.url).toContain("mediaTicket=");
+    expect(download.expiresAt).toBeTruthy();
+    const downloadUrl = `http://127.0.0.1:${claim.port}${download.url}`;
+    const response = await fetch(downloadUrl);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);
+    const head = await fetch(downloadUrl, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect((await head.arrayBuffer()).byteLength).toBe(0);
+    const range = await fetch(downloadUrl, { headers: { Range: "bytes=0-3" } });
+    expect(range.status).toBe(206);
+    expect(Buffer.from(await range.arrayBuffer())).toEqual(fixture.body.subarray(0, 4));
+  }
+
+  const artifact = artifactList.artifacts[0]!;
+
+  await expect(
+    rpc("artifacts.get", {
+      sessionKey,
+      artifactId: "artifact_unknown",
+    }),
+  ).rejects.toThrow(/artifact not found/i);
+  await expect(
+    rpc("artifacts.get", {
+      sessionKey,
+      agentId,
+      artifactId: artifact.id,
+    }),
+  ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
+
+  await expectRpc("agents.delete", { agentId, deleteFiles: false }, agentResult);
+  await restartGateway("gateway agent artifact APIs after delete");
+  const finalAgents = await rpc<{ agents: Array<{ id: string }> }>("agents.list");
+  expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(agentId);
+  expect(recoveryRestart).not.toHaveBeenCalled();
+}, 120_000);

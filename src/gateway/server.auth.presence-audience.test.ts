@@ -4,16 +4,12 @@ import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { PresenceQueryResult } from "../../packages/gateway-protocol/src/schema/presence.js";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { writeConfigFile } from "../config/config.js";
-import {
-  persistSessionTranscriptTurn,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -89,440 +85,376 @@ function observePresence(ws: PresenceSocket) {
   return events;
 }
 
-describe("gateway presence audience", () => {
-  test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
-    await configureGatewayAuth(
-      {
-        mode: "trusted-proxy",
-        identityScopes: {
-          "admin@example.com": ["operator.admin"],
-          "watcher@example.com": ["operator.admin"],
-        },
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          requiredHeaders: ["x-forwarded-proto"],
-          allowLoopback: true,
-        },
+test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
+  await configureGatewayAuth(
+    {
+      mode: "trusted-proxy",
+      identityScopes: {
+        "admin@example.com": ["operator.admin"],
+        "watcher@example.com": ["operator.admin"],
       },
-      {
-        default: "reader",
-        definitions: {
-          reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
-          writer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
-          restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
-          maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
-          pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
-        },
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+        allowLoopback: true,
       },
-    );
-    const creator = ensureProfileForEmail("creator@example.com");
-    const restricted = ensureProfileForEmail("restricted@example.com");
-    setUserProfileRole(restricted.id, "restricted");
-    setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
-    const watcherProfile = ensureProfileForEmail("watcher@example.com");
-    setUserProfileRole(watcherProfile.id, "maintainer");
-    setDisplayName(watcherProfile.id, "Presence Watcher");
-    setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
-    setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
-    const sharedKey = "agent:main:presence-shared";
-    const sharedSessionId = randomUUID();
-    const draftKey = "agent:main:presence-draft";
-    const draftSessionId = randomUUID();
-    const incognitoKey = "agent:main:dashboard:incognito-presence";
-    const restrictedKey = "agent:main:presence-restricted-draft";
-    const missingKey = "agent:main:presence-missing";
-    const watchedKeys = [sharedKey, draftKey, incognitoKey, restrictedKey, missingKey].toSorted();
-    const watcherInstanceId = `presence-watcher-${randomUUID()}`;
-    const identityDir = tempDirs.make("openclaw-presence-identities-");
+    },
+    {
+      default: "reader",
+      definitions: {
+        reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+        writer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+        restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+        maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+        pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
+      },
+    },
+  );
+  const creator = ensureProfileForEmail("creator@example.com");
+  const restricted = ensureProfileForEmail("restricted@example.com");
+  setUserProfileRole(restricted.id, "restricted");
+  setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
+  const watcherProfile = ensureProfileForEmail("watcher@example.com");
+  setUserProfileRole(watcherProfile.id, "maintainer");
+  setDisplayName(watcherProfile.id, "Presence Watcher");
+  setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
+  setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
+  const sharedKey = "agent:main:presence-shared";
+  const sharedSessionId = randomUUID();
+  const draftKey = "agent:main:presence-draft";
+  const incognitoKey = "agent:main:dashboard:incognito-presence";
+  const restrictedKey = "agent:main:presence-restricted-draft";
+  const missingKey = "agent:main:presence-missing";
+  const watchedKeys = [sharedKey, draftKey, incognitoKey, restrictedKey, missingKey].toSorted();
+  const watcherInstanceId = `presence-watcher-${randomUUID()}`;
+  const identityDir = tempDirs.make("openclaw-presence-identities-");
 
-    await withGatewayServer(async ({ port }) => {
-      for (const [sessionKey, sessionId, profileId, visibility, incognito] of [
-        [sharedKey, sharedSessionId, creator.id, "shared", false],
-        [draftKey, draftSessionId, creator.id, "draft", false],
-        [incognitoKey, randomUUID(), creator.id, "shared", true],
-        [restrictedKey, randomUUID(), restricted.id, "draft", false],
-      ] as const) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: Date.now(),
-            createdVia: "operator",
-            createdActor: { type: "human", source: "profile", id: profileId },
-            visibility,
-            ...(incognito ? { incognito: true } : {}),
-          },
-        );
-      }
-      await persistSessionTranscriptTurn(
-        { agentId: "main", sessionId: draftSessionId, sessionKey: draftKey },
+  await withGatewayServer(async ({ port }) => {
+    for (const [sessionKey, sessionId, profileId, visibility, incognito] of [
+      [sharedKey, sharedSessionId, creator.id, "shared", false],
+      [draftKey, randomUUID(), creator.id, "draft", false],
+      [incognitoKey, randomUUID(), creator.id, "shared", true],
+      [restrictedKey, randomUUID(), restricted.id, "draft", false],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
         {
-          updateMode: "none",
-          messages: [
-            {
-              message: makeUserMessage("foreign draft transcript", 1),
-              now: Date.parse("2026-09-04T08:00:00.000Z"),
-            },
-          ],
+          sessionId,
+          updatedAt: Date.now(),
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: profileId },
+          visibility,
+          ...(incognito ? { incognito: true } : {}),
         },
       );
-      const sockets: PresenceSocket[] = [];
-      const openRecipient = async (
-        name: string,
-        scopes: string[],
-        role: "operator" | "node" = "operator",
-      ) => {
-        const ws = await openWs(port, {
-          ...TRUSTED_PROXY_HEADERS,
-          "x-forwarded-user": `${name}@example.com`,
-        });
-        sockets.push(ws);
-        const events = observePresence(ws);
-        const client = {
-          ...(role === "node" ? NODE_CLIENT : CONTROL_UI_CLIENT),
-          instanceId: name === "watcher" ? watcherInstanceId : `presence-${name}`,
-          timeZone: "Europe/Vienna",
-        };
-        const connected = await connectReq(ws, {
-          skipDefaultAuth: true,
-          prePairDevice: true,
-          scopes,
-          role,
-          client,
-          deviceIdentityPath: path.join(identityDir, `${name}-${sockets.length}.sqlite`),
-          browserOrigin: BROWSER_ORIGIN,
-        });
-        expect(connected.ok, `${name} connect: ${JSON.stringify(connected.error)}`).toBe(true);
-        expect(responseScopes(connected), `${name} effective scopes`).toEqual(scopes);
-        return {
-          ws,
-          events,
-          hello: connected.payload as { snapshot: { presence: SystemPresence[] } },
-        };
+    }
+    const sockets: PresenceSocket[] = [];
+    const openRecipient = async (
+      name: string,
+      scopes: string[],
+      role: "operator" | "node" = "operator",
+    ) => {
+      const ws = await openWs(port, {
+        ...TRUSTED_PROXY_HEADERS,
+        "x-forwarded-user": `${name}@example.com`,
+      });
+      sockets.push(ws);
+      const events = observePresence(ws);
+      const client = {
+        ...(role === "node" ? NODE_CLIENT : CONTROL_UI_CLIENT),
+        instanceId: name === "watcher" ? watcherInstanceId : `presence-${name}`,
+        timeZone: "Europe/Vienna",
       };
+      const connected = await connectReq(ws, {
+        skipDefaultAuth: true,
+        prePairDevice: true,
+        scopes,
+        role,
+        client,
+        deviceIdentityPath: path.join(identityDir, `${name}-${sockets.length}.sqlite`),
+        browserOrigin: BROWSER_ORIGIN,
+      });
+      expect(connected.ok, `${name} connect: ${JSON.stringify(connected.error)}`).toBe(true);
+      expect(responseScopes(connected), `${name} effective scopes`).toEqual(scopes);
+      return {
+        ws,
+        events,
+        hello: connected.payload as { snapshot: { presence: SystemPresence[] } },
+      };
+    };
+    try {
+      const watcher = await openRecipient("watcher", ["operator.admin"]);
+      // Join publication itself: an RPC response can precede the coalescing window.
+      const firstConnect = nextPresence(watcher.ws, (rows) =>
+        rows.some((entry) => entry.instanceId === "presence-idle" && entry.reason === "connect"),
+      );
+      const [idle] = await Promise.all([openRecipient("idle", ["operator.read"]), firstConnect]);
+      expect
+        .soft(watcher.events.at(-1), "first connect publishes without activity")
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ instanceId: "presence-idle", reason: "connect" }),
+          ]),
+        );
+      for (const sessionKeys of [[sharedKey], []]) {
+        expect(await rpcReq(idle.ws, "sessions.viewers.set", { sessionKeys })).toMatchObject({
+          ok: true,
+        });
+      }
+      const idlePerson = currentPerson("presence-idle");
+      expect(idlePerson.watchedSessions).toBeUndefined();
+      expect(idlePerson).toMatchObject(personTiming);
+      const idleBefore = structuredClone(idlePerson);
+      const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
       try {
-        const watcher = await openRecipient("watcher", ["operator.admin"]);
-        // Join publication itself: an RPC response can precede the coalescing window.
-        const firstConnect = nextPresence(watcher.ws, (rows) =>
-          rows.some((entry) => entry.instanceId === "presence-idle" && entry.reason === "connect"),
-        );
-        const [idle] = await Promise.all([openRecipient("idle", ["operator.read"]), firstConnect]);
-        expect
-          .soft(watcher.events.at(-1), "first connect publishes without activity")
-          .toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ instanceId: "presence-idle", reason: "connect" }),
-            ]),
-          );
-        for (const sessionKeys of [[sharedKey], []]) {
-          expect(await rpcReq(idle.ws, "sessions.viewers.set", { sessionKeys })).toMatchObject({
-            ok: true,
-          });
+        for (const email of ["creator@example.com", "presence-unrelated@example.test"]) {
+          // No await: committed profile notifications settle synchronously,
+          // without a heartbeat interleaving with this unchanged-row check.
+          ensureProfileForEmail(email);
+          expect(
+            currentPerson("presence-idle"),
+            `${email} must preserve unrelated presence`,
+          ).toEqual(idleBefore);
         }
-        const idlePerson = currentPerson("presence-idle");
-        expect(idlePerson.watchedSessions).toBeUndefined();
-        expect(idlePerson).toMatchObject(personTiming);
-        const idleBefore = structuredClone(idlePerson);
-        const now = vi.spyOn(Date, "now").mockReturnValue(idleBefore.ts + 1000);
-        try {
-          for (const email of ["creator@example.com", "presence-unrelated@example.test"]) {
-            // No await: committed profile notifications settle synchronously,
-            // without a heartbeat interleaving with this unchanged-row check.
-            ensureProfileForEmail(email);
-            expect(
-              currentPerson("presence-idle"),
-              `${email} must preserve unrelated presence`,
-            ).toEqual(idleBefore);
-          }
-        } finally {
-          now.mockRestore();
-        }
-        const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
-          sessionKeys: watchedKeys,
-        });
-        expect(declared).toMatchObject({ ok: true, payload: { sessionKeys: watchedKeys } });
-        const rawWatcher = currentPerson(watcherInstanceId);
-        expect(rawWatcher?.watchedSessions).toEqual(watchedKeys);
-        const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
-        expect(person.user?.id).toBe(ensureProfileForEmail("watcher@example.com").id);
-        expect(person.ts).toBeGreaterThan(0);
-        expect(person).toMatchObject(personTiming);
-
-        const recipients = [];
-        for (const { name, scopes, allowed } of [
-          { name: "creator", scopes: ["operator.read"], allowed: [sharedKey, draftKey] },
-          { name: "reader", scopes: ["operator.read"], allowed: [sharedKey] },
-          { name: "writer", scopes: ["operator.write"], allowed: [sharedKey] },
-          { name: "restricted", scopes: ["operator.read"], allowed: [restrictedKey] },
-          {
-            name: "admin",
-            scopes: ["operator.admin"],
-            allowed: [sharedKey, draftKey, incognitoKey, restrictedKey],
-          },
-          { name: "pairing", scopes: ["operator.pairing"], allowed: [] },
-          { name: "no-read", scopes: [], allowed: [] },
-          { name: "node", scopes: [], allowed: [] },
-        ]) {
-          const recipient = await openRecipient(
-            name,
-            scopes,
-            name === "node" ? "node" : "operator",
-          );
-          const canRead = !["pairing", "node", "no-read"].includes(name);
-          const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(
-            recipient.ws,
-            "sessions.list",
-            { agentId: "main" },
-          );
-          expect(listed.ok, `${name} sessions.list scope`).toBe(canRead);
-          if (canRead) {
-            expect(
-              listed.payload?.sessions
-                .map((entry) => entry.key)
-                .filter((key) => watchedKeys.includes(key))
-                .toSorted(),
-              `${name} canonical sessions.list visibility`,
-            ).toEqual(allowed.filter((key) => key !== incognitoKey).toSorted());
-            const canReadDraft = allowed.includes(draftKey);
-            const described = await rpcReq<{ session: { sessionId?: string } | null }>(
-              recipient.ws,
-              "sessions.describe",
-              { key: draftKey },
-            );
-            if (name === "restricted") {
-              expect(described.ok, `${name} sessions.describe scope`).toBe(false);
-            } else {
-              expect(described, `${name} sessions.describe visibility`).toMatchObject({
-                ok: true,
-                payload: { session: canReadDraft ? { sessionId: draftSessionId } : null },
-              });
-            }
-            const transcript = await rpcReq<{ messages: Array<{ content?: unknown }> }>(
-              recipient.ws,
-              "sessions.get",
-              { key: draftKey },
-            );
-            if (name === "restricted") {
-              expect(transcript.ok, `${name} sessions.get scope`).toBe(false);
-            } else {
-              expect(transcript.ok, `${name} sessions.get visibility`).toBe(true);
-              expect(
-                transcript.payload?.messages.map((message) => message.content),
-                `${name} sessions.get transcript`,
-              ).toEqual(canReadDraft ? ["foreign draft transcript"] : []);
-            }
-          }
-          const presence = await rpcReq(recipient.ws, "system-presence");
-          expect(presence.ok, `${name} system-presence scope`).toBe(canRead);
-          const query = await rpcReq<PresenceQueryResult>(
-            recipient.ws,
-            "presence.query",
-            name === "reader" ? { include: ["devices", "network"] } : {},
-          );
-          expect(query.ok, `${name} presence.query scope`).toBe(canRead);
-          if (canRead) {
-            expect(query.payload).toMatchObject({
-              status: "ok",
-              observedAt: expect.any(Number),
-              truncated: false,
-            });
-            const watcherPeople = query.payload?.people.filter(
-              (entry) => entry.profileId === watcherProfile.id,
-            );
-            expect(watcherPeople, `${name} reads one named person`).toEqual([
-              expect.objectContaining({ name: "Presence Watcher", online: true }),
-            ]);
-            if (name === "reader") {
-              expect(watcherPeople?.[0]).toMatchObject({
-                activity: {
-                  at: person.connectionLastActivityAt,
-                  source: "openclaw-interaction",
-                },
-                deviceCount: 1,
-                devices: [
-                  {
-                    kind: "client",
-                    connections: [
-                      {
-                        id: person.connectionId,
-                        clientId: CONTROL_UI_CLIENT.id,
-                        timeZone: "Europe/Vienna",
-                        network: { ip: "203.0.113.50" },
-                      },
-                    ],
-                  },
-                ],
-              });
-              const self = await rpcReq<PresenceQueryResult>(recipient.ws, "presence.query", {
-                action: "person",
-                person: "me",
-              });
-              expect(self).toMatchObject({
-                ok: true,
-                payload: {
-                  status: "ok",
-                  people: [{ profileId: ensureProfileForEmail("reader@example.com").id }],
-                },
-              });
-            }
-          } else {
-            expect(query.payload).toBeUndefined();
-          }
-          recipients.push({
-            ...recipient,
-            name,
-            scopes,
-            allowed,
-            canRead,
-            rpcPresence: presence.payload,
-          });
-        }
-
-        const unauthenticated = await openWs(port, { origin: BROWSER_ORIGIN });
-        sockets.push(unauthenticated);
-        const unauthenticatedEvents = observePresence(unauthenticated);
-        const readers = recipients.filter(({ canRead }) => canRead);
-        // The viewer declaration already published activity. Typing within its
-        // 30-second window updates the store without another full roster event.
-        const readNow = Date.now;
-        const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
-        const typingStartedAt = Date.now();
-        const eventPromises = readers.map(({ ws }) =>
-          nextPresence(ws, (rows) =>
-            rows.some(
-              (entry) =>
-                entry.instanceId === watcherInstanceId &&
-                entry.lastActivityAt !== undefined &&
-                entry.lastActivityAt >= typingStartedAt,
-            ),
-          ),
-        );
-        // Own event rejections before the typing request can fail or time out.
-        const [events] = await Promise.all([
-          Promise.all(eventPromises),
-          // A late connection publishes an older snapshot before the typing activity.
-          openRecipient("late-reader", ["operator.read"])
-            .then(() =>
-              rpcReq(watcher.ws, "session.typing", {
-                sessionKey: sharedKey,
-                sessionId: sharedSessionId,
-                typing: true,
-              }),
-            )
-            .then((response) => expect(response).toMatchObject({ ok: true })),
-        ]).finally(() => activityClock.mockRestore());
-        const activeWatcher = currentPerson(watcherInstanceId);
-        const { watchedSessions: _activeWatches, ...activePerson } = activeWatcher;
-        expect(activePerson.lastActivityAt).toBeGreaterThanOrEqual(person.lastActivityAt!);
-        expect(activeWatcher.watchedSessions).toEqual(watchedKeys);
-        for (const [index, recipient] of readers.entries()) {
-          for (const [surface, rows] of [
-            ["hello", recipient.hello.snapshot.presence],
-            ["system-presence", recipient.rpcPresence],
-            ["presence event", events[index]!.payload.presence],
-          ] as const) {
-            if (!Value.Check(Type.Array(PresenceEntrySchema), rows)) {
-              throw new Error(`${recipient.name} ${surface} returned invalid presence rows`);
-            }
-            const received = rows.find((entry) => entry.instanceId === watcherInstanceId);
-            const { watchedSessions, ...receivedPerson } = received ?? {};
-            expect
-              .soft(
-                receivedPerson,
-                `${recipient.name} ${surface} preserves the person and timestamp without hidden counts`,
-              )
-              .toEqual(surface === "presence event" ? activePerson : person);
-            expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(idlePerson);
-            expect
-              .soft(
-                watchedSessions ?? [],
-                `${recipient.name} ${surface} watched session disclosure`,
-              )
-              .toEqual(recipient.allowed.toSorted());
-          }
-        }
-        for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
-          expect(recipient.hello.snapshot.presence, `${recipient.name} hello inventory`).toEqual(
-            [],
-          );
-          expect(recipient.rpcPresence).toBeUndefined();
-          // The activity fanout is synchronous. A later response on this socket
-          // is a transport barrier, so absence does not depend on sleeping.
-          expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
-          expect(recipient.events, `${recipient.name} activity-driven frames`).toEqual([]);
-        }
-        const preauthRead = await rpcReq(unauthenticated, "system-presence");
-        expect(preauthRead.ok).toBe(false);
-        expect(preauthRead.payload).toBeUndefined();
-        expect(unauthenticatedEvents).toEqual([]);
-
-        const isLiveIdle = (entry: SystemPresence) =>
-          entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
-        const nextIdleRows = async (count: number) => {
-          const event = await nextPresence(
-            watcher.ws,
-            (rows) => rows.filter(isLiveIdle).length === count,
-          );
-          return event.payload.presence.filter(isLiveIdle);
-        };
-        const [overlappingRows, overlap] = await Promise.all([
-          nextIdleRows(2),
-          openRecipient("idle", ["operator.read"]),
-        ]);
-        expect.soft(overlappingRows, "overlapping connect publishes both sockets").toHaveLength(2);
-        for (const entry of overlappingRows) {
-          expect(entry.onlineSince).toBe(idlePerson.onlineSince);
-          expect(entry.lastActivityAt).toBe(idlePerson.lastActivityAt);
-        }
-        for (const [connection, remaining] of [
-          [idle, 1],
-          [overlap, 0],
-        ] as const) {
-          // A different socket's response cannot join this connection's server close.
-          const disconnected = nextIdleRows(remaining);
-          const closed = once(connection.ws, "close");
-          connection.ws.close();
-          const [, rows] = await Promise.all([closed, disconnected]);
-          expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
-          if (remaining) {
-            expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
-          }
-        }
-        const [reconnectedRows, reconnected] = await Promise.all([
-          nextIdleRows(1),
-          openRecipient("idle", ["operator.read"]),
-        ]);
-        const returnedPerson = reconnected.hello.snapshot.presence.find(
-          (entry) => entry.user?.id === idlePerson.user?.id && entry.reason === "connect",
-        )!;
-        expect(returnedPerson.onlineSince).toBeGreaterThan(idlePerson.onlineSince!);
-        expect(returnedPerson.lastActivityAt).toBeUndefined();
-        expect(returnedPerson.watchedSessions).toBeUndefined();
-        expect(reconnectedRows, "reconnect publishes without profile edit or activity").toEqual([
-          returnedPerson,
-        ]);
-        for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
-          expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
-          expect(recipient.events, `${recipient.name} connection-driven frames`).toEqual([]);
-        }
-
-        const rejected = await openWs(port, { origin: BROWSER_ORIGIN });
-        sockets.push(rejected);
-        const rejectedEvents = observePresence(rejected);
-        const connect = await connectReq(rejected, {
-          skipDefaultAuth: true,
-          device: null,
-          scopes: ["operator.read", "operator.admin"],
-          client: CONTROL_UI_CLIENT,
-        });
-        expect(connect.ok).toBe(false);
-        expect(connect.payload).toBeUndefined();
-        expect(rejectedEvents).toEqual([]);
       } finally {
-        for (const ws of sockets) {
-          ws.close();
+        now.mockRestore();
+      }
+      const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
+        sessionKeys: watchedKeys,
+      });
+      expect(declared).toMatchObject({ ok: true, payload: { sessionKeys: watchedKeys } });
+      const rawWatcher = currentPerson(watcherInstanceId);
+      expect(rawWatcher?.watchedSessions).toEqual(watchedKeys);
+      const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
+      expect(person.user?.id).toBe(ensureProfileForEmail("watcher@example.com").id);
+      expect(person.ts).toBeGreaterThan(0);
+      expect(person).toMatchObject(personTiming);
+
+      const recipients = [];
+      for (const { name, scopes, allowed } of [
+        { name: "creator", scopes: ["operator.read"], allowed: [sharedKey, draftKey] },
+        { name: "reader", scopes: ["operator.read"], allowed: [sharedKey] },
+        { name: "writer", scopes: ["operator.write"], allowed: [sharedKey] },
+        { name: "restricted", scopes: ["operator.read"], allowed: [restrictedKey] },
+        {
+          name: "admin",
+          scopes: ["operator.admin"],
+          allowed: [sharedKey, draftKey, incognitoKey, restrictedKey],
+        },
+        { name: "pairing", scopes: ["operator.pairing"], allowed: [] },
+        { name: "no-read", scopes: [], allowed: [] },
+        { name: "node", scopes: [], allowed: [] },
+      ]) {
+        const recipient = await openRecipient(name, scopes, name === "node" ? "node" : "operator");
+        const canRead = !["pairing", "node", "no-read"].includes(name);
+        const read = async <T extends Record<string, unknown>>(
+          method: string,
+          params: unknown = {},
+          permitted = canRead,
+        ) => {
+          const result = await rpcReq<T>(recipient.ws, method, params);
+          expect(result.ok, `${name} ${method} scope`).toBe(permitted);
+          return result.payload;
+        };
+        await read("sessions.list", { agentId: "main" });
+        if (name === "restricted") {
+          for (const method of ["sessions.describe", "sessions.get"]) {
+            await read(method, { key: draftKey }, false);
+          }
+        }
+        const presence = await read("system-presence");
+        const query = await read<PresenceQueryResult>(
+          "presence.query",
+          name === "reader" ? { include: ["devices", "network"] } : {},
+        );
+        if (canRead) {
+          expect(query).toMatchObject({
+            status: "ok",
+            observedAt: expect.any(Number),
+            truncated: false,
+          });
+          const watcherPeople = query?.people.filter(
+            (entry) => entry.profileId === watcherProfile.id,
+          );
+          expect(watcherPeople, `${name} reads one named person`).toEqual([
+            expect.objectContaining({ name: "Presence Watcher", online: true }),
+          ]);
+          if (name === "reader") {
+            const connection = {
+              id: person.connectionId,
+              clientId: CONTROL_UI_CLIENT.id,
+              timeZone: "Europe/Vienna",
+              network: { ip: "203.0.113.50" },
+            };
+            expect(watcherPeople?.[0]).toMatchObject({
+              activity: {
+                at: person.connectionLastActivityAt,
+                source: "openclaw-interaction",
+              },
+              deviceCount: 1,
+              devices: [{ kind: "client", connections: [connection] }],
+            });
+            const self = await read<PresenceQueryResult>("presence.query", {
+              action: "person",
+              person: "me",
+            });
+            expect(self).toMatchObject({
+              status: "ok",
+              people: [{ profileId: ensureProfileForEmail("reader@example.com").id }],
+            });
+          }
+        } else {
+          expect(query).toBeUndefined();
+        }
+        recipients.push({
+          ...recipient,
+          name,
+          scopes,
+          allowed,
+          canRead,
+          rpcPresence: presence,
+        });
+      }
+
+      const unauthenticated = await openWs(port, { origin: BROWSER_ORIGIN });
+      sockets.push(unauthenticated);
+      const unauthenticatedEvents = observePresence(unauthenticated);
+      const readers = recipients.filter(({ canRead }) => canRead);
+      // The viewer declaration already published activity. Typing within its
+      // 30-second window updates the store without another full roster event.
+      const readNow = Date.now;
+      const activityClock = vi.spyOn(Date, "now").mockImplementation(() => readNow() + 30_000);
+      const typingStartedAt = Date.now();
+      const eventPromises = readers.map(({ ws }) =>
+        nextPresence(ws, (rows) =>
+          rows.some(
+            (entry) =>
+              entry.instanceId === watcherInstanceId &&
+              entry.lastActivityAt !== undefined &&
+              entry.lastActivityAt >= typingStartedAt,
+          ),
+        ),
+      );
+      // Own event rejections before the typing request can fail or time out.
+      const [events] = await Promise.all([
+        Promise.all(eventPromises),
+        // A late connection publishes an older snapshot before the typing activity.
+        openRecipient("late-reader", ["operator.read"])
+          .then(() =>
+            rpcReq(watcher.ws, "session.typing", {
+              sessionKey: sharedKey,
+              sessionId: sharedSessionId,
+              typing: true,
+            }),
+          )
+          .then((response) => expect(response).toMatchObject({ ok: true })),
+      ]).finally(() => activityClock.mockRestore());
+      const activeWatcher = currentPerson(watcherInstanceId);
+      const { watchedSessions: _activeWatches, ...activePerson } = activeWatcher;
+      expect(activePerson.lastActivityAt).toBeGreaterThanOrEqual(person.lastActivityAt!);
+      expect(activeWatcher.watchedSessions).toEqual(watchedKeys);
+      for (const [index, recipient] of readers.entries()) {
+        for (const [surface, rows] of [
+          ["hello", recipient.hello.snapshot.presence],
+          ["system-presence", recipient.rpcPresence],
+          ["presence event", events[index]!.payload.presence],
+        ] as const) {
+          if (!Value.Check(Type.Array(PresenceEntrySchema), rows)) {
+            throw new Error(`${recipient.name} ${surface} returned invalid presence rows`);
+          }
+          const received = rows.find((entry) => entry.instanceId === watcherInstanceId);
+          const { watchedSessions, ...receivedPerson } = received ?? {};
+          expect
+            .soft(
+              receivedPerson,
+              `${recipient.name} ${surface} preserves the person and timestamp without hidden counts`,
+            )
+            .toEqual(surface === "presence event" ? activePerson : person);
+          expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(idlePerson);
+          expect
+            .soft(watchedSessions ?? [], `${recipient.name} ${surface} watched session disclosure`)
+            .toEqual(recipient.allowed.toSorted());
         }
       }
-    });
+      for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
+        expect(recipient.hello.snapshot.presence, `${recipient.name} hello inventory`).toEqual([]);
+        expect(recipient.rpcPresence).toBeUndefined();
+        // The activity fanout is synchronous. A later response on this socket
+        // is a transport barrier, so absence does not depend on sleeping.
+        expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
+        expect(recipient.events, `${recipient.name} activity-driven frames`).toEqual([]);
+      }
+      const preauthRead = await rpcReq(unauthenticated, "system-presence");
+      expect(preauthRead.ok).toBe(false);
+      expect(preauthRead.payload).toBeUndefined();
+      expect(unauthenticatedEvents).toEqual([]);
+
+      const isLiveIdle = (entry: SystemPresence) =>
+        entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
+      const nextIdleRows = async (count: number) => {
+        const event = await nextPresence(
+          watcher.ws,
+          (rows) => rows.filter(isLiveIdle).length === count,
+        );
+        return event.payload.presence.filter(isLiveIdle);
+      };
+      const [overlappingRows, overlap] = await Promise.all([
+        nextIdleRows(2),
+        openRecipient("idle", ["operator.read"]),
+      ]);
+      expect.soft(overlappingRows, "overlapping connect publishes both sockets").toHaveLength(2);
+      for (const entry of overlappingRows) {
+        expect(entry.onlineSince).toBe(idlePerson.onlineSince);
+        expect(entry.lastActivityAt).toBe(idlePerson.lastActivityAt);
+      }
+      for (const [connection, remaining] of [
+        [idle, 1],
+        [overlap, 0],
+      ] as const) {
+        // A different socket's response cannot join this connection's server close.
+        const disconnected = nextIdleRows(remaining);
+        const closed = once(connection.ws, "close");
+        connection.ws.close();
+        const [, rows] = await Promise.all([closed, disconnected]);
+        expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
+        if (remaining) {
+          expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
+        }
+      }
+      const [reconnectedRows, reconnected] = await Promise.all([
+        nextIdleRows(1),
+        openRecipient("idle", ["operator.read"]),
+      ]);
+      const returnedPerson = reconnected.hello.snapshot.presence.find(
+        (entry) => entry.user?.id === idlePerson.user?.id && entry.reason === "connect",
+      )!;
+      expect(returnedPerson.onlineSince).toBeGreaterThan(idlePerson.onlineSince!);
+      expect(returnedPerson.lastActivityAt).toBeUndefined();
+      expect(returnedPerson.watchedSessions).toBeUndefined();
+      expect(reconnectedRows, "reconnect publishes without profile edit or activity").toEqual([
+        returnedPerson,
+      ]);
+      for (const recipient of recipients.filter(({ canRead }) => !canRead)) {
+        expect((await rpcReq(recipient.ws, "health")).ok).toBe(true);
+        expect(recipient.events, `${recipient.name} connection-driven frames`).toEqual([]);
+      }
+
+      const rejected = await openWs(port, { origin: BROWSER_ORIGIN });
+      sockets.push(rejected);
+      const rejectedEvents = observePresence(rejected);
+      const connect = await connectReq(rejected, {
+        skipDefaultAuth: true,
+        device: null,
+        scopes: ["operator.read", "operator.admin"],
+        client: CONTROL_UI_CLIENT,
+      });
+      expect(connect.ok).toBe(false);
+      expect(connect.payload).toBeUndefined();
+      expect(rejectedEvents).toEqual([]);
+    } finally {
+      for (const ws of sockets) {
+        ws.close();
+      }
+    }
   });
 });

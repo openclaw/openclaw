@@ -37,7 +37,7 @@ import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 
 let gitWorkspaceTemplate: string;
 const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness(async (makeTempDir) => {
@@ -117,101 +117,64 @@ async function holdSessionWriter(storePath: string) {
   return { releaseWriter, heldWriter };
 }
 
-test("sessions.create atomically persists trusted visible-spawn tool policy with required parent", async () => {
-  const { storePath, actor } = await seedSpawnParent("visible-spawn", "required");
-
-  const created = await createSession(
-    {
-      label: "Restricted visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          operatorRoleActor: { kind: "system" },
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: parentSessionKey,
-            completionOwnerSessionKey: "agent:main:discord:direct:alice",
-            inheritedToolPolicy,
+test.each(["visible-spawn", "runtime-spawn"] as const)(
+  "sessions.create persists trusted %s policy",
+  async (source) => {
+    const runtime = source === "runtime-spawn";
+    const { storePath, actor } = await seedSpawnParent(source, runtime ? undefined : "required");
+    const label = runtime ? "Runtime visible child" : "Restricted visible child";
+    const completionOwnerSessionKey = `agent:main:discord:direct:${runtime ? "bob" : "alice"}`;
+    const spawnContext = { completionOwnerSessionKey, inheritedToolPolicy };
+    const created = await createSession(
+      { label, parentSessionKey, spawnDepth: 1 },
+      runtime
+        ? {
+            context: { validateAgentRuntimeApprovalAuthority: () => true },
+            client: runtimeClient({ ...spawnContext, inheritedPermissionMode: "full" }),
+          }
+        : {
+            client: {
+              connect: { scopes: ["operator.write"] },
+              internal: {
+                syntheticClient: true,
+                operatorRoleActor: { kind: "system" },
+                sessionCreation: {
+                  ...spawnContext,
+                  via: "spawn",
+                  actor: { type: "agent", id: "main" },
+                  requesterSessionKey: parentSessionKey,
+                },
+              },
+            } as never,
           },
+    );
+    const policy = {
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      ...(runtime ? { permissionMode: "full", createdActor: { type: "agent", id: "main" } } : {}),
+    };
+    expect(created, JSON.stringify(created.error)).toMatchObject({
+      ok: true,
+      payload: {
+        key: expect.stringMatching(/^agent:main:dashboard:/),
+        entry: {
+          ...policy,
+          ...(runtime ? { createdVia: "spawn" } : { label, parentSessionKey, spawnDepth: 1 }),
         },
-      } as never,
-    },
-  );
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    label: "Restricted visible child",
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    parentSessionKey,
-    spawnDepth: 1,
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-  });
-  const key = requireNonEmptyString(created.payload?.key, "visible child key");
-  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-  expect(child).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-    createdActor: actor,
-  });
-  expect(child?.sandbox).toBe("required");
-});
-
-test("sessions.create persists trusted agent-runtime spawn permissions", async () => {
-  const { storePath } = await seedSpawnParent("runtime-spawn");
-
-  const created = await createSession(
-    {
-      label: "Runtime visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => true,
       },
-      client: runtimeClient({
-        completionOwnerSessionKey: "agent:main:discord:direct:bob",
-        inheritedPermissionMode: "full",
-        inheritedToolPolicy,
-      }),
-    },
-  );
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "main" },
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:bob",
-    permissionMode: "full",
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-  });
-  const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
-  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-  expect(child).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:bob",
-    permissionMode: "full",
-    inheritedToolPolicyVersion: 1,
-    createdActor: { type: "agent", id: "main" },
-  });
-  expect(child?.sandbox).toBeUndefined();
-});
+    });
+    const key = requireNonEmptyString(created.payload?.key, "visible child key");
+    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(child).toMatchObject({
+      ...policy,
+      createdActor: runtime ? { type: "agent", id: "main" } : actor,
+    });
+    expect(child?.sandbox).toBe(runtime ? undefined : "required");
+  },
+);
 
 test("sessions.create rejects a replaced required spawn parent before child creation", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -322,34 +285,21 @@ test("sessions.create commits no child after its worker turn closes", async () =
   const sessionKey = "agent:main:dashboard:worker-turn-race";
   const database = openOpenClawStateDatabase();
   const placements = createWorkerSessionPlacementStore({ database });
-  let placement = await placements.startDispatch({
-    agentId: "main",
-    sessionId: "worker-source-session",
-    sessionKey: "agent:main:dashboard:worker-source",
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "worker-environment",
-    sessionId: placement.sessionId,
-    ownerEpoch: 7,
-  });
-  for (const [from, to, patch] of [
-    ["requested", "provisioning", { environmentId: "worker-environment" }],
-    ["provisioning", "syncing", { workerBundleHash: "a".repeat(64) }],
-    [
-      "syncing",
-      "starting",
-      { remoteWorkspaceDir: "/workspace/source", workspaceBaseManifestRef: "manifest-source" },
-    ],
-    ["starting", "active", { activeOwnerEpoch: 7 }],
-  ] as const) {
-    placement = await placements.transition({
-      sessionId: placement.sessionId,
-      from,
-      to,
-      expectedGeneration: placement.generation,
-      patch,
-    });
-  }
+  const placement = await advancePlacementFixtureToActive(
+    placements,
+    database,
+    {
+      agentId: "main",
+      sessionId: "worker-source-session",
+      sessionKey: "agent:main:dashboard:worker-source",
+    },
+    {
+      environmentId: "worker-environment",
+      ownerEpoch: 7,
+      remoteWorkspaceDir: "/workspace/source",
+      workspaceBaseManifestRef: "manifest-source",
+    },
+  );
   const turnClaim = await placements.claimTurn({
     agentId: placement.agentId,
     sessionId: placement.sessionId,
