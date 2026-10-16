@@ -11,17 +11,67 @@ import { createDeferred } from "./promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 const fixture = createFixtureLifetime();
+const qaModuleId = (artifactBasename: string) =>
+  resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "qa-lab",
+    artifactBasename,
+  });
+const qaApiModuleId = qaModuleId("api.js");
+const qaRuntimeModuleId = qaModuleId("runtime-api.js");
+const noop = async () => {};
+const reject = (error: Error) => async () => {
+  throw error;
+};
+const mockBus = (stop: () => Promise<void>, port = 1) => ({
+  createQaBusState: () => ({}),
+  createQaChannelTransport: () => ({}),
+  startQaBusServer: async () => ({ baseUrl: `http://127.0.0.1:${port}`, stop }),
+});
+type FixtureBody = (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>;
 
-const qaApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "qa-lab",
-  artifactBasename: "api.js",
-});
-const qaRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "qa-lab",
-  artifactBasename: "runtime-api.js",
-});
+function captureTests<T extends (...args: never[]) => Promise<void>>(webchat = false) {
+  const bodies: T[] = [];
+  const cleanups: Array<() => Promise<void>> = [];
+  vi.doMock("vitest", () => ({
+    [webchat ? "afterEach" : "afterAll"]: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
+    describe: (_name: string, body: () => void) => body(),
+    ...(webchat
+      ? { it: (_name: string, _options: unknown, body: T) => bodies.push(body) }
+      : { test: (_name: string, body: T) => bodies.push(body) }),
+    expect,
+  }));
+  return { bodies, cleanups };
+}
+
+function mockEvidence(includeEntries = false) {
+  const written: Array<{ status: string; details?: string }> = [];
+  vi.doMock("../e2e/qa-lab/runtime/script-evidence.js", () => ({
+    createQaScriptEvidenceWriter: () => ({
+      appendLog: () => {},
+      write: async (result: (typeof written)[number]) => {
+        written.push(result);
+        return includeEntries ? { entries: [{ result }] } : undefined;
+      },
+    }),
+  }));
+  return written;
+}
+
+function expectFailure(written: ReturnType<typeof mockEvidence>, ...messages: string[]) {
+  expect(written).toMatchObject([{ status: "fail", details: expect.any(String) }]);
+  for (const message of messages) {
+    expect(written[0]?.details).toContain(message);
+  }
+}
+
+async function tempRoot(prefix: string) {
+  const root = await fs.realpath(fixture.createTempDir(prefix));
+  for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+    vi.stubEnv(key, root);
+  }
+  return root;
+}
 
 afterEach(async () => {
   try {
@@ -58,18 +108,22 @@ function cleanupStep(events: string[], label: string, error?: Error) {
   };
 }
 
+const cleanupResult =
+  <T>(events: string[], result: T) =>
+  async () => {
+    events.push("gateway");
+    return result;
+  };
+
 describe("QA gateway fixture error composition", () => {
   it.for(["joined", "unconfirmed", "rejected"] as const)(
     "keeps the generation workspace through a held server close and %s Gateway cleanup",
     (shutdown, { signal }) =>
       fixture.run(async () => {
-        const root = await fs.realpath(fixture.createTempDir("qa-generation-cleanup-"));
-        for (const key of ["TMPDIR", "TMP", "TEMP"]) {
-          vi.stubEnv(key, root);
-        }
+        const root = await tempRoot("qa-generation-cleanup-");
         const cleanupStarted = createDeferred();
         const cleaned: string[] = [];
-        const written: Array<{ status: string; details?: string }> = [];
+        const written = mockEvidence(true);
         let workspaceRoot = "";
         let socket: Socket | undefined;
         let peer: Duplex | undefined;
@@ -132,23 +186,16 @@ describe("QA gateway fixture error composition", () => {
         );
         vi.doMock(qaApiModuleId, () => ({
           QA_EVIDENCE_FILENAME: "qa-evidence.json",
-          createQaBusState: () => ({}),
-          createQaChannelTransport: () => ({}),
-          startQaBusServer: async () => ({
-            baseUrl: "http://127.0.0.1:1",
-            stop: async () => {
-              cleaned.push("bus");
-              cleanupStarted.resolve();
-            },
+          ...mockBus(async () => {
+            cleaned.push("bus");
+            cleanupStarted.resolve();
           }),
           startQaMockOpenAiServer: async () => ({
             baseUrl: "http://127.0.0.1:1",
             stop: cleanupStep(cleaned, "provider"),
           }),
           createQaGatewayChild: () => ({
-            start: async () => {
-              throw new Error("generation startup failed");
-            },
+            start: reject(new Error("generation startup failed")),
             stop: async () => {
               cleaned.push("gateway");
               if (shutdown === "rejected") {
@@ -157,15 +204,6 @@ describe("QA gateway fixture error composition", () => {
               return shutdown === "unconfirmed"
                 ? { process: "unconfirmed", errors: [new Error("generation shutdown unconfirmed")] }
                 : { process: "never-spawned", errors: [] };
-            },
-          }),
-        }));
-        vi.doMock("../e2e/qa-lab/runtime/script-evidence.js", () => ({
-          createQaScriptEvidenceWriter: () => ({
-            appendLog: () => {},
-            write: async (result: { status: string; details?: string }) => {
-              written.push(result);
-              return { entries: [{ result }] };
             },
           }),
         }));
@@ -207,9 +245,7 @@ describe("QA gateway fixture error composition", () => {
         }
         expect(serverJoined).toBe(true);
         expect(cleaned).toEqual(["gateway", "provider", "bus"]);
-        expect(written).toHaveLength(1);
-        expect(written[0]?.status).toBe("fail");
-        expect(written[0]?.details).toContain("generation startup failed");
+        expectFailure(written, "generation startup failed");
         if (shutdown === "joined") {
           await expect(fs.stat(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
@@ -221,14 +257,11 @@ describe("QA gateway fixture error composition", () => {
 
   it("records compaction startup and cleanup failures after joining the provider", ({ signal }) =>
     fixture.run(async () => {
-      const root = await fs.realpath(fixture.createTempDir("qa-compaction-cleanup-"));
+      const root = await tempRoot("qa-compaction-cleanup-");
       const repoRoot = path.join(root, "repo");
       await fs.mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
       await fs.writeFile(path.join(repoRoot, "dist", "index.js"), "");
       await fs.writeFile(path.join(repoRoot, "dist", "plugin-sdk", "qa-lab.js"), "");
-      for (const key of ["TMPDIR", "TMP", "TEMP"]) {
-        vi.stubEnv(key, root);
-      }
       for (const key of [
         "HOME",
         "OPENCLAW_HOME",
@@ -243,17 +276,9 @@ describe("QA gateway fixture error composition", () => {
       }
       const cleaned: string[] = [];
       let providerUrl: string | undefined;
-      const written: Array<{ status: string; details?: string }> = [];
+      const written = mockEvidence();
       vi.doMock(qaApiModuleId, () => ({
-        createQaBusState: () => ({}),
-        createQaChannelTransport: () => ({}),
-        startQaBusServer: async () => ({
-          baseUrl: "http://127.0.0.1:1",
-          stop: async () => {
-            cleaned.push("bus");
-            throw new Error("bus cleanup failed");
-          },
-        }),
+        ...mockBus(cleanupStep(cleaned, "bus", new Error("bus cleanup failed"))),
         createQaGatewayChild: () => ({
           start: async (params: { providerBaseUrl: string }) => {
             providerUrl = params.providerBaseUrl;
@@ -262,18 +287,10 @@ describe("QA gateway fixture error composition", () => {
             await response.arrayBuffer();
             throw new Error("compaction startup failed");
           },
-          stop: async () => {
-            cleaned.push("gateway");
-            return { process: "never-spawned", errors: [new Error("gateway cleanup failed")] };
-          },
-        }),
-      }));
-      vi.doMock("../e2e/qa-lab/runtime/script-evidence.js", () => ({
-        createQaScriptEvidenceWriter: () => ({
-          appendLog: () => {},
-          write: async (result: { status: string; details?: string }) => {
-            written.push(result);
-          },
+          stop: cleanupResult(cleaned, {
+            process: "never-spawned",
+            errors: [new Error("gateway cleanup failed")],
+          }),
         }),
       }));
       const { runGatewayCompactionAbort } =
@@ -290,15 +307,12 @@ describe("QA gateway fixture error composition", () => {
       expect(cleaned).toEqual(["gateway", "bus"]);
       expect(providerUrl).toBeDefined();
       await expect(fetch(`${providerUrl}/models`)).rejects.toThrow();
-      expect(written).toHaveLength(1);
-      expect(written[0]?.status).toBe("fail");
-      for (const message of [
+      expectFailure(
+        written,
         "compaction startup failed",
         "gateway cleanup failed",
         "bus cleanup failed",
-      ]) {
-        expect(written[0]?.details).toContain(message);
-      }
+      );
       await expect(fs.stat(path.join(root, "gateway-stopped"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -312,31 +326,11 @@ describe("QA gateway fixture error composition", () => {
         const gatewayError = new Error("WebChat gateway cleanup failed");
         const busError = new Error("WebChat bus cleanup failed");
         const cleaned: string[] = [];
-        const bodies: Array<() => Promise<void>> = [];
-        const cleanups: Array<() => Promise<void>> = [];
-        const start = async () => {
-          throw startupError;
-        };
-        vi.doMock("vitest", () => ({
-          afterEach: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
-          describe: (_name: string, body: () => void) => body(),
-          it: (_name: string, _options: unknown, body: () => Promise<void>) => bodies.push(body),
-          expect,
-        }));
-        vi.doMock(qaApiModuleId, () => ({
-          createQaBusState: () => ({}),
-          createQaChannelTransport: () => ({}),
-          startQaBusServer: async () => ({
-            baseUrl: "http://127.0.0.1:43210",
-            stop: async () => {
-              cleaned.push("bus");
-              throw busError;
-            },
-          }),
-        }));
+        const { bodies, cleanups } = captureTests<() => Promise<void>>(true);
+        vi.doMock(qaApiModuleId, () => mockBus(cleanupStep(cleaned, "bus", busError), 43210));
         vi.doMock(qaRuntimeModuleId, () => ({
           createQaLiveLaneGateway: () => ({
-            start,
+            start: reject(startupError),
             stop: async () => {
               cleaned.push("gateway");
               if (mode === "rejection") {
@@ -377,15 +371,7 @@ describe("QA gateway fixture error composition", () => {
   it("retains the original cleanup-only error and finishes cleanup", async () => {
     const failure = new Error("cleanup failed");
     const lastCleanup = vi.fn();
-    await expect(
-      runQaGatewayFixture(
-        async () => {},
-        () => {
-          throw failure;
-        },
-        lastCleanup,
-      ),
-    ).rejects.toBe(failure);
+    await expect(runQaGatewayFixture(noop, reject(failure), lastCleanup)).rejects.toBe(failure);
     expect(lastCleanup).toHaveBeenCalledOnce();
   });
 
@@ -399,9 +385,7 @@ describe("QA gateway fixture error composition", () => {
     const contextClosing = createDeferred();
     const releaseContext = createDeferred();
     const result = runQaGatewayFixture(
-      async () => {
-        throw bodyError;
-      },
+      reject(bodyError),
       cleanupStep(events, "release", releaseError),
       async () => {
         events.push("context-closing");
@@ -414,10 +398,7 @@ describe("QA gateway fixture error composition", () => {
       cleanupStep(events, "node"),
       () =>
         stopQaGatewayFixture({
-          stop: async () => {
-            events.push("gateway");
-            return { errors: [gatewayError] };
-          },
+          stop: cleanupResult(events, { errors: [gatewayError] }),
         }),
       cleanupStep(events, "provider"),
     ).catch((error: unknown) => error);
@@ -445,10 +426,7 @@ describe("QA gateway fixture error composition", () => {
       const startupError = new Error("fixture startup failed");
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
-      const bodies: Array<
-        (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>
-      > = [];
-      const cleanups: Array<() => Promise<void>> = [];
+      const { bodies, cleanups } = captureTests<FixtureBody>();
       const finished: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
       const registry = Object.assign(new EventEmitter(), {
         exitCode: null as number | null,
@@ -461,15 +439,6 @@ describe("QA gateway fixture error composition", () => {
         },
       });
       let receiverCount = 0;
-      vi.doMock("vitest", () => ({
-        afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
-        describe: (_name: string, body: () => void) => body(),
-        test: (
-          _name: string,
-          body: (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>,
-        ) => bodies.push(body),
-        expect,
-      }));
       vi.doMock("node:child_process", () => ({
         execFile: (...args: unknown[]) => {
           const callback = args.at(-1);
@@ -483,9 +452,9 @@ describe("QA gateway fixture error composition", () => {
         },
       }));
       vi.doMock("node:fs/promises", () => ({
-        copyFile: async () => {},
-        cp: async () => {},
-        mkdir: async () => {},
+        copyFile: noop,
+        cp: noop,
+        mkdir: noop,
         mkdtemp: vi
           .fn()
           .mockResolvedValueOnce("/qa-fixture/scratch")
@@ -495,18 +464,13 @@ describe("QA gateway fixture error composition", () => {
         rm: async (target: string) => {
           cleaned.push(target);
         },
-        symlink: async () => {},
-        writeFile: async () => {},
+        symlink: noop,
+        writeFile: noop,
       }));
       vi.doMock(qaApiModuleId, () => ({
         createQaGatewayChild: () => ({
-          start: async () => {
-            throw startupError;
-          },
-          stop: async () => {
-            cleaned.push("gateway");
-            return { errors: [finalizationError] };
-          },
+          start: reject(startupError),
+          stop: cleanupResult(cleaned, { errors: [finalizationError] }),
         }),
         startQaMockOpenAiServer: async () => ({
           baseUrl: "http://127.0.0.1:43211",
