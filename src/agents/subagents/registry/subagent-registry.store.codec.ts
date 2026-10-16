@@ -1,5 +1,6 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
@@ -58,6 +59,16 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   payload.requesterSessionKey = row.requester_session_key;
   payload.requesterStorePath = row.requester_store_path ?? undefined;
   payload.controllerStorePath = row.controller_store_path ?? undefined;
+  if (payload.operatorRecoverySource !== undefined) {
+    try {
+      payload.operatorRecoverySource = decodeGatewayOperatorRecoverySource(
+        payload.operatorRecoverySource,
+      );
+    } catch {
+      // Preserve the interrupted result; unavailable evidence cannot authorize a continuation.
+      delete payload.operatorRecoverySource;
+    }
+  }
   const controllerSessionKey = row.controller_session_key?.trim();
   if (controllerSessionKey) {
     payload.controllerSessionKey = controllerSessionKey;

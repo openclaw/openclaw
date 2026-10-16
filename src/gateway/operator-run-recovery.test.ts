@@ -36,6 +36,10 @@ import {
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  readGatewayOperatorRecoverySource,
+  restoreGatewayOperatorSource,
+} from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -63,6 +67,68 @@ function pairedOperator(): PairedDevice {
 }
 
 describe("restart recovery authenticated operator source", () => {
+  it.each(["current", "owner closed", "device revoked"] as const)(
+    "checks independently owned continuation custody after preparation: %s",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const profile = ensureProfileForEmail("continuation-source@example.test");
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir: state.stateDir,
+          context: createContext(),
+          profileId: profile.id,
+          config: {},
+          device: pairedOperator(),
+          scopes: ["operator.write"],
+        });
+        const snapshot = expectDefined(
+          fixture.entry.restartRecoveryOperatorSource?.snapshot,
+          "authenticated continuation source",
+        );
+        let current = true;
+        const restore = restoreGatewayOperatorSource({
+          snapshot,
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Continuation owner closed");
+            }
+          },
+          prepareCurrent: async () => {
+            if (change === "owner closed") {
+              current = false;
+            } else if (change === "device revoked") {
+              invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+            }
+          },
+        });
+        if (change !== "current") {
+          await expect(restore).rejects.toThrow(/owner closed|authority changed/);
+          return;
+        }
+        const restored = await restore;
+        const retained = expectDefined(restored.authority.retain, "continuation retention")();
+        try {
+          restored.release();
+          expect(restored.authority.profileId).toBe(profile.id);
+          expect(restored.authority.scopes).toEqual(["operator.write"]);
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(
+            readGatewayOperatorRecoverySource(restored.authority, {
+              runId: fixture.target.recoveryRunId,
+              sessionKey: fixture.target.sessionKey,
+              sessionId: fixture.target.sessionId,
+            }),
+          ).toBeUndefined();
+          current = false;
+          expect(restored.authority.assertCurrent).toThrow("Continuation owner closed");
+        } finally {
+          retained();
+          restored.release();
+        }
+      });
+    },
+  );
   it("keeps restored authority current during unrelated issuance", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("publication-lifetime@example.test");

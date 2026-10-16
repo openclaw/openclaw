@@ -1,30 +1,162 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver as getEntryGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
+  assertSubagentRegistryWriteSourceCurrent,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-/** A closed Gateway's durable terminal wake acquires fresh host custody, never its old aliases. */
+const log = createSubsystemLogger("agents/subagents");
+
+async function restoreSubagentCompletionSource(
+  entry: SubagentRunRecord,
+  resolver: GatewayContextResolver,
+  isGatewayCurrent: () => boolean,
+): Promise<void> {
+  if (
+    entry.collect ||
+    (entry.execution.status === "terminal" &&
+      !entry.requesterSettleWake &&
+      entry.cleanupCompletedAt !== undefined)
+  ) {
+    return;
+  }
+  // A refused restoration must leave a restricted row, never a synthetic system caller.
+  subagentRuns.requireCompletionAuthority(entry);
+  let releaseRestored: (() => void) | undefined;
+  let continuation:
+    | Awaited<
+        ReturnType<
+          typeof import("../../../gateway/server-plugin-in-process-authority.js").captureOperatorToolGatewayContinuationContext
+        >
+      >
+    | undefined;
+  try {
+    const source = entry.operatorRecoverySource;
+    const gateway = resolver();
+    const storePath = entry.requesterStorePath;
+    if (
+      !gateway ||
+      !source ||
+      !storePath ||
+      source.agentId !== entry.requesterAgentId ||
+      source.sessionKey !== entry.requesterSessionKey ||
+      source.sessionId !== entry.completionRequesterSessionId ||
+      source.lifecycleRevision !== entry.completionRequesterLifecycleRevision
+    ) {
+      throw new Error("Subagent restart recovery lacks its original operator source");
+    }
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const context = captureOpenClawStateWorkerContext();
+    const assertCurrent = () => {
+      assertSubagentRegistryWriteSourceCurrent(context);
+      const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+      if (
+        !current ||
+        !isGatewayCurrent() ||
+        resolver() !== gateway ||
+        getEntryGatewayContextResolver(current) !== resolver ||
+        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+      ) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Subagent recovery completion owner changed",
+        );
+      }
+    };
+    assertCurrent();
+    const [
+      { restoreGatewayOperatorSource },
+      { captureOperatorToolGatewayContinuationContext },
+      { createSyntheticPluginRuntimeClient },
+    ] = await Promise.all([
+      import("../../../gateway/operator-run-recovery.js"),
+      import("../../../gateway/server-plugin-in-process-authority.js"),
+      import("../../../gateway/server-plugin-runtime-client.js"),
+    ]);
+    assertCurrent();
+    const restored = await restoreGatewayOperatorSource({
+      snapshot: source.snapshot,
+      target: source,
+      context: gateway,
+      assertCurrent,
+      prepareCurrent: async () => {
+        const requester = await readSessionEntryReadOnlyInWorker(
+          {
+            agentId: source.agentId,
+            sessionKey: source.sessionKey,
+            storePath,
+          },
+          assertCurrent,
+        );
+        assertCurrent();
+        if (
+          requester?.sessionId !== source.sessionId ||
+          requester.lifecycleRevision !== source.lifecycleRevision
+        ) {
+          throw new Error("Subagent restart recovery requester session changed");
+        }
+      },
+    });
+    releaseRestored = restored.release;
+    assertCurrent();
+    continuation = await withPluginRuntimeGatewayRequestScope(
+      {
+        client: createSyntheticPluginRuntimeClient({
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: restored.authority,
+          scopes: [...restored.authority.scopes],
+        }),
+        context: gateway,
+        resolveGatewayContext: resolver,
+        isWebchatConnect: () => false,
+      },
+      () => captureOperatorToolGatewayContinuationContext(),
+    );
+    assertCurrent();
+    if (!continuation?.operatorAuthority) {
+      throw new Error("Subagent restart recovery could not retain operator authority");
+    }
+    subagentRuns.bindCompletionAuthority(entry, continuation, true);
+    continuation = undefined;
+  } catch (error) {
+    log.warn("subagent completion authority was not restored", { runId: entry.runId, error });
+  } finally {
+    continuation?.release();
+    releaseRestored?.();
+  }
+}
+
+/** A closed Gateway's unfinished work acquires fresh host custody, never its old aliases. */
 async function recoverSubagentRunGatewayOwner(
   expected: SubagentRunRecord,
   resolver: GatewayContextResolver,
   onRecovered: (entry: SubagentRunRecord) => void,
+  isGatewayCurrent: () => boolean,
 ): Promise<boolean> {
   const previousResolver = getEntryGatewayContextResolver(expected);
   const gateway = resolver();
   if (!previousResolver || previousResolver() !== undefined || !gateway) {
     return false;
   }
-  return mutateSubagentRuns(
+  let recovered: SubagentRunRecord | undefined;
+  const committed = await mutateSubagentRuns(
     [expected.runId],
     (rows) => {
       const current = rows.get(expected.runId);
@@ -41,12 +173,22 @@ async function recoverSubagentRunGatewayOwner(
         const row = postimages.get(expected.runId);
         if (row) {
           bindGatewayContextResolver(row, resolver);
-          onRecovered(row);
+          if (!row.collect) {
+            subagentRuns.requireCompletionAuthority(row);
+          }
+          recovered = row;
           subagentRuns.commitOwnership(row);
         }
       },
     },
   );
+  if (recovered) {
+    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent);
+    if (isGatewayCurrent()) {
+      onRecovered(recovered);
+    }
+  }
+  return committed;
 }
 
 /** Bind only the captured inventory, retaining the same Gateway across batch yields. */
@@ -78,11 +220,15 @@ export async function bindSubagentRunGatewayOwners(params: {
     }
     const previous = getEntryGatewayContextResolver(entry);
     if (previous) {
-      if (entry.execution.status !== "terminal" || !entry.requesterSettleWake || previous()) {
+      if (
+        previous() ||
+        (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
+          !isRetiredSubagentExecution(entry))
+      ) {
         continue;
       }
       const previousResumeKey = getSubagentRunRuntimeKey(entry);
-      if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered)) {
+      if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered, isCurrent)) {
         params.resumedRuns.delete(previousResumeKey);
       }
       if (!isCurrent()) {
@@ -91,6 +237,10 @@ export async function bindSubagentRunGatewayOwners(params: {
       continue;
     }
     bindGatewayContextResolver(entry, resolver);
+    await restoreSubagentCompletionSource(entry, resolver, isCurrent);
+    if (!isCurrent()) {
+      return false;
+    }
     // Binding an existing owner must not supersede a registration already in preparation.
     publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }

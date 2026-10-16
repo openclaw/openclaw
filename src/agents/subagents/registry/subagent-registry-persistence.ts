@@ -38,6 +38,7 @@ import type {
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
 import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -385,8 +386,8 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     if (
       !current ||
       !isSameSubagentRunOwner(current, recovery.expected) ||
-      current.execution.status !== "terminal" ||
-      !current.requesterSettleWake ||
+      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
+        !isRetiredSubagentExecution(current)) ||
       getGatewayContextResolver(current) !== recovery.previousResolver ||
       recovery.previousResolver() !== undefined ||
       recovery.resolver() !== recovery.gateway
