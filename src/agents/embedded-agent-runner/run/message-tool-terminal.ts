@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
@@ -95,10 +96,27 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   };
 }
 
+function isCompletedMessageToolOnlySourceReply(params: {
+  context: AfterToolCallContext;
+  hookResult?: AfterToolCallResult;
+}): boolean {
+  const deliveryFact =
+    readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.context.result)?.messageDelivery,
+    ) ?? readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery);
+  const isError = params.hookResult?.isError ?? params.context.isError;
+  return (
+    resolveMessageToolSourceReplyFinal(argsRecordForToolCall(params.context)) &&
+    !isError &&
+    deliveryFact?.sourceReplyDelivered === true
+  );
+}
+
 export function installMessageToolTerminalHook(
   params: MessageToolTerminalRoute & {
     agent: Agent;
     onDeliveredSourceReply?: () => void;
+    onCompletedSourceReply?: () => void;
   },
 ): void {
   let finalSourceReplyDelivered = false;
@@ -149,6 +167,9 @@ export function installMessageToolTerminalHook(
       if (delivered) {
         finalSourceReplyDelivered ||= final;
         params.onDeliveredSourceReply?.();
+        if (isCompletedMessageToolOnlySourceReply({ context, hookResult })) {
+          params.onCompletedSourceReply?.();
+        }
       }
     }
     return delivered && final ? { ...hookResult, terminate: true } : hookResult;

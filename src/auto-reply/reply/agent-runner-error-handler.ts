@@ -155,6 +155,9 @@ export async function handleAgentExecutionError(params: {
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
   }
+  if (params.state.completedSourceReplyDelivered) {
+    return await settleFailure({ text: SILENT_REPLY_TOKEN });
+  }
   if (err instanceof WorkerNodeLostError) {
     const runState = resolveReplyOperationRunState(turn.opts);
     if (

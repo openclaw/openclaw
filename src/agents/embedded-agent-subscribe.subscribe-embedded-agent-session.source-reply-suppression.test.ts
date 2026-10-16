@@ -24,6 +24,7 @@ function createBlockReplyHarness(
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     hasDeliveredMessageToolOnlySourceReply?: () => boolean;
     onDeliveredMessageToolOnlySourceReply?: () => void;
+    onCompletedMessageToolOnlySourceReply?: () => void;
     reasoningMode?: "off" | "on" | "stream";
     onReasoningEnd?: () => void;
     onReasoningStream?: (payload: { text?: string }) => void;
@@ -69,6 +70,7 @@ function createBlockReplyHarness(
     sourceReplyDeliveryMode: options.sourceReplyDeliveryMode,
     hasDeliveredMessageToolOnlySourceReply: options.hasDeliveredMessageToolOnlySourceReply,
     onDeliveredMessageToolOnlySourceReply: options.onDeliveredMessageToolOnlySourceReply,
+    onCompletedMessageToolOnlySourceReply: options.onCompletedMessageToolOnlySourceReply,
   });
   return { emit, onAgentEvent, onBlockReply, onPartialReply, subscription };
 }
@@ -404,6 +406,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       const sessionManager = session.sessionManager;
       const onBlockReply = vi.fn();
       const onDeliveredMessageToolOnlySourceReply = vi.fn();
+      const onCompletedMessageToolOnlySourceReply = vi.fn();
       const subscription = subscribeEmbeddedAgentSession({
         session,
         runId: "implicit-source",
@@ -411,6 +414,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         blockReplyBreak: "message_end",
         onBlockReply,
         onDeliveredMessageToolOnlySourceReply,
+        onCompletedMessageToolOnlySourceReply,
       });
       emit({
         type: "tool_execution_start",
@@ -453,6 +457,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         expect(onBlockReply).not.toHaveBeenCalled();
       }
       expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+      expect(onCompletedMessageToolOnlySourceReply).toHaveBeenCalledTimes(final ? 1 : 0);
       onBlockReply.mockClear();
 
       emit({

@@ -236,13 +236,21 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   input.onSystemPromptChanged(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
+  let didReportCompletedSourceReply = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
+  };
+  const markCompletedSourceReplyDelivered = () => {
+    if (!didReportCompletedSourceReply) {
+      didReportCompletedSourceReply = true;
+      attempt.onCompletedSourceReplyDelivered?.();
+    }
   };
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    onCompletedSourceReply: markCompletedSourceReplyDelivered,
     config: attempt.config,
     currentProvider: attempt.messageChannel ?? attempt.messageProvider,
     currentAccountId: attempt.agentAccountId,
@@ -264,6 +272,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    markCompletedSourceReplyDelivered,
     setActiveSessionSystemPrompt,
     settingsManager,
     refreshTools: () => {
