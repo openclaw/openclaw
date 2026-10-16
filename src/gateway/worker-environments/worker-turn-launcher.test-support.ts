@@ -44,6 +44,7 @@ import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
+  WorkerSessionPlacementIdentity,
   WorkerSessionPlacementRecord,
   WorkerSessionTurnClaim,
 } from "./placement-record.js";
@@ -159,12 +160,7 @@ let cleanupAdmissionSink: (() => void) | undefined;
 export let root: string;
 export let placements: WorkerSessionPlacementStore;
 export let sessionFile: string;
-export let sessionTarget: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+export let sessionTarget: WorkerSessionPlacementIdentity & { storePath: string };
 
 export async function setupWorkerTurnLauncherTest(): Promise<void> {
   testState = await createOpenClawTestState({

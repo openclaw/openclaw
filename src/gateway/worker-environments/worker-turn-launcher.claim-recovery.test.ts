@@ -25,19 +25,17 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
   ENVIRONMENT_ID,
   appendWorkerReply,
+  acknowledgeCompletedWorkerTurn,
   OWNER_EPOCH,
   MANIFEST_REF,
   attachedEnvironment,
   credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
   root,
   seedActivePlacement,
   SESSION_ID,
@@ -46,7 +44,6 @@ import {
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   reconcileUnchangedLocalWorkspace,
-  type WorkerTurnEnvironmentService,
   type WorkerTurnLauncherOptions,
   database,
   placements,
@@ -54,10 +51,55 @@ import {
   turn,
   unusedEnvironments,
   workerTurnRequest,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 afterAll(closeStateDatabaseForTest);
+beforeEach(setupWorkerTurnLauncherTest);
+afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+
+function createProvider(
+  options: Partial<Parameters<typeof createWorkerSessionTurnPlacementProvider>[0]> = {},
+) {
+  return createWorkerSessionTurnPlacementProvider({
+    environments: unusedEnvironments(),
+    placements,
+    ...options,
+  });
+}
+
+const createOperation = () =>
+  createReplyOperation({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, resetTriggered: false });
+const unexpectedLocalExecution = async () => {
+  throw new Error("unexpected local execution");
+};
+
+function enqueueWorker(params: SessionPlacementTurnParams, session = true) {
+  const lane = createLane(params);
+  const run = () => lane.enqueueGlobal(unexpectedLocalExecution);
+  return session ? lane.enqueueSession(run) : run();
+}
+
+async function underRetiredParent(
+  provider: ReturnType<typeof createProvider>,
+  task: () => Promise<void>,
+) {
+  let assertParent: (() => void) | undefined;
+  await provider.executeLocalTurn(
+    {
+      ...workerTurnRequest("parent-run"),
+      sessionId: "parent-session",
+      sessionKey: "agent:main:parent",
+    },
+    async () => {
+      assertParent = resolveSessionPlacementTurnSettlementAssertion();
+      await task();
+    },
+  );
+  expect(assertParent).toBeTypeOf("function");
+  expect(assertParent).toThrow("settlement is closed");
+}
 
 function createLane(initialParams: SessionPlacementTurnParams) {
   let params = initialParams;
@@ -78,16 +120,10 @@ function createLane(initialParams: SessionPlacementTurnParams) {
 }
 
 describe("local claim recovery before backend registration", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
-  it.each(["local", "standalone", "remote"] as const)(
-    "admits a queued %s child after its inherited parent claim closes",
+  it.each(["local", "standalone", "remote", "embedded", "CLI"] as const)(
+    "admits a %s child after its inherited parent claim closes",
     async (execution) => {
-      const provider = createWorkerSessionTurnPlacementProvider({
-        environments: unusedEnvironments(),
-        placements,
-      });
+      const provider = createProvider();
       const gate = createDeferred();
       const localTask = vi.fn(async () => {
         if (execution === "local") {
@@ -101,29 +137,27 @@ describe("local claim recovery before backend registration", () => {
           return { meta: { durationMs: 2 } };
         },
       );
-      let uninstall = installSessionPlacementAdmissionProvider(provider);
+      const queued = execution !== "embedded" && execution !== "CLI";
+      let uninstall = queued ? installSessionPlacementAdmissionProvider(provider) : () => {};
       let child: Promise<unknown> | undefined;
-      let assertParent: (() => void) | undefined;
       try {
-        await provider.executeLocalTurn(
-          {
-            sessionId: "parent-session",
-            sessionKey: "agent:main:parent",
-            agentId: "main",
-            runId: "parent-run",
-          },
-          async () => {
-            assertParent = resolveSessionPlacementTurnSettlementAssertion();
+        await underRetiredParent(provider, async () => {
+          if (queued) {
             const lane = createLane(turn("child-run"));
             child = lane.enqueueSession(async () => {
               await gate.promise;
               lane.throwIfAborted();
               return lane.enqueueGlobal(localTask);
             });
-          },
-        );
-        expect(assertParent).toBeTypeOf("function");
-        expect(assertParent).toThrow("settlement is closed");
+          } else {
+            child = gate.promise.then(() => {
+              const params = turn("standalone-run");
+              return execution === "CLI"
+                ? withLocalSessionPlacementTurnSettlement(params, localTask)
+                : withSessionPlacementTurnAdmission(params, params, localTask);
+            });
+          }
+        });
         if (execution !== "local") {
           uninstall();
           uninstall = () => {};
@@ -139,8 +173,9 @@ describe("local claim recovery before backend registration", () => {
         await expect(child).resolves.toMatchObject({
           meta: { durationMs: execution === "remote" ? 2 : 1 },
         });
-        expect(localTask).toHaveBeenCalledTimes(execution === "remote" ? 0 : 1);
-        expect(remoteTask).toHaveBeenCalledTimes(execution === "remote" ? 1 : 0);
+        expect([localTask.mock.calls.length, remoteTask.mock.calls.length]).toEqual(
+          execution === "remote" ? [0, 1] : [1, 0],
+        );
         expect((await placements.getAsync(SESSION_ID))?.turnClaim ?? null).toBeNull();
       } finally {
         gate.resolve();
@@ -150,59 +185,12 @@ describe("local claim recovery before backend registration", () => {
     },
   );
 
-  it.each(["embedded", "CLI"] as const)(
-    "isolates standalone %s admission from a retired parent settlement",
-    async (execution) => {
-      const provider = createWorkerSessionTurnPlacementProvider({
-        environments: unusedEnvironments(),
-        placements,
-      });
-      const gate = createDeferred();
-      const task = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-      let child: Promise<unknown> | undefined;
-      let assertParent: (() => void) | undefined;
-      await provider.executeLocalTurn(
-        {
-          sessionId: "parent-session",
-          sessionKey: "agent:main:parent",
-          agentId: "main",
-          runId: "parent-run",
-        },
-        async () => {
-          assertParent = resolveSessionPlacementTurnSettlementAssertion();
-          child = gate.promise.then(() => {
-            const params = turn("standalone-run");
-            return execution === "CLI"
-              ? withLocalSessionPlacementTurnSettlement(params, task)
-              : withSessionPlacementTurnAdmission(params, params, task);
-          });
-        },
-      );
-      try {
-        expect(assertParent).toThrow("settlement is closed");
-        gate.resolve();
-        await expect(child).resolves.toMatchObject({ meta: { durationMs: 1 } });
-        expect(task).toHaveBeenCalledOnce();
-      } finally {
-        gate.resolve();
-        await Promise.allSettled([child]);
-      }
-    },
-  );
-
   it.each(["preflight", "attempt admission", "terminal result"])(
     "releases a force-cleared reply before backend registration and fences its late %s",
     async (stage) => {
-      const provider = createWorkerSessionTurnPlacementProvider({
-        environments: unusedEnvironments(),
-        placements,
-      });
+      const provider = createProvider();
       const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const operation = createReplyOperation({
-        sessionKey: SESSION_KEY,
-        sessionId: SESSION_ID,
-        resetTriggered: false,
-      });
+      const operation = createOperation();
       const params = { ...turn("run-preflight"), replyOperation: operation };
       const lane = createLane(params);
       const started = createDeferred();
@@ -272,16 +260,9 @@ describe("local claim recovery before backend registration", () => {
   it.each(["before", "during"])(
     "does not start local work for a reply cleared %s admission",
     async (timing) => {
-      const provider = createWorkerSessionTurnPlacementProvider({
-        environments: unusedEnvironments(),
-        placements,
-      });
+      const provider = createProvider();
       const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const operation = createReplyOperation({
-        sessionKey: SESSION_KEY,
-        sessionId: SESSION_ID,
-        resetTriggered: false,
-      });
+      const operation = createOperation();
       const params = { ...turn("run-cleared-before-admission"), replyOperation: operation };
       const run = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       try {
@@ -306,9 +287,6 @@ describe("local claim recovery before backend registration", () => {
 });
 
 describe("worker pre-launch claim recovery", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
   it.each([
     "workspace resolution",
     "workspace queue",
@@ -324,6 +302,12 @@ describe("worker pre-launch claim recovery", () => {
     const successorEntered = createDeferred();
     const finishSuccessor = createDeferred();
     const coordinator = createWorkerWorkspaceOperationCoordinator();
+    const pauseAt = async (expected: typeof stage) => {
+      if (blockSecond && stage === expected) {
+        entered.resolve();
+        await resume.promise;
+      }
+    };
     let blockSecond = false;
     let holdSuccessor = true;
     let queuedBlocker: Promise<void> | undefined;
@@ -351,24 +335,9 @@ describe("worker pre-launch claim recovery", () => {
         );
       }
       const leafId = await appendWorkerReply("First turn complete", 41);
-      await createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
+      const result = await acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       await placements.markWorkspaceResultPending(request.turnClaim);
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: 3,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return result;
     });
     let environment: ReturnType<typeof attachedEnvironment> = {
       ...attachedEnvironment(),
@@ -397,18 +366,14 @@ describe("worker pre-launch claim recovery", () => {
         ownerEpoch: environment.ownerEpoch,
       })),
       acknowledgeCredentialDelivery: async () => true,
-      startTunnel: async () => ({
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        runWorkspaceCommand: vi.fn(),
-        syncWorkspace: vi.fn(),
-        stop: vi.fn(),
-        measureLaunchTurn,
-        readLaunchToolNames,
-        launchTurn: launch,
-        quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-      }),
+      startTunnel: async () =>
+        createWorkerTurnTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: environment.ownerEpoch,
+          syncWorkspace: vi.fn(),
+          launchTurn: launch,
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+        }),
       destroy,
     };
     const redispatchPlacement = createWorkerPlacementRedispatch({
@@ -421,23 +386,12 @@ describe("worker pre-launch claim recovery", () => {
         assertCurrent?.();
         const recoveredEnvironmentId = `${ENVIRONMENT_ID}-recovered`;
         const recoveredOwnerEpoch = OWNER_EPOCH + 1;
-        const recovered = await advancePlacementFixtureToActive(
-          placements,
-          database,
-          {
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-            expectedPlacement: request.expectedPlacement,
-          },
-          {
-            environmentId: recoveredEnvironmentId,
-            ownerEpoch: recoveredOwnerEpoch,
-            remoteWorkspaceDir: "/workspace/recovered",
-            workspaceBaseManifestRef: MANIFEST_REF,
-          },
-        );
+        const recovered = await advancePlacementFixtureToActive(placements, database, request, {
+          environmentId: recoveredEnvironmentId,
+          ownerEpoch: recoveredOwnerEpoch,
+          remoteWorkspaceDir: "/workspace/recovered",
+          workspaceBaseManifestRef: MANIFEST_REF,
+        });
         const recoveredEnvironment = attachedEnvironment();
         if (recoveredEnvironment.leaseId === null) {
           throw new Error("expected leased worker environment");
@@ -455,9 +409,8 @@ describe("worker pre-launch claim recovery", () => {
       },
     });
     let workspaceCalls = 0;
-    const provider = createWorkerSessionTurnPlacementProvider({
+    const provider = createProvider({
       environments,
-      placements,
       reconcileActivePlacement: async () => {},
       redispatchPlacement,
       resolveWorkspace: async () => {
@@ -467,10 +420,7 @@ describe("worker pre-launch claim recovery", () => {
           await finishSuccessor.promise;
           throw new Error("successor finished");
         }
-        if (blockSecond && stage === "workspace resolution") {
-          entered.resolve();
-          await resume.promise;
-        }
+        await pauseAt("workspace resolution");
         return { kind: "local", path: root };
       },
       workspaceOperations: {
@@ -479,8 +429,7 @@ describe("worker pre-launch claim recovery", () => {
             environmentId,
             async () => {
               if (blockSecond && stage === "workspace mutation") {
-                entered.resolve();
-                await resume.promise;
+                await pauseAt("workspace mutation");
                 // The entered writer still owns the exact claim after cancellation.
                 expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe("blocked-second");
               }
@@ -496,32 +445,21 @@ describe("worker pre-launch claim recovery", () => {
       },
     });
     const uninstall = installSessionPlacementAdmissionProvider(provider);
-    const operation = createReplyOperation({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      resetTriggered: false,
-    });
+    const operation = createOperation();
     const first = turn("warm-first");
     const second = {
       ...turn("blocked-second"),
       timeoutMs: 48 * 60 * 60 * 1_000,
       replyOperation: operation,
-      onExecutionStarted: async () => {
-        if (stage === "execution-start publication") {
-          entered.resolve();
-          await resume.promise;
-        }
-      },
+      onExecutionStarted: () => pauseAt("execution-start publication"),
     };
     let blocked: Promise<unknown> | undefined;
     let successor: Promise<unknown> | undefined;
     let recovery: Promise<unknown> | undefined;
     try {
-      await expect(
-        createLane(first).enqueueGlobal(async () => {
-          throw new Error("unexpected local execution");
-        }),
-      ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+      await expect(enqueueWorker(first, false)).resolves.toMatchObject({
+        payloads: [{ text: "First turn complete" }],
+      });
       await placements.waitForTurnClaimRelease(SESSION_ID, {});
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
@@ -529,12 +467,7 @@ describe("worker pre-launch claim recovery", () => {
       if (stage === "workspace queue") {
         queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
       }
-      const lane = createLane(second);
-      blocked = lane.enqueueSession(() =>
-        lane.enqueueGlobal(async () => {
-          throw new Error("unexpected local execution");
-        }),
-      );
+      blocked = enqueueWorker(second);
       const outcome = blocked.catch((error: unknown) => error);
       await entered.promise;
       const oldClaim = placements.get(SESSION_ID)?.turnClaim;
@@ -591,14 +524,9 @@ describe("worker pre-launch claim recovery", () => {
         blockSecond = false;
         holdSuccessor = false;
         const third = turn("successor-third");
-        const thirdLane = createLane(third);
-        await expect(
-          thirdLane.enqueueSession(() =>
-            thirdLane.enqueueGlobal(async () => {
-              throw new Error("unexpected local execution");
-            }),
-          ),
-        ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+        await expect(enqueueWorker(third)).resolves.toMatchObject({
+          payloads: [{ text: "First turn complete" }],
+        });
         await placements.waitForTurnClaimRelease(SESSION_ID, {});
         expect(placements.get(SESSION_ID)).toMatchObject({
           state: "active",
@@ -625,12 +553,7 @@ describe("worker pre-launch claim recovery", () => {
       });
       expect(getCommandLaneSnapshot(resolveEmbeddedSessionLane(SESSION_KEY)).activeCount).toBe(0);
       const third = turn("successor-third");
-      const thirdLane = createLane(third);
-      successor = thirdLane.enqueueSession(() =>
-        thirdLane.enqueueGlobal(async () => {
-          throw new Error("unexpected local execution");
-        }),
-      );
+      successor = enqueueWorker(third);
       void successor.catch(() => {});
       await successorEntered.promise;
       const replacement = placements.get(SESSION_ID)?.turnClaim;
@@ -658,9 +581,6 @@ describe("worker pre-launch claim recovery", () => {
 });
 
 describe("worker turn launcher node-loss continuation", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
   it("retains an interrupted workspace and waits for reconnect before allowing continuation", async () => {
     await seedActivePlacement();
     const loss = new WorkerNodeLostError();
@@ -668,13 +588,11 @@ describe("worker turn launcher node-loss continuation", () => {
     const waiting = createDeferred();
     const order: string[] = [];
     let interruptedClaim: WorkerSessionTurnClaim | undefined;
-    const launchTurn = vi.fn(
-      async (request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) => {
-        interruptedClaim = request.turnClaim;
-        request.onDispatchReady?.();
-        throw loss;
-      },
-    );
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+      interruptedClaim = request.turnClaim;
+      request.onDispatchReady?.();
+      throw loss;
+    });
     const persistAbandonedPartial = vi.fn<
       NonNullable<WorkerTurnLauncherOptions["persistAbandonedPartial"]>
     >(async (claim) => {
@@ -686,28 +604,26 @@ describe("worker turn launcher node-loss continuation", () => {
       nodeDeviceId: "paired-node",
       sshEndpoint: null,
     };
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: () => environment,
-      acquireTurnCredential: async () => credential(),
-      acknowledgeCredentialDelivery: async () => true,
-      startTunnel: async () =>
-        createWorkerTurnTunnel({
-          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-          launchTurn,
-        }),
-      stopTunnel: async () => {
-        order.push("tunnel stopped");
+    const environments = workerTurnEnvironments(
+      createWorkerTurnTunnel({
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+        launchTurn,
+      }),
+      {
+        get: () => environment,
+        acknowledgeCredentialDelivery: async () => true,
+        stopTunnel: async () => {
+          order.push("tunnel stopped");
+        },
       },
-    };
+    );
     const reconcileActivePlacement = vi.fn(async () => {
       expect(interruptedClaim).toBeDefined();
       await placements.acceptWorkspaceResult(interruptedClaim!);
       await placements.completeWorkspaceResultAndReleaseTurn(interruptedClaim!);
       order.push("workspace settled");
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
+    const provider = createProvider({
       environments,
       persistAbandonedPartial,
       reconcileActivePlacement,
@@ -765,17 +681,14 @@ describe("worker turn launcher node-loss continuation", () => {
     });
     const reconcileActivePlacement = vi.fn();
     const destroy = vi.fn(async () => attachedEnvironment());
-    const launchTurn = vi.fn(
-      async (request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) => {
-        request.onDispatchReady?.();
-        if (failure !== "retained workspace and no reconnect") {
-          await placements.markWorkspaceResultPending(request.turnClaim);
-        }
-        throw loss;
-      },
-    );
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+      request.onDispatchReady?.();
+      if (failure !== "retained workspace and no reconnect") {
+        await placements.markWorkspaceResultPending(request.turnClaim);
+      }
+      throw loss;
+    });
+    const provider = createProvider({
       waitForAdmissionNode,
       reconcileActivePlacement,
       persistAbandonedPartial: async () => {
@@ -783,19 +696,17 @@ describe("worker turn launcher node-loss continuation", () => {
           throw new Error("transcript unavailable");
         }
       },
-      environments: {
-        ...unusedEnvironments(),
-        get: () => attachedEnvironment(),
-        stopTunnel: async () => {},
-        destroy,
-        acquireTurnCredential: async () => credential(),
-        acknowledgeCredentialDelivery: async () => true,
-        startTunnel: async () =>
-          createWorkerTurnTunnel({
-            reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-            launchTurn,
-          }),
-      },
+      environments: workerTurnEnvironments(
+        createWorkerTurnTunnel({
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+          launchTurn,
+        }),
+        {
+          stopTunnel: async () => {},
+          destroy,
+          acknowledgeCredentialDelivery: async () => true,
+        },
+      ),
     });
     await expect(
       provider.executeTurn(

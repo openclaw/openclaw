@@ -4,9 +4,29 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import type { executeWorkerTurn } from "./worker-turn-execution.js";
+
+function expectCalls(count: number, ...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
 
 describe("worker turn execution loading", () => {
   let fixture: typeof import("./worker-turn-launcher.test-support.js");
+
+  const createProvider = (environments = fixture.unusedEnvironments()) =>
+    fixture.createWorkerSessionTurnPlacementProvider({
+      placements: fixture.placements,
+      environments,
+    });
+
+  const sandboxRequest = () => ({
+    sessionId: fixture.SESSION_ID,
+    sessionKey: fixture.SESSION_KEY,
+    agentId: "main",
+    workspaceDir: fixture.root,
+  });
 
   beforeEach(async () => {
     vi.resetModules();
@@ -46,28 +66,21 @@ describe("worker turn execution loading", () => {
       const restart = createAgentRunRestartAbortError();
       let revoked = false;
       let executionAssertion: (() => void) | undefined;
-      const execute = vi.fn(
-        async (params: {
-          onHandoff: () => void;
-          onTerminal?: () => void;
-          turnClaim: WorkerSessionTurnClaim;
-          assertRunCurrent: () => void;
-        }) => {
-          executionAssertion = params.assertRunCurrent;
-          const sql = observeMainThreadSql();
-          try {
-            params.assertRunCurrent();
-            params.assertRunCurrent();
-            sql.expectIdle();
-          } finally {
-            sql.restore();
-          }
-          params.onHandoff();
-          params.onTerminal?.();
-          await fixture.placements.releaseTurn(params.turnClaim);
-          return { meta: { durationMs: 1 } };
-        },
-      );
+      const execute = vi.fn(async (params: Parameters<typeof executeWorkerTurn>[0]) => {
+        executionAssertion = params.assertRunCurrent;
+        const sql = observeMainThreadSql();
+        try {
+          params.assertRunCurrent();
+          params.assertRunCurrent();
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+        params.onHandoff();
+        params.onTerminal?.();
+        await fixture.placements.releaseTurn(params.turnClaim);
+        return { meta: { durationMs: 1 } };
+      });
       const load = vi.fn(async () => {
         loadStarted.resolve();
         await releaseLoad.promise;
@@ -86,10 +99,7 @@ describe("worker turn execution loading", () => {
       const owner = await import("./worker-turn-run-owner.js");
       const createOwner = vi.spyOn(owner, "createWorkerTurnRunOwner");
       const environments = fixture.unusedEnvironments();
-      const provider = fixture.createWorkerSessionTurnPlacementProvider({
-        environments,
-        placements: fixture.placements,
-      });
+      const provider = createProvider(environments);
       const onAdmitted = vi.fn();
       const assertCurrent = vi.fn(() => {
         if (revoked) {
@@ -108,11 +118,9 @@ describe("worker turn execution loading", () => {
       const settled = run.catch(() => {});
       try {
         await awaitGateBeforeSettlement(loadStarted.promise, settled, "execution never loaded");
-        expect(load).toHaveBeenCalledOnce();
-        expect(unselected).not.toHaveBeenCalled();
-        expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
-        expect(onAdmitted).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
-        expect(execute).not.toHaveBeenCalled();
+        expectCalls(1, load);
+        expectCalls(0, unselected, execute);
+        expectCalls(mode === "worker-turn" ? 1 : 0, createOwner, onAdmitted);
         const placement = fixture.placements.get(fixture.SESSION_ID);
         if (placement?.state !== "active") {
           throw new Error("expected retained active placement");
@@ -153,8 +161,7 @@ describe("worker turn execution loading", () => {
         releaseLoad.resolve();
         if (scenario === "current") {
           await expect(run).resolves.toEqual({ meta: { durationMs: 1 } });
-          expect(onAdmitted).toHaveBeenCalledOnce();
-          expect(execute).toHaveBeenCalledOnce();
+          expectCalls(1, onAdmitted, execute);
           expect(execute.mock.calls[0]?.[0].turnClaim).toEqual(retained);
           if (mode === "worker-turn") {
             expect(executionAssertion).toThrow();
@@ -169,13 +176,11 @@ describe("worker turn execution loading", () => {
           } else {
             await expect(run).rejects.toThrow("placement changed while loading turn execution");
           }
-          expect(onAdmitted).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
-          expect(execute).not.toHaveBeenCalled();
+          expectCalls(mode === "worker-turn" ? 1 : 0, onAdmitted);
+          expectCalls(0, execute);
         }
-        expect(createOwner).toHaveBeenCalledTimes(mode === "worker-turn" ? 1 : 0);
-        expect(runLocal).not.toHaveBeenCalled();
-        expect(environments.startTunnel).not.toHaveBeenCalled();
-        expect(environments.destroy).not.toHaveBeenCalled();
+        expectCalls(mode === "worker-turn" ? 1 : 0, createOwner);
+        expectCalls(0, runLocal, environments.startTunnel, environments.destroy);
         expect(fixture.placements.get(fixture.SESSION_ID)?.turnClaim?.claimId).toBe(
           replacement?.claimId,
         );
@@ -198,12 +203,7 @@ describe("worker turn execution loading", () => {
     let checkedPendingPublication = false;
     // mock-isolation: drive the launcher guard without starting real worker execution.
     vi.doMock("./worker-turn-execution.js", () => ({
-      executeWorkerTurn: async (params: {
-        onHandoff: () => void;
-        onTerminal: () => void;
-        turnClaim: WorkerSessionTurnClaim;
-        assertRunCurrent: () => void;
-      }) => {
+      executeWorkerTurn: async (params: Parameters<typeof executeWorkerTurn>[0]) => {
         setRuntimeConfigSnapshot(config);
         using stage = vi.spyOn(publicationOwner, "stagePlacementWorkspaceResultWorkerPublication");
         stage.mockImplementationOnce((...args) => {
@@ -233,12 +233,9 @@ describe("worker turn execution loading", () => {
         return { meta: { durationMs: 1 } };
       },
     }));
-    const provider = fixture.createWorkerSessionTurnPlacementProvider({
-      environments: {
-        ...fixture.unusedEnvironments(),
-        get: fixture.attachedEnvironment,
-      },
-      placements: fixture.placements,
+    const provider = createProvider({
+      ...fixture.unusedEnvironments(),
+      get: fixture.attachedEnvironment,
     });
     const runId = "run-required-result-publication";
     const runLocal = vi.fn();
@@ -256,10 +253,7 @@ describe("worker turn execution loading", () => {
     });
     vi.doMock("./worker-turn-execution.js", load);
     vi.doMock("./workspace-result-finalize.js", load);
-    const provider = fixture.createWorkerSessionTurnPlacementProvider({
-      environments: fixture.unusedEnvironments(),
-      placements: fixture.placements,
-    });
+    const provider = createProvider();
     const request = fixture.workerTurnRequest("run-local-lazy");
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     await expect(
@@ -302,16 +296,11 @@ describe("worker turn execution loading", () => {
         nodeDeviceId: "fixture-node",
         sshEndpoint: null,
       };
-      const provider = fixture.createWorkerSessionTurnPlacementProvider({
-        environments: { ...fixture.unusedEnvironments(), get: vi.fn(() => environment) },
-        placements: fixture.placements,
+      const provider = createProvider({
+        ...fixture.unusedEnvironments(),
+        get: vi.fn(() => environment),
       });
-      const sandbox = provider.prepareSandbox({
-        sessionId: fixture.SESSION_ID,
-        sessionKey: fixture.SESSION_KEY,
-        agentId: "main",
-        workspaceDir: fixture.root,
-      });
+      const sandbox = provider.prepareSandbox(sandboxRequest());
       const settled = sandbox.catch(() => {});
       try {
         await awaitGateBeforeSettlement(loadStarted.promise, settled, "sandbox never loaded");
@@ -354,16 +343,8 @@ describe("worker turn execution loading", () => {
       throw failure;
     });
     vi.doMock("./placement-sandbox.js", load);
-    const provider = fixture.createWorkerSessionTurnPlacementProvider({
-      environments: fixture.unusedEnvironments(),
-      placements: fixture.placements,
-    });
-    const request = {
-      sessionId: fixture.SESSION_ID,
-      sessionKey: fixture.SESSION_KEY,
-      agentId: "main",
-      workspaceDir: fixture.root,
-    };
+    const provider = createProvider();
+    const request = sandboxRequest();
     using prepared = await provider.prepareSandbox({ ...request, agentId: "other" });
     expect(prepared.sandbox).toBeNull();
     expect(load).not.toHaveBeenCalled();
