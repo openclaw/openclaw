@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -16,10 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
-import type {
-  TranscriptTurnAdmission,
-  TranscriptTurnBoundary,
-} from "../../config/sessions/transcript-entry-anchor.js";
+import type { TranscriptTurnAdmission } from "../../config/sessions/transcript-entry-anchor.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -29,7 +25,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   completedTurnMessageAnchor,
   captureCompletedTurnMessageAnchor,
@@ -56,11 +52,13 @@ import {
 } from "./context-engine-turn-outbox.kernel.worker.js";
 import { bindSqliteWorkerBackend } from "./context-engine-turn-outbox.worker.js";
 import {
+  appendTurnMessage,
+  createTurnBoundary,
   createTurnEngine as createEngine,
   createTurnLease as createLease,
 } from "./context-engine-turn.test-support.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useSessionStoreTempDirs(afterEach, "openclaw-context-outbox-");
 const runtimeContext = {
   provider: "anthropic",
   modelId: "claude-sonnet-4-6",
@@ -71,61 +69,23 @@ type ContextEngineTurnOutboxPayload = Parameters<
   typeof enqueueContextEngineTurnCommit
 >[0]["payload"];
 
-afterEach(async () => {
-  for (const tempDir of tempDirs.splice(0)) {
-    await cleanupSessionStateForTest({ stateDir: tempDir });
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
 function createPayload(
   databasePath: string,
   advancementKey: string,
   sessionId = "session-a",
   sequence = 1,
 ): ContextEngineTurnOutboxPayload {
-  const anchor = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: databasePath,
-    generation: "generation-1",
-    entryId: `${advancementKey}:user`,
-    rawSeq: sequence,
-    effectiveParentId: null,
-    activeMessagePosition: sequence,
-  };
-  const boundary = {
-    admission: {
-      ...anchor,
-      logicalTurnId: advancementKey,
-      role: "user" as const,
-    },
-    terminal: {
-      ...anchor,
-      entryId: `${advancementKey}:assistant`,
-      rawSeq: sequence + 1,
-      effectiveParentId: anchor.entryId,
-      activeMessagePosition: sequence + 1,
-    },
-  } satisfies TranscriptTurnBoundary;
   return {
-    boundary,
+    boundary: createTurnBoundary(databasePath, advancementKey, sessionId, sequence),
     isHeartbeat: false,
     messages: [],
   };
 }
 
-function createStateDir() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-"));
-  tempDirs.push(stateDir);
-  return stateDir;
-}
-
 function createDatabase() {
   return openOpenClawAgentDatabase({
     agentId: "main",
-    env: { OPENCLAW_STATE_DIR: createStateDir() },
+    env: { OPENCLAW_STATE_DIR: tempDirs.make() },
   });
 }
 
@@ -138,15 +98,19 @@ function runtimeRecorder(content = "current", timestamp = 1_000) {
   return { currentMessage, recorder };
 }
 
+function readRow(database: ReturnType<typeof createDatabase>, key: string, columns: string) {
+  return database.db
+    .prepare(`SELECT ${columns} FROM context_engine_turn_outbox WHERE advancement_key = ?`)
+    .get(key);
+}
+
 function readPayload(database: ReturnType<typeof createDatabase>, key: string): unknown {
-  const row = database.db
-    .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
-    .get(key) as { payload_json: string } | undefined;
+  const row = readRow(database, key, "payload_json") as { payload_json: string } | undefined;
   return JSON.parse(row?.payload_json ?? "{}");
 }
 
 async function createTranscript(sessionId: string, content = "current") {
-  const stateDir = createStateDir();
+  const stateDir = tempDirs.make();
   const target = {
     agentId: "main",
     sessionId,
@@ -320,11 +284,7 @@ describe("context-engine turn outbox", () => {
         path: database.path,
       });
       const row = () =>
-        database.db
-          .prepare(
-            "SELECT attempt_count, last_error FROM context_engine_turn_outbox WHERE advancement_key = ?",
-          )
-          .get(payload.boundary.admission.logicalTurnId);
+        readRow(database, payload.boundary.admission.logicalTurnId, "attempt_count, last_error");
       const result = await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
       if (failure === "missing-state") {
         expect(result.pending).toBe(true);
@@ -370,11 +330,13 @@ describe("context-engine turn outbox", () => {
         engineId: "test",
         isHeartbeat: accepted,
       });
-      const terminal = await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: accepted ? "first answer" : "rejected fallback" },
-        parentId: admitted.messageId,
-        now: 2_000,
-      });
+      const terminal = await appendTurnMessage(
+        target,
+        "assistant",
+        accepted ? "first answer" : "rejected fallback",
+        2_000,
+        admitted.messageId,
+      );
       if (!terminal?.anchor) {
         throw new Error("expected terminal transcript entry");
       }
@@ -387,11 +349,7 @@ describe("context-engine turn outbox", () => {
           runtimeContext: { ...runtimeContext },
         });
       }
-      const current = await appendTranscriptMessage(target, {
-        message: { role: "user", content: "second" },
-        parentId: terminal.messageId,
-        now: 3_000,
-      });
+      const current = await appendTurnMessage(target, "user", "second", 3_000, terminal.messageId);
       if (!current?.anchor) {
         throw new Error("expected current transcript entry");
       }
@@ -415,17 +373,15 @@ describe("context-engine turn outbox", () => {
       });
       if (accepted) {
         expect(commitTurn).toHaveBeenCalledOnce();
-        expect(commitTurn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            advancementKey: admission.logicalTurnId,
-            isHeartbeat: true,
-            runtimeContext,
-            messages: [
-              { role: "user", content: "first" },
-              { role: "assistant", content: "first answer" },
-            ],
-          }),
-        );
+        expect(commitTurn.mock.calls[0]?.[0]).toMatchObject({
+          advancementKey: admission.logicalTurnId,
+          isHeartbeat: true,
+          runtimeContext,
+          messages: [
+            { role: "user", content: "first" },
+            { role: "assistant", content: "first answer" },
+          ],
+        });
         expect(
           database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
         ).toHaveLength(0);
@@ -470,27 +426,20 @@ describe("context-engine turn outbox", () => {
       engineId: "test",
       isHeartbeat: false,
     });
-    const storedState = () =>
-      database.db
-        .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
-        .get(payload.boundary.admission.logicalTurnId)?.payload_state;
-    const sequence = () =>
-      database.db
-        .prepare(
-          "SELECT enqueue_sequence FROM context_engine_turn_outbox WHERE advancement_key = ?",
-        )
-        .get(payload.boundary.admission.logicalTurnId)?.enqueue_sequence;
-    const admittedSequence = sequence();
-    expect(admittedSequence).toBe(1);
-    expect(storedState()).toBe("admitted");
+    const row = () =>
+      readRow(
+        database,
+        payload.boundary.admission.logicalTurnId,
+        "payload_state, enqueue_sequence",
+      );
+    expect(row()).toEqual({ payload_state: "admitted", enqueue_sequence: 1 });
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
       database,
       engineId: "test",
       isHeartbeat: false,
     });
-    expect(storedState()).toBe("accepted");
-    expect(sequence()).toBe(admittedSequence);
+    expect(row()).toEqual({ payload_state: "accepted", enqueue_sequence: 1 });
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -499,8 +448,7 @@ describe("context-engine turn outbox", () => {
       sessionId: payload.boundary.admission.sessionId,
       warn,
     });
-    expect(storedState()).toBe("blocked");
-    expect(sequence()).toBe(admittedSequence);
+    expect(row()).toEqual({ payload_state: "blocked", enqueue_sequence: 1 });
 
     expect(readPayload(database, payload.boundary.admission.logicalTurnId)).toMatchObject({
       state: "blocked",
@@ -538,16 +486,8 @@ describe("context-engine turn outbox", () => {
       expect.objectContaining({ advancementKey: "session-a:later-ready" }),
     );
     expect(degradeBeforeStart).not.toHaveBeenCalled();
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
-        .get(payload.boundary.admission.logicalTurnId),
-    ).toBeDefined();
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
-        .get("session-a:later-ready"),
-    ).toBeUndefined();
+    expect(readRow(database, payload.boundary.admission.logicalTurnId, "1")).toBeDefined();
+    expect(readRow(database, "session-a:later-ready", "1")).toBeUndefined();
     expect(readPayload(database, currentAdmission.logicalTurnId)).toMatchObject({
       state: "admitted",
     });
@@ -601,13 +541,10 @@ describe("context-engine turn outbox", () => {
       "session-a:z-first",
       "session-b:1",
     ]);
-    expect(
-      database.db
-        .prepare(
-          "SELECT enqueue_sequence, attempt_count FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
-        )
-        .get(),
-    ).toEqual({ enqueue_sequence: 1, attempt_count: 1 });
+    expect(readRow(database, "session-a:z-first", "enqueue_sequence, attempt_count")).toEqual({
+      enqueue_sequence: 1,
+      attempt_count: 1,
+    });
     failFirstTurn = false;
 
     await drain(2);
@@ -688,8 +625,8 @@ describe("context-engine turn outbox", () => {
   });
 
   it("preserves an unbound incognito namespace under a symlinked state directory", () => {
-    const stateDir = createStateDir();
-    const alias = path.join(createStateDir(), "state");
+    const stateDir = tempDirs.make();
+    const alias = path.join(tempDirs.make(), "state");
     fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
     const storePath = path.join(
       alias,
@@ -710,7 +647,7 @@ describe("context-engine turn outbox", () => {
 
   it("admits a runtime transcript through a symlinked state directory", async () => {
     const { stateDir, target, admission, database } = await createTranscript("symlink-turn");
-    const alias = path.join(createStateDir(), "state");
+    const alias = path.join(tempDirs.make(), "state");
     fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
     const { currentMessage, recorder } = runtimeRecorder();
     const lease = createLease(createEngine(async () => ({ status: "committed" })));

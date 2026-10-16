@@ -21,6 +21,18 @@ import {
 // Collect the real transport before test deadlines; production still imports it lazily.
 export { callGatewayTool } from "../tools/gateway.js";
 
+type Held = { entered: Deferred; release: Deferred<boolean> };
+function hold(set: (gate: Held) => void) {
+  const gate = { entered: deferred(), release: deferred<boolean>() };
+  set(gate);
+  return {
+    entered: gate.entered.promise,
+    release: () => gate.release.resolve(true),
+    fail: () => gate.release.resolve(false),
+  };
+}
+type HoldControl = ReturnType<typeof hold>;
+
 // Only the peer is synthetic: question claims use the production tool, one-shot
 // call, client, and WebSocket send, with real QuestionManager terminal state.
 export async function withQuestionGateway(
@@ -30,15 +42,11 @@ export async function withQuestionGateway(
     backingRun: AbortController;
     requests: RequestFrame[];
     waitStarted: Promise<void>;
-    holdNextHello: () => { entered: Promise<void>; release: () => void; fail: () => void };
+    holdNextHello: () => HoldControl;
     onResolved: (callback: () => void) => void;
     dropNextResolveResponse: () => void;
     holdRegistration: () => { entered: Promise<void>; release: () => void };
-    holdWaitAnswerResponse: () => {
-      entered: Promise<void>;
-      release: () => void;
-      fail: () => void;
-    };
+    holdWaitAnswerResponse: () => HoldControl;
   }) => Promise<void>,
 ) {
   await withEnvAsync(
@@ -67,11 +75,11 @@ export async function withQuestionGateway(
       const backingRun = new AbortController();
       const requests: RequestFrame[] = [];
       const waitStarted = deferred();
-      let nextHello: { entered: Deferred; release: Deferred<"allow" | "close"> } | undefined;
+      let nextHello: Held | undefined;
       let onResolved = () => {};
       let dropResolveResponse = false;
-      let registrationHold: { entered: Deferred; release: Deferred } | undefined;
-      let answerHold: { entered: Deferred; release: Deferred<boolean> } | undefined;
+      let registrationHold: Held | undefined;
+      let answerHold: Held | undefined;
       server.on("connection", (socket) => {
         socket.send(
           JSON.stringify({
@@ -88,11 +96,11 @@ export async function withQuestionGateway(
             }
           };
           if (frame.method === "connect") {
-            const hold = nextHello;
+            const gate = nextHello;
             nextHello = undefined;
-            hold?.entered.resolve();
-            void (hold?.release.promise ?? Promise.resolve("allow")).then((outcome) => {
-              if (outcome === "close") {
+            gate?.entered.resolve();
+            void (gate?.release.promise ?? Promise.resolve(true)).then((outcome) => {
+              if (outcome === false) {
                 socket.terminate();
               } else {
                 respond({ type: "hello-ok" });
@@ -172,29 +180,18 @@ export async function withQuestionGateway(
           backingRun,
           requests,
           waitStarted: waitStarted.promise,
-          holdNextHello: () => {
-            const hold = { entered: deferred(), release: deferred<"allow" | "close">() };
-            nextHello = hold;
-            return {
-              entered: hold.entered.promise,
-              release: () => hold.release.resolve("allow"),
-              fail: () => hold.release.resolve("close"),
-            };
-          },
-          holdRegistration: () => {
-            const hold = { entered: deferred(), release: deferred() };
-            registrationHold = hold;
-            return { entered: hold.entered.promise, release: () => hold.release.resolve() };
-          },
-          holdWaitAnswerResponse: () => {
-            const hold = { entered: deferred(), release: deferred<boolean>() };
-            answerHold = hold;
-            return {
-              entered: hold.entered.promise,
-              release: () => hold.release.resolve(true),
-              fail: () => hold.release.resolve(false),
-            };
-          },
+          holdNextHello: () =>
+            hold((gate) => {
+              nextHello = gate;
+            }),
+          holdRegistration: () =>
+            hold((gate) => {
+              registrationHold = gate;
+            }),
+          holdWaitAnswerResponse: () =>
+            hold((gate) => {
+              answerHold = gate;
+            }),
           onResolved: (callback) => {
             onResolved = callback;
           },
