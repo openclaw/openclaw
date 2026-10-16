@@ -31,7 +31,7 @@ import {
 import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
-import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
+import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
@@ -61,6 +61,7 @@ export class DesktopPanelController extends SolidPanelController {
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null = null;
   fullscreenMode!: DesktopFullscreen;
+  pictureInPicture!: DesktopPictureInPicture;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
   desktopClientFactory: () => Pick<desktopTransport.DesktopClient, "connect"> = () =>
@@ -93,7 +94,6 @@ export class DesktopPanelController extends SolidPanelController {
     apps: this.desktopApps,
   }));
 
-  private readonly pictureInPicture = new DesktopPictureInPicture(this, () => this.state);
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -151,6 +151,11 @@ export class DesktopPanelController extends SolidPanelController {
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode?.ownsFullscreen() ?? false,
   });
+
+  readonly pictureInPictureSource = (): HTMLCanvasElement | null =>
+    this.available && this.state === "connected" && (!this.embedded || this.presented)
+      ? this.renderRoot.querySelector<HTMLCanvasElement>(".desktop-surface canvas")
+      : null;
 
   override connectedCallback(): void {
     if (!this.embedded) {
@@ -313,7 +318,10 @@ export class DesktopPanelController extends SolidPanelController {
 
   private disconnectConnection(retainViewer = false): void {
     this.audio.close();
-    this.pictureInPicture.close();
+    // Disposed owners release the mirror without publishing presentation state.
+    if (this.isConnected) {
+      this.pictureInPicture.close();
+    }
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);

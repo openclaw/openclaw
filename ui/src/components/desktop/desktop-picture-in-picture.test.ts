@@ -242,7 +242,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     expect(disconnect).not.toHaveBeenCalled();
   });
 
-  it.each(["disconnect", "source switch", "session switch", "unmount"])(
+  it.each(["disconnect", "source switch", "session switch", "hidden", "unmount"])(
     "closes late PiP completions after %s",
     async (reason) => {
       const pending = createDeferred<Window>();
@@ -259,6 +259,10 @@ describe("Desktop Picture-in-Picture ownership", () => {
         updatePanel(panel, { requestedSource: "another-machine" });
       } else if (reason === "session switch") {
         updatePanel(panel, { sessionKey: "agent:main:another-session" });
+      } else if (reason === "hidden") {
+        updatePanel(panel, { presented: false });
+        await panel.updateComplete;
+        expect(button(panel).getAttribute("aria-busy")).toBe("true");
       } else {
         unmountPanel(panel);
       }
