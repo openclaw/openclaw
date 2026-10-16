@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordRestClient } from "./client.js";
-import { createDiscordRequestClient } from "./proxy-request-client.js";
+import { RequestClient } from "./internal/rest.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
@@ -158,7 +158,7 @@ describe("createDiscordRestClient proxy support", () => {
       if (!proxyFetch) {
         throw new Error("expected Discord proxy fetch");
       }
-      const rest = createDiscordRequestClient("test-token", {
+      const rest = new RequestClient("test-token", {
         baseUrl: `http://127.0.0.1:${targetPort}`,
         fetch: proxyFetch,
         queueRequests: false,

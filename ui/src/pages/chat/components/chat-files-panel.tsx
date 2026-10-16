@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, onCleanup, refresh } from "solid-js";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -13,7 +13,6 @@ import {
   LitContent,
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
-import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -41,45 +40,41 @@ defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
+    let completeCommit = () => {};
     const appUnmount = new McpAppUnmountGate<Props>(
-      { requestUpdate: () => lifecycle.invalidate() },
+      { requestUpdate: () => void refresh(rendered) },
       () =>
         new Promise<void>((resolve) => {
-          lifecycle.afterCommit((complete) => {
-            resolve();
-            complete();
-          }, resolve);
+          completeCommit = resolve;
         }),
     );
-    const lifecycle = createSolidRenderLifecycle({
-      host,
-      presented: () => true,
-      read: () => {
-        const snapshot = {
-          previews: props.previews,
-          activeId: props.activeId,
-          tabsInHeader: props.tabsInHeader,
-          browser: props.browser,
-          renderDetail: props.renderDetail,
-          onSelect: props.onSelect,
-          onClose: props.onClose,
-        };
-        const appKeys = new Set(
-          snapshot.previews
-            .filter((entry) => entry.content.kind === "mcp-app")
-            .map((entry) => entry.id),
-        );
-        return appUnmount.render(
-          JSON.stringify([...appKeys]),
-          () => snapshot,
-          () =>
-            [...host.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
-              (element) => !appKeys.has(element.dataset.appTabId ?? ""),
-            ),
-        );
-      },
+    const rendered = createMemo(() => {
+      const snapshot = {
+        previews: props.previews,
+        activeId: props.activeId,
+        tabsInHeader: props.tabsInHeader,
+        browser: props.browser,
+        renderDetail: props.renderDetail,
+        onSelect: props.onSelect,
+        onClose: props.onClose,
+      };
+      const appKeys = new Set(
+        snapshot.previews
+          .filter((entry) => entry.content.kind === "mcp-app")
+          .map((entry) => entry.id),
+      );
+      return appUnmount.render(
+        JSON.stringify([...appKeys]),
+        () => snapshot,
+        () =>
+          [...host.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
+            (element) => !appKeys.has(element.dataset.appTabId ?? ""),
+          ),
+      );
     });
-    const rendered = lifecycle.snapshot;
+    createEffect(rendered, () => completeCommit());
+    // Disposal also settles the gate; it restarts only views that remain connected.
+    onCleanup(() => completeCommit());
     const hostedTabs = (): PanelHostedTab[] => {
       const tabs = props.previews.map(({ id, label, content }) => ({
         id,

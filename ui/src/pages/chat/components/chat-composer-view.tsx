@@ -1,10 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { dynamic } from "@solidjs/web";
 import { createMemo, createRenderEffect, onCleanup, Show, untrack } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
 import "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../components/mcp-app-resources.tsx";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -13,6 +14,7 @@ import "../../../styles/chat/composer-context-strip.css";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import {
   renderChatAbortActionSolid,
@@ -23,7 +25,6 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
-import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
@@ -221,7 +222,16 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             controller={context.goalComposer}
             requestUpdate={context.requestUpdate}
           />
-          <LitContent value={props.composerRecovery ?? undefined} />
+          <Show when={props.composerRecovery}>
+            {(recovery) => {
+              const Recovery = dynamic(() => recovery().component);
+              return (
+                <ComposerContent>
+                  <Recovery {...recovery()} />
+                </ComposerContent>
+              );
+            }}
+          </Show>
         </div>
         {showComposerInput() ? (
           <ComposerInputScope state={context.state}>
@@ -483,14 +493,21 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       providerUsage={props.providerUsage}
                     />
                   </div>
-                  {hasComposerContent(composerControls()) ? (
-                    <>
-                      {" "}
-                      <div class="agent-chat__composer-controls">
-                        <LitContent value={composerControls()} />
-                      </div>{" "}
-                    </>
-                  ) : undefined}
+                  <Show when={composerControls()}>
+                    {(controls) => {
+                      const Controls = dynamic(() => controls().component);
+                      return (
+                        <>
+                          {" "}
+                          <div class="agent-chat__composer-controls">
+                            <ComposerContent>
+                              <Controls model={controls().model} />
+                            </ComposerContent>
+                          </div>{" "}
+                        </>
+                      );
+                    }}
+                  </Show>
                   <div class="agent-chat__composer-actions">
                     <ChatPrimaryActions {...context.runControlsProps} />
                   </div>

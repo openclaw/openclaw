@@ -1,9 +1,9 @@
 import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
-import type { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import type { DesktopAudio } from "./desktop-audio.ts";
@@ -47,7 +47,7 @@ type DesktopPresentationOptions = {
   pictureInPicture: DesktopPictureInPicture;
   audio: DesktopAudio;
   dockLayout: DockLayoutController<"bottom" | "right">;
-  fullscreenMode: DesktopFullscreenController;
+  fullscreenMode: DesktopFullscreen;
   onControlToggle: () => void;
   onTakeControl: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
@@ -119,7 +119,11 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
       return (
         <>
           <DesktopNotice
-            errorText={props.view.pictureInPicture.errorText ?? props.view.content.errorText}
+            errorText={
+              props.view.pictureInPicture.errorText ??
+              props.view.fullscreenMode.errorText() ??
+              props.view.content.errorText
+            }
             noticeText={props.view.content.noticeText}
             availability={props.view.content.availability}
           />
@@ -190,14 +194,17 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           dock={props.view.dockLayout.dock}
           height={props.view.dockLayout.height}
           width={props.view.dockLayout.width}
-          fullscreen={props.view.fullscreenMode.active}
-          renderResizer={() => (
-            <DockResizer
-              controller={props.view.dockLayout}
-              classPrefix="bp"
-              label={t("desktop.resize")}
-            />
-          )}
+          fullscreen={props.view.fullscreenMode.active()}
+          sectionRef={props.view.fullscreenMode.sectionRef}
+          renderResizer={() =>
+            !props.view.fullscreenMode.active() && (
+              <DockResizer
+                controller={props.view.dockLayout}
+                classPrefix="bp"
+                label={t("desktop.resize")}
+              />
+            )
+          }
           renderFullscreenControl={() => (
             <FullscreenButton controller={props.view.fullscreenMode} />
           )}

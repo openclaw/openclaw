@@ -27,7 +27,7 @@ function coverage(status = "complete", unknownCount = 0) {
   return { scope: "page", items: [{ ...plugin, status, unknownCount }], nextCursor: null };
 }
 
-async function query(t, respond, args = [], now = undefined) {
+async function query(t, respond, args, now) {
   // The OS reserves a fresh loopback port; no fixed port or external service is used.
   const server = createServer((request, response) => {
     const result = respond(new URL(request.url, "http://localhost"));
@@ -52,7 +52,7 @@ async function query(t, respond, args = [], now = undefined) {
     : [];
   const result = await exec(
     process.execPath,
-    [...clock, script, key, "--base-url", baseUrl, ...args],
+    [...clock, script, key, "--base-url", baseUrl, ...(args ?? [])],
     {
       timeout: 5000,
     },
@@ -61,7 +61,7 @@ async function query(t, respond, args = [], now = undefined) {
     (error) => error,
   );
   assert.ok(result.stdout, result.stderr);
-  return { code: result.code, report: JSON.parse(result.stdout) };
+  return { code: result.code, report: JSON.parse(result.stdout), stdout: result.stdout };
 }
 
 test("CLI follows empty intermediate pages and reports distinct consumers with evidence", async (t) => {
@@ -247,4 +247,98 @@ test("invalid or conflicting date filters fail before making a request", async (
     assert.equal(code, 1);
     assert.equal(report.distinctPlugins, null);
   }
+});
+
+test("CLI keeps large paginated inventories readable without losing aggregate coverage", async (t) => {
+  const since = "2026-07-16T12:00:00.000Z";
+  const releasedSince = 1784203200000;
+  const consumers = Array.from({ length: 12 }, (_, index) => ({
+    ...consumer,
+    packageName: `consumer-${String(index).padStart(2, "0")}`,
+    releaseId: `consumer-release-${index}`,
+    releaseCreatedAt: releasedSince,
+  }));
+  const roster = [
+    ...consumers.map(({ packageName, releaseId, version, releaseCreatedAt }) => ({
+      packageName,
+      releaseId,
+      version,
+      releaseCreatedAt,
+      status: "complete",
+      unknownCount: 0,
+    })),
+    ...Array.from({ length: 1143 }, (_, index) => ({
+      packageName: `missing-${index}`,
+      releaseId: `missing-release-${index}`,
+      version: "1.0.0",
+      releaseCreatedAt: releasedSince,
+      status: "missing",
+      unknownCount: 0,
+    })),
+    {
+      packageName: "partial-last",
+      releaseId: "partial-release",
+      version: "1.0.0",
+      releaseCreatedAt: releasedSince,
+      status: "partial",
+      unknownCount: 7,
+    },
+  ];
+  const respond = (url) => {
+    assert.equal(url.searchParams.get("releasedSince"), String(releasedSince));
+    const records = url.pathname.endsWith("/coverage") ? roster : consumers;
+    const offset = Number(url.searchParams.get("cursor") ?? 0);
+    const end = offset + 100;
+    return {
+      key,
+      scope: "page",
+      releasedSince,
+      items: records.slice(offset, end),
+      nextCursor: end < records.length ? String(end) : null,
+    };
+  };
+  const { code, report, stdout } = await query(t, respond, ["--since", since]);
+  assert.equal(code, 0);
+  assert.ok(
+    Buffer.byteLength(stdout) < 16_000,
+    "chat output must retain its count and coverage header",
+  );
+  assert.equal(report.key, key);
+  assert.equal(report.releaseWindow.latestReleaseUploadedSince, since);
+  assert.equal(report.traversalComplete, true);
+  assert.equal(report.assessment, "incomplete-coverage");
+  assert.equal(report.distinctPlugins, 12);
+  assert.deepEqual(report.referenceCounts, { runtime: 12, type: 12, declarative: 0 });
+  assert.deepEqual(report.coverage, {
+    eligible: 1156,
+    complete: 12,
+    partial: 1,
+    failed: 0,
+    missing: 1143,
+    incompatible: 0,
+    unresolvedReferences: 7,
+  });
+  assert.equal(report.items.length, 5);
+  assert.deepEqual(report.items[0].evidence, consumer.evidence);
+  assert.equal(report.gaps.length, 5);
+  assert.deepEqual(report.output, {
+    detail: "summary",
+    exampleLimit: 5,
+    omitted: { items: 7, gaps: 1139, warnings: 0 },
+  });
+  assert.ok(report.source.startsWith("http://127.0.0.1:"));
+
+  const full = await query(t, respond, ["--since", since, "--full"]);
+  assert.equal(full.code, 0);
+  assert.equal(full.report.distinctPlugins, 12);
+  assert.equal(full.report.coverage.eligible, 1156);
+  assert.equal(full.report.coverage.unresolvedReferences, 7);
+  assert.equal(full.report.items.length, 12);
+  assert.equal(full.report.gaps.length, 1144);
+  assert.equal(full.report.gaps.at(-1).packageName, "partial-last");
+  assert.deepEqual(full.report.output, {
+    detail: "full",
+    exampleLimit: null,
+    omitted: { items: 0, gaps: 0, warnings: 0 },
+  });
 });

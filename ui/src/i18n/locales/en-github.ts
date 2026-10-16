@@ -44,6 +44,7 @@ const enGitHub = {
     more: en.sessionHovercard.more,
     changedFile: en.sessionHovercard.changedFile,
     changedFiles: en.sessionHovercard.changedFiles,
+    pullRequests: "Pull requests",
     pullRequestLabel: "Pull request #{number}, {state}",
     pullRequestAuthorLabel: "Opened by {login}",
     states: {

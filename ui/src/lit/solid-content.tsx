@@ -19,19 +19,8 @@ import {
 } from "solid-js";
 import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 
-export { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
-
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
-
-/** Render opaque plugin SDK templates with their event receiver. */
-export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  if (template === undefined) {
-    unmountLitContent(target);
-  } else {
-    mountLitContent(template, target, { host });
-  }
-}
 
 export const emptyLegacyContent: typeof nothing = nothing;
 
@@ -45,11 +34,6 @@ type LitContentMount = {
 type NestedSolidRoot = { element: HTMLElement; dispose: () => void };
 let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
-
-/** Retire the existing range without restoring a possibly disposed creator. */
-function unmountLitContent(container: HTMLElement | DocumentFragment): void {
-  litContentMounts.get(container)?.dispose();
-}
 
 /** A top-level Lit caller settles now; nested Solid work settles with its owner. */
 function flushLegacyContent(): void {

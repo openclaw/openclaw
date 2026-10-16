@@ -530,9 +530,6 @@ async function completeEmbeddedRun(
       }
     }
   } else {
-    log.debug(
-      `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
-    );
     markEmbeddedRunAuthProfileSuccess({
       authProfileStateMode: input.runParams.authProfileStateMode,
       profileId: input.authProfileId,

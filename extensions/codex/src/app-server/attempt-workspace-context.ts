@@ -293,6 +293,6 @@ export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
 }
 
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+export function isNonEmptyString(value: string | undefined): value is string {
+  return Boolean(value);
 }

@@ -19,7 +19,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
-import { renderMicrophonePicker, type ChatRunControlsProps } from "./chat-composer-controls.tsx";
+import type { ChatRunControlsProps, MicrophonePickerProps } from "./chat-composer-controls.tsx";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -508,8 +508,8 @@ export function createChatComposerContext(
     startRealtimeTalk();
   };
   const selectedMicrophoneId = props.realtimeTalkInputDeviceId?.trim() ?? "";
-  const microphonePicker = props.onToggleRealtimeTalk
-    ? renderMicrophonePicker({
+  const microphonePicker: MicrophonePickerProps | undefined = props.onToggleRealtimeTalk
+    ? {
         devices: devicePicker.devices,
         loading: devicePicker.loading,
         open: devicePicker.open,
@@ -535,7 +535,7 @@ export function createChatComposerContext(
         },
         onOpenTalkSettings: props.onOpenTalkSettings,
         onOpenDictationSettings: props.onOpenDictationSettings,
-      })
+      }
     : undefined;
   const dictationOptions = {
     client: props.gatewayClient ?? null,

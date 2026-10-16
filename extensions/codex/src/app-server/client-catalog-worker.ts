@@ -9,6 +9,7 @@ import {
 } from "./client-catalog-response.js";
 import type { CodexCatalogDecodeRoute } from "./client-message-frames.js";
 import { isJsonObject } from "./protocol.js";
+import { CodexCatalogResponseTooLargeError } from "./rpc-error.js";
 
 const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
 const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
@@ -51,9 +52,7 @@ export class CodexCatalogWorker {
       return undefined;
     }
     if (line.byteLength > CATALOG_MAX_BYTES) {
-      const error = new Error(
-        "Codex catalog response exceeds 8 MiB; reduce oversized thread previews and retry.",
-      );
+      const error = new CodexCatalogResponseTooLargeError();
       return route === "unresolved"
         ? { failures: [{ value: "<oversized catalog response>", error, fragmentCount: 1 }] }
         : { failures: [], projectionError: { id: route.id, error } };

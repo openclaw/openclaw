@@ -399,74 +399,105 @@ describe("model chat and native model ownership", () => {
   );
 
   it("retains admitted account routes when projecting native model capabilities", async () => {
-    const fixture = await createFixture();
-    const model = {
-      provider: "openai",
-      id: fixture.generation.modelId,
-      name: "Account-only model",
-    };
-    const source: PreparedModelRuntimeSnapshot = {
-      ...fixture.generation.preparedModelRuntime,
-      readFullModelCatalog: () => ({
-        entries: [{ ...model, nativeRuntime: "codex" }],
-        routeVariants: [
-          {
-            ...model,
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
+    // First prove the admitted route without authored transport; then prove configured policy
+    // through the same runtime owner using a subscription-compatible authored endpoint.
+    for (const authoredContextTokenCap of [undefined, 500_000]) {
+      const config: OpenClawConfig = {};
+      if (authoredContextTokenCap !== undefined) {
+        config.models = {
+          providers: {
+            openai: {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [
+                {
+                  id: "fixture-model",
+                  name: "Configured account-only model",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 20_000,
+                  contextWindow: 1_000_000,
+                  contextTokens: authoredContextTokenCap,
+                },
+              ],
+            },
           },
-        ],
-      }),
-    };
-    const admitted = capturePreparedModelRuntimeCatalog(source, source);
-    // The orchestrator adds project facts without retaining the capture's object identity.
-    const projected = Object.freeze({ ...admitted, projectKey: null });
-    expect(projected.modelCatalog.entries).toEqual([{ ...model, nativeRuntime: "codex" }]);
-    expect(projected.modelCatalog.routeVariants).toEqual([]);
-    await fixture.state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "openai:account-only": {
-          type: "oauth",
-          provider: "openai",
-          access: "synthetic-account-access",
-          refresh: "synthetic-account-refresh",
-          expires: Date.now() + 86_400_000,
-          accountId: "synthetic-account",
+        };
+      }
+      const fixture = await createFixture(config);
+      const model = {
+        provider: "openai",
+        id: fixture.generation.modelId,
+        name: "Account-only model",
+      };
+      const source: PreparedModelRuntimeSnapshot = {
+        ...fixture.generation.preparedModelRuntime,
+        readFullModelCatalog: () => ({
+          entries: [{ ...model, nativeRuntime: "codex" }],
+          routeVariants: [
+            {
+              ...model,
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+        }),
+      };
+      const admitted = capturePreparedModelRuntimeCatalog(source, source);
+      // The orchestrator adds project facts without retaining the capture's object identity.
+      const projected = Object.freeze({ ...admitted, projectKey: null });
+      expect(projected.modelCatalog.entries).toEqual([{ ...model, nativeRuntime: "codex" }]);
+      expect(projected.modelCatalog.routeVariants).toEqual([]);
+      await fixture.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:account-only": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-account-access",
+            refresh: "synthetic-account-refresh",
+            expires: Date.now() + 86_400_000,
+            accountId: "synthetic-account",
+          },
         },
-      },
-    });
-    await withPreparedModelRuntimePluginGenerationScope(
-      {
-        remoteCatalog: null,
-        pluginMetadataSnapshot: fixture.generation.metadataSnapshot,
-        pluginRegistry: fixture.generation.pluginRegistry,
-        inlineProviderModels: [],
-        configuredCatalogEntries: [],
-      },
-      () =>
-        fixture.withRuntime(
-          { authProfileId: "openai:account-only", authProfileIdSource: "user" },
-          (runtime) => {
-            const snapshot = runtime.snapshot();
-            expect(runtime.nativeModelOwned).toBe(true);
-            expect(snapshot.agentHarness.id).toBe("codex");
-            expect(snapshot.activePreparedAuthPlan).toMatchObject({
-              forwardedAuthProfileId: "openai:account-only",
-              selectedAuthMode: "oauth",
-              modelRoute: {
-                api: "openai-chatgpt-responses",
-                baseUrl: "https://chatgpt.com/backend-api/codex",
-                authRequirement: "subscription",
-                runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-              },
-            });
-            expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
-          },
-          projected,
-        ),
-      () => admitted,
-    );
+      });
+      await withPreparedModelRuntimePluginGenerationScope(
+        {
+          remoteCatalog: null,
+          pluginMetadataSnapshot: fixture.generation.metadataSnapshot,
+          pluginRegistry: fixture.generation.pluginRegistry,
+          inlineProviderModels: [],
+          configuredCatalogEntries: [],
+        },
+        () =>
+          fixture.withRuntime(
+            { authProfileId: "openai:account-only", authProfileIdSource: "user" },
+            (runtime) => {
+              const snapshot = runtime.snapshot();
+              expect(runtime.nativeModelOwned).toBe(true);
+              expect(snapshot.agentHarness.id).toBe("codex");
+              expect(snapshot.contextTokenBudget).toBe(authoredContextTokenCap);
+              expect(snapshot.authoredContextTokenCap).toBe(authoredContextTokenCap);
+              if (authoredContextTokenCap !== undefined) {
+                expect(snapshot.contextWindowInfo?.source).toBe("modelsConfig");
+              }
+              expect(snapshot.activePreparedAuthPlan).toMatchObject({
+                forwardedAuthProfileId: "openai:account-only",
+                selectedAuthMode: "oauth",
+                modelRoute: {
+                  api: "openai-chatgpt-responses",
+                  baseUrl: "https://chatgpt.com/backend-api/codex",
+                  authRequirement: "subscription",
+                  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+                },
+              });
+              expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+            },
+            projected,
+          ),
+        () => admitted,
+      );
+    }
   });
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {

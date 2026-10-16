@@ -88,15 +88,14 @@ export function assertPostgresSearchAdmitted(
 }
 
 /** Deterministic derived DDL joins the store's generated DDL hash and exact catalog seal. */
-export function postgresSearchSql(schema?: SearchSchema): string {
-  if (!schema) {
-    return "";
-  }
+export function postgresSearchSql(schema: SearchSchema, namespace: string): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
+  const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
+  const configLiteral = `'${config.replaceAll("'", "''")}'`;
   const statements: string[] = [];
   if (Object.keys(schema.text ?? {}).length) {
-    statements.push(`CREATE TEXT SEARCH CONFIGURATION ${searchConfig} (COPY = pg_catalog.simple);
-ALTER TEXT SEARCH CONFIGURATION ${searchConfig} ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart WITH ${ext}.unaccent, pg_catalog.simple;`);
+    statements.push(`CREATE TEXT SEARCH CONFIGURATION ${config} (COPY = pg_catalog.simple);
+ALTER TEXT SEARCH CONFIGURATION ${config} ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart WITH ${ext}.unaccent, pg_catalog.simple;`);
   }
   for (const index of Object.values(schema.text ?? {})) {
     if (!index.postgres || index.fields.length !== 1) {
@@ -104,7 +103,7 @@ ALTER TEXT SEARCH CONFIGURATION ${searchConfig} ALTER MAPPING FOR hword, hword_p
     }
     const table = pgSearchName(index.table),
       field = pgSearchName(index.fields[0]!);
-    statements.push(`ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (to_tsvector('${searchConfig}'::regconfig, coalesce(${field}, ''))) STORED;
+    statements.push(`ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (to_tsvector(${configLiteral}::regconfig, coalesce(${field}, ''))) STORED;
 CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(openclaw_search);`);
     if (index.postgres.mode === "trigram") {
       statements.push(

@@ -235,9 +235,14 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 
 WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the stored option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+## Agent questions
+
+WhatsApp does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Plugin hooks and privacy
 

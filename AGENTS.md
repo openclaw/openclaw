@@ -118,7 +118,7 @@ Read matching guides in full; commands and details stay with them.
 - **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
 - **Channels/message actions:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
 - **Agent tools, prompts, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
-- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients.
+- **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Before writing, reviewing, or refactoring Solid code (Control UI, plugin views, Canvas hosts), read the [Solid skill](.agents/skills/solid/SKILL.md) and the installed `solid-js` cheatsheet it points to.
 - **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.
 - **Config migration:** [Doctor transforms](docs/gateway/doctor/config-migrations.md), never new runtime compatibility readers.
 - **Audit/identity:** [audit doctrine](docs/gateway/audit.md); provenance = opt-in, never authorization; changes to collection, reader scope, retained fields, bounds, contracts need approval.

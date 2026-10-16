@@ -184,9 +184,9 @@ export async function completeCleanupBookkeeping(
   // A replacement row or newer child generation still fences these effects.
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
-  context.resumeAncestorCleanup(entry);
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
     assertPublishedOwner();
-    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
+    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext, true);
   }
+  context.resumeAncestorCleanup(entry);
 }

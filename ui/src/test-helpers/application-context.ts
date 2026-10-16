@@ -1,4 +1,7 @@
+import { render } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { normalizeApplicationContext } from "./application-context-fixtures.ts";
 
 export {
@@ -8,13 +11,6 @@ export {
 } from "./application-context-fixtures.ts";
 
 type ContextCallback = (value: ApplicationContext, unsubscribe?: () => void) => void;
-type ContextRequest = Event & {
-  context: unknown;
-  contextTarget: Element;
-  callback: ContextCallback;
-  subscribe?: boolean;
-};
-
 /** Plain-DOM fixture for callers still crossing the application context bridge. */
 export function requestApplicationContext(
   host: Element,
@@ -33,33 +29,21 @@ export function requestApplicationContext(
 
 export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
-  let current = normalizeApplicationContext(context);
-  const subscribers = new Map<ContextCallback, () => void>();
-  host.addEventListener("context-request", (event) => {
-    // SAFETY: The context-request protocol defines these properties on its DOM event.
-    const request = event as ContextRequest;
-    if (request.context !== applicationContext || request.contextTarget === host) {
-      return;
-    }
-    event.stopPropagation();
-    if (request.subscribe) {
-      const unsubscribe = () => subscribers.delete(request.callback);
-      subscribers.set(request.callback, unsubscribe);
-      request.callback(current, unsubscribe);
-    } else {
-      request.callback(current);
-    }
-  });
+  const [value, setValue] = createSignal(normalizeApplicationContext(context));
+  render(
+    () =>
+      createComponent(ApplicationProvider, {
+        host,
+        get value() {
+          return value();
+        },
+      }),
+    document.createDocumentFragment(),
+  );
   return Object.assign(host, {
-    setContext(this: void, value: ApplicationContext) {
-      const next = normalizeApplicationContext(value);
-      if (next === current) {
-        return;
-      }
-      current = next;
-      for (const [callback, unsubscribe] of subscribers) {
-        callback(current, unsubscribe);
-      }
+    setContext: (next: ApplicationContext) => {
+      setValue(normalizeApplicationContext(next));
+      flush();
     },
   });
 }

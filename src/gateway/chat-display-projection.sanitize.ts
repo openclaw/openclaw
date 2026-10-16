@@ -5,6 +5,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import { normalizeContextUsage } from "../agents/usage.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -331,20 +332,6 @@ const USAGE_FIELDS = [
   "total_tokens",
 ] as const;
 
-/** Counters can cover a whole multi-call turn; clients size context from an available marker. */
-function projectContextUsage(raw: unknown): Record<string, unknown> | undefined {
-  const record = readObjectRecord(raw);
-  const promptTokens = asFiniteNumber(record?.promptTokens);
-  const totalTokens = asFiniteNumber(record?.totalTokens);
-  return record?.state === "available" &&
-    promptTokens !== undefined &&
-    totalTokens !== undefined &&
-    promptTokens >= 0 &&
-    totalTokens >= promptTokens
-    ? { state: "available", promptTokens, totalTokens }
-    : undefined;
-}
-
 function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
@@ -369,9 +356,7 @@ function sanitizeNumericMetadata(
     if (cost) {
       projected.cost = cost;
     }
-  }
-  if (fields === USAGE_FIELDS) {
-    const contextUsage = projectContextUsage(record.contextUsage);
+    const contextUsage = normalizeContextUsage(record.contextUsage);
     if (contextUsage) {
       projected.contextUsage = contextUsage;
     }

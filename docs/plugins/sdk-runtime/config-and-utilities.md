@@ -419,6 +419,8 @@ their payload for the listener. `include` and `exclude` apply to every event;
 the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
-cannot override the dispatcher's trust metadata. Accepted events retain their
-individual frozen copies; this filter does not change diagnostic collection or
-queue behavior.
+cannot override the dispatcher's trust metadata. Accepted plain event payloads
+share one frozen snapshot across listeners in a dispatch. Payloads with mutable
+opaque values (such as Maps or Dates) and private listener data retain individual
+copies. Listener mutations remain isolated from other listeners and producers;
+filtering does not change diagnostic collection or queue behavior.
