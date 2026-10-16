@@ -13,9 +13,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
@@ -39,6 +42,13 @@ const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${p
 const { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary } =
   useManagedServiceHandoffLifecycleFixture();
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Gateway startup admits its engine before update requests. Cold discovery is
+// covered separately by update-managed-service-handoff-engine.test.ts.
+beforeAll(() => {
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
+});
+afterAll(resetDatabaseEngineSelectionForTest);
 
 async function createUserSystemdFixture() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-"));

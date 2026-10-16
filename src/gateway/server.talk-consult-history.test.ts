@@ -96,7 +96,7 @@ let voiceSessionId: string | undefined;
 let modelStarted = createDeferred();
 let releaseModel = createDeferred();
 let unsubscribe: (() => void) | undefined;
-let publications: Promise<void>[] = [];
+let publications: ReturnType<ReturnType<typeof createTranscriptUpdateBroadcastHandler>>[] = [];
 let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;

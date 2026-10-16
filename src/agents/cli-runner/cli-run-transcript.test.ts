@@ -136,6 +136,49 @@ it("keeps CLI usage unmarked when the backend reports no separate turn total", a
   });
 });
 
+it("persists the 1h cache-write subset of a Claude turn total", async () => {
+  const root = sessionDirs.make();
+  const target = {
+    agentId: "main",
+    sessionId: "cli-cache-ttl-session",
+    sessionKey: "agent:main:cli-cache-ttl",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+
+  await persistCliAssistantTranscript({
+    runParams: {
+      ...target,
+      config: {},
+      sessionFile: `sqlite://agents/main/${target.sessionId}`,
+      workspaceDir: root,
+      prompt: "hi",
+      provider: "claude-cli",
+      runId: "cli-cache-ttl-run",
+      timeoutMs: 1_000,
+      persistAssistantTranscript: true,
+    },
+    text: "reply",
+    modelId: "claude-opus-4-8",
+    usage: { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 },
+    turnUsage: { input: 4418, output: 534, cacheWrite: 36955, cacheWrite1h: 36955 },
+    stopReason: "stop",
+  });
+
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  // Usage estimates price 1h writes at twice the input rate, so the subset must survive.
+  expect((messages[0] as AssistantMessage).usage).toMatchObject({
+    output: 534,
+    cacheWrite: 36955,
+    cacheWrite1h: 36955,
+  });
+});
+
 it.each([
   { kind: "completed", yielded: undefined, stopReason: "stop" },
   { kind: "yielded", yielded: true, stopReason: "stop" },

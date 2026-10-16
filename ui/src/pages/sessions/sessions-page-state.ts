@@ -9,7 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { SessionDetailsOwner } from "../../components/session-details-controller.ts";
+import { createSessionDetails } from "../../components/session-details.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import "../../components/session-menu.ts";
@@ -194,7 +194,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
-  const details = new SessionDetailsOwner(() => publish(), {
+  const details = createSessionDetails({
     captureScope: captureRequestScope,
     isCurrent: isRequestScopeCurrent,
     row: () => state.result?.sessions.find((row) => row.key === state.expandedSessionKey),
@@ -1363,10 +1363,10 @@ export function createSessionsPage(
     const context = application;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
-      loading: state.loading || details.loading,
+      loading: state.loading,
       refreshing: state.refreshing,
       result: state.result,
-      error: details.error ?? state.error,
+      error: state.error,
       activeMinutes: state.activeMinutes,
       limit: state.limit,
       includeGlobal: state.includeGlobal,
@@ -1573,7 +1573,6 @@ export function createSessionsPage(
       transcriptSearchAbort?.abort();
       clearSearchTimer();
       inputDialog.abort();
-      details.reset();
       sessionPullRequestsForGateway(application.gateway).unwatch(menuOwner);
       gatewayLifecycle.dispose();
     };
@@ -1591,6 +1590,8 @@ export function createSessionsPage(
       return {
         ...view,
         ...presentation,
+        loading: view.loading || details.loading(),
+        error: details.error() ?? view.error,
         // Keep the stored Person preference while the owner roster is unavailable.
         groupBy:
           view.personGroupingAvailable || presentation.groupBy !== "person"

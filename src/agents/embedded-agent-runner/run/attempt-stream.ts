@@ -13,6 +13,7 @@ import {
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
@@ -400,6 +401,7 @@ export function installEmbeddedAttemptStreamGuards(
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,

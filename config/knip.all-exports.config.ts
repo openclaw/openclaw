@@ -75,8 +75,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // The public QA Gateway child launches this transport proxy by path.
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
-  // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.
-  "test/fixtures/mantis-request-producer.mts!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.

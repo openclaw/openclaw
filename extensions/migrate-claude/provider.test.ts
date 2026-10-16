@@ -23,6 +23,29 @@ let stateDir: string;
 let reportDir: string;
 
 const provider = buildClaudeMigrationProvider();
+const instructionSources = [
+  {
+    name: "project CLAUDE.md",
+    sourceDir: "project-root",
+    sourceFile: "CLAUDE.md",
+    itemId: "workspace:CLAUDE.md",
+    targetFile: "AGENTS.md",
+  },
+  {
+    name: "project .claude/CLAUDE.md",
+    sourceDir: "project-root",
+    sourceFile: path.join(".claude", "CLAUDE.md"),
+    itemId: "workspace:.claude/CLAUDE.md",
+    targetFile: "AGENTS.md",
+  },
+  {
+    name: "user ~/.claude/CLAUDE.md",
+    sourceDir: ".claude",
+    sourceFile: "CLAUDE.md",
+    itemId: "memory:user-CLAUDE.md",
+    targetFile: "USER.md",
+  },
+];
 
 function contextFor(source: string, options: Partial<Parameters<typeof makeContext>[0]> = {}) {
   return makeContext({ source, stateDir, workspaceDir, ...options });
@@ -53,29 +76,7 @@ describe("Claude migration provider", () => {
     await testWorkspace.cleanup();
   });
 
-  it.each([
-    {
-      name: "project CLAUDE.md",
-      sourceDir: "project-root",
-      sourceFile: "CLAUDE.md",
-      itemId: "workspace:CLAUDE.md",
-      targetFile: "AGENTS.md",
-    },
-    {
-      name: "project .claude/CLAUDE.md",
-      sourceDir: "project-root",
-      sourceFile: path.join(".claude", "CLAUDE.md"),
-      itemId: "workspace:.claude/CLAUDE.md",
-      targetFile: "AGENTS.md",
-    },
-    {
-      name: "user ~/.claude/CLAUDE.md",
-      sourceDir: ".claude",
-      sourceFile: "CLAUDE.md",
-      itemId: "memory:user-CLAUDE.md",
-      targetFile: "USER.md",
-    },
-  ])("keeps repeated $name imports byte-identical", async (testCase) => {
+  it.each(instructionSources)("keeps repeated $name imports byte-identical", async (testCase) => {
     const source = path.join(root, testCase.sourceDir);
     const sourceFile = path.join(source, testCase.sourceFile);
     const context = contextFor(source);
@@ -101,6 +102,56 @@ describe("Claude migration provider", () => {
     const changedBytes = await fs.readFile(target, "utf8");
     expect(changedBytes).toContain("Version one.");
     expect(changedBytes).toContain("Version two.");
+  });
+
+  it.each(instructionSources)(
+    "rejects malformed $name without changing instructions and allows a repaired import",
+    async (testCase) => {
+      const source = path.join(root, testCase.sourceDir);
+      const sourceFile = path.join(source, testCase.sourceFile);
+      const target = path.join(workspaceDir, testCase.targetFile);
+      const original = Buffer.from("Existing instructions.\n");
+      const malformed = Buffer.from([0x61, 0xc3, 0x28, 0x0a]);
+      await writeFile(sourceFile, "");
+      await fs.writeFile(sourceFile, malformed);
+      await writeFile(target, original.toString("utf8"));
+      const context = contextFor(source);
+
+      const rejected = await provider.apply(context);
+
+      expect(planItemById(rejected.items, testCase.itemId)).toMatchObject({
+        status: "error",
+        reason: expect.stringContaining("UTF-8"),
+      });
+      expect(await fs.readFile(target)).toEqual(original);
+      expect(await fs.readFile(sourceFile)).toEqual(malformed);
+
+      const repaired = "\uFEFFInstructions: 中文 🦞 and literal \uFFFD\n";
+      await fs.writeFile(sourceFile, repaired, "utf8");
+      const imported = await provider.apply(context);
+      expect(planItemById(imported.items, testCase.itemId).status).toBe("migrated");
+      const importedBytes = await fs.readFile(target);
+      expect(importedBytes).toEqual(
+        Buffer.from(
+          `${original.toString("utf8")}\n\n<!-- Imported from Claude: ${testCase.name} -->\n\n${repaired}`,
+        ),
+      );
+    },
+  );
+
+  it("rejects malformed instructions before creating a workspace", async () => {
+    const source = path.join(root, "project");
+    const sourceFile = path.join(source, "CLAUDE.md");
+    await writeFile(sourceFile, "");
+    await fs.writeFile(sourceFile, Buffer.from([0xff]));
+
+    const result = await provider.apply(contextFor(source));
+
+    expect(planItemById(result.items, "workspace:CLAUDE.md")).toMatchObject({
+      status: "error",
+      reason: expect.stringContaining("UTF-8"),
+    });
+    await expect(fs.access(workspaceDir)).rejects.toThrow();
   });
 
   it("skips empty instructions without creating a target", async () => {

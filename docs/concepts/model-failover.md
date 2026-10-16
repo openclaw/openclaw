@@ -13,6 +13,11 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+Turn usage includes completed model candidates even when their answer is discarded
+during fallback. Costs retain each candidate's price; if any completed candidate's
+price is unavailable, the total cost stays unknown. The final selected model and
+its last-call usage still determine the reported model and context-window usage.
+
 Before rotating profiles or changing models, the runner attempts bounded
 same-model recovery for temporary rate limits and provider failures. It continues
 the existing transcript, preserving partial output and completed work. The agent
@@ -20,17 +25,28 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-An explicit organization-wide tokens-per-minute (TPM) exhaustion skips same-model
-backoff and auth-profile rotation when another configured candidate remains and the
-attempt is safe to replay. Auth-profile-backed credentials use the existing model cooldown,
-starting at 30 seconds, before another primary check. Other models on the same
-provider remain eligible. Generic 429 throttles, request limits, server errors,
-and connection failures keep bounded same-model recovery. The last configured
-candidate retains same-model recovery. If all later candidates are skipped by
-policy, authentication, or cooldown checks, the turn reports the exhausted chain
-instead of returning to the TPM-limited model. Inline provider keys still retry
-the primary on later turns; their existing cooldown policy covers auth and billing
-failures rather than model rate limits.
+Explicit organization-wide tokens-per-minute (TPM) exhaustion uses the same bounded
+recovery policy. Embedded model calls and direct completions share a process-local
+admission gate: requests using the affected provider endpoint and account wait for
+the provider's retry floor before being sent. This includes streamed rate-limit
+errors. `Retry-After` and exhausted quota reset headers are honored by the provider
+error parser. A full-refill reset is not a minimum wait when the bucket still has
+tokens and the provider supplies a shorter retry hint.
+
+During recovery, interactive turns take priority over subagents and background
+work such as reviews and titles. Queued requests resume one at a time with
+100–250 ms of jitter between admissions. The status reads **Waiting for rate
+limit**; cancellation, run deadlines, retry budgets, and configured delay caps
+still apply. The gate does not retry requests itself. A fallback model using the
+same account shares its wait instead of immediately hitting the same limit.
+
+Accounts share a gate when their explicit organization header or observed provider
+error identifies the same organization. Until then, credentials are scoped
+separately; requests without an account identity cannot be coordinated. State is
+in memory and expires one minute after the latest retry floor. Successful traffic
+does not extend recovery pacing. This does not coordinate other Gateway
+processes or native harness transports such as the Codex app-server, which retain
+their own transport and retry policies.
 
 An output-token limit is separate from a transient provider outage. The embedded
 runtime permits at most one continuation for a truncated Responses tool call or

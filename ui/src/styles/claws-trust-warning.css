@@ -9,10 +9,6 @@
   display: block;
 }
 
-.claws-trust-warning__release {
-  margin: 4px 0 8px;
-}
-
 .claws-trust-warning div strong {
   margin-right: 3px;
 }

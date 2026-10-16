@@ -8,7 +8,7 @@ import {
   imageFileExtensionForMimeType,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
@@ -673,7 +673,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         req,
         capability: "image",
       });
-      const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
+      const maxImageBytes = resolveGeneratedImageDownloadMaxBytes(req.cfg);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         ...(schema.supportsCount ? { num_images: req.count ?? 1 } : {}),

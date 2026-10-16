@@ -25,6 +25,7 @@ import {
 } from "./execution-decision-facts.test-support.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "./execution-decision-receipts.js";
 import { createExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
+import { pruneExpiredExecutionIdentityContextsInDatabase } from "./execution-identity-context.js";
 import {
   bindExecutionOwnerLifecycleMetadata,
   ensureExecutionOwnerLifecycleBindingSchema,
@@ -671,7 +672,7 @@ describe("execution decision facts", () => {
     expect(Compile(AuditRunInspectResultSchema).Check(result)).toBe(false);
   });
 
-  it("rejects a generic fact whose context, execution, and run tuple is not exact", () => {
+  it("requires an exact retained context for every generic fact append", () => {
     const database = databaseOptions();
     seedExecutionContext(database);
     expect(() =>
@@ -683,6 +684,31 @@ describe("execution decision facts", () => {
     expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(
       false,
     );
+    expect(
+      recordExecutionDecisionFactInDatabase(receipt("before-context-prune"), {
+        ...database,
+        database: openOpenClawStateDatabase(database),
+        now: 100,
+      }),
+    ).toBe("inserted");
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: 100 + RETENTION_MS,
+      }),
+    ).toBe(1);
+    expect(() =>
+      recordExecutionDecisionFactInDatabase(receipt("after-context-prune"), {
+        ...database,
+        database: openOpenClawStateDatabase(database),
+        now: 100 + RETENTION_MS,
+      }),
+    ).toThrow("exact retained execution context");
+    expect(
+      openOpenClawStateDatabase(database)
+        .db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
+        .get(),
+    ).toEqual({ count: 1 });
   });
 
   it("projects a fact as unknown when the requested tuple does not match", () => {

@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -194,6 +194,7 @@ export function createPluginsPage(options: {
     });
   });
 
+  // Route changes synchronize the Gateway binding and retire page requests.
   createEffect(
     () => [options.routeData(), options.surface()] as const,
     ([nextRouteData, nextSurface]) => {
@@ -227,11 +228,14 @@ export function createPluginsPage(options: {
         state.detail?.catalog ?? state.catalogDetail?.result,
       ),
   );
-  onSettled(() => listen(document, "keydown", handleDocumentKeydown, true));
-  onCleanup(() => {
-    active = false;
-    icons.reset();
-    gateway.dispose();
+  onSettled(() => {
+    const stopKeydown = listen(document, "keydown", handleDocumentKeydown, true);
+    return () => {
+      stopKeydown();
+      active = false;
+      icons.reset();
+      gateway.dispose();
+    };
   });
 
   const handleDocumentKeydown = (event: Event) => {

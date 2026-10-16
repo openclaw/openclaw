@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 374285,
-  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
-  "updatedAt": "2026-10-12"
+  "startupJsGzipBytes": 342000,
+  "reason": "Post-Lit startup measured 340081 B gzip on 9fa4e5618912; retain about 2 KB of headroom.",
+  "updatedAt": "2026-10-16"
 }

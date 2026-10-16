@@ -243,6 +243,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
+    this.sessionData.disconnect();
     this.peopleView?.dismiss();
     this.narration?.disconnect();
     super.disconnectedCallback();
@@ -330,6 +331,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override connectedCallback() {
+    this.sessionData.connect();
     this.snapshot.connect();
     super.connectedCallback();
   }

@@ -66,7 +66,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   let connection: GatewayConnectionScope | null = null;
   let active = true;
   let pending = false;
+  let literalInput: HTMLInputElement | undefined;
 
+  // Reinspect the Gateway credential when its field, revision, or connection changes.
   createEffect(
     () => {
       const { pluginId, baseHash, gateway, canInspect } = props.context;
@@ -87,7 +89,10 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         next.field !== previous?.field ||
         !next.canInspect ||
         (connection && !next.gateway.isCurrent(connection));
-      const wasOpen = untrack(dialogOpen);
+      // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
+      const [wasOpen, wasSaving, staleMessage] = untrack(
+        () => [dialogOpen(), saving(), t("pluginsPage.credentials.stale")] as const,
+      );
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field or connection may discard its uncommitted key.
@@ -101,12 +106,12 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       setInspection(null);
       generation++;
-      if (wasOpen && !untrack(saving) && !sourceChanged) {
-        setError(untrack(() => t("pluginsPage.credentials.stale")));
+      if (wasOpen && !wasSaving && !sourceChanged) {
+        setError(staleMessage);
         setLoading(false);
         return;
       }
-      void untrack(inspect);
+      void inspect();
     },
   );
 
@@ -342,14 +347,14 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 ) {
                   return;
                 }
-                const input = event.currentTarget.querySelector("input");
-                const value = input ? enteredLiteral(input) : "";
+                const value = literalInput ? enteredLiteral(literalInput) : "";
                 if (value) {
                   void patch(value);
                 }
               }}
             >
               <input
+                ref={(input) => (literalInput = input)}
                 class="settings-input"
                 aria-label={props.descriptor.label}
                 aria-describedby={props.field.descriptionId}

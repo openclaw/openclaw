@@ -391,8 +391,11 @@ For a specific paired device that advertises `workerHost.deviceFolders: true`,
 choose **Existing folder on device** in the workspace picker and enter an
 absolute path on that device. This option is not available for **Auto**, cloud
 workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. The device validates
-the folder; the Gateway does not browse or resolve this path locally.
+the capability. Operators with `operator.admin` can also choose **Browse folders
+on** _device_ to list folders on that device through its `fs.listDir` command.
+The listing is not limited to `folders` roots; the device validates the chosen
+folder when the session is created. The Gateway never browses or resolves this
+path locally.
 
 The session records `deviceFolder: { deviceId, path }` and dispatches to that
 exact device. Do not combine `deviceFolder` with a project, repository,

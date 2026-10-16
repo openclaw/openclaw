@@ -491,6 +491,13 @@ it.for([
       }
       const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
         registeredRuntime) as typeof registeredRuntime;
+      // Service restarts reopen indexes only after a manager has run in this process.
+      const earlier = await runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
+      if (!earlier.manager) {
+        throw new Error(earlier.error ?? "Expected an earlier memory manager");
+      }
+      await runtime.closeAllMemorySearchManagers?.();
+      subscriptions.length = 0;
       const getManager = runtime.getMemorySearchManager.bind(runtime);
       const acquired = createDeferredCore<Awaited<ReturnType<typeof getManager>>>();
       const acquisition = vi
