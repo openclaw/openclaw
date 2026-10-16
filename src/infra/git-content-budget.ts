@@ -1,7 +1,7 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-// Worker content reads, checkouts, and worktree maintenance share one child budget.
+// Worker content reads and host-owned worktree maintenance share one child budget.
 // Slots survive lifecycle resets until their owning processes have settled.
 const budget = resolveGlobalSingleton(Symbol.for("openclaw.gitContentBudget"), () => ({
   active: 0,

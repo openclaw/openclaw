@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "../../infra/fs-safe.js";
-import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
+import {
+  normalizeGitPathForFilesystem,
+  requireGitCommandOutput,
+  type GitCommandOptions,
+} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import type { WorktreeWaitBudget } from "./allocation.js";
@@ -217,11 +221,16 @@ async function prepareTemplate(options: CheckoutOptions, measurementKey: string)
           }
           setWorktreePreparationTemplate("cold", { reason: "template-checkout" });
           const started = performance.now();
-          await git.require(
-            preparing.path,
-            ["read-tree", "--reset", "--no-recurse-submodules", "-u", commit],
+          const materialized = await materializeManagedWorktree(
+            {
+              destination: preparing.path,
+              commit,
+              preparedGit: git,
+              executionTimeoutMs: options.checkoutBudget?.timeoutMs,
+            },
             checkoutGitOptions({ ...options, ...templateOptions }),
           );
+          requireGitCommandOutput("git read-tree", materialized);
           gitMs = performance.now() - started;
           if (backend.id === "btrfs" && !btrfsCheckoutMeasurements.has(measurementKey)) {
             btrfsCheckoutMeasurements.set(measurementKey, { gitMs });
@@ -359,7 +368,12 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     await assertRegistration();
     materializationStarted = true;
     const result = await materializeManagedWorktree(
-      { destination: options.destination, commit, sourceOnly: options.sourceOnly },
+      {
+        destination: options.destination,
+        commit,
+        sourceOnly: options.sourceOnly,
+        executionTimeoutMs: options.checkoutBudget?.timeoutMs,
+      },
       checkoutGitOptions(options),
     );
     if (result.code === 0) {
