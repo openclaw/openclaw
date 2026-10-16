@@ -409,7 +409,7 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear() {
+    clear(this: void) {
       anchor = null;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
