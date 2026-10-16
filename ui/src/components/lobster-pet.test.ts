@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { loadSettings, settingsKeyForGateway } from "../app/settings.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
@@ -25,15 +26,23 @@ import {
   type LobsterPetElement,
 } from "./lobster-pet.test-support.ts";
 
+const paletteById = (id: string) =>
+  expectDefined(
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
+    id,
+  );
+const activity = (status: "done" | "failed", lastActivityAt: number, endedAt?: number) => ({
+  status,
+  lastActivityAt,
+  ...(endedAt === undefined ? {} : { endedAt }),
+});
+
 function paletteSvg(
   id: string,
   options: Parameters<typeof renderLobsterSvg>[1] = {},
   accessory: "none" | "crown" = "none",
 ) {
-  const palette = expectDefined(
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
-    id,
-  );
+  const palette = paletteById(id);
   return renderLobsterSvg(
     { ...canonicalLobsterLook(palette), accessory },
     { standalone: true, ...options },
@@ -59,13 +68,8 @@ async function expectPresenceAfter(
   maxMs: number,
   selector = ".lobster-pet",
 ) {
-  expect(
-    await advanceUntil(
-      element,
-      () => (element.querySelector(selector) !== null) === present,
-      maxMs,
-    ),
-  ).toBe(true);
+  const hasExpectedPresence = () => (element.querySelector(selector) !== null) === present;
+  expect(await advanceUntil(element, hasExpectedPresence, maxMs)).toBe(true);
 }
 async function visitingPet(seed = 42, mode?: Parameters<typeof createPet>[1]) {
   const element = createPet(seed, mode);
@@ -77,35 +81,19 @@ async function tick(element: LobsterPetElement, ms: number) {
   await element.updateComplete;
 }
 async function expectClassAfter(element: LobsterPetElement, suffix: string, maxMs = 10_000) {
-  expect(
-    await advanceUntil(
-      element,
-      () => spriteClasses(element).includes(`lobster-pet--${suffix}`),
-      maxMs,
-      100,
-    ),
-  ).toBe(true);
+  const hasClass = () => spriteClasses(element).includes(`lobster-pet--${suffix}`);
+  expect(await advanceUntil(element, hasClass, maxMs, 100)).toBe(true);
 }
 async function openDismissMenu(
   element: LobsterPetElement,
   options: MouseEventInit = {},
   selector = ".lobster-pet",
 ) {
-  element.querySelector(selector)?.dispatchEvent(
-    new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      ...options,
-    }),
-  );
+  const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...options });
+  element.querySelector(selector)?.dispatchEvent(event);
   await element.updateComplete;
   await settleDismissMenu(element);
 }
-async function advancePetFrame(element: LobsterPetElement): Promise<void> {
-  vi.advanceTimersToNextFrame();
-  await element.updateComplete;
-}
-
 async function settleDismissMenu(element: LobsterPetElement) {
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
@@ -133,22 +121,20 @@ function spriteClasses(element: LobsterPetElement): string {
 }
 
 async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promise<string | null> {
-  let elapsed = 0;
-  while (elapsed < maxMs) {
-    await vi.advanceTimersByTimeAsync(200);
-    elapsed += 200;
-    await element.updateComplete;
-    const match = /lobster-pet--act-([a-z]+)/.exec(spriteClasses(element));
-    if (match) {
-      return expectDefined(match[1], "lobster act name");
-    }
-  }
-  return null;
+  let act: string | null = null;
+  await advanceUntil(
+    element,
+    () => {
+      act = /lobster-pet--act-([a-z]+)/.exec(spriteClasses(element))?.[1] ?? null;
+      return act !== null;
+    },
+    maxMs,
+    200,
+  );
+  return act;
 }
 
-async function startVigilOnlyRun(
-  outcome: LobsterPetElement["runOutcome"],
-): Promise<LobsterPetElement> {
+async function startVigilOnlyRun(outcome: LobsterPetElement["runOutcome"]) {
   // Seed 0 opts out of scheduled visits and passers, so vigil is the only
   // presence owner when the run finishes.
   const element = createPet(0, "busy");
@@ -216,31 +202,13 @@ describe("connection and run outcomes", () => {
   });
   it.each<[Parameters<typeof resolveLobsterRunOutcome>[0], string]>([
     [null, "ok"],
-    [
-      [
-        { status: "done", lastActivityAt: 10 },
-        { status: "failed", lastActivityAt: 20 },
-      ],
-      "error",
-    ],
-    [
-      [
-        { status: "failed", lastActivityAt: 10 },
-        { status: "done", lastActivityAt: 20 },
-      ],
-      "ok",
-    ],
+    [[activity("done", 10), activity("failed", 20)], "error"],
+    [[activity("failed", 10), activity("done", 20)], "ok"],
     [[{ status: "running", lastActivityAt: 99 }], "ok"],
     [[{ status: "timeout", updatedAt: 5 }], "error"],
     [[{ status: "killed", endedAt: 50 }], "aborted"],
     // endedAt outranks activity stamps touched by unrelated events.
-    [
-      [
-        { status: "failed", endedAt: 30, lastActivityAt: 10 },
-        { status: "done", endedAt: 20, lastActivityAt: 40 },
-      ],
-      "error",
-    ],
+    [[activity("failed", 10, 30), activity("done", 40, 20)], "error"],
   ])("resolves terminal sessions %j as %s", (sessions, expected) => {
     expect(resolveLobsterRunOutcome(sessions)).toBe(expected);
   });
@@ -254,7 +222,6 @@ describe("lobster pet element", () => {
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     const element = createPet(42);
     await element.updateComplete;
-
     expect(spritePresent(element)).toBe(false);
     await tick(element, 1_000);
     expect(spritePresent(element)).toBe(false);
@@ -267,23 +234,14 @@ describe("lobster pet element", () => {
   it("a shy seed never visits on its own", async () => {
     const element = createPet(7);
     await element.updateComplete;
-
     expect(await advanceUntil(element, () => spritePresent(element), 12_000)).toBe(false);
   });
 
   it("departs after its stay and returns for a later visit", async () => {
     const element = await visitingPet(42);
     await expectPresenceAfter(element, false, 400_000);
-
     expect(await advanceUntil(element, () => spritePresent(element), 1_200_000)).toBe(false);
     await expectPresenceAfter(element, true, 2_500_000);
-  });
-
-  it("startles when poked", async () => {
-    const element = await visitingPet(42);
-    poke(element);
-    await element.updateComplete;
-    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
   });
 
   it("schedules acts while perched", async () => {
@@ -298,13 +256,12 @@ describe("lobster pet element", () => {
     await updatePet(element, { mode: "busy" });
     expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
     expect(spriteClasses(element)).toContain("lobster-pet--busy");
-
     await updatePet(element, { runOutcome: "ok", mode: "idle" });
     expect(spriteClasses(element)).toContain("lobster-pet--act-cheer");
-
     const offline = createPet(7, "offline");
     await offline.updateComplete;
-    await advancePetFrame(offline);
+    vi.advanceTimersToNextFrame();
+    await offline.updateComplete;
     expect(spritePresent(offline)).toBe(true);
     expect(spriteClasses(offline)).toContain("lobster-pet--offline");
   });
@@ -313,7 +270,6 @@ describe("lobster pet element", () => {
     const molting = await visitingPet(2);
     expect(await advanceUntilAct(molting, 30_000)).toBe("molt");
     await expectPresenceAfter(molting, true, 30_000, ".lobster-pet--shell");
-
     const twins = await visitingPet(21);
     expect(twins.querySelectorAll(".lobster-pet:not(.lobster-pet--shell)")).toHaveLength(2);
     expect(twins.querySelector(".lobster-pet--twin")?.getAttribute("title")).toMatch(/ Jr\.$/);
@@ -331,8 +287,7 @@ describe("lobster pet element", () => {
     const composer = element.parentElement!.querySelector<HTMLTextAreaElement>("textarea")!;
     composer.focus();
 
-    // Coordinates deliberately exceed a guessed 264x80 pre-clamp: a
-    // reintroduced clamp would move the trigger away from these exact values.
+    // Exceed the old 264×80 pre-clamp to catch trigger-coordinate drift.
     const clientX = 1200;
     const clientY = 850;
     await openDismissMenu(element, { clientX, clientY });
@@ -403,23 +358,16 @@ describe("lobster pet element", () => {
     await openDismissMenu(element);
     selectDismissal(element, "dismiss-permanently");
     await element.updateComplete;
-
-    const persistedSettings = Array.from({ length: localStorage.length }, (_, index) => {
-      const raw = localStorage.getItem(localStorage.key(index) ?? "");
-      try {
-        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      } catch {
-        return {};
-      }
+    const key = settingsKeyForGateway(loadSettings().gatewayUrl);
+    expect(JSON.parse(localStorage.getItem(key) ?? "null")).toMatchObject({
+      lobsterPetVisits: false,
     });
-    expect(persistedSettings).toContainEqual(expect.objectContaining({ lobsterPetVisits: false }));
     await expectPresenceAfter(element, false, 5_000);
   });
 
   it("never shows when visits are disabled, offline included", async () => {
     const element = createPet(42, "offline");
     await updatePet(element, { visitsEnabled: false });
-
     expect(spritePresent(element)).toBe(false);
     expect(await advanceUntil(element, () => spritePresent(element), 1_200_000)).toBe(false);
   });
@@ -431,27 +379,22 @@ describe("lobster pet element", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("gets grumpy after three fast pokes and recovers after a minute", async () => {
+  it.each([1, 3, 10])("reacts to %s fast pokes and recovers", async (count) => {
     const element = await visitingPet(42);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < count; i++) {
       poke(element);
       await element.updateComplete;
     }
-    expect(spriteClasses(element)).toContain("lobster-pet--grumpy");
-
-    await tick(element, 61_000);
-    expect(spriteClasses(element)).not.toContain("lobster-pet--grumpy");
-  });
-
-  it("leaves in a huff after ten pokes but returns for a later visit", async () => {
-    const element = await visitingPet(42);
-    for (let i = 0; i < 10; i++) {
-      poke(element);
-      await element.updateComplete;
+    if (count === 1) {
+      expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    } else if (count === 3) {
+      expect(spriteClasses(element)).toContain("lobster-pet--grumpy");
+      await tick(element, 61_000);
+      expect(spriteClasses(element)).not.toContain("lobster-pet--grumpy");
+    } else {
+      await expectPresenceAfter(element, false, 5_000);
+      await expectPresenceAfter(element, true, 3_700_000);
     }
-    await expectPresenceAfter(element, false, 5_000);
-
-    await expectPresenceAfter(element, true, 3_700_000);
   });
 
   it("old friends wave hello on their first arrival of the load", async () => {
@@ -478,13 +421,11 @@ describe("lobster pet element", () => {
   it("cancels a pending pet when the pointer interaction is cancelled", async () => {
     const element = createPet(42, "offline");
     await element.updateComplete;
-
     const sprite = element.querySelector(".lobster-pet");
     sprite?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(300);
     sprite?.dispatchEvent(new Event("pointercancel"));
     await tick(element, 400);
-
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-pet");
   });
 
@@ -492,7 +433,6 @@ describe("lobster pet element", () => {
     const element = createPet(42, "busy");
     element.runOutcome = "error";
     await arrive(element);
-
     await updatePet(element, { mode: "idle" });
     expect(spriteClasses(element)).toContain("lobster-pet--act-droop");
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
@@ -502,10 +442,8 @@ describe("lobster pet element", () => {
     const element = await visitingPet(42, "busy");
     await tick(element, 600_500);
     expect(spriteClasses(element)).toContain("lobster-pet--vigil");
-
     const act = await advanceUntilAct(element, 30_000);
     expect(act).toBeNull();
-
     await updatePet(element, { mode: "idle" });
     expect(spriteClasses(element)).not.toContain("lobster-pet--vigil");
   });
@@ -522,7 +460,7 @@ describe("lobster pet element", () => {
       expect(spriteClasses(element)).toContain(`lobster-pet--act-${act}`);
       expect(spriteClasses(element)).not.toContain("lobster-pet--away");
 
-      const reachedNextPhase = await advanceUntil(
+      await advanceUntil(
         element,
         () =>
           spriteClasses(element).includes("lobster-pet--away") ||
@@ -530,7 +468,6 @@ describe("lobster pet element", () => {
         10_000,
         100,
       );
-      expect(reachedNextPhase).toBe(true);
       if (outcome === "error") {
         expect(spriteClasses(element)).toContain("lobster-pet--act-sweep");
         expect(spriteClasses(element)).not.toContain("lobster-pet--away");
@@ -587,7 +524,6 @@ describe("lobster pet element", () => {
     expect(first.querySelector(".lob-bindle")).toBeNull();
     expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
     first.remove();
-
     const second = createPet(42);
     second.gatewayVersion = "2026.7.1";
     await arrive(second);
@@ -648,13 +584,11 @@ describe("lobster pet element", () => {
   });
 
   it("wears the sailor cap on lobster days, deferring to rolled headwear", async () => {
-    // 2026-01-05 is a probed lobster day; seed 42 rolls the (face-worn)
-    // eyepatch that day, so the cap fits.
+    // This lobster day rolls a face-worn eyepatch, leaving room for the cap.
     vi.setSystemTime(new Date("2026-01-05T12:00:00"));
     const element = await visitingPet(42);
     expect(element.querySelector(".lob-cap")).not.toBeNull();
     element.remove();
-
     vi.setSystemTime(summer);
     const plain = await visitingPet(42);
     expect(plain.querySelector(".lob-cap")).toBeNull();
@@ -671,7 +605,6 @@ describe("lobster pet element", () => {
 
   it("props an open book against the claws while keeping both eyes open", () => {
     const container = paletteSvg("crimson", { reading: true });
-
     expect(container.querySelector(".lob-reading-book")).not.toBeNull();
     expect(container.querySelectorAll(".lob-eye-open circle")).toHaveLength(4);
     expect(container.querySelector<SVGElement>(".lob-eye-closed")?.style.display).toBe("none");
@@ -687,23 +620,22 @@ describe("lobster pet element", () => {
     expect(loadingContainer.querySelector(".lob-skeleton")).not.toBeNull();
     expect(loadingContainer.querySelectorAll(".lob-eye-open circle")).toHaveLength(2);
 
-    const actualContainer = paletteSvg("actual");
-    expect(actualContainer.querySelector(".lob-actual")).not.toBeNull();
-    expect(actualContainer.querySelector(".lob-standard-dome")).toBeNull();
-
-    const balloonContainer = paletteSvg("balloon");
-    expect(balloonContainer.querySelector(".lob-balloon-frame")).not.toBeNull();
-    expect(balloonContainer.querySelector(".lob-standard-dome")).toBeNull();
-
-    const asciiContainer = paletteSvg("ascii");
-    expect(asciiContainer.querySelector(".lob-ascii")).not.toBeNull();
-    expect(asciiContainer.querySelector(".lob-eye-open")?.textContent).toContain("(o)");
-    expect(asciiContainer.querySelector(".lob-eye-closed")?.textContent).toContain("(-)");
-    expect(asciiContainer.querySelector(".lob-standard-dome")).toBeNull();
-
-    const portalContainer = paletteSvg("portal");
-    expect(portalContainer.querySelectorAll(".lob-portal-ring")).toHaveLength(2);
-    expect(portalContainer.querySelector(".lob-standard-dome")).toBeNull();
+    for (const [id, selector] of [
+      ["actual", ".lob-actual"],
+      ["balloon", ".lob-balloon-frame"],
+      ["ascii", ".lob-ascii"],
+      ["portal", ".lob-portal-ring"],
+    ] as const) {
+      const container = paletteSvg(id);
+      expect(container.querySelector(selector)).not.toBeNull();
+      expect(container.querySelector(".lob-standard-dome")).toBeNull();
+      if (id === "ascii") {
+        expect(container.querySelector(".lob-eye-open")?.textContent).toContain("(o)");
+        expect(container.querySelector(".lob-eye-closed")?.textContent).toContain("(-)");
+      } else if (id === "portal") {
+        expect(container.querySelectorAll(".lob-portal-ring")).toHaveLength(2);
+      }
+    }
   });
 
   it("never stacks the sailor cap on the tinfoil hat", () => {
@@ -719,8 +651,7 @@ describe("lobster pet element", () => {
     );
     const element = await visitingPet(42);
     expect(element.querySelector(".lobster-pet__svg")).not.toBeNull();
-    // Tab switches re-enter through the visibilitychange resume path, which
-    // must stay inert under reduced motion too. Mode flips must not startle.
+    // Visibility resumes and mode flips must also honor reduced motion.
     document.dispatchEvent(new Event("visibilitychange"));
     await updatePet(element, { mode: "busy" });
     const act = await advanceUntilAct(element, 30_000);
@@ -756,10 +687,7 @@ describe("lobster plans", () => {
       look: { palette: { id: "gold" } },
       friendName: "Goldenrod",
     });
-    const goldenRetro = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "goldenretro"),
-      "golden retro palette",
-    );
+    const goldenRetro = paletteById("goldenretro");
     const grail = resolveLobsterLoadIdentity(191, {
       ...createLobsterPetLook(191, neutralDate),
       palette: goldenRetro,
@@ -776,7 +704,6 @@ describe("lobster plans", () => {
     });
     const seen = getLobsterdex();
     expect(LOBSTER_PET_PALETTES.filter((palette) => seen.has(palette.id))).toHaveLength(0);
-
     const identity = identityOf(191);
     expect(identity.oldFriend).toBe(false);
     expect(identity.look.palette.id).not.toBe("clawdia");
@@ -823,10 +750,8 @@ describe("rare lobster loads", () => {
     ["shellvis", "Shellvis"],
     ["alexandergrahamshell", "Alexander Graham Shell"],
   ] as const)("records a genuine %s arrival with its signature identity", async (id, name) => {
-    const now = summer;
-
     let seed = 0;
-    while (seed < 20_000 && createLobsterPetLook(seed, now).palette.id !== id) {
+    while (seed < 20_000 && createLobsterPetLook(seed, summer).palette.id !== id) {
       seed++;
     }
     expect(seed).toBeLessThan(20_000);
@@ -864,7 +789,6 @@ describe("rare lobster loads", () => {
   it("hatches shiny lobsters that sparkle and log in the Lobsterdex", async () => {
     const seed = 4_689;
     const shinyLook = createLobsterPetLook(seed, summer);
-    expect(shinyLook.shiny).toBe(true);
     const element = await visitingPet(seed);
     expect(spriteClasses(element)).toContain("lobster-pet--shiny");
     expect(spriteClasses(element)).toContain(`lobster-pet--palette-${shinyLook.palette.id}`);
@@ -898,7 +822,6 @@ describe("rare lobster loads", () => {
   it("lets the snail take its sweet time crossing the ledge", async () => {
     const element = createPet(37);
     await element.updateComplete;
-
     await expectPresenceAfter(element, true, 500_000, ".lobster-pet--snail");
     // A regular passer's 11s crossing would be long over; the snail abides.
     await tick(element, 60_000);

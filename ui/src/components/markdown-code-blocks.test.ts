@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
@@ -61,21 +61,19 @@ function expectCopyFailed(button: HTMLButtonElement) {
   expect(button.classList.contains("copy-failed")).toBe(true);
   expect(button.getAttribute("aria-label")).toBe("Copy failed");
 }
+async function copy(button: HTMLButtonElement, elapsed = 0) {
+  button.click();
+  await vi.advanceTimersByTimeAsync(elapsed);
+}
 
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      observe(target: Element) {
-        observed.add(target);
-      }
-      unobserve(target: Element) {
-        observed.delete(target);
-      }
-      disconnect() {
-        observed.clear();
-      }
+      observe = (target: Element) => observed.add(target);
+      unobserve = (target: Element) => observed.delete(target);
+      disconnect = () => observed.clear();
     },
   );
   const { container, section, blocks: initialBlocks } = mountBlocks();
@@ -159,187 +157,149 @@ function expectText(root: ParentNode, selector: string) {
   return expect(root.querySelector(selector)?.textContent);
 }
 
-describe("Markdown code-block clipboard feedback", () => {
-  it("preserves closing HTML tags when copying ordinary code", async () => {
-    const source = '<script>console.log("ok")</script>\n</style></textarea>';
-    const writeText = mockClipboard(
-      vi.fn(async () => undefined),
-      false,
-    );
-    const button = renderCodeCopyButton(source);
-
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(writeText).toHaveBeenCalledWith(source);
+it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
+  let resolveFirstWrite!: () => void;
+  const firstWrite = new Promise<void>((resolve) => {
+    resolveFirstWrite = resolve;
   });
+  mockClipboard(vi.fn().mockReturnValueOnce(firstWrite).mockRejectedValueOnce(denied));
+  const button = renderCodeCopyButton();
 
-  it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
-    let resolveFirstWrite!: () => void;
-    const firstWrite = new Promise<void>((resolve) => {
-      resolveFirstWrite = resolve;
-    });
-    mockClipboard(vi.fn().mockReturnValueOnce(firstWrite).mockRejectedValueOnce(denied));
-    const button = renderCodeCopyButton();
+  button.click();
+  button.click();
+  await vi.advanceTimersByTimeAsync(0);
 
-    button.click();
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
+  expect(button.getAttribute("aria-label")).toBe("Copy failed");
 
-    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+  resolveFirstWrite();
+  await vi.advanceTimersByTimeAsync(0);
 
-    resolveFirstWrite();
-    await vi.advanceTimersByTimeAsync(0);
+  expectCopyFailed(button);
+  expect(button.classList.contains("copied")).toBe(false);
 
-    expectCopyFailed(button);
-    expect(button.classList.contains("copied")).toBe(false);
+  await vi.advanceTimersByTimeAsync(2_000);
 
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    expect(button.getAttribute("aria-label")).toBe("Copy code");
-  });
-
-  it.each([
-    { name: "a previous denied copy", firstSucceeds: false, firstResetAtMs: 2_000 },
-    { name: "a previous successful copy", firstSucceeds: true, firstResetAtMs: 1_500 },
-  ])("keeps the latest denied-copy feedback after $name", async (scenario) => {
-    const writeText = mockClipboard();
-    if (scenario.firstSucceeds) {
-      writeText.mockResolvedValueOnce(undefined);
-    }
-    const button = renderCodeCopyButton();
-
-    button.click();
-    await vi.advanceTimersByTimeAsync(1_000);
-    button.click();
-    await vi.advanceTimersByTimeAsync(scenario.firstResetAtMs - 1_000);
-
-    expectCopyFailed(button);
-
-    await vi.advanceTimersByTimeAsync(3_000 - scenario.firstResetAtMs);
-
-    expect(button.classList.contains("copy-failed")).toBe(false);
-    expect(button.getAttribute("aria-label")).toBe("Copy code");
-  });
-
-  it("keeps independent reset deadlines for different code-copy buttons", async () => {
-    mockClipboard(vi.fn().mockRejectedValue(new DOMException("Clipboard access denied")));
-    const first = renderCodeCopyButton();
-    const second = first.cloneNode(true) as HTMLButtonElement;
-    second.addEventListener("click", handleMarkdownCodeBlockClick);
-    document.body.append(second);
-
-    first.click();
-    await vi.advanceTimersByTimeAsync(500);
-    second.click();
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(first.getAttribute("aria-label")).toBe("Copy code");
-    expect(second.getAttribute("aria-label")).toBe("Copy failed");
-
-    second.remove();
-    await vi.advanceTimersByTimeAsync(500);
-
-    expect(second.getAttribute("aria-label")).toBe("Copy code");
-  });
+  expect(button.getAttribute("aria-label")).toBe("Copy code");
 });
 
-describe("toSanitizedMarkdownHtml code blocks", () => {
-  const jsonBlock = (lineCount: number) => {
-    const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
-    values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
-    return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
-  };
-  const interactive = (lines = 41) =>
-    render(jsonBlock(lines), { codeBlockInteraction: "interactive" });
-
-  async function expectCodeCopy(fragment: HTMLElement, text: string) {
-    const writeText = mockClipboard(
-      vi.fn(async () => undefined),
-      false,
-    );
-    document.body.append(fragment);
-    const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(button!.getAttribute("aria-label")).toBe("Copied!");
-    expect(writeText).toHaveBeenCalledWith(text);
+it.each([
+  { name: "a previous denied copy", firstSucceeds: false, firstResetAtMs: 2_000 },
+  { name: "a previous successful copy", firstSucceeds: true, firstResetAtMs: 1_500 },
+])("keeps the latest denied-copy feedback after $name", async (scenario) => {
+  const writeText = mockClipboard();
+  if (scenario.firstSucceeds) {
+    writeText.mockResolvedValueOnce(undefined);
   }
+  const button = renderCodeCopyButton();
 
-  it.each([true, false])("keeps code literal without HTML children (block art=%s)", (blockArt) => {
-    const fragment = render(
-      blockArt ? "  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  " : "```html\n<script>alert(1)</script>\n```",
-    );
-    const code = fragment.querySelector(`pre code${blockArt ? ".markdown-block-art" : ""}`);
-    expect(fragment.querySelector(blockArt ? "p" : "script")).toBeNull();
-    expect(code?.textContent).toBe(
-      blockArt ? "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  " : "<script>alert(1)</script>\n",
-    );
-    expect(code?.innerHTML).not.toContain("<script>");
-  });
+  await copy(button, 1_000);
+  await copy(button, scenario.firstResetAtMs - 1_000);
 
-  it("renders indented code blocks", async () => {
-    const fragment = render("text\n\n    indented code");
+  expectCopyFailed(button);
 
-    expectText(fragment, "p").toBe("text");
-    expectText(fragment, ".code-block-lang").toBe("Code");
-    expectText(fragment, "pre code").toBe("indented code\n");
-    await expectCodeCopy(fragment, "indented code");
-  });
+  await vi.advanceTimersByTimeAsync(3_000 - scenario.firstResetAtMs);
 
-  it("uses the singular hidden-line label for a single hidden line", () => {
-    const fragment = interactive(8);
-    const expand = fragment.querySelector(".code-block-expand");
+  expect(button.classList.contains("copy-failed")).toBe(false);
+  expect(button.getAttribute("aria-label")).toBe("Copy code");
+});
 
-    expect(expand?.textContent).toBe("1 hidden line");
-    expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
-  });
+it("keeps independent reset deadlines for different code-copy buttons", async () => {
+  mockClipboard(vi.fn().mockRejectedValue(new DOMException("Clipboard access denied")));
+  const first = renderCodeCopyButton();
+  const second = first.cloneNode(true) as HTMLButtonElement;
+  second.addEventListener("click", handleMarkdownCodeBlockClick);
+  document.body.append(second);
 
-  it("keeps long TEXT fences fully visible", () => {
-    const fragment = render(`\`\`\`TEXT\n${"prose line\n".repeat(20)}\`\`\``, {
-      codeBlockInteraction: "interactive",
-    });
+  await copy(first, 500);
+  await copy(second, 1_500);
 
-    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
-    expect(fragment.querySelector(".code-block-expand")).toBeNull();
-    expectText(fragment, "pre code").toContain("prose line");
-  });
+  expect(first.getAttribute("aria-label")).toBe("Copy code");
+  expect(second.getAttribute("aria-label")).toBe("Copy failed");
 
-  it.each([
-    ["expand", "is-expanded", "aria-expanded", [true]],
-    ["wrap", "is-wrapped", "aria-pressed", [true, false]],
-  ] as const)(
-    "handles %s through the shared click owner",
-    (action, className, attribute, states) => {
-      const fragment = interactive();
-      const wrapper = fragment.querySelector(".code-block-wrapper");
-      const button = fragment.querySelector<HTMLButtonElement>(`.code-block-${action}`);
-      for (const state of states) {
-        button?.click();
-        expect(wrapper?.classList.contains(className)).toBe(state);
-        expect(button?.getAttribute(attribute)).toBe(String(state));
-      }
-    },
+  second.remove();
+  await vi.advanceTimersByTimeAsync(500);
+
+  expect(second.getAttribute("aria-label")).toBe("Copy code");
+});
+const interactive = (lines = 41) => {
+  const values = Array.from({ length: lines - 2 }, (_, i) => i);
+  const json = JSON.stringify(values, null, 2);
+  return render(`\`\`\`json\n${json}\n\`\`\``, { codeBlockInteraction: "interactive" });
+};
+
+it.each([true, false])("keeps code literal without HTML children (block art=%s)", (blockArt) => {
+  const fragment = render(
+    blockArt ? "  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  " : "```html\n<script>alert(1)</script>\n```",
   );
+  const code = fragment.querySelector(`pre code${blockArt ? ".markdown-block-art" : ""}`);
+  expect(fragment.querySelector(blockArt ? "p" : "script")).toBeNull();
+  expect(code?.textContent).toBe(
+    blockArt ? "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  " : "<script>alert(1)</script>\n",
+  );
+  expect(code?.innerHTML).not.toContain("<script>");
+});
 
-  it("localizes the hidden-line count and the language fallback", async () => {
-    i18n.registerTranslation("pt-BR", {
-      chat: {
-        codeBlock: {
-          languageFallback: "Código",
-          hiddenLines: "{count} linhas ocultas",
-        },
-      },
-    });
-    await i18n.setLocale("pt-BR");
-    try {
-      const fragment = interactive();
-      expectText(fragment, ".code-block-expand").toContain("34 linhas ocultas");
-      const unlabeled = render("```\nconteúdo\n```");
-      expectText(unlabeled, ".code-block-lang").toBe("Código");
-    } finally {
-      await i18n.setLocale("en");
-    }
+it.each([
+  ["ordinary HTML", '<script>console.log("ok")</script>\n</style></textarea>', false],
+  ["indented code", "indented code", true],
+] as const)("renders and copies %s literally", async (_, source, indented) => {
+  const fragment = render(indented ? `text\n\n    ${source}` : `\`\`\`ts\n${source}\n\`\`\``);
+  if (indented) {
+    expect(
+      ["p", ".code-block-lang", "pre code"].map((tag) => fragment.querySelector(tag)?.textContent),
+    ).toEqual(["text", "Code", "indented code\n"]);
+  }
+  const writeText = mockClipboard(vi.fn().mockResolvedValue(undefined), false);
+  document.body.append(fragment);
+  const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  await copy(button!);
+  expect(button!.getAttribute("aria-label")).toBe("Copied!");
+  expect(writeText).toHaveBeenCalledWith(source);
+});
+
+it("uses the singular hidden-line label for a single hidden line", () => {
+  const fragment = interactive(8);
+  const expand = fragment.querySelector(".code-block-expand");
+
+  expect(expand?.textContent).toBe("1 hidden line");
+  expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
+});
+
+it("keeps long TEXT fences fully visible", () => {
+  const fragment = render(`\`\`\`TEXT\n${"prose line\n".repeat(20)}\`\`\``, {
+    codeBlockInteraction: "interactive",
   });
+
+  expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+  expect(fragment.querySelector(".code-block-expand")).toBeNull();
+  expectText(fragment, "pre code").toContain("prose line");
+});
+
+it.each([
+  ["expand", "is-expanded", "aria-expanded", [true]],
+  ["wrap", "is-wrapped", "aria-pressed", [true, false]],
+] as const)("handles %s through the shared click owner", (action, className, attribute, states) => {
+  const fragment = interactive();
+  const wrapper = fragment.querySelector(".code-block-wrapper");
+  const button = fragment.querySelector<HTMLButtonElement>(`.code-block-${action}`);
+  for (const state of states) {
+    button?.click();
+    expect(wrapper?.classList.contains(className)).toBe(state);
+    expect(button?.getAttribute(attribute)).toBe(String(state));
+  }
+});
+
+it("localizes the hidden-line count and the language fallback", async () => {
+  const codeBlock = { languageFallback: "Código", hiddenLines: "{count} linhas ocultas" };
+  i18n.registerTranslation("pt-BR", { chat: { codeBlock } });
+  await i18n.setLocale("pt-BR");
+  try {
+    const fragment = interactive();
+    expectText(fragment, ".code-block-expand").toContain("34 linhas ocultas");
+    const unlabeled = render("```\nconteúdo\n```");
+    expectText(unlabeled, ".code-block-lang").toBe("Código");
+  } finally {
+    await i18n.setLocale("en");
+  }
 });
