@@ -3,75 +3,37 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
+  cleanupAdmission,
+  sessionRuntime,
+  useReclaimFixtures,
+} from "./server-worker-placement-reclaim.test-support.js";
+import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
-const tempDirs = createTempDirTracker();
-function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionStoreTargetInWorker {
-  return (params) =>
-    resolveGatewaySessionStoreTargetInWorker({
-      ...params,
-      cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
-    });
-}
-function sessionRuntime(storePath: string, worktreePath?: string) {
-  return {
-    managedWorktrees: {
-      findLiveByOwner: async () =>
-        worktreePath
-          ? {
-              id: "task-worktree",
-              ownerId: REQUEST.sessionKey,
-              path: worktreePath,
-            }
-          : undefined,
-    },
-    resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-    resolveCanonicalSessionEntryFromStoreKeys,
-  };
-}
+const fixtures = useReclaimFixtures();
 function expectAdmissions(report: Awaited<ReturnType<typeof scenario>>) {
   expect(report.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
   expect(report).toMatchObject({
     preexistingAdmissionAccepted: false,
     explicitNewAdmissionAccepted: true,
   });
-}
-function cleanupAdmission(
-  runId: string,
-  result: Awaited<Awaited<ReturnType<typeof admitWorkerStopChat>>["promise"]> | undefined,
-) {
-  if (result?.ok) {
-    result.value.cleanupAdmittedRun();
-    clearAgentRunContext(runId, result.value.lifecycleGeneration);
-  }
 }
 function expectPartial(events: unknown[], text: string, runId: string) {
   expect(events).toEqual([
@@ -84,12 +46,6 @@ function expectPartial(events: unknown[], text: string, runId: string) {
     }),
   ]);
 }
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
-});
 
 async function scenario(
   name: string,
@@ -104,13 +60,7 @@ async function scenario(
     pendingMove = false,
   } = {},
 ) {
-  const root = tempDirs.make("worker-stop-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
-  const readProjection = placements.readProjection.bind(placements);
-  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
-  const storePath = path.join(root, "sessions.sqlite");
-  setRuntimeConfigSnapshot({ session: { store: storePath } });
+  const root = fixtures.makeRoot("worker-stop-");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
   // Recovery reads real result refs, so this managed-worktree fixture owns its Git root.
@@ -118,12 +68,12 @@ async function scenario(
     timeoutMs: 10_000,
   });
   expect(initialized.code).toBe(0);
-  const entry = {
-    sessionId: REQUEST.sessionId,
-    worktree: { id: "task-worktree", branch: "test", repoRoot: worktreePath },
-    updatedAt: Date.now(),
-  };
-  await replaceSessionEntry({ ...REQUEST, storePath }, entry);
+  const { database, placements, storePath, entry } = await fixtures.createSession(root, {
+    worktreePath,
+    now: () => 1000,
+  });
+  const readProjection = placements.readProjection.bind(placements);
+  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();
@@ -136,7 +86,7 @@ async function scenario(
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
     placements,
     loadSessionRuntime: async () =>
-      sessionRuntime(storePath, failedRetry ? undefined : worktreePath) as never,
+      sessionRuntime(storePath, failedRetry ? undefined : worktreePath),
     cancelSessionWork: async (request) => {
       cancellationEntered.resolve();
       if (pendingMove) {
@@ -210,9 +160,7 @@ async function scenario(
   const coordinated = coordinateWorkerPlacementDispatch(
     harness.service,
     pendingMove
-      ? createGatewayWorkerDispatchAdmission(
-          async () => sessionRuntime(storePath, worktreePath) as never,
-        )
+      ? createGatewayWorkerDispatchAdmission(async () => sessionRuntime(storePath, worktreePath))
       : (_request, run) => run(),
   );
   const provisionEntered = createDeferred();
@@ -524,7 +472,7 @@ it.each([false, true])(
 );
 
 it("an idempotent failed-cleanup result does not cancel work already on the local placement", async () => {
-  const storePath = path.join(tempDirs.make("failed-already-local-"), "sessions.sqlite");
+  const storePath = path.join(fixtures.makeRoot("failed-already-local-"), "sessions.sqlite");
   setRuntimeConfigSnapshot({ session: { store: storePath } });
   const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
   await replaceSessionEntry({ ...REQUEST, storePath }, entry);
@@ -536,7 +484,7 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
       getAsync: async () => local as never,
       waitForTurnClaimRelease: vi.fn(),
     },
-    loadSessionRuntime: async () => sessionRuntime(storePath) as never,
+    loadSessionRuntime: async () => sessionRuntime(storePath),
     cancelSessionWork: cancel,
     revokeSessionAuthority: vi.fn(),
   });
@@ -569,13 +517,14 @@ it("Stop preserves RPC cancellation and buffered output while Move waits behind 
 it.each(["missing", "local"] as const)(
   "Stop records RPC cancellation for local chat before unrelated inspection completes (%s placement)",
   async (state) => {
-    const root = tempDirs.make("worker-stop-local-");
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const storePath = path.join(root, "sessions.sqlite");
-    setRuntimeConfigSnapshot({ session: { store: storePath } });
-    const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
-    await replaceSessionEntry({ storePath, ...REQUEST }, entry);
+    const root = fixtures.makeRoot("worker-stop-local-");
+    const {
+      database,
+      placements,
+      storePath,
+      entry,
+      runtime: localRuntime,
+    } = await fixtures.createSession(root);
     if (state === "local") {
       await placements.releaseTurn(
         await placements.claimTurn({
@@ -586,11 +535,6 @@ it.each(["missing", "local"] as const)(
         }),
       );
     }
-    const localRuntime = {
-      managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-      resolveCanonicalSessionEntryFromStoreKeys,
-    };
     const context = createWorkerStopChatContext();
     const cancelApprovals = vi.fn();
     context.cancelRunBoundApprovals = cancelApprovals;

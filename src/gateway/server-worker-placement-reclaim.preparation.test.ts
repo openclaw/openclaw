@@ -1,34 +1,23 @@
-import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { useReclaimFixtures } from "./server-worker-placement-reclaim.test-support.js";
 import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
-const tempDirs = createTempDirTracker();
+const fixtures = useReclaimFixtures();
 function waitFor(gate: Promise<unknown>, operation: Promise<unknown>) {
   return Promise.race([
     gate,
@@ -50,54 +39,15 @@ function source(placement: {
   };
 }
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
-});
-
 async function cancellationLoadFixture(
   options: NonNullable<Parameters<typeof createHarness>[2]> = {},
   beforeCancellation?: () => Promise<void>,
 ) {
-  const root = tempDirs.make("worker-stop-advance-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database });
-  const storePath = path.join(root, "sessions.sqlite");
-  setRuntimeConfigSnapshot({ session: { store: storePath } });
-  const entry = {
-    sessionId: REQUEST.sessionId,
+  const root = fixtures.makeRoot("worker-stop-advance-");
+  const { database, placements, storePath, entry, runtime } = await fixtures.createSession(root, {
+    worktreePath: root,
     lifecycleRevision: "original",
-    worktree: { id: "task-worktree", branch: "test", repoRoot: root },
-    updatedAt: Date.now(),
-  };
-  await replaceSessionEntry({ ...REQUEST, storePath }, entry);
-  const runtime = {
-    managedWorktrees: {
-      findLiveByOwner: async () => ({
-        id: "task-worktree",
-        name: "test",
-        repoFingerprint: "test",
-        repoRoot: root,
-        ownerId: REQUEST.sessionKey,
-        ownerKind: "session" as const,
-        path: root,
-        branch: "test",
-        baseRef: "main",
-        createdAt: 1,
-        lastActiveAt: 1,
-      }),
-    },
-    resolveGatewaySessionStoreTargetInWorker: (
-      params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
-    ) =>
-      resolveGatewaySessionStoreTargetInWorker({
-        ...params,
-        cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
-      }),
-    resolveCanonicalSessionEntryFromStoreKeys,
-  };
+  });
   const context = createWorkerStopChatContext();
   let delayCancellation = false;
   const loading = createDeferredCore();

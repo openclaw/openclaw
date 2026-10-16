@@ -4,10 +4,7 @@ import * as metadataState from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as version from "../version.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -27,11 +24,9 @@ const mocks = vi.hoisted(() => ({
   createTools: vi.fn<WorkerGatewayTools>(async () => []),
   options: undefined as ServiceOptions | undefined,
   service: {
-    setHumanPresence: vi.fn(async () => {}),
-    get: vi.fn<WorkerEnvironmentService["get"]>(),
     ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
     stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
-  } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop" | "setHumanPresence">,
+  } satisfies Pick<WorkerEnvironmentService, "ready" | "stop">,
 }));
 
 vi.mock("./worker-environments/service.js", () => ({
@@ -53,8 +48,7 @@ import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-enviro
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     mocks.options = undefined;
     vi.restoreAllMocks();
     vi.clearAllMocks();

@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -13,13 +10,14 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import { handleChatSendSetupError } from "./server-methods/chat-send-dispatch-errors.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { cleanupAdmission } from "./server-worker-placement-reclaim.test-support.js";
 import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
@@ -28,15 +26,6 @@ import * as lifecycleState from "./session-lifecycle-state.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
-const routing = vi.hoisted(() => ({
-  load: vi.fn<
-    typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-  >(),
-}));
-vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: routing.load,
-}));
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
   "Stop preserves canonical terminal ownership through %s",
@@ -48,13 +37,13 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         : vi
             .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
             .mockReturnValue(() => terminalWrite.promise);
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
+    const state = await createOpenClawTestState({ scenario: "minimal" });
+    const { root } = state;
     const cfg = {};
     setRuntimeConfigSnapshot(cfg);
-    const target = {
-      storePath: path.join(root, "sessions.json"),
-      sessionKey: "agent:main:terminal-stop",
-    };
+    const sessionKey = "agent:main:terminal-stop";
+    const { storePath } = await resolveGatewaySessionStoreTargetInWorker({ cfg, key: sessionKey });
+    const target = { storePath, sessionKey };
     const sessionId = "terminal-stop-session";
     const runId = "terminal-stop-run";
     const entry = {
@@ -77,15 +66,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       logGateway: log,
     });
     const { chatRunState } = context;
-    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
-      typeof import("./session-utils-store-worker.js")
-    >("./session-utils-store-worker.js");
-    routing.load.mockImplementation((params) =>
-      loadGatewaySessionEntryReadOnlyInWorker({
-        ...params,
-        cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
-      }),
-    );
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
     let reclaim: Promise<unknown> | undefined;
@@ -110,15 +90,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       }
     });
     const admit = async (id: string) =>
-      (
-        await admitWorkerStopChat({
-          context,
-          storePath: target.storePath,
-          ...identity,
-          entry,
-          runId: id,
-        })
-      ).promise;
+      (await admitWorkerStopChat({ context, storePath, ...identity, entry, runId: id })).promise;
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
@@ -169,14 +141,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
               path: root,
             }),
           },
-          resolveGatewaySessionStoreTargetInWorker: (params) =>
-            resolveGatewaySessionStoreTargetInWorker({
-              ...params,
-              cfg: {
-                ...params.cfg,
-                session: { ...params.cfg.session, store: target.storePath },
-              },
-            }),
+          resolveGatewaySessionStoreTargetInWorker,
           resolveCanonicalSessionEntryFromStoreKeys,
         }),
         cancelSessionWork: async (request) => {
@@ -246,19 +211,13 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(persisted?.endedAt).toBeTypeOf("number");
       const fresh = await admit("explicit-after-terminal-stop");
       expect(fresh.ok).toBe(true);
-      if (fresh.ok) {
-        fresh.value.cleanupAdmittedRun();
-        clearAgentRunContext("explicit-after-terminal-stop", fresh.value.lifecycleGeneration);
-      }
+      cleanupAdmission("explicit-after-terminal-stop", fresh);
     } finally {
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
       await reclaim?.catch(() => {});
-      if (active?.ok) {
-        active.value.cleanupAdmittedRun();
-        clearAgentRunContext(runId, active.value.lifecycleGeneration);
-      }
+      cleanupAdmission(runId, active);
       unsubscribe();
       await subscriptions?.agentUnsub();
       subscriptions?.heartbeatUnsub();
@@ -267,8 +226,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       await closeSessionSqliteDatabasesForTest();
       clearRuntimeConfigSnapshot();
       persistenceSpy?.mockRestore();
-      routing.load.mockReset();
-      await fs.rm(root, { recursive: true, force: true });
+      await state.cleanup();
     }
   },
 );
