@@ -35,7 +35,10 @@ export function createGroupGatingTestHandler(params: {
   processMock.mockClear();
   verboseMock.mockClear();
   const replyLogger = getChildLogger({ name: "whatsapp-group-admission-test" });
-  vi.spyOn(replyLogger, "warn").mockImplementation(warn);
+  vi.spyOn(replyLogger, "warn").mockImplementation((...args) => {
+    warn(...args);
+    return undefined;
+  });
   const handler = createWebOnMessageHandler({
     cfg: params.cfg,
     verbose: false,
