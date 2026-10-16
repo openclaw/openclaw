@@ -23,22 +23,20 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.replace(/[\r\n]+$/u, "");
 }
 
-async function expectGitRootResolution(params: {
-  label: string;
-  setup: (
-    temp: string,
-  ) => Promise<{ startPath: string; expectedRoot: string | null; expectedHead: string | null }>;
-}): Promise<void> {
-  await withTestDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
-    const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
-    if (expectedHead) {
-      await fs.writeFile(expectedHead, `${"a".repeat(40)}\n`);
-    }
-    // Include the fixture root, but never inspect host-owned ancestors above it.
-    const maxDepth = path.relative(temp, startPath).split(path.sep).filter(Boolean).length + 1;
-    expect(findGitRoot(startPath, { maxDepth })).toBe(expectedRoot);
-    expect(readGitHead(startPath, { maxDepth })?.headPath ?? null).toBe(expectedHead);
-  });
+async function initialCommit(repo: string, email: string) {
+  await git(
+    repo,
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    `user.email=${email}`,
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "source",
+  );
 }
 
 describe("git-root", () => {
@@ -141,40 +139,26 @@ describe("git-root", () => {
   );
 
   it.each([
-    {
-      name: ".git is a gitdir pointer file",
-      label: "git-root-file",
-      setup: async (temp: string) => {
-        const repoRoot = path.join(temp, "repo");
-        const workspace = path.join(repoRoot, "nested", "workspace");
-        const gitDir = path.join(repoRoot, ".actual-git");
-        await fs.mkdir(workspace, { recursive: true });
-        await fs.mkdir(gitDir, { recursive: true });
-        await fs.writeFile(path.join(repoRoot, ".git"), "gitdir: .actual-git\n", "utf-8");
-        return {
-          startPath: workspace,
-          expectedRoot: repoRoot,
-          expectedHead: path.join(gitDir, "HEAD"),
-        };
-      },
-    },
-    {
-      name: "invalid gitdir content without a parent repo",
-      label: "git-root-invalid-only",
-      setup: async (temp: string) => {
-        const repoRoot = path.join(temp, "repo");
-        const nested = path.join(repoRoot, "nested");
-        await fs.mkdir(nested, { recursive: true });
-        await fs.writeFile(path.join(repoRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
-        return {
-          startPath: nested,
-          expectedRoot: repoRoot,
-          expectedHead: null,
-        };
-      },
-    },
-  ])("resolves git roots when $name", async ({ label, setup }) => {
-    await expectGitRootResolution({ label, setup });
+    [".git is a gitdir pointer file", "gitdir: .actual-git\n", "nested/workspace", true],
+    ["invalid gitdir content without a parent repo", "not-a-gitdir-pointer\n", "nested", false],
+  ] as const)("resolves git roots when %s", async (_name, pointer, nested, valid) => {
+    await withTestDir({ prefix: "openclaw-git-root-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const workspace = path.join(repoRoot, nested);
+      const gitDir = path.join(repoRoot, ".actual-git");
+      await fs.mkdir(workspace, { recursive: true });
+      if (valid) {
+        await fs.mkdir(gitDir);
+        await fs.writeFile(path.join(gitDir, "HEAD"), `${"a".repeat(40)}\n`);
+      }
+      await fs.writeFile(path.join(repoRoot, ".git"), pointer);
+      // Bound discovery to this fixture, never host-owned ancestors.
+      const maxDepth = path.relative(temp, workspace).split(path.sep).filter(Boolean).length + 1;
+      expect(findGitRoot(workspace, { maxDepth })).toBe(repoRoot);
+      expect(readGitHead(workspace, { maxDepth })?.headPath ?? null).toBe(
+        valid ? path.join(gitDir, "HEAD") : null,
+      );
+    });
   });
 
   it("matches native Git storage across normal, bare, and relocated linked layouts", async () => {
@@ -186,19 +170,7 @@ describe("git-root", () => {
       );
       const checkout = path.join(root, "checkout");
       await git(root, "init", "--template=", "-b", "main", source);
-      await git(
-        source,
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=openclaw-test@example.invalid",
-        "-c",
-        "commit.gpgSign=false",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "source",
-      );
+      await initialCommit(source, "openclaw-test@example.invalid");
       await git(root, "clone", "--bare", source, bare);
       await git(bare, "worktree", "add", "-b", "linked", checkout);
       const originalAdmin = await fs.realpath(
@@ -335,19 +307,7 @@ describe("Git worktree administration", () => {
         const repo = path.join(root, "repo");
         const checkout = path.join(root, "checkout");
         await git(root, "init", "--template=", "-b", "main", repo);
-        await git(
-          repo,
-          "-c",
-          "user.name=OpenClaw Test",
-          "-c",
-          "user.email=git@example.invalid",
-          "-c",
-          "commit.gpgSign=false",
-          "commit",
-          "--allow-empty",
-          "-m",
-          "source",
-        );
+        await initialCommit(repo, "git@example.invalid");
         await git(
           repo,
           "-c",

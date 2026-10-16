@@ -37,47 +37,51 @@ afterEach(() => {
 
 const emptyDiff = { files: [], additions: 0, deletions: 0 };
 
+function holdRead<K extends keyof GitReadOperations>(
+  _type: K,
+  fallback: GitReadOperations[K]["output"],
+) {
+  const held = createDeferredCore<GitReadOperations[K]["output"]>();
+  onTestFinished(() => held.resolve(fallback));
+  gitRead.mockReturnValueOnce(held.promise);
+  return held;
+}
+
+function identity(root: string, fingerprint: string, originUrl = "") {
+  return { checkoutRoot: root, repoRoot: root, originUrl, fingerprint };
+}
+
+function contextRead(root: string) {
+  return { type: "checkout.context" as const, input: { root } };
+}
+
 describe("typed Git read ownership", () => {
   it("serves identity snapshots while one background pass refreshes external metadata", async () => {
     vi.useFakeTimers();
-    const cold = createDeferredCore<GitReadOperations["repository.identities"]["output"]>();
-    onTestFinished(() => cold.resolve([]));
-    gitRead.mockReturnValueOnce(cold.promise);
+    const cold = holdRead("repository.identities", []);
     const operation = { type: "repository.identities" as const, input: { roots: ["/snapshot"] } };
     await expect(runGitReadOperation(operation)).resolves.toEqual([]);
     vi.advanceTimersByTime(120_000);
     await expect(runGitReadOperation(operation)).resolves.toEqual([]);
     expect(gitRead).toHaveBeenCalledOnce();
     const changed = { ...operation, input: { roots: ["/new-checkout-set"] } };
-    const changedIdentity = {
-      checkoutRoot: "/new-checkout-set",
-      repoRoot: "/new-checkout-set",
-      originUrl: "",
-      fingerprint: "new",
-    };
+    const changedIdentity = identity("/new-checkout-set", "new");
     gitRead.mockResolvedValueOnce([changedIdentity]);
     await expect(runGitReadOperation(changed)).resolves.toEqual([]);
     expect(gitRead).toHaveBeenCalledOnce();
-    const identity = {
-      checkoutRoot: "/snapshot",
-      repoRoot: "/snapshot",
-      originUrl: "https://example.test/old.git",
-      fingerprint: "old",
-    };
-    cold.resolve([identity]);
+    const snapshot = identity("/snapshot", "old", "https://example.test/old.git");
+    cold.resolve([snapshot]);
     await cold.promise;
     await vi.advanceTimersByTimeAsync(0);
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     await expect(runGitReadOperation(changed)).resolves.toEqual([changedIdentity]);
-    const refresh = createDeferredCore<GitReadOperations["repository.identities"]["output"]>();
-    onTestFinished(() => refresh.resolve([]));
-    gitRead.mockReturnValueOnce(refresh.promise);
+    const refresh = holdRead("repository.identities", []);
     vi.advanceTimersByTime(60_001);
     const stale = await runGitReadOperation(operation);
     await vi.advanceTimersByTimeAsync(0);
-    expect(stale).toEqual([identity]);
+    expect(stale).toEqual([snapshot]);
     stale[0]!.originUrl = "mutated response";
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     expect(gitRead).toHaveBeenCalledTimes(3);
     refresh.resolve([]);
     await refresh.promise;
@@ -91,34 +95,27 @@ describe("typed Git read ownership", () => {
       type: "repository.identities" as const,
       input: { roots: ["/snapshot-lifetime"] },
     };
-    const identity = {
-      checkoutRoot: "/snapshot-lifetime",
-      repoRoot: "/snapshot-lifetime",
-      originUrl: "",
-      fingerprint: "retained",
-    };
-    gitRead.mockResolvedValueOnce([identity]);
+    const snapshot = identity("/snapshot-lifetime", "retained");
+    gitRead.mockResolvedValueOnce([snapshot]);
     await runGitReadOperation(operation);
     await vi.advanceTimersByTimeAsync(0);
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     gitRead.mockRejectedValueOnce(new Error("temporary discovery failure"));
     vi.advanceTimersByTime(60_001);
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     await vi.advanceTimersByTimeAsync(0);
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     expect(gitRead).toHaveBeenCalledTimes(2);
-    const held = createDeferredCore<GitReadOperations["repository.identities"]["output"]>();
-    onTestFinished(() => held.resolve([]));
-    gitRead.mockReturnValueOnce(held.promise);
+    const held = holdRead("repository.identities", []);
     vi.advanceTimersByTime(60_001);
-    await expect(runGitReadOperation(operation)).resolves.toEqual([identity]);
+    await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     await vi.advanceTimersByTimeAsync(0);
     const owner = gitRead.mock.calls.at(-1)?.[1]?.signal;
     const retiring = drainGlobalSingletonLifecycleState("restart");
     await Promise.resolve();
     expect(owner?.aborted).toBe(true);
     await expect(runGitReadOperation(operation)).rejects.toThrow("restarting");
-    held.resolve([identity]);
+    held.resolve([snapshot]);
     await retiring;
     gitRead.mockResolvedValueOnce([]);
     await expect(runGitReadOperation(operation)).resolves.toEqual([]);
@@ -143,9 +140,7 @@ describe("typed Git read ownership", () => {
   });
 
   it("gives each coalesced response independent files and commit metadata", async () => {
-    const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
-    onTestFinished(() => held.resolve(emptyDiff));
-    gitRead.mockReturnValueOnce(held.promise);
+    const held = holdRead("checkout.diff", emptyDiff);
     const first = loadCheckoutDiff({ cwd: "/independent-diffs", sessionKey: "a" });
     const second = loadCheckoutDiff({ cwd: "/independent-diffs", sessionKey: "b" });
     held.resolve({
@@ -174,9 +169,7 @@ describe("typed Git read ownership", () => {
   });
 
   it("shares baseline fingerprints while binding each captured session independently", async () => {
-    const held = createDeferredCore<GitReadOperations["checkout.baseline"]["output"]>();
-    onTestFinished(() => held.resolve(undefined));
-    gitRead.mockReturnValueOnce(held.promise);
+    const held = holdRead("checkout.baseline", undefined);
     const first = captureSessionDiffBaseline({ cwd: "/baseline-sharing", sessionId: "a" });
     const second = captureSessionDiffBaseline({ cwd: "/baseline-sharing", sessionId: "b" });
     await Promise.resolve();
@@ -187,81 +180,62 @@ describe("typed Git read ownership", () => {
     await expect(second).resolves.toEqual({ ...captured, sessionId: "b" });
   });
 
-  it.each(["unversioned refresh"])(
-    "observes %s immediately without an older completion replacing it",
-    async (mode) => {
-      const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-      onTestFinished(() => old.resolve(null));
-      const fresh = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-      onTestFinished(() => fresh.resolve(null));
-      gitRead.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-      const operation = {
-        type: "checkout.context" as const,
-        input: { root: "/refresh-generation" },
-      };
-      readRevision
-        .mockResolvedValueOnce(mode === "new revision" ? "old" : null)
-        .mockResolvedValue(mode === "new revision" ? "new" : null);
-      const pending = runGitReadOperation(operation);
-      const refresh = runGitReadOperation(operation, { refresh: true });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(gitRead).toHaveBeenCalledTimes(2);
-      const refreshed = {
-        owner: "example",
-        repo: "repo",
-        branch: "new",
-        root: operation.input.root,
-      };
-      fresh.resolve(refreshed);
-      await expect(refresh).resolves.toEqual(refreshed);
-      old.resolve({ ...refreshed, branch: "old" });
-      await expect(pending).resolves.toMatchObject({ branch: "old" });
-      await expect(runGitReadOperation(operation)).resolves.toEqual(refreshed);
-      expect(gitRead).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("observes an unversioned refresh without an older completion replacing it", async () => {
+    const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
+    onTestFinished(() => old.resolve(null));
+    const fresh = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
+    onTestFinished(() => fresh.resolve(null));
+    gitRead.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const operation = contextRead("/refresh-generation");
+    readRevision.mockResolvedValue(null);
+    const pending = runGitReadOperation(operation);
+    const refresh = runGitReadOperation(operation, { refresh: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gitRead).toHaveBeenCalledTimes(2);
+    const refreshed = {
+      owner: "example",
+      repo: "repo",
+      branch: "new",
+      root: operation.input.root,
+    };
+    fresh.resolve(refreshed);
+    await expect(refresh).resolves.toEqual(refreshed);
+    old.resolve({ ...refreshed, branch: "old" });
+    await expect(pending).resolves.toMatchObject({ branch: "old" });
+    await expect(runGitReadOperation(operation)).resolves.toEqual(refreshed);
+    expect(gitRead).toHaveBeenCalledTimes(2);
+  });
 
-  it.each([{ pendingAtExpiry: true, revision: null, freshnessMs: 75_000 }])(
-    "measures branch-fact fallback from admission with revision=$revision and pending=$pendingAtExpiry",
-    async ({ pendingAtExpiry, revision, freshnessMs }) => {
-      vi.useFakeTimers();
-      readRevision.mockResolvedValue(revision);
-      const held = createDeferredCore<GitReadOperations["pull-request.branch-facts"]["output"]>();
-      onTestFinished(() => held.resolve(undefined));
-      gitRead.mockReturnValueOnce(held.promise);
-      const operation = {
-        type: "pull-request.branch-facts" as const,
-        input: {
-          root: `/admission-expiry-${revision}-${pendingAtExpiry}`,
-          branch: "feature",
-          mergedHeads: [],
-        },
-      };
-      const first = runGitReadOperation(operation);
-      await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
-      vi.advanceTimersByTime(freshnessMs - 1_000);
-      const earlier = { creatable: true, stats: { additions: 1, deletions: 0, changedFiles: 1 } };
-      if (!pendingAtExpiry) {
-        held.resolve(earlier);
-        await first;
-      }
-      vi.advanceTimersByTime(1_001);
-      const fresh = { ...earlier, stats: { ...earlier.stats, additions: 2 } };
-      gitRead.mockResolvedValueOnce(fresh);
-      const current = runGitReadOperation(operation);
-      await expect(current).resolves.toEqual(fresh);
-      expect(gitRead).toHaveBeenCalledTimes(2);
-      held.resolve(earlier);
-      await first;
-      await expect(runGitReadOperation(operation)).resolves.toEqual(fresh);
-    },
-  );
+  it("expires pending unversioned branch facts from admission", async () => {
+    vi.useFakeTimers();
+    readRevision.mockResolvedValue(null);
+    const held = holdRead("pull-request.branch-facts", undefined);
+    const operation = {
+      type: "pull-request.branch-facts" as const,
+      input: {
+        root: "/admission-expiry-null-true",
+        branch: "feature",
+        mergedHeads: [],
+      },
+    };
+    const first = runGitReadOperation(operation);
+    await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
+    vi.advanceTimersByTime(74_000);
+    const earlier = { creatable: true, stats: { additions: 1, deletions: 0, changedFiles: 1 } };
+    vi.advanceTimersByTime(1_001);
+    const fresh = { ...earlier, stats: { ...earlier.stats, additions: 2 } };
+    gitRead.mockResolvedValueOnce(fresh);
+    const current = runGitReadOperation(operation);
+    await expect(current).resolves.toEqual(fresh);
+    expect(gitRead).toHaveBeenCalledTimes(2);
+    held.resolve(earlier);
+    await first;
+    await expect(runGitReadOperation(operation)).resolves.toEqual(fresh);
+  });
 
   it("one cancelled subscriber cannot terminate a peer's Git operation", async () => {
-    const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
-    onTestFinished(() => held.resolve(emptyDiff));
-    gitRead.mockReturnValueOnce(held.promise);
+    const held = holdRead("checkout.diff", emptyDiff);
     const operation = { type: "checkout.diff" as const, input: { cwd: "/shared-cancellation" } };
     const first = new AbortController();
     const second = new AbortController();
@@ -281,10 +255,8 @@ describe("typed Git read ownership", () => {
   });
 
   it("joins final-subscriber teardown while fresh readers avoid its stale generation", async () => {
-    const held = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => held.resolve(null));
-    gitRead.mockReturnValueOnce(held.promise);
-    const operation = { type: "checkout.context" as const, input: { root: "/last-subscriber" } };
+    const held = holdRead("checkout.context", null);
+    const operation = contextRead("/last-subscriber");
     const subscriber = new AbortController();
     const cancelled = runGitReadOperation(operation, { signal: subscriber.signal });
     let callerSettled = false;
@@ -323,10 +295,7 @@ describe("typed Git read ownership", () => {
       } else {
         gitRead.mockReturnValueOnce(held.promise);
       }
-      const operation = {
-        type: "checkout.context" as const,
-        input: { root: `/restart-lifecycle-${phase}` },
-      };
+      const operation = contextRead(`/restart-lifecycle-${phase}`);
       const pending = runGitReadOperation(operation);
       const rejected = expect(pending).rejects.toThrow();
       await Promise.resolve();
@@ -350,7 +319,7 @@ describe("typed Git read ownership", () => {
 
   it("a failed read cannot poison the next normal request", async () => {
     gitRead.mockRejectedValueOnce(new Error("temporary failure")).mockResolvedValueOnce(null);
-    const operation = { type: "checkout.context" as const, input: { root: "/recovery" } };
+    const operation = contextRead("/recovery");
     await expect(runGitReadOperation(operation)).rejects.toThrow("temporary failure");
     await expect(runGitReadOperation(operation)).resolves.toBeNull();
     expect(gitRead).toHaveBeenCalledTimes(2);

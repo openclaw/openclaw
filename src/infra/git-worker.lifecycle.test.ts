@@ -24,6 +24,7 @@ import {
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
 import * as gitExec from "./git-exec.js";
+import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
 
@@ -72,6 +73,50 @@ async function repository(root: string): Promise<string> {
   await git(repo, "add", "README.md");
   await git(repo, "commit", "-m", "initial");
   return repo;
+}
+
+function snapshot(
+  repo: string,
+  worktreeId: string,
+  options: GitWorkerOperationOptions = { onEffect: () => undefined },
+  overrides: Partial<GitWorkerOperations["worktree.snapshot"]["input"]> = {},
+) {
+  return runGitWorkerOperation(
+    {
+      type: "worktree.snapshot",
+      input: {
+        worktreeId,
+        checkoutPath: repo,
+        repoRoot: repo,
+        reason: "fixture",
+        provisionedPaths: [],
+        ...overrides,
+      },
+    },
+    options,
+  );
+}
+
+function inspect(repo: string) {
+  return runGitWorkerOperation({
+    type: "worktree.cleanup-inspection",
+    input: { kind: "nested-repository", checkoutPath: repo },
+  });
+}
+
+function sizing(repoRoot: string, options?: GitWorkerOperationOptions, ref = "HEAD") {
+  return runGitWorkerOperation({ type: "worktree.git-size", input: { repoRoot, ref } }, options);
+}
+
+function barrier() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered,
+    release,
+    wait: (operation: Promise<unknown>, message: string, timeoutMessage?: string) =>
+      waitForLifecyclePoint(entered.promise, operation, message, timeoutMessage),
+  };
 }
 
 async function partialClone(root: string) {
@@ -299,23 +344,9 @@ describe("Git operation host lifecycle", () => {
       }
       return await realRun(cwd, args, options);
     });
-    const snapshot = await runGitWorkerOperation(
-      {
-        type: "worktree.snapshot",
-        input: {
-          worktreeId: "bounded-ignored",
-          checkoutPath: repo,
-          repoRoot: repo,
-          reason: "fixture",
-          provisionedPaths: [],
-        },
-      },
-      {
-        onEffect: () => undefined,
-      },
-    );
-    expect(await git(repo, "show", `${snapshot.snapshotRef}:${input}`)).toBe("retain task input");
-    const tree = await git(repo, "ls-tree", "-r", "--name-only", snapshot.snapshotRef);
+    const saved = await snapshot(repo, "bounded-ignored");
+    expect(await git(repo, "show", `${saved.snapshotRef}:${input}`)).toBe("retain task input");
+    const tree = await git(repo, "ls-tree", "-r", "--name-only", saved.snapshotRef);
     expect(tree).not.toContain("dependencies/");
     expect(tree).not.toContain("private.txt");
     expect(ignoredReads).toBeGreaterThan(0);
@@ -332,33 +363,14 @@ describe("Git operation host lifecycle", () => {
       const external = path.join(root, "external");
       await fs.mkdir(path.join(external, ".git"), { recursive: true });
       await fs.symlink(external, path.join(dependencies, "link"), "dir");
-      const inspect = () =>
-        runGitWorkerOperation({
-          type: "worktree.cleanup-inspection",
-          input: { kind: "nested-repository", checkoutPath: repo },
-        });
-      expect(await inspect()).toEqual({ retainedReason: undefined });
+      expect(await inspect(repo)).toEqual({ retainedReason: undefined });
       const rawDirectory = Buffer.concat([Buffer.from(`${dependencies}/`), Buffer.from([0xff])]);
       await fs.mkdir(rawDirectory);
       await fs.symlink("missing-git-metadata", Buffer.concat([rawDirectory, Buffer.from("/.git")]));
-      expect(await inspect()).toEqual({ retainedReason: "nested-repository" });
-      await expect(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "raw-nested",
-              checkoutPath: repo,
-              repoRoot: repo,
-              reason: "fixture",
-              provisionedPaths: [],
-            },
-          },
-          {
-            onEffect: () => undefined,
-          },
-        ),
-      ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
+      expect(await inspect(repo)).toEqual({ retainedReason: "nested-repository" });
+      await expect(snapshot(repo, "raw-nested")).rejects.toThrow(
+        "nested git repositories cannot be snapshotted losslessly",
+      );
     },
   );
 
@@ -409,12 +421,7 @@ describe("Git operation host lifecycle", () => {
             : options,
         ),
     );
-    await expect(
-      runGitWorkerOperation({
-        type: "worktree.cleanup-inspection",
-        input: { kind: "nested-repository", checkoutPath: repo },
-      }),
-    ).rejects.toThrow("output limit exceeded");
+    await expect(inspect(repo)).rejects.toThrow("output limit exceeded");
   });
 
   it("serves branch metadata while two independent diffs wait for Git", async () => {
@@ -435,8 +442,7 @@ describe("Git operation host lifecycle", () => {
         spawns.push(event);
       }
     });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, release, wait } = barrier();
     const realRun = worktreeGit.runGitBytes;
     vi.spyOn(worktreeGit, "runGitBytes").mockImplementation(async (cwd, args, options) => {
       if (
@@ -454,8 +460,7 @@ describe("Git operation host lifecycle", () => {
     );
     const pending: Promise<unknown>[] = [first];
     try {
-      await waitForLifecyclePoint(
-        entered.promise,
+      await wait(
         first,
         "Diff ended before its Git read was held",
         "Diff did not reach its held Git request",
@@ -506,8 +511,7 @@ describe("Git operation host lifecycle", () => {
       await fs.writeFile(path.join(peer, ".gitignore"), "included.txt\n");
       await fs.writeFile(path.join(peer, ".worktreeinclude"), "included.txt\n");
       await fs.writeFile(path.join(peer, "included.txt"), "provisioned\n");
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release, wait } = barrier();
       let heldRequests = 0;
       const realRun = worktreeGit.runGitBuffered;
       vi.spyOn(worktreeGit, "runGitBuffered").mockImplementation(async (cwd, args, options) => {
@@ -519,40 +523,14 @@ describe("Git operation host lifecycle", () => {
         return await realRun(cwd, args, options);
       });
       const startMaintenance = () =>
-        runGitWorkerOperation(
-          maintenance === "snapshot"
-            ? {
-                type: "worktree.snapshot",
-                input: {
-                  worktreeId: "held-maintenance",
-                  checkoutPath: repo,
-                  repoRoot: repo,
-                  reason: "fixture",
-                  provisionedPaths: [],
-                },
-              }
-            : {
-                type: "worktree.cleanup-inspection",
-                input: { kind: "nested-repository", checkoutPath: repo },
-              },
-          {
-            onEffect: () => undefined,
-          },
-        );
+        maintenance === "snapshot" ? snapshot(repo, "held-maintenance") : inspect(repo);
       const first = settle(startMaintenance());
       const pending: Promise<unknown>[] = [first];
       try {
-        await waitForLifecyclePoint(
-          entered.promise,
-          first,
-          "Maintenance ended before its Git read was held",
-        );
+        await wait(first, "Maintenance ended before its Git read was held");
         pending.push(settle(startMaintenance()));
         const preparation = Promise.all([
-          runGitWorkerOperation({
-            type: "worktree.git-size",
-            input: { repoRoot: peer, ref: "HEAD" },
-          }),
+          sizing(peer),
           runGitWorkerOperation({
             type: "worktree.provisioning-inspection",
             input: { sourceRoot: peer },
@@ -633,8 +611,8 @@ describe("Git operation host lifecycle", () => {
       vi.stubEnv("GIT_TRACE2_EVENT", trace);
       const abort = new AbortController();
       const pending = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: clone, ref: commit } },
+        sizing(
+          clone,
           {
             signal: abort.signal,
             git:
@@ -645,6 +623,7 @@ describe("Git operation host lifecycle", () => {
                   }
                 : undefined,
           },
+          commit,
         ),
       );
       let gitPid: number | undefined;
@@ -692,34 +671,26 @@ describe("Git operation host lifecycle", () => {
   it("captures caller Git policy before a queued sizing request can be changed", async () => {
     const root = tempDirs.make("openclaw-caller-git-admission-");
     const repo = await repository(root);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, release, wait } = barrier();
     let held = false;
     const first = settle(
-      runGitWorkerOperation(
-        { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-        {
-          git: {
-            text: async (cwd, args, options) => {
-              if (!held) {
-                held = true;
-                entered.resolve();
-                await release.promise;
-              }
-              return await gitExec.executeGitCommandBytes(cwd, args, options);
-            },
-            buffered: gitExec.executeGitCommandBuffered,
+      sizing(repo, {
+        git: {
+          text: async (cwd, args, options) => {
+            if (!held) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return await gitExec.executeGitCommandBytes(cwd, args, options);
           },
+          buffered: gitExec.executeGitCommandBuffered,
         },
-      ),
+      }),
     );
     const pending: Promise<unknown>[] = [first];
     try {
-      await waitForLifecyclePoint(
-        entered.promise,
-        first,
-        "Sizing ended before the predecessor was held",
-      );
+      await wait(first, "Sizing ended before the predecessor was held");
       const calls = { text: 0, buffered: 0 };
       const executors: NonNullable<GitWorkerOperationOptions["git"]> = {
         text: async (cwd, args, options) => {
@@ -731,12 +702,7 @@ describe("Git operation host lifecycle", () => {
           return await gitExec.executeGitCommandBuffered(cwd, args, options);
         },
       };
-      const second = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-          { git: executors },
-        ),
-      );
+      const second = settle(sizing(repo, { git: executors }));
       pending.push(second);
       executors.text = executors.buffered = async () => {
         throw new Error("queued caller replaced Git policy");
@@ -758,8 +724,7 @@ describe("Git operation host lifecycle", () => {
     async (transport) => {
       const root = tempDirs.make("openclaw-caller-git-authority-");
       const repo = await repository(root);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release, wait } = barrier();
       const revoked = new Error("caller Git authority revoked");
       let current = true;
       const trace = path.join(root, "git-trace.jsonl");
@@ -769,37 +734,30 @@ describe("Git operation host lifecycle", () => {
         await release.promise;
       };
       const pending = settle(
-        runGitWorkerOperation(
-          { type: "worktree.git-size", input: { repoRoot: repo, ref: "HEAD" } },
-          {
-            assertCurrent: () => {
-              if (!current) {
-                throw revoked;
+        sizing(repo, {
+          assertCurrent: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+          git: {
+            text: async (cwd, args, options) => {
+              if (transport === "text") {
+                await waitForRevocation();
               }
+              return await gitExec.executeGitCommandBytes(cwd, args, options);
             },
-            git: {
-              text: async (cwd, args, options) => {
-                if (transport === "text") {
-                  await waitForRevocation();
-                }
-                return await gitExec.executeGitCommandBytes(cwd, args, options);
-              },
-              buffered: async (cwd, args, options) => {
-                if (transport === "buffered") {
-                  await waitForRevocation();
-                }
-                return await gitExec.executeGitCommandBuffered(cwd, args, options);
-              },
+            buffered: async (cwd, args, options) => {
+              if (transport === "buffered") {
+                await waitForRevocation();
+              }
+              return await gitExec.executeGitCommandBuffered(cwd, args, options);
             },
           },
-        ),
+        }),
       );
       try {
-        await waitForLifecyclePoint(
-          entered.promise,
-          pending,
-          "Sizing ended before caller Git was held",
-        );
+        await wait(pending, "Sizing ended before caller Git was held");
         current = false;
         release.resolve();
         const result = await within(pending);
@@ -823,8 +781,7 @@ describe("Git operation host lifecycle", () => {
       const repo = await repository(root);
       const neighbor = path.join(root, "neighbor.txt");
       await fs.writeFile(neighbor, "keep");
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release, wait } = barrier();
       const abort = new AbortController();
       let temporaryDirectory = "";
       const onEffect: NonNullable<GitWorkerOperationOptions["onEffect"]> = async (effect) => {
@@ -842,30 +799,19 @@ describe("Git operation host lifecycle", () => {
       };
       let completed = 0;
       const pending = settle(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "temporary-lifecycle",
-              checkoutPath: repo,
-              repoRoot: repo,
-              reason: "fixture",
-              // A provisioned path that became tracked must fail the worker's snapshot validation.
-              provisionedPaths: ending === "worker-error" ? ["README.md"] : [],
-            },
-          },
+        snapshot(
+          repo,
+          "temporary-lifecycle",
           { signal: abort.signal, onEffect },
+          // A provisioned path that became tracked must fail snapshot validation.
+          { provisionedPaths: ending === "worker-error" ? ["README.md"] : [] },
         ),
       ).then((result) => {
         completed++;
         return result;
       });
       try {
-        await waitForLifecyclePoint(
-          entered.promise,
-          pending,
-          "Snapshot ended before capacity inspection",
-        );
+        await wait(pending, "Snapshot ended before capacity inspection");
         expect(await exists(temporaryDirectory)).toBe(true);
         if (ending === "cancel") {
           abort.abort(new Error("snapshot cancelled"));
@@ -927,17 +873,9 @@ describe("Git operation host lifecycle", () => {
       const revoked = new Error("snapshot authority revoked");
       const abort = new AbortController();
       const pending = settle(
-        runGitWorkerOperation(
-          {
-            type: "worktree.snapshot",
-            input: {
-              worktreeId: "revoked-snapshot",
-              checkoutPath: checkout,
-              repoRoot: repo,
-              reason: "fixture",
-              provisionedPaths: [],
-            },
-          },
+        snapshot(
+          repo,
+          "revoked-snapshot",
           {
             signal: abort.signal,
             assertCurrent: () => {
@@ -955,6 +893,7 @@ describe("Git operation host lifecycle", () => {
               return undefined;
             },
           },
+          { checkoutPath: checkout },
         ),
       );
       let successor: Promise<void> | undefined;

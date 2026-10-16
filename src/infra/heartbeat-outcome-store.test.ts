@@ -45,6 +45,28 @@ import { sqliteWorkerOwnerProbe } from "./sqlite-worker-owner-probe.test-support
 
 const tempDirs = createTempDirTracker();
 
+function sessionTarget(env: NodeJS.ProcessEnv, sessionKey = "agent:main:main") {
+  return { agentId: "main", sessionKey, env };
+}
+
+function persist(
+  target: ReturnType<typeof sessionTarget>,
+  summary: string,
+  overrides: Partial<Parameters<typeof persistHeartbeatOutcome>[0]> = {},
+) {
+  return persistHeartbeatOutcome({
+    ...target,
+    runSessionKey: `${target.sessionKey}:heartbeat`,
+    occurredAt: 100,
+    response: { outcome: "progress", notify: false, summary },
+    ...overrides,
+  });
+}
+
+function claimOutcome(target: ReturnType<typeof sessionTarget>, runId: string) {
+  return claimHeartbeatOutcomeForRun({ ...target, runId });
+}
+
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
@@ -70,17 +92,12 @@ afterEach(async () => {
 describe("heartbeat outcome store", () => {
   it("persists and claims the first outcome after reopening without host SQL", async () => {
     const env = await createEnv();
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    const target = sessionTarget(env);
     await closeOpenClawAgentDatabasesAsync();
     const host = observeHostDataSql();
     try {
-      await persistHeartbeatOutcome({
-        ...target,
-        runSessionKey: "agent:main:main:heartbeat",
-        occurredAt: 100,
-        response: { outcome: "progress", notify: false, summary: "First after boot" },
-      });
-      expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toMatchObject({
+      await persist(target, "First after boot");
+      expect(await claimOutcome(target, "first-run")).toMatchObject({
         summary: "First after boot",
       });
       expect(host.queries).toEqual([]);
@@ -88,22 +105,17 @@ describe("heartbeat outcome store", () => {
       host.restore();
     }
     await closeOpenClawAgentDatabasesAsync();
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toMatchObject({
+    expect(await claimOutcome(target, "first-run")).toMatchObject({
       summary: "First after boot",
     });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" })).toBeUndefined();
+    expect(await claimOutcome(target, "second-run")).toBeUndefined();
   });
 
   it("preserves absent storage when there is no durable base session", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-heartbeat-absent-") };
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
-    await persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 100,
-      response: { outcome: "progress", notify: false, summary: "No durable session" },
-    });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "first-run" })).toBeUndefined();
+    const target = sessionTarget(env);
+    await persist(target, "No durable session");
+    expect(await claimOutcome(target, "first-run")).toBeUndefined();
     expect(existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
   });
 
@@ -122,7 +134,7 @@ describe("heartbeat outcome store", () => {
       },
     });
     const env = await createEnv();
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    const target = sessionTarget(env);
     let commits = 0;
     let admissions = 0;
     sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
@@ -142,12 +154,7 @@ describe("heartbeat outcome store", () => {
     expect(await claim("first-run")).toBeUndefined();
     expect(await claim("second-run")).toBeUndefined();
     expect(admissions).toBe(afterAbsent);
-    await persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 100,
-      response: { outcome: "progress", notify: false, summary: "Recorded progress" },
-    });
+    await persist(target, "Recorded progress");
     expect(commits).toBe(1);
     const claimed = await claim("first-run");
     expect(claimed).toMatchObject({ summary: "Recorded progress" });
@@ -161,13 +168,8 @@ describe("heartbeat outcome store", () => {
 
   it("leaves the outcome unclaimed when its admitted run retires before worker admission", async () => {
     const env = await createEnv();
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
-    await persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      response: { outcome: "progress", notify: false, summary: "Saved outcome" },
-      occurredAt: 100,
-    });
+    const target = sessionTarget(env);
+    await persist(target, "Saved outcome");
     const admission = prepareSystemAgentRunAdmission(
       {},
       "retired-run",
@@ -184,12 +186,10 @@ describe("heartbeat outcome store", () => {
       });
       admission.close();
       await expect(pending).rejects.toThrow();
-      expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "another-run" })).toMatchObject({
+      expect(await claimOutcome(target, "another-run")).toMatchObject({
         summary: "Saved outcome",
       });
-      expect(
-        await claimHeartbeatOutcomeForRun({ ...target, runId: "retired-run" }),
-      ).toBeUndefined();
+      expect(await claimOutcome(target, "retired-run")).toBeUndefined();
     } finally {
       admission.close();
     }
@@ -197,15 +197,10 @@ describe("heartbeat outcome store", () => {
 
   it("does not reopen an agent for persistence queued before its close", async () => {
     const env = await createEnv();
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    const target = sessionTarget(env);
     const blocked = createDeferredCore();
     const ahead = runOpenClawAgentWriteAdmission(target, () => blocked.promise);
-    const pending = persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 100,
-      response: { outcome: "progress", notify: false, summary: "Must not reopen" },
-    });
+    const pending = persist(target, "Must not reopen");
     const refused = expect(pending).rejects.toThrow("closed");
     try {
       await closeOpenClawAgentDatabasesAsync();
@@ -219,21 +214,16 @@ describe("heartbeat outcome store", () => {
 
   it("retains incognito outcomes on the existing in-memory session owner", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-heartbeat-incognito-") };
-    const target = { agentId: "main", sessionKey: "agent:main:dashboard:incognito-heartbeat", env };
+    const target = sessionTarget(env, "agent:main:dashboard:incognito-heartbeat");
     await upsertSessionEntryCore(target, { sessionId: "private-session", updatedAt: 1 });
-    await persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:dashboard:incognito-heartbeat:heartbeat",
-      occurredAt: 100,
-      response: { outcome: "progress", notify: false, summary: "Private progress" },
-    });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "private-user" })).toMatchObject({
+    await persist(target, "Private progress");
+    expect(await claimOutcome(target, "private-user")).toMatchObject({
       summary: "Private progress",
     });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "private-user" })).toMatchObject({
+    expect(await claimOutcome(target, "private-user")).toMatchObject({
       summary: "Private progress",
     });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "another-user" })).toBeUndefined();
+    expect(await claimOutcome(target, "another-user")).toBeUndefined();
     const memoryPath = resolveIncognitoOpenClawAgentSqlitePath(target);
     expect(
       memorySessionActorOwners
@@ -247,10 +237,8 @@ describe("heartbeat outcome store", () => {
 
   it("keeps one bounded typed outcome per base session with provenance", async () => {
     const env = await createEnv();
-    await persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
+    const target = sessionTarget(env);
+    await persist(target, "", {
       response: {
         outcome: "progress",
         notify: false,
@@ -263,15 +251,9 @@ describe("heartbeat outcome store", () => {
       wakeSource: "interval",
       wakeReason: "scheduled",
       occurredAt: 1_700_000_000_000,
-      env,
     });
 
-    const stored = await claimHeartbeatOutcomeForRun({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runId: "user-run-1",
-      env,
-    });
+    const stored = await claimOutcome(target, "user-run-1");
     expect(stored).toMatchObject({
       sessionKey: "agent:main:main",
       runSessionKey: "agent:main:main:heartbeat",
@@ -294,11 +276,9 @@ describe("heartbeat outcome store", () => {
     try {
       const admitted = await admission.admit("embedded");
       const context = await claimHeartbeatContextForUserRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
+        ...target,
         runId: "user-run-1",
         trigger: "user",
-        env,
         assertCurrent: resolveAdmittedRunActiveAssertion(admitted),
       });
       expect(context).toContain(
@@ -354,14 +334,11 @@ describe("heartbeat outcome store", () => {
       await skipped;
     }
 
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-1",
-        env,
-      }),
-    ).toMatchObject({ outcome: "blocked", summary: "Waiting for build", occurredAt: 200 });
+    expect(await claimOutcome(sessionTarget(env), "user-run-1")).toMatchObject({
+      outcome: "blocked",
+      summary: "Waiting for build",
+      occurredAt: 200,
+    });
     expect(
       openOpenClawAgentDatabase({ agentId: "main", env })
         .db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes")
@@ -385,13 +362,9 @@ describe("heartbeat outcome store", () => {
       db.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(runSessionKey),
     ).toEqual({ session_key: runSessionKey });
 
-    await persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey,
+    await persist(sessionTarget(env, sessionKey), "Transient heartbeat", {
       runSessionKey,
-      response: { outcome: "progress", notify: false, summary: "Transient heartbeat" },
       occurredAt: 500,
-      env,
     });
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM heartbeat_outcomes").get()).toEqual({
@@ -414,7 +387,7 @@ async function reserveWorker(env: NodeJS.ProcessEnv) {
 
 it("queues captured outcomes off-thread and claims once per run until the next heartbeat", async () => {
   const env = await createEnv();
-  const target = { agentId: "main", sessionKey: "agent:main:main", env };
+  const target = sessionTarget(env);
   const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(target).db);
   const databasePath = resolveOpenClawAgentSqlitePath(target);
   const initialWriteToken = readSqliteDatabaseWriteTokenForPath(databasePath);
@@ -478,13 +451,8 @@ it("queues captured outcomes off-thread and claims once per run until the next h
 
 it("rechecks a queued claim's captured authority and leaves the outcome unclaimed", async () => {
   const env = await createEnv();
-  const target = { agentId: "main", sessionKey: "agent:main:main", env };
-  await persistHeartbeatOutcome({
-    ...target,
-    runSessionKey: "agent:main:main:heartbeat",
-    response: { outcome: "progress", notify: false, summary: "unclaimed" },
-    occurredAt: 100,
-  });
+  const target = sessionTarget(env);
+  await persist(target, "unclaimed");
   const reservation = await reserveWorker(env);
   let current = true;
   const input = {

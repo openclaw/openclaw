@@ -37,6 +37,23 @@ function prepare(body: string) {
   return prepareGithubIssue({ body, title: `Support report ${body}` });
 }
 
+function cliOutput(stdout: string, status = 0) {
+  return cliResult({ started: true, status, stdout: Buffer.from(stdout) });
+}
+
+function lookupResult(issue: ReturnType<typeof prepare>, url: string, body = issue.body) {
+  return cliOutput(JSON.stringify([{ body, title: issue.title, url }]));
+}
+
+function childFixture() {
+  return Object.assign(new EventEmitter(), {
+    stdin: Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() }),
+    stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+    kill: vi.fn(),
+    unref: vi.fn(),
+  });
+}
+
 function availableFallbackUrl(issue: ReturnType<typeof prepareGithubIssue>): string {
   expect(issue.browserFallback.status).toBe("available");
   if (issue.browserFallback.status !== "available") {
@@ -95,13 +112,7 @@ describe("GitHub issue transport", () => {
       .fn<RunGithubCli>()
       .mockResolvedValueOnce(authSuccess)
       .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 1,
-          stdout: Buffer.from(
-            "HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}",
-          ),
-        }),
+        cliOutput("HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}", 1),
       );
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
@@ -131,19 +142,7 @@ describe("GitHub issue transport", () => {
       .mockResolvedValueOnce(authSuccess)
       .mockResolvedValueOnce(cliResult({ started: true, status: 1 }))
       .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from(
-            JSON.stringify([
-              {
-                body: issue.body,
-                title: issue.title,
-                url: "https://github.com/openclaw/openclaw/issues/456",
-              },
-            ]),
-          ),
-        }),
+        lookupResult(issue, "https://github.com/openclaw/openclaw/issues/456"),
       );
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
@@ -155,21 +154,11 @@ describe("GitHub issue transport", () => {
 
   it("reconciles a persisted attempt without issuing a create request", async () => {
     const issue = prepare("cross-process-retry");
-    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(
-      cliResult({
-        started: true,
-        status: 0,
-        stdout: Buffer.from(
-          JSON.stringify([
-            {
-              body: issue.body,
-              title: issue.title,
-              url: "https://github.com/openclaw/openclaw/issues/456",
-            },
-          ]),
-        ),
-      }),
-    );
+    const runGh = vi
+      .fn<RunGithubCli>()
+      .mockResolvedValueOnce(
+        lookupResult(issue, "https://github.com/openclaw/openclaw/issues/456"),
+      );
 
     await expect(reconcileGithubIssue(issue, runGh)).resolves.toEqual({
       status: "created",
@@ -190,20 +179,8 @@ describe("GitHub issue transport", () => {
     const runGh = vi
       .fn<RunGithubCli>()
       .mockResolvedValueOnce(authSuccess)
-      .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from(`HTTP/2.0 201 Created\r\n\r\n${url}\n`),
-        }),
-      )
-      .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from(JSON.stringify([{ body: issue.body, title: issue.title, url }])),
-        }),
-      );
+      .mockResolvedValueOnce(cliOutput(`HTTP/2.0 201 Created\r\n\r\n${url}\n`))
+      .mockResolvedValueOnce(lookupResult(issue, url));
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
       reason: "creation-outcome-unknown",
@@ -216,27 +193,13 @@ describe("GitHub issue transport", () => {
     const runGh = vi
       .fn<RunGithubCli>()
       .mockResolvedValueOnce(authSuccess)
+      .mockResolvedValueOnce(cliOutput("HTTP/2.0 201 Created\r\n\r\nnot-a-url\n"))
       .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from("HTTP/2.0 201 Created\r\n\r\nnot-a-url\n"),
-        }),
-      )
-      .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from(
-            JSON.stringify([
-              {
-                body: `${issue.body}\nchanged`,
-                title: issue.title,
-                url: "https://github.com/openclaw/openclaw/issues/999",
-              },
-            ]),
-          ),
-        }),
+        lookupResult(
+          issue,
+          "https://github.com/openclaw/openclaw/issues/999",
+          `${issue.body}\nchanged`,
+        ),
       );
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
@@ -251,13 +214,7 @@ describe("GitHub issue transport", () => {
     const runGh = vi
       .fn<RunGithubCli>()
       .mockReturnValueOnce(auth)
-      .mockResolvedValueOnce(
-        cliResult({
-          started: true,
-          status: 0,
-          stdout: Buffer.from("https://github.com/openclaw/openclaw/issues/789\n"),
-        }),
-      );
+      .mockResolvedValueOnce(cliOutput("https://github.com/openclaw/openclaw/issues/789\n"));
 
     const first = submitGithubIssue(issue, runGh);
     const second = submitGithubIssue(issue, runGh);
@@ -276,19 +233,9 @@ describe("GitHub issue transport", () => {
     vi.useFakeTimers();
     vi.stubEnv("VITEST", undefined);
     vi.stubEnv("NODE_ENV", "production");
-    const child = new EventEmitter() as EventEmitter & {
-      stdin: EventEmitter & { destroy: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
-      stdout: EventEmitter & { destroy: ReturnType<typeof vi.fn> };
-      kill: ReturnType<typeof vi.fn>;
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.stdin = Object.assign(new EventEmitter(), {
-      destroy: vi.fn(),
-      end: vi.fn(() => queueMicrotask(() => child.emit("spawn"))),
-    });
-    child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
-    child.kill = vi.fn(() => false);
-    child.unref = vi.fn();
+    const child = childFixture();
+    child.stdin.end.mockImplementation(() => queueMicrotask(() => child.emit("spawn")));
+    child.kill.mockReturnValue(false);
     spawnMock.mockReturnValue(child);
     const issue = prepare("timeout");
 
@@ -319,12 +266,7 @@ describe("GitHub issue transport", () => {
           authorityAtCreate = current;
           expect(claimed).toBe(true);
         }
-        const child = Object.assign(new EventEmitter(), {
-          stdin: Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() }),
-          stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
-          kill: vi.fn(),
-          unref: vi.fn(),
-        });
+        const child = childFixture();
         child.stdin.end.mockImplementation(() =>
           queueMicrotask(() => {
             child.emit("spawn");
