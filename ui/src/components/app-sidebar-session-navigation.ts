@@ -116,14 +116,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  rosterCollapsedAgentIds: ReadonlySet<string> | null = null;
+  readRosterCollapsedAgentIds: (() => ReadonlySet<string> | null) | null = null;
   private readonly rosterSourceMemo = new SidebarProjectionMemo<
     NonNullable<SidebarProjectionHost["rosterSessionSource"]>
   >();
 
   get rosterSessionSource() {
     const context = this.context;
-    const collapsedAgentIds = this.rosterCollapsedAgentIds;
+    const collapsedAgentIds = this.readRosterCollapsedAgentIds?.();
     if (!context || !collapsedAgentIds) {
       return null;
     }
