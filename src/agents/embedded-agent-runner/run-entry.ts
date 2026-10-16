@@ -32,7 +32,7 @@ import {
   sessionPlacementUsesWorkerInference,
   withRequiredSessionPlacement,
 } from "../session-placement-admission.js";
-import { mergeCompletedAgentUsage } from "./completed-usage.js";
+import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -60,7 +60,7 @@ import type {
   EmbeddedAgentRunEntryResult,
 } from "./run-entry.types.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "./types.js";
-import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
 export type { RunEntryCandidateOptions } from "./run-entry.types.js";
@@ -575,20 +575,13 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           agentDir: params.selection.agentDir,
         });
       }
-      const aggregatedUsage = toNormalizedUsage(usage);
       candidateResult = {
         ...candidateResult,
         meta: {
           ...candidateResult.meta,
           agentMeta: {
             ...candidateResult.meta.agentMeta,
-            usage: aggregatedUsage
-              ? { ...aggregatedUsage, contextUsage: { state: "unavailable" } }
-              : undefined,
-            diagnosticUsage: toNormalizedUsage(diagnosticUsage),
-            costUsd: usage.cost && usage.cost !== "unavailable" ? usage.cost.total : undefined,
-            assistantTurns: usage.assistantTurns,
-            ...(usage.bridgeCalls ? { bridgeCalls: usage.bridgeCalls } : {}),
+            ...buildCompletedAgentUsageMeta(usage, diagnosticUsage),
           },
         },
       };

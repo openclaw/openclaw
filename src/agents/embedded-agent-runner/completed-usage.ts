@@ -5,6 +5,7 @@ import type { EmbeddedAgentMeta } from "./types.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
+  toNormalizedUsage,
   type UsageAccumulator,
 } from "./usage-accumulator.js";
 
@@ -40,4 +41,22 @@ export function mergeCompletedAgentUsage(params: {
       : usage,
   );
   mergeAttemptRunStatsIntoAccumulator(params.usage, candidate ?? {});
+}
+
+/** Billing totals span requests; only the selected result owns live context. */
+export function buildCompletedAgentUsageMeta(
+  usage: UsageAccumulator,
+  diagnosticUsage: UsageAccumulator,
+): Pick<
+  EmbeddedAgentMeta,
+  "usage" | "diagnosticUsage" | "costUsd" | "assistantTurns" | "bridgeCalls"
+> {
+  const aggregate = toNormalizedUsage(usage);
+  return {
+    usage: aggregate ? { ...aggregate, contextUsage: { state: "unavailable" } } : undefined,
+    diagnosticUsage: toNormalizedUsage(diagnosticUsage),
+    costUsd: usage.cost && usage.cost !== "unavailable" ? usage.cost.total : undefined,
+    assistantTurns: usage.assistantTurns,
+    ...(usage.bridgeCalls ? { bridgeCalls: usage.bridgeCalls } : {}),
+  };
 }

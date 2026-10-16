@@ -73,7 +73,7 @@ import {
 import { SessionManager } from "../sessions/session-manager.js";
 import { redactRunIdentifier } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import { mergeCompletedAgentUsage } from "./completed-usage.js";
+import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -102,7 +102,7 @@ import {
 } from "./run/runtime-resolution.js";
 import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
@@ -654,7 +654,6 @@ async function runEmbeddedAgentForSession(
             }
             if (!continuation) {
               if (refreshed && result.meta.agentMeta) {
-                const aggregatedUsage = toNormalizedUsage(usage);
                 result = {
                   ...result,
                   meta: {
@@ -662,14 +661,7 @@ async function runEmbeddedAgentForSession(
                     durationMs: Date.now() - started,
                     agentMeta: {
                       ...result.meta.agentMeta,
-                      usage: aggregatedUsage
-                        ? { ...aggregatedUsage, contextUsage: { state: "unavailable" } }
-                        : undefined,
-                      diagnosticUsage: toNormalizedUsage(diagnosticUsage),
-                      costUsd:
-                        usage.cost && usage.cost !== "unavailable" ? usage.cost.total : undefined,
-                      assistantTurns: usage.assistantTurns,
-                      ...(usage.bridgeCalls ? { bridgeCalls: usage.bridgeCalls } : {}),
+                      ...buildCompletedAgentUsageMeta(usage, diagnosticUsage),
                     },
                   },
                 };
