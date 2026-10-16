@@ -44,9 +44,9 @@ it.each(["expired", "partial", "caller-aborted", "authority-closed"] as const)(
         });
       const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { signal }) => {
         if (ending === "partial") {
-          await new Promise<void>((resolve) =>
-            signal.addEventListener("abort", () => resolve(), { once: true }),
-          );
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
         }
         return answer;
       });
