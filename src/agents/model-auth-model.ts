@@ -20,11 +20,7 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
-import {
-  CUSTOM_LOCAL_AUTH_MARKER,
-  isNonSecretApiKeyMarker,
-  isSecretRefHeaderValueMarker,
-} from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
@@ -150,6 +146,9 @@ export async function hasAvailableAuthForProvider(params: {
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
+  }
+  if (authOverride === "none") {
+    return authConfig.hasSyntheticLocalProviderAuthConfig({ ...params, cfg });
   }
   const store =
     params.store ??
@@ -277,28 +276,7 @@ export async function getApiKeyForModelCore(params: {
   });
 }
 
-/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
-export function applyLocalNoAuthHeaderOverride<T extends Model>(
-  model: T,
-  auth: ResolvedProviderAuth | null | undefined,
-): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
-    return model;
-  }
-
-  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
-  // placeholder so construction succeeds, then clear the header at request build
-  // time for local servers that intentionally do not require auth.
-  const headers = {
-    ...model.headers,
-    Authorization: null,
-  } as unknown as Record<string, string>;
-
-  return {
-    ...model,
-    headers,
-  };
-}
+export { applyLocalNoAuthHeaderOverride } from "./model-auth-markers.js";
 
 export function applySecretRefHeaderSentinels<T extends Model>(
   model: T,

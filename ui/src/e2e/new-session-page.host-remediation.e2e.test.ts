@@ -34,6 +34,15 @@ suite.define(() => {
         "environments.list": {
           profiles: [],
           environments: [
+            // Fill the picker so unavailable rows require scrolling on phones.
+            ...Array.from({ length: 12 }, (_, index) => ({
+              id: `node:available-device-${index}`,
+              type: "node",
+              label: `Additional computer ${index + 1}`,
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            })),
             {
               id: "node:paired-device",
               type: "node",
@@ -48,6 +57,14 @@ suite.define(() => {
               status: "unavailable",
               sessionHost: true,
             },
+            // Keep the phone inventory overflowing independently of composer placement.
+            ...Array.from({ length: width === 390 ? 12 : 0 }, (_, index) => ({
+              id: `node:additional-device-${index}`,
+              type: "node",
+              label: `Additional device ${index + 1}`,
+              status: "available",
+              sessionHost: true,
+            })),
           ],
         },
       });

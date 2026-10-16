@@ -65,18 +65,18 @@ afterEach(() => {
 describe("new session draft route ownership", () => {
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const updated = vi.spyOn(NewSessionPageOwner.prototype, "updated");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
     const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
     await enterMessage(page, "warmup");
     for (const text of ["h", "he", "hello"]) {
       prepare.mockClear();
-      updated.mockClear();
+      projectRecents.mockClear();
       renderModels.mockClear();
       await enterMessage(page, text);
-      expect(updated).toHaveBeenCalled();
-      expect(prepare).toHaveBeenCalledTimes(updated.mock.calls.length);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
       expect(renderModels).not.toHaveBeenCalled();
       expect(page.querySelector("textarea")).toBe(textarea);
       expect(textarea.value).toBe(text);
@@ -100,21 +100,6 @@ describe("new session draft route ownership", () => {
     page.requestUpdate();
     await settle(page);
     expect(retained?.disabled).toBe(true);
-  });
-
-  it("prepares composer options once per draft revision rather than per prop read", async () => {
-    const page = await mount(routeData("research"));
-    const textarea = page.querySelector("textarea");
-    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
-
-    await enterMessage(page, "Keep typing without rebuilding options");
-
-    expect(message(page)).toBe("Keep typing without rebuilding options");
-    expect(page.querySelector("textarea")).toBe(textarea);
-    expect(prepare.mock.calls.length).toBeGreaterThan(0);
-    expect(prepare.mock.calls.length).toBeLessThanOrEqual(2);
-    expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it.each([false, true])(

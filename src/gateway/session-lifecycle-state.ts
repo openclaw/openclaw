@@ -54,6 +54,7 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     stopReason?: unknown;
     error?: unknown;
     errorKind?: unknown;
+    suppressErrorNotice?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -67,6 +68,7 @@ type LifecycleSessionShape = Pick<
   GatewaySessionRow,
   | "updatedAt"
   | "lastRunError"
+  | "suppressErrorNotice"
   | "lastRunId"
   | "startedAt"
   | "endedAt"
@@ -179,6 +181,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       updatedAt,
       status: undefined,
       lastRunError: undefined,
+      suppressErrorNotice: false,
       startedAt,
       endedAt: undefined,
       runtimeMs: undefined,
@@ -201,6 +204,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   return {
     updatedAt,
     status,
+    suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
     lastRunError: interruptedForRestart
       ? "Run interrupted by a Gateway restart."
       : terminal && status
@@ -418,7 +422,14 @@ async function persistPreparedGatewaySessionLifecycleEvent(
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
+  let failedRun:
+    | {
+        runId: string;
+        error: unknown;
+        errorKind?: "state_contention";
+        suppressErrorNotice?: boolean;
+      }
+    | undefined;
   const persisted = await patchSessionEntryTarget(
     {
       agentId: sessionEntry.agentId,
@@ -536,6 +547,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       ) {
         failedRun = {
           runId: eventRunId,
+          suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
           errorKind:
             params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
           error:
@@ -586,7 +598,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   if (persisted && failedRun) {
-    const { runId, error, errorKind } = failedRun;
+    const { runId, error, errorKind, suppressErrorNotice } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -601,6 +613,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       runId,
       error,
       errorKind,
+      suppressErrorNotice,
       assertCommitAllowed: params.assertCommitAllowed,
     };
     // An accepted terminal owns its receipt, independently of an ambient requester turn.

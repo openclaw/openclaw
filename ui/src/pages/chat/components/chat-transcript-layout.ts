@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";

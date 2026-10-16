@@ -1,10 +1,6 @@
-// Discord tests cover proxy request client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAbortableFetchMock,
-  createJsonResponse,
-} from "./internal/test-builders.test-support.js";
-import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
+import { RequestClient } from "./rest.js";
+import { createAbortableFetchMock, createJsonResponse } from "./test-builders.test-support.js";
 
 async function expectAbortError(promise: Promise<unknown>) {
   let abortError: unknown;
@@ -21,7 +17,7 @@ async function expectAbortError(promise: Promise<unknown>) {
   expect(abortError.message).toBe("The operation was aborted.");
 }
 
-describe("createDiscordRequestClient", () => {
+describe("RequestClient proxy transport", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -41,8 +37,8 @@ describe("createDiscordRequestClient", () => {
       return createJsonResponse([]);
     });
 
-    const client = createDiscordRequestClient("Bot test-token", {
-      fetch: fetchSpy as never,
+    const client = new RequestClient("Bot test-token", {
+      fetch: fetchSpy,
       queueRequests: false,
     });
 
@@ -55,8 +51,8 @@ describe("createDiscordRequestClient", () => {
     const { fetch: fetchSpy } = createAbortableFetchMock();
     vi.useFakeTimers();
 
-    const client = createDiscordRequestClient("Bot test-token", {
-      fetch: fetchSpy as never,
+    const client = new RequestClient("Bot test-token", {
+      fetch: fetchSpy,
       queueRequests: false,
       timeout: 20,
     });
@@ -72,8 +68,8 @@ describe("createDiscordRequestClient", () => {
   it("lets abortAllRequests cancel active proxied fetches", async () => {
     const abortable = createAbortableFetchMock();
 
-    const client = createDiscordRequestClient("Bot test-token", {
-      fetch: abortable.fetch as never,
+    const client = new RequestClient("Bot test-token", {
+      fetch: abortable.fetch,
       queueRequests: false,
       timeout: 5_000,
     });
@@ -93,8 +89,8 @@ describe("createDiscordRequestClient", () => {
   it("lets a caller signal cancel active proxied fetches", async () => {
     const abortable = createAbortableFetchMock();
     const controller = new AbortController();
-    const client = createDiscordRequestClient("Bot test-token", {
-      fetch: abortable.fetch as never,
+    const client = new RequestClient("Bot test-token", {
+      fetch: abortable.fetch,
       queueRequests: false,
       signal: controller.signal,
       timeout: 5_000,
@@ -107,10 +103,5 @@ describe("createDiscordRequestClient", () => {
 
     await expectAbortError(request);
     expect(abortable.receivedSignal?.aborted).toBe(true);
-  });
-
-  it("exports a reasonable timeout constant", () => {
-    expect(DISCORD_REST_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
-    expect(DISCORD_REST_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
   });
 });

@@ -134,12 +134,8 @@ export function buildCodexSystemPromptReport(params: {
   const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
-  const bootstrapMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
-  );
-  const bootstrapTotalMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
-  );
+  const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
+  const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -298,12 +294,6 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]) {
       (baseName ? byBaseName.get(baseName) : undefined)
     );
   };
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 export function buildCodexOpenClawPromptContext(params: {
