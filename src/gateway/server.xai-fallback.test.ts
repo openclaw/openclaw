@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -77,24 +78,21 @@ const itemEvent = (item: OutputMessage, added = false) =>
     output_index: 0,
     item: added ? { ...item, status: "in_progress", content: [] } : item,
   });
-const responseEvent = (
-  id: string,
-  status: "failed" | "completed",
-  output: OutputMessage[],
-  input_tokens: number,
-  output_tokens: number,
-  error?: { code: null; message: string },
-) =>
-  encodeEvent({
+const responseEvent = (failed: boolean, attempt: number, output: OutputMessage[]) => {
+  const status = failed ? "failed" : "completed";
+  const input_tokens = failed ? 21 : 10;
+  const output_tokens = failed ? 4 : 5;
+  return encodeEvent({
     type: `response.${status}`,
     response: {
-      id,
+      id: failed ? `failure-${attempt}` : "fallback-response",
       status,
       output,
       usage: { input_tokens, output_tokens, total_tokens: input_tokens + output_tokens },
-      ...(error ? { error } : {}),
+      ...(failed ? { error: { code: null, message: tokenGenerationError } } : {}),
     },
   });
+};
 const contains = (value: unknown) => expect.arrayContaining([expect.objectContaining(value)]);
 
 function messageText(message: unknown): string {
@@ -146,14 +144,19 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
-    const terminalEvents = new Map<string, (event: ChatEvent) => void>();
+    let receiveTerminal: ((event: ChatEvent) => void) | undefined;
     const publishedMessages = new Map<string, unknown>();
-    const fallbackEvents: unknown[] = [];
+    const fallbackAttempts: Array<{ runId: string; attempts: unknown }> = [];
     const provider = createServer((request, response) => {
       void (async () => {
+        const reply = (value: unknown, status = 200, stream = false) => {
+          response.writeHead(status, {
+            "content-type": stream ? "text/event-stream" : "application/json",
+          });
+          response.end(stream ? encodeEvent(value) : JSON.stringify(value));
+        };
         if (request.method === "GET" && request.url === "/v1/models") {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify({ data: [{ id: primaryModel }, { id: fallbackModel }] }));
+          reply({ data: [{ id: primaryModel }, { id: fallbackModel }] });
           return;
         }
         expect(request).toMatchObject({ method: "POST", url: "/v1/responses" });
@@ -170,13 +173,7 @@ it(
             code: rejection.code,
             type: rejection.type,
           };
-          if (rejection.status !== undefined) {
-            response.writeHead(rejection.status, { "content-type": "application/json" });
-            response.end(JSON.stringify({ error }));
-          } else {
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            response.end(encodeEvent({ error }));
-          }
+          reply({ error }, rejection.status, rejection.status === undefined);
           return;
         }
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -202,24 +199,13 @@ it(
           }
           response.write(itemEvent(item));
         }
-        response.end(
-          responseEvent(
-            failed ? `failure-${requests.length}` : "fallback-response",
-            failed ? "failed" : "completed",
-            output,
-            failed ? 21 : 10,
-            failed ? 4 : 5,
-            failed ? { code: null, message: tokenGenerationError } : undefined,
-          ),
-        );
+        response.end(responseEvent(failed, requests.length, output));
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      await new Promise<void>((resolve, reject) => {
-        provider.once("error", reject);
-        provider.listen(0, "127.0.0.1", resolve);
-      });
+      provider.listen(0, "127.0.0.1");
+      await once(provider, "listening");
       const address = provider.address();
       if (!address || typeof address === "string") {
         throw new Error("Missing loopback provider address");
@@ -269,35 +255,40 @@ it(
         configPath,
         token: "xai-fallback-test",
         onEvent: (event) => {
-          if (event.event === "chat") {
-            const chatEvent = event.payload as ChatEvent;
+          const { event: kind, payload } = event;
+          if (kind === "chat") {
+            const chatEvent = payload as ChatEvent;
             events.push(chatEvent);
-            terminalEvents.get(chatEvent.runId)?.(chatEvent);
+            receiveTerminal?.(chatEvent);
+          }
+          if (!isRecord(payload)) {
+            return;
           }
           if (
-            event.event === "session.message" &&
-            isRecord(event.payload) &&
-            typeof event.payload.sessionKey === "string" &&
-            isRecord(event.payload.message) &&
-            event.payload.message.role === "assistant"
+            kind === "session.message" &&
+            typeof payload.sessionKey === "string" &&
+            isRecord(payload.message) &&
+            payload.message.role === "assistant"
           ) {
-            publishedMessages.set(event.payload.sessionKey, event.payload.message);
+            publishedMessages.set(payload.sessionKey, payload.message);
           }
           if (
-            event.event === "agent" &&
-            isRecord(event.payload) &&
-            isRecord(event.payload.data) &&
-            event.payload.data.phase === "fallback"
+            kind === "agent" &&
+            typeof payload.runId === "string" &&
+            isRecord(payload.data) &&
+            payload.data.phase === "fallback"
           ) {
-            fallbackEvents.push(event.payload);
+            fallbackAttempts.push({ runId: payload.runId, attempts: payload.data.attempts });
           }
         },
       });
       const installed = getActivePluginRegistry()?.providers.find(
         (entry) => entry.provider.id === "xai",
       );
-      expect(installed?.pluginId).toBe("xai");
-      expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
+      expect(installed).toMatchObject({
+        pluginId: "xai",
+        provider: { classifyFailoverReason: expect.any(Function) },
+      });
       for (const selected of scenarios) {
         scenario = selected;
         requests = [];
@@ -312,8 +303,9 @@ it(
         });
         const terminalReceived = createDeferred();
         const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
-        const receiveTerminal = (event: ChatEvent) => {
+        receiveTerminal = (event: ChatEvent) => {
           if (
+            event.runId === started.runId &&
             event.sessionKey === sessionKey &&
             (expectsSuccess
               ? event.state === "final" && event.stopReason === "stop"
@@ -322,13 +314,8 @@ it(
             terminalReceived.resolve();
           }
         };
-        terminalEvents.set(started.runId, receiveTerminal);
         // The expected terminal may arrive before chat.send acknowledges its run ID.
-        for (const event of events) {
-          if (event.runId === started.runId) {
-            receiveTerminal(event);
-          }
-        }
+        events.forEach(receiveTerminal);
         const completed = await gateway.client.request<{
           status: string;
           terminalReply?: { text?: string };
@@ -336,61 +323,57 @@ it(
         expect(completed.status, scenario).not.toBe("timeout");
         // Status-notice finals do not settle the transcript-gated successful reply.
         await withinTest(terminalReceived.promise, signal);
-        terminalEvents.delete(started.runId);
+        receiveTerminal = undefined;
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
         const runEvents = events.filter((event) => event.runId === started.runId);
-        expect.soft(requests[0], scenario).toBe(primaryModel);
-        expect
-          .soft(
-            requests.filter((requested) => requested === primaryModel),
-            scenario,
-          )
-          .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
+        const check = (actual: unknown) => expect.soft(actual, scenario);
+        check(requests[0]).toBe(primaryModel);
+        check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
+          rejection && rejection.reason !== "rate_limit" ? 1 : 2,
+        );
         const terminal = runEvents.filter(
           (event) => event.state === "final" && event.stopReason === "stop",
         );
-        expect
-          .soft(requests.includes(fallbackModel), scenario)
-          .toBe(scenario !== "continuation" && scenario !== "no-fallback");
-        if (rejection || ["fallback", "continuation", "visible-fallback"].includes(scenario)) {
+        check(requests.includes(fallbackModel)).toBe(
+          scenario !== "continuation" && scenario !== "no-fallback",
+        );
+        if (expectsSuccess) {
           const expected = scenario === "continuation" ? continuation : marker;
-          expect.soft(completed, scenario).toMatchObject({
+          check(completed).toMatchObject({
             status: "ok",
             terminalReply: { text: expected },
           });
-          expect.soft(assistant, scenario).toMatchObject({ stopReason: "stop" });
-          expect.soft(messageText(assistant), scenario).toBe(expected);
-          expect.soft(terminal, scenario).toHaveLength(1);
-          expect.soft(messageText(terminal[0]?.message), scenario).toBe(expected);
+          check(assistant).toMatchObject({ stopReason: "stop" });
+          check(messageText(assistant)).toBe(expected);
+          check(terminal).toHaveLength(1);
+          check(messageText(terminal[0]?.message)).toBe(expected);
           if (rejection) {
-            expect.soft(fallbackEvents, scenario).toEqual(
+            check(fallbackAttempts).toEqual(
               contains({
                 runId: started.runId,
-                data: expect.objectContaining({
-                  attempts: contains({
-                    provider: "xai",
-                    model: primaryModel,
-                    reason: rejection.reason,
-                    ...(rejection.status === undefined ? {} : { status: rejection.status }),
-                  }),
+                attempts: contains({
+                  provider: "xai",
+                  model: primaryModel,
+                  reason: rejection.reason,
+                  ...(rejection.status === undefined ? {} : { status: rejection.status }),
                 }),
               }),
             );
           }
         } else {
-          expect.soft(completed.status, scenario).toBe("error");
-          expect.soft(messageText(assistant), scenario).toBe(prefix);
-          expect.soft(messageText(publishedMessages.get(sessionKey)), scenario).toBe(prefix);
+          check(completed.status).toBe("error");
+          check(messageText(assistant)).toBe(prefix);
+          check(messageText(publishedMessages.get(sessionKey))).toBe(prefix);
           const deltas = runEvents.filter((event) => event.state === "delta");
           const liveMessage = deltas.reduce<unknown>(
             (previous, event) => mergeChatStreamMessage(previous, event),
             undefined,
           );
           // Saved assistant content belongs to canonical publication, not the unsaved live tail.
-          expect.soft(messageText(liveMessage), scenario).toBe("");
+          check(messageText(liveMessage)).toBe("");
         }
       }
     } finally {

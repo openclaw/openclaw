@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import * as promises from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteStoreScope } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -16,16 +12,9 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
-import {
-  disposeSessionReadContexts,
-  identifiedClient,
-  initializeSessionReadContext,
-} from "./server-methods/sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import {
-  dashboardTitleScheduleMocks,
-  setupSessionCreateTestHarness,
-} from "./server.sessions.create.test-support.js";
+import * as readContexts from "./server-methods/sessions-read-cache.test-support.js";
+import type { GatewayClient, RespondFn } from "./server-methods/types.js";
+import * as createHarness from "./server.sessions.create.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
@@ -58,7 +47,7 @@ vi.mock(
   },
 );
 
-const { createSessionStoreDir } = setupSessionCreateTestHarness();
+const { createSessionStoreDir } = createHarness.setupSessionCreateTestHarness();
 afterEach(() => {
   replacementBoundary.key = undefined;
   replacementBoundary.entered = undefined;
@@ -71,14 +60,18 @@ async function createFixture(
   communication?: SessionEntry["communication"],
 ) {
   const { dir, storePath } = await createSessionStoreDir();
-  const makeProfile = (role: string) => ensureProfileForEmail(`${role}-${suffix}@example.test`);
-  const creator = makeProfile("creator");
-  const collaborator = makeProfile("collaborator");
-  const admin = makeProfile("admin");
-  for (const profile of [creator, collaborator]) {
-    setUserProfileRole(profile.id, "collaborator");
-  }
-  setUserProfileRole(admin.id, "administrator");
+  const person = (name: string, role = "collaborator") => {
+    const profile = ensureProfileForEmail(`${name}-${suffix}@example.test`);
+    setUserProfileRole(profile.id, role);
+    const client = readContexts.identifiedClient(profile.id);
+    if (role === "administrator") {
+      client.connect.scopes = ["operator.admin"];
+    }
+    return { ...profile, client };
+  };
+  const creator = person("creator");
+  const collaborator = person("collaborator");
+  const admin = person("admin", "administrator");
   const base = getRuntimeConfig();
   const role = (
     others: "view" | "write",
@@ -100,10 +93,9 @@ async function createFixture(
   };
   const parentKey = `agent:main:dashboard:parent-${suffix}`;
   const targetKey = `agent:main:dashboard:target-${suffix}`;
-  const creatorActor = { type: "human", source: "profile", id: creator.id } as const;
   const entry = (id: string, fields: Partial<SessionEntry>) =>
     sessionStoreEntry(id, {
-      createdActor: creatorActor,
+      createdActor: { type: "human", source: "profile", id: creator.id },
       visibility: "read-only",
       ...fields,
     });
@@ -116,96 +108,89 @@ async function createFixture(
       }),
     },
   });
-  for (const key of [parentKey, targetKey]) {
+  const read = (sessionKey = targetKey) => loadSessionEntry({ sessionKey, storePath });
+  for (const sessionKey of [parentKey, targetKey]) {
     sessionMembers.addSessionMember(
-      { agentId: "main", sessionKey: key, storePath },
+      { agentId: "main", sessionKey, storePath },
       {
         identityId: collaborator.id,
         addedBy: creator.id,
-        expectedSessionId: expectDefined(
-          loadSessionEntry({ sessionKey: key, storePath }),
-          "seeded session",
-        ).sessionId,
+        expectedSessionId: expectDefined(read(sessionKey), "seeded session").sessionId,
       },
     );
   }
-  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  createHarness.dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const makeContext = async () => {
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     context.readPreparedGatewayModelCatalog = async () => {
       const catalog = await context.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     };
-    await initializeSessionReadContext(context);
+    await readContexts.initializeSessionReadContext(context);
     return context;
   };
-  const creatorClient = identifiedClient(creator.id);
-  const collaboratorClient = identifiedClient(collaborator.id);
-  const adminClient = identifiedClient(admin.id);
-  adminClient.connect.scopes = ["operator.admin"];
-  const context = await makeContext();
-  const read = (sessionKey = targetKey) => loadSessionEntry({ sessionKey, storePath });
-  const rpc = (client: GatewayClient, method: string, params = {}) =>
-    request(context, client, method, { key: targetKey, ...params });
+  let context = await makeContext();
+  // Use the router: directSessionReq bypasses selected-profile authority.
+  const rpc = async (client: GatewayClient, method: string, params = {}) => {
+    const responses: Parameters<RespondFn>[] = [];
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "communication-" + method,
+        method,
+        params: { key: targetKey, ...params },
+      },
+      client,
+      context,
+      isWebchatConnect: () => false,
+      respond: (...response) => responses.push(response),
+    });
+    await flushPendingSessionsChangedEvents(context);
+    expect(responses).toHaveLength(1);
+    const [ok, payload, error] = responses[0]!;
+    return { ok, payload, error };
+  };
+  const expectSuccess = (result: Awaited<ReturnType<typeof rpc>>) => {
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    return result.payload;
+  };
   const success = async (client: GatewayClient, method: string, params = {}) =>
     expectSuccess(await rpc(client, method, params));
   const describeReopened = async () => {
-    await disposeSessionReadContexts();
+    await readContexts.disposeSessionReadContexts();
     await releaseGatewaySessionStoreFixture(dir);
     testState.sessionStorePath = storePath;
     (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
-    return expectSuccess(
-      await request(await makeContext(), identifiedClient(creator.id), "sessions.describe", {
-        key: targetKey,
-      }),
-    );
+    context = await makeContext();
+    return await success(readContexts.identifiedClient(creator.id), "sessions.describe");
   };
   return {
     creator,
     collaborator,
+    admin,
     parentKey,
     targetKey,
-    creatorClient,
-    collaboratorClient,
-    adminClient,
     read,
     rpc,
     success,
     describeReopened,
     storePath,
+    expectStored: (fields: Partial<SessionEntry>, policy: SessionEntry["communication"]) => {
+      const stored = read();
+      expect(stored).toMatchObject(fields);
+      expect(stored?.communication).toEqual(policy);
+    },
   };
 }
 
-// The RPC router, unlike directSessionReq, enforces selected-profile authority.
-async function request(
-  context: GatewayRequestContext,
-  client: GatewayClient,
-  method: string,
-  params: Record<string, unknown>,
-) {
-  const responses: Parameters<RespondFn>[] = [];
-  await handleGatewayRequest({
-    req: { type: "req", id: "communication-" + method, method, params },
-    client,
-    context,
-    isWebchatConnect: () => false,
-    respond: (...response) => responses.push(response),
-  });
-  await flushPendingSessionsChangedEvents(context);
-  expect(responses).toHaveLength(1);
-  const [ok, payload, error] = responses[0]!;
-  return { ok, payload, error };
-}
-
-function expectSuccess(result: Awaited<ReturnType<typeof request>>) {
-  expect(result.ok, JSON.stringify(result.error)).toBe(true);
-  return result.payload;
+function expectError(result: { ok: boolean; error?: unknown }, code: string, message: string) {
+  expect(result).toMatchObject({ ok: false, error: { code, message } });
 }
 
 test("sessions.create inherits communication for a new explicit child, not an adopted collaborator target", async () => {
   const f = await createFixture("adoption");
   const childKey = "agent:main:dashboard:communication-new-child";
-  const child = await f.success(f.collaboratorClient, "sessions.create", {
+  const child = await f.success(f.collaborator.client, "sessions.create", {
     agentId: "main",
     key: childKey,
     parentSessionKey: f.parentKey,
@@ -221,7 +206,7 @@ test("sessions.create inherits communication for a new explicit child, not an ad
   });
 
   const before = expectDefined(f.read(), "existing target");
-  const adopted = await f.success(f.collaboratorClient, "sessions.create", {
+  const adopted = await f.success(f.collaborator.client, "sessions.create", {
     agentId: "main",
     key: f.targetKey,
     parentSessionKey: f.parentKey,
@@ -246,41 +231,30 @@ test("sessions.create inherits communication for a new explicit child, not an ad
 test("communication writes require the creator or admin and existing creates cannot overwrite policy", async () => {
   const f = await createFixture("explicit");
   for (const method of ["sessions.create", "sessions.patch"] as const) {
-    const denied = await f.rpc(f.collaboratorClient, method, {
+    const denied = await f.rpc(f.collaborator.client, method, {
       communication: { receive: "always" },
     });
-    expect(denied).toMatchObject({
-      ok: false,
-      error: {
-        code: "FORBIDDEN",
-        message: "Only the session creator or an admin can change communication settings.",
-      },
-    });
+    expectError(
+      denied,
+      "FORBIDDEN",
+      "Only the session creator or an admin can change communication settings.",
+    );
     expect(f.read()?.communication).toEqual({ receive: "never" });
   }
-  const overwrite = await f.rpc(f.creatorClient, "sessions.create", {
+  const overwrite = await f.rpc(f.creator.client, "sessions.create", {
     communication: { receive: "always" },
   });
-  expect(overwrite).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "sessions.create communication requires a new session",
-    },
-  });
-  for (const client of [f.creatorClient, f.adminClient]) {
-    const receive = client === f.creatorClient ? "ask" : "never";
-    await f.success(client, "sessions.patch", {
-      communication: { receive },
-    });
+  expectError(overwrite, "INVALID_REQUEST", "sessions.create communication requires a new session");
+  for (const client of [f.creator.client, f.admin.client]) {
+    const receive = client === f.creator.client ? "ask" : "never";
+    await f.success(client, "sessions.patch", { communication: { receive } });
     expect(f.read()?.communication).toEqual({ receive });
   }
 
   const beforeReset = expectDefined(f.read(), "target before reset");
-  await f.success(f.adminClient, "sessions.reset");
+  await f.success(f.admin.client, "sessions.reset");
   const resetEntry = expectDefined(f.read(), "reset target");
-  expect(resetEntry.communication).toEqual({ receive: "never" });
-  expect(resetEntry.sessionId).toBe(beforeReset.sessionId);
+  f.expectStored({ sessionId: beforeReset.sessionId }, { receive: "never" });
   expect(resetEntry.lifecycleRevision).not.toBe(beforeReset.lifecycleRevision);
 
   expect(await f.describeReopened()).toMatchObject({
@@ -289,20 +263,13 @@ test("communication writes require the creator or admin and existing creates can
   expect(f.read()?.communication).toEqual({ receive: "never" });
 });
 
+const configuredDefaults = { send: "never", receive: "ask" } as const;
 test.each([
-  {
-    name: "built-in defaults",
-    defaults: undefined,
-    effective: { send: "always", receive: "always" },
-  },
-  {
-    name: "configured defaults",
-    defaults: { send: "never", receive: "ask" },
-    effective: { send: "never", receive: "ask" },
-  },
+  ["built-in defaults", undefined, { send: "always", receive: "always" }],
+  ["configured defaults", configuredDefaults, configuredDefaults],
 ] as const)(
-  "preserves pre-feature sparse metadata with $name through RPC and SQLite reopen",
-  async ({ name, defaults, effective }) => {
+  "preserves pre-feature sparse metadata with %s through RPC and SQLite reopen",
+  async (name, defaults, effective) => {
     const metadata = {
       label: "Existing conversation",
       icon: "book",
@@ -317,13 +284,13 @@ test.each([
     const before = expectDefined(f.read(), "pre-feature stored row");
     expect(before).not.toHaveProperty("communication");
 
-    expect(await f.success(f.creatorClient, "sessions.describe")).toMatchObject({
+    expect(await f.success(f.creator.client, "sessions.describe")).toMatchObject({
       session: { ...metadata, sessionId: before.sessionId, effectiveCommunication: effective },
     });
     // Describing a sparse row projects defaults without backfilling stored overrides.
     expect(f.read()).toEqual(before);
 
-    await f.success(f.creatorClient, "sessions.patch", {
+    await f.success(f.creator.client, "sessions.patch", {
       expectedSessionId: before.sessionId,
       communication: { send: "ask" },
     });
@@ -333,8 +300,7 @@ test.each([
       createdActor: before.createdActor,
       communication: { send: "ask" },
     };
-    expect(f.read()).toMatchObject(expected);
-    expect(f.read()?.communication).toEqual({ send: "ask" });
+    f.expectStored(expected, { send: "ask" });
 
     expect(await f.describeReopened()).toMatchObject({
       session: {
@@ -343,8 +309,7 @@ test.each([
         effectiveCommunication: { send: "ask", receive: effective.receive },
       },
     });
-    expect(f.read()).toMatchObject(expected);
-    expect(f.read()?.communication).toEqual({ send: "ask" });
+    f.expectStored(expected, { send: "ask" });
   },
 );
 
@@ -356,20 +321,15 @@ test.for(["creator", "admin", "membership"] as const)(
       authority === "creator"
         ? f.targetKey
         : "agent:main:dashboard:communication-revoked-child-" + authority;
-    const client =
-      authority === "creator"
-        ? f.creatorClient
-        : authority === "admin"
-          ? f.adminClient
-          : f.collaboratorClient;
+    const client = f[authority === "membership" ? "collaborator" : authority].client;
     const parent = { agentId: "main", sessionKey: f.parentKey, storePath: f.storePath };
     const resolved = resolveSqliteStoreScope(f.storePath, { agentId: "main" });
     const database = openOpenClawAgentDatabase({ agentId: "main", path: resolved.path });
     const transcriptCount = () =>
       database.db.prepare("SELECT count(*) AS count FROM transcript_events").get()?.count;
     const beforeTranscripts = transcriptCount();
-    const entered = createDeferred();
-    const release = createDeferred();
+    const entered = promises.createDeferred();
+    const release = promises.createDeferred();
     replacementBoundary.key = childKey;
     replacementBoundary.entered = entered.resolve;
     replacementBoundary.release = release.promise;
@@ -386,8 +346,8 @@ test.for(["creator", "admin", "membership"] as const)(
       (error: unknown) => ({ response: undefined, error }),
     );
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
+      await promises.withinTest(
+        promises.awaitGateBeforeSettlement(
           entered.promise,
           creating,
           "creation never reached the real SQLite replacement",

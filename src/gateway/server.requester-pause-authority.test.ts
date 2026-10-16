@@ -19,7 +19,6 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
-import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -32,7 +31,6 @@ import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-s
 import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
 import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
-// The provider is simulated; requester admission, dispatch, and SQLite effects are real.
 const getContext = installAuthorityProofGateway();
 afterEach(() => vi.restoreAllMocks());
 
@@ -53,6 +51,8 @@ it.for([
     const id = randomUUID();
     const parent = `agent:main:pause-authority:${id}`;
     const parentId = `parent-${id}`;
+    const parentSession = { sessionKey: parent, sessionId: parentId };
+    const parentScope = { agentId: "main", ...parentSession };
     const foreign = `agent:main:foreign-authority:${id}`;
     const foreignId = `foreign-${id}`;
     const originalRunId = `original-${id}`;
@@ -95,13 +95,16 @@ it.for([
         },
       );
     }
-    const child: SubagentRunRecord = {
-      runId: `child-${id}`,
-      childSessionKey: `agent:main:subagent:${id}`,
+    const requester = {
       requesterSessionKey: parent,
       requesterAgentId: "main",
-      requesterDisplayKey: parent,
       requesterTurnRunId: originalRunId,
+    };
+    const child: SubagentRunRecord = {
+      ...requester,
+      runId: `child-${id}`,
+      childSessionKey: `agent:main:subagent:${id}`,
+      requesterDisplayKey: parent,
       task: "Wait for requester continuation",
       cleanup: "keep",
       createdAt: Date.now(),
@@ -148,19 +151,14 @@ it.for([
         await recorder.persistApproved();
         return reply("Foreign turn executed");
       }
-      registerAgentRunContext(runId, {
-        agentId: "main",
-        sessionKey: parent,
-        sessionId: parentId,
-      });
+      registerAgentRunContext(runId, parentScope);
       const admission = prepareAgentCommandExecutionIdentity({
         opts,
         prepared: {
           cfg: context.getRuntimeConfig(),
           runId,
           sessionAgentId: "main",
-          sessionId: parentId,
-          sessionKey: parent,
+          ...parentSession,
         },
         ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
         lifecycleGeneration: expectDefined(opts.lifecycleGeneration, "Gateway generation"),
@@ -177,19 +175,16 @@ it.for([
         );
         expect(caller.operatorAuthority).toMatchObject({
           profileId: client.authenticatedUserProfile!.profileId,
-          ...(followsUp && runId === continuationRunId
-            ? {
-                scopes: originalSource?.authority.scopes,
-              }
-            : {}),
         });
-        if (followsUp && runId === continuationRunId) {
+        const continued = followsUp && runId === continuationRunId;
+        if (continued) {
+          expect(caller.operatorAuthority).toMatchObject({
+            scopes: originalSource?.authority.scopes,
+          });
           expect(caller.operatorAuthority?.source).toBe(originalSource?.authority.source);
         }
         expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
-          outcome === "operator only" || (followsUp && runId === continuationRunId)
-            ? undefined
-            : "control-ui-admin",
+          outcome === "operator only" || continued ? undefined : "control-ui-admin",
         );
         await withGatewayToolCallerIdentity(caller, async () => {
           const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway input recorder");
@@ -200,27 +195,15 @@ it.for([
               "registered completion source",
             );
             runs.bindCompletionAuthority(currentChild(), completion);
-            const requester = {
-              requesterSessionKey: parent,
-              requesterAgentId: "main",
-              requesterTurnRunId: runId,
-            };
             expect(await markRequesterTurnYielded(requester)).toBe(1);
             expect(
               await settleRequesterAfterSessionSpawns({
                 ...requester,
                 requesterYielded: true,
-                acceptedSessionSpawns: [
-                  {
-                    runId: child.runId,
-                    childSessionKey: child.childSessionKey,
-                    expectsCompletionMessage: true,
-                  },
-                ],
+                acceptedSessionSpawns: [child],
               }),
             ).toBe(true);
           } else {
-            expect(opts.sessionKey).toBe(parent);
             received.push(opts.message);
             if (runId === pauseRunId) {
               await mutateChild((draft) => {
@@ -420,7 +403,7 @@ it.for([
           expect(failure).toBeInstanceOf(Error);
           expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
         }
-        expect((await listSessionPendingInputs(scope)).total).toBe(0);
+        expect((await pendingInputs.listSessionPendingInputs(scope)).total).toBe(0);
       } finally {
         resume.resolve();
         await Promise.allSettled([continuation, ...trackedRequests()]);

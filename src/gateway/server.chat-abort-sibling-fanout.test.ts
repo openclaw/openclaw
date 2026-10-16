@@ -19,23 +19,13 @@ import * as swarm from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import * as sessionWork from "../sessions/session-lifecycle-admission.js";
-import {
-  agentCommandMock,
-  connectOk,
-  createGatewaySuiteHarness,
-  embeddedRunMock,
-  installGatewayTestHooks,
-  onceMessage,
-  prepareGatewayReplyRuntimeForTest,
-  rpcReq,
-  testState,
-} from "./test-helpers.js";
+import * as fixture from "./test-helpers.js";
 
-let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-installGatewayTestHooks({
+let gateway: Awaited<ReturnType<typeof fixture.createGatewaySuiteHarness>>;
+fixture.installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    gateway = await createGatewaySuiteHarness();
+    gateway = await fixture.createGatewaySuiteHarness();
   },
   cleanup: async () => {
     await runQaGatewayFixture(
@@ -53,25 +43,17 @@ await import("./server.js");
 // Prepare the lazy handler before the first creation RPC starts its response deadline.
 await import("./server-methods/sessions-create.js");
 
-for (const { name, fault, replaceParent } of [
-  {
-    name: "public session creation and child Stop publish readable cancellation state",
-    fault: false,
-    replaceParent: false,
-  },
-  {
-    name: "chat.abort interrupts all siblings before cleanup and preserves failure accounting",
-    fault: true,
-    replaceParent: false,
-  },
-  {
-    name: "typed Stop rejects a replaced parent while retaining its accepted child cancellation",
-    fault: false,
-    replaceParent: true,
-  },
-]) {
+for (const [suffix, name] of [
+  ["success", "public session creation and child Stop publish readable cancellation state"],
+  ["fault", "chat.abort interrupts all siblings before cleanup and preserves failure accounting"],
+  [
+    "replacement",
+    "typed Stop rejects a replaced parent while retaining its accepted child cancellation",
+  ],
+] as const) {
   test(name, async () => {
-    const suffix = replaceParent ? "replacement" : fault ? "fault" : "success";
+    const fault = suffix === "fault";
+    const replaceParent = suffix === "replacement";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
     const groupId = `sibling-abort-${suffix}`;
@@ -95,7 +77,7 @@ for (const { name, fault, replaceParent } of [
     };
     const replacementCanary = "The replacement conversation must survive the earlier Stop.";
     let replacementBefore: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> | undefined;
-    testState.sessionStorePath = storePath;
+    fixture.testState.sessionStorePath = storePath;
     const seedSession = (key: string, id: string) =>
       writeSubagentSessionEntry({
         stateDir,
@@ -116,19 +98,23 @@ for (const { name, fault, replaceParent } of [
     const firstInterrupted = createDeferred();
     const slotReleaseResults: boolean[] = [];
     const start = vi.fn(async () => {});
+    const reserve = (runId: string, maxConcurrent: number) =>
+      swarm.reserveSwarmRun({ groupId, runId, maxConcurrent, activeRunIds: running });
     let parentRequestId: string | undefined;
-    let abortResponse: ReturnType<typeof rpcReq> | undefined;
+    let abortResponse: ReturnType<typeof fixture.rpcReq> | undefined;
     let abortOutcome:
-      | Promise<
-          { ok: true; response: Awaited<ReturnType<typeof rpcReq>> } | { ok: false; error: unknown }
-        >
+      | Promise<PromiseSettledResult<Awaited<ReturnType<typeof fixture.rpcReq>>>>
       | undefined;
     let responseSettled = false;
     let acceptedKillIntent: SubagentRunRecord["killIntent"];
     const rpc = <T extends Record<string, unknown>>(
       method: string,
       params: Record<string, unknown>,
-    ) => rpcReq<T>(socket, method, params);
+    ) => fixture.rpcReq<T>(socket, method, params);
+    const expectResponse = (
+      response: Awaited<ReturnType<typeof rpc>>,
+      shape: Record<string, unknown>,
+    ) => expect(response, JSON.stringify(response.error)).toMatchObject(shape);
     const runtimeKey = (runId: string) => getSubagentRunRuntimeKey(subagentRuns.get(runId)!);
     const describe = async (
       key: string,
@@ -136,7 +122,7 @@ for (const { name, fault, replaceParent } of [
       fields: Record<string, unknown> = {},
     ) => {
       const response = await rpc("sessions.describe", { key, agentId: "main" });
-      expect(response, JSON.stringify(response.error)).toMatchObject({
+      expectResponse(response, {
         ok: true,
         payload: { session: { key, sessionId, ...fields } },
       });
@@ -145,9 +131,9 @@ for (const { name, fault, replaceParent } of [
     await runQaGatewayFixture(
       async () => {
         if (!fault && !replaceParent) {
-          await prepareGatewayReplyRuntimeForTest({ force: true });
+          await fixture.prepareGatewayReplyRuntimeForTest({ force: true });
         }
-        await connectOk(socket, {
+        await fixture.connectOk(socket, {
           scopes: ["operator.read", "operator.write"],
           prePairDevice: true,
         });
@@ -156,14 +142,14 @@ for (const { name, fault, replaceParent } of [
             agentId: "main",
             key: parentKey,
           });
-          expect(created, JSON.stringify(created.error)).toMatchObject({
+          expectResponse(created, {
             ok: true,
             payload: { key: parentKey },
           });
           parentSessionId = expectDefined(created.payload, "created non-main parent").sessionId;
           expect(parentSessionId).not.toBe("");
         }
-        agentCommandMock.mockImplementationOnce(async (input) => {
+        fixture.agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
           await command.onExecutionStarted?.();
@@ -177,12 +163,12 @@ for (const { name, fault, replaceParent } of [
           idempotencyKey: parentRunId,
         });
         parentRequestId = accepted.id;
-        expect(accepted).toMatchObject({
+        expectResponse(accepted, {
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
         const parent = await parentStarted.promise;
-        expect(agentCommandMock).toHaveBeenCalledTimes(1);
+        expect(fixture.agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
           const childStorePath = await seedSession(sessionKey(runId), `${runId}-session`);
@@ -212,9 +198,7 @@ for (const { name, fault, replaceParent } of [
             );
           }
           if (queued.includes(runId)) {
-            expect(
-              swarm.reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
-            ).toBe(true);
+            expect(reserve(runId, 8)).toBe(true);
           }
           await registerSubagentRun({
             runId,
@@ -240,14 +224,7 @@ for (const { name, fault, replaceParent } of [
           }
         }
         if (queued.length === 0) {
-          expect(
-            swarm.reserveSwarmRun({
-              groupId,
-              runId: firstRunId,
-              maxConcurrent: 1,
-              activeRunIds: running,
-            }),
-          ).toBe(false);
+          expect(reserve(firstRunId, 1)).toBe(false);
         }
         expect(running.every((runId) => swarm.isSwarmRunActive(runId))).toBe(true);
         for (const runId of queued) {
@@ -266,7 +243,7 @@ for (const { name, fault, replaceParent } of [
           const payload = expectDefined(history.payload, "parent history");
           expect(payload.sessionId).toBe(parentSessionId);
           expect(payload.sessionInfo).toHaveProperty("activeLeafEntryId");
-          embeddedRunMock.activeIds.add(`${firstRunId}-session`);
+          fixture.embeddedRunMock.activeIds.add(`${firstRunId}-session`);
           abortResponse = rpc("chat.send", {
             sessionKey: parentKey,
             message: "/stop",
@@ -281,16 +258,10 @@ for (const { name, fault, replaceParent } of [
             runId: parentRunId,
           });
         }
-        abortOutcome = abortResponse.then(
-          (response) => {
-            responseSettled = true;
-            return { ok: true as const, response };
-          },
-          (error: unknown) => {
-            responseSettled = true;
-            return { ok: false as const, error };
-          },
-        );
+        abortOutcome = Promise.allSettled([abortResponse]).then(([outcome]) => {
+          responseSettled = true;
+          return expectDefined(outcome, "Stop outcome");
+        });
         await awaitGateBeforeSettlement(
           firstInterrupted.promise,
           abortOutcome,
@@ -331,11 +302,11 @@ for (const { name, fault, replaceParent } of [
           lease.release();
         }
         const outcome = await abortOutcome;
-        if (!outcome.ok) {
-          throw outcome.error;
+        if (outcome.status === "rejected") {
+          throw outcome.reason;
         }
         if (replaceParent) {
-          expect(outcome.response).toMatchObject({
+          expectResponse(outcome.value, {
             ok: false,
             error: {
               code: "INVALID_REQUEST",
@@ -346,19 +317,22 @@ for (const { name, fault, replaceParent } of [
               },
             },
           });
-          expect(embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);
-          expect(embeddedRunMock.activeIds.has(`${firstRunId}-session`)).toBe(true);
+          expect(fixture.embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);
+          expect(fixture.embeddedRunMock.activeIds.has(`${firstRunId}-session`)).toBe(true);
           expect(sessions.loadExactSessionEntryReadOnly(replacementScope)?.entry.sessionId).toBe(
             replacementScope.sessionId,
           );
           expect(await sessions.loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
         } else if (fault) {
-          expect(outcome.response).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-          expect(outcome.response.error?.message).toContain(
-            "synthetic sibling interruption failure",
-          );
+          expectResponse(outcome.value, {
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("synthetic sibling interruption failure"),
+            },
+          });
         } else {
-          expect(outcome.response).toMatchObject({
+          expectResponse(outcome.value, {
             ok: true,
             payload: { ok: true, aborted: true, runIds: [parentRunId] },
           });
@@ -409,13 +383,13 @@ for (const { name, fault, replaceParent } of [
           lease.release();
         }
         const outcome = await abortOutcome;
-        if (outcome && !outcome.ok) {
-          throw outcome.error;
+        if (outcome?.status === "rejected") {
+          throw outcome.reason;
         }
       },
       async () => {
         const terminal = parentRequestId
-          ? onceMessage(
+          ? fixture.onceMessage(
               socket,
               (frame) =>
                 frame.type === "res" &&
@@ -431,7 +405,7 @@ for (const { name, fault, replaceParent } of [
         try {
           for (const runId of selected) {
             if (replaceParent) {
-              embeddedRunMock.activeIds.delete(`${runId}-session`);
+              fixture.embeddedRunMock.activeIds.delete(`${runId}-session`);
             }
             const hold = swarm.holdQueuedSwarmRun(runId);
             if (hold) {

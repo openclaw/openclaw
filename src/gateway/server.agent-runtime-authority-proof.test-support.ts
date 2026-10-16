@@ -1,4 +1,3 @@
-// Real-owner fixture shared by delegated and ordinary RPC compatibility cases.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -202,13 +201,12 @@ export function installAgentAuthorityProofFixture() {
     });
     const observation = (): ProofObservation => ({
       registryLive: validateAgentRunDelegatedAuthority(authority),
-      gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity) === true,
+      gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity),
       admittedLive: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
       closureCount: closed.length,
     });
     observe("caller-admitted", observation());
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-    expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(true);
+    expect(observation()).toMatchObject({ registryLive: true, gatewayLive: true });
     return {
       identity,
       authority,
@@ -217,9 +215,11 @@ export function installAgentAuthorityProofFixture() {
         admission.close();
         observe("authority-close", observation());
         expect(closed).toEqual([authority.claimId]);
-        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-        expect(context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(false);
+        expect(observation()).toMatchObject({
+          admittedLive: false,
+          registryLive: false,
+          gatewayLive: false,
+        });
       },
       dispose: () => {
         admission.close();
@@ -229,7 +229,7 @@ export function installAgentAuthorityProofFixture() {
   }
   type Caller = Awaited<ReturnType<typeof caller>>;
 
-  async function fixture(options?: { imageCapable?: true }) {
+  return async (options?: { imageCapable?: true }) => {
     const context = getContext();
     // Pin the roster/model instead of relying on implicit-main migration or catalog defaults.
     testState.agentsConfig = { entries: { main: {} } };
@@ -300,10 +300,8 @@ export function installAgentAuthorityProofFixture() {
       .mockImplementation(<T>(operation: () => T | Promise<T>): Promise<T> => {
         const pending = track(operation);
         work.add(pending);
-        void pending.then(
-          () => work.delete(pending),
-          () => work.delete(pending),
-        );
+        const settled = () => work.delete(pending);
+        void pending.then(settled, settled);
         return pending;
       });
     const drain = async () => {
@@ -365,9 +363,7 @@ export function installAgentAuthorityProofFixture() {
         }
       },
     };
-  }
-
-  return fixture;
+  };
 }
 
 export async function holdExecution(signal: AbortSignal) {

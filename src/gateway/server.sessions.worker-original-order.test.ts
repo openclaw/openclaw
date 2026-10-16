@@ -3,26 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import * as workerProtocol from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
-import {
-  bundleMcpRuntimeMocks,
-  directSessionReq,
-  sessionStoreEntry,
-  setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+import * as sessions from "./test/server-sessions.test-helpers.js";
 import { bootstrapWorker } from "./worker-environments/bootstrap.js";
 import type { WorkerInstallationArtifact } from "./worker-environments/bundle.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
@@ -36,19 +24,22 @@ import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
 import {
-  git as runGit,
   localWorkspaceRunner,
+  resolveIdentity as fixtureIdentity,
+  SSH,
   success,
 } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
+import { initializeScriptGitWorkspace } from "./worker-environments/workspace-sync-scripts.test-support.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const { createSessionStoreDir } = sessions.setupGatewaySessionsHandlerTestHarness();
 const PRIMARY_PORT = 2222;
 const FALLBACK_PORT = 22;
 const SESSION_ID = "session-original-order";
 const SESSION_KEY = "agent:main:original-order";
+const sessionIdentity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
 const PROFILE_ID = "development";
 const ENVIRONMENT_ID = deriveEnvironmentIntent(`session-dispatch:${SESSION_ID}:1`).environmentId;
 const BUNDLE_HASH = "a".repeat(64);
@@ -56,8 +47,8 @@ const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
   protocolFeatures: [
-    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+    workerProtocol.WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+    workerProtocol.WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   ],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
@@ -68,12 +59,9 @@ const INSTALLATION: WorkerInstallationArtifact = {
   tarballPath: "/gateway/worker-bundle.tgz",
 };
 const SSH_ENDPOINT: WorkerSshEndpoint = {
-  host: "worker.example.test",
+  ...SSH,
   port: PRIMARY_PORT,
   fallbackPorts: [FALLBACK_PORT],
-  user: "openclaw",
-  hostKey: "ssh-ed25519 AAAA",
-  keyRef: { source: "file", provider: "worker-fixture", id: "/identity" },
 };
 
 function expectOrdered(actual: readonly string[], expected: readonly string[]): void {
@@ -102,31 +90,28 @@ function argvPort(argv: readonly string[]): number {
 
 class OriginalOrderSshRunner implements WorkerSshRunner {
   readonly events: string[] = [];
-  private bootstrapOperationToken: string | undefined;
+  bootstrapUploadPath = "";
+  readonly bootstrapReceiptPath: string;
   private readonly workspace: WorkerSshRunner;
 
   constructor(private readonly remoteHome: string) {
     this.workspace = localWorkspaceRunner(remoteHome).runner;
-  }
-
-  setBootstrapOperationId(operationId: string): void {
-    this.bootstrapOperationToken = createHash("sha256").update(operationId).digest("hex");
-  }
-
-  get bootstrapUploadPath(): string {
-    if (!this.bootstrapOperationToken) {
-      throw new Error("bootstrap operation id is not configured");
-    }
-    return path.join(
-      this.remoteHome,
+    this.bootstrapReceiptPath = path.join(
+      remoteHome,
       ".openclaw-worker",
-      ".incoming",
-      `openclaw-upload-${BUNDLE_HASH}.tgz.${this.bootstrapOperationToken}`,
+      BUNDLE_HASH,
+      "bootstrap-receipt.json",
     );
   }
 
-  get bootstrapReceiptPath(): string {
-    return path.join(this.remoteHome, ".openclaw-worker", BUNDLE_HASH, "bootstrap-receipt.json");
+  setBootstrapOperationId(operationId: string): void {
+    const token = createHash("sha256").update(operationId).digest("hex");
+    this.bootstrapUploadPath = path.join(
+      this.remoteHome,
+      ".openclaw-worker",
+      ".incoming",
+      `openclaw-upload-${BUNDLE_HASH}.tgz.${token}`,
+    );
   }
 
   start(): never {
@@ -234,8 +219,8 @@ afterEach(async () => {
   workerService = undefined;
   await tunnelManager?.stopAll();
   tunnelManager = undefined;
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await stateDatabase.closeOpenClawStateDatabaseAsync();
+  stateDatabase.closeOpenClawStateDatabaseForTest();
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -253,11 +238,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   ]);
   await installRemoteProcessFixture(remoteHome);
   await fs.writeFile(path.join(localWorkspace, "current.txt"), "current\n");
-  await runGit(localWorkspace, "init");
-  await runGit(localWorkspace, "config", "user.name", "Worker Boundary Test");
-  await runGit(localWorkspace, "config", "user.email", "worker-boundary@example.test");
-  await runGit(localWorkspace, "add", "current.txt");
-  await runGit(localWorkspace, "commit", "-m", "initialize managed workspace");
+  await initializeScriptGitWorkspace(localWorkspace, "current.txt");
   const runner = new OriginalOrderSshRunner(remoteHome);
   const events = runner.events;
   const provider: WorkerProvider = {
@@ -275,7 +256,9 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     },
   };
 
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+  const database = stateDatabase.openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  });
   const environmentStore = await createWorkerEnvironmentStore({ database, now: () => 2_000 });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
   tunnelManager = createWorkerTunnelManager({ runner });
@@ -311,7 +294,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
         },
       );
     },
-    resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
+    resolveSshIdentity: fixtureIdentity,
     tunnelManager,
     generateWorkerCredential: () => "original-order-credential",
     liveEvents: {
@@ -362,9 +345,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
   });
 
   const active = await dispatch.dispatch({
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    agentId: "main",
+    ...sessionIdentity,
     profileId: PROFILE_ID,
     executionMode: "remote-exec",
   });
@@ -374,23 +355,26 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     `${JSON.stringify(RECEIPT)}\n`,
   );
   events.push("placement:active");
-  await expect(
-    dispatch.reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" }),
-  ).resolves.toMatchObject({ state: "reclaimed", environmentId: ENVIRONMENT_ID });
+  await expect(dispatch.reclaim(sessionIdentity)).resolves.toMatchObject({
+    state: "reclaimed",
+    environmentId: ENVIRONMENT_ID,
+  });
   expect(workerService.get(ENVIRONMENT_ID)).toMatchObject({ state: "destroyed" });
   expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed" });
   events.push("placement:reclaimed");
 
   await createSessionStoreDir();
-  await writeSessionStore({ entries: { [SESSION_KEY]: sessionStoreEntry(SESSION_ID) } });
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementationOnce(async ({ sessionId }) => {
-    expect(sessionId).toBe(SESSION_ID);
-    expect((await loadSessionEntryAsync(SESSION_KEY)).entry?.sessionId).toBe(SESSION_ID);
-    expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
-    events.push("session:cleanup");
-    return true;
-  });
-  const deleted = await directSessionReq(
+  await writeSessionStore({ entries: { [SESSION_KEY]: sessions.sessionStoreEntry(SESSION_ID) } });
+  sessions.bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementationOnce(
+    async ({ sessionId }) => {
+      expect(sessionId).toBe(SESSION_ID);
+      expect((await loadSessionEntryAsync(SESSION_KEY)).entry?.sessionId).toBe(SESSION_ID);
+      expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
+      events.push("session:cleanup");
+      return true;
+    },
+  );
+  const deleted = await sessions.directSessionReq(
     "sessions.delete",
     { key: SESSION_KEY },
     {
