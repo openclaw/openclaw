@@ -22,7 +22,7 @@ export function renderProviderIcon(
   className = "",
 ) {
   const localBrand = resolveSetupBrandIcon(entry);
-  const iconClass = `model-setup__icon ${className}`.trim();
+  const iconClass = ["model-setup__icon", className];
   if (localBrand) {
     return <ProviderBrandIcon provider={localBrand} class={iconClass} />;
   }

@@ -14,6 +14,7 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import {
   transcriptListParams,
@@ -560,16 +561,14 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   );
   const timer = globalThis.setInterval(() => refreshLive(), 3_000);
   const activate = () => refreshLive(true);
-  document.addEventListener("visibilitychange", activate);
-  globalThis.addEventListener("focus", activate);
+  onCleanup(listen(document, "visibilitychange", activate));
+  onCleanup(listen(globalThis, "focus", activate));
   onCleanup(() => {
     active = false;
     gateway.dispose();
     cancelSummaryGeneration();
     cancelExport();
     globalThis.clearInterval(timer);
-    document.removeEventListener("visibilitychange", activate);
-    globalThis.removeEventListener("focus", activate);
   });
 
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);

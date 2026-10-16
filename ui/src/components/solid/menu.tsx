@@ -99,7 +99,7 @@ export type MenuProps = {
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
   panelClass?: string;
-  triggerClass?: string;
+  triggerClass?: JSX.ClassValue;
   triggerAttributes?: Pick<
     JSX.ButtonHTMLAttributes<HTMLButtonElement>,
     "title" | "style" | "tabindex" | "aria-hidden" | "aria-keyshortcuts" | "aria-busy" | "value"
