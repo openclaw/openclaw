@@ -13,6 +13,7 @@ export type GitHubConnectionTarget =
   | Extract<GitHubConnectionOwner, { kind: "personal" }>
   | (Extract<GitHubConnectionOwner, { kind: "shared" }> & {
       config: Record<string, unknown> | null;
+      profileId: string | null;
     });
 
 export type RequestOwner = {
@@ -54,8 +55,7 @@ export type AuthorizationOperation = {
   cancelError?: string;
 };
 
-export type GitHubIdentityHost = {
-  requestUpdate: () => void;
+export type GitHubIdentityDependencies = {
   authorizationSucceeded?: () => void;
   runExternalMutation?: RuntimeConfigCapability["runExternalMutation"];
 };
@@ -72,7 +72,9 @@ export function readGitHubIdentityDraft(value: unknown): GitHubIdentityDraft {
 
 export function githubConnectionOwnerKey(target: GitHubConnectionTarget | null): string {
   return JSON.stringify(
-    target?.kind === "shared" ? { kind: target.kind, agentId: target.agentId } : target,
+    target?.kind === "shared"
+      ? { kind: target.kind, agentId: target.agentId, profileId: target.profileId }
+      : target,
   );
 }
 
