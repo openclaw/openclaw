@@ -30,6 +30,13 @@ describe("ensureSandboxBrowser create args", () => {
     latestBridgeResolved,
   } = harness;
 
+  const browserParams = (cfg = buildConfig(false), workspaceDir = harness.testWorkspaceDir) => ({
+    scopeKey: "session:test",
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    cfg,
+  });
+
   it("rejects stale sandbox browser images without the relay auth contract", async () => {
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
       if (args[0] === "image" && args[1] === "inspect") {
@@ -38,14 +45,7 @@ describe("ensureSandboxBrowser create args", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    await expect(
-      ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg: buildConfig(false),
-      }),
-    ).rejects.toThrow(
+    await expect(ensureTestSandboxBrowser(browserParams())).rejects.toThrow(
       "Sandbox browser image openclaw-sandbox-browser:bookworm-slim is stale or incompatible",
     );
 
@@ -70,12 +70,7 @@ describe("ensureSandboxBrowser create args", () => {
     const configuredSentinel = "synthetic-browser-transport-value";
     const cfg = buildConfig(true);
     cfg.docker.env = { ...cfg.docker.env, BROWSER_TRANSPORT_SENTINEL: configuredSentinel };
-    const result = await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg,
-    });
+    const result = await ensureTestSandboxBrowser(browserParams(cfg));
 
     const createArgs = requireDockerCreateArgs();
     expect(createArgs.filter((arg) => arg === "--init")).toHaveLength(1);
@@ -148,12 +143,7 @@ describe("ensureSandboxBrowser create args", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    const params = {
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
-    };
+    const params = browserParams();
     await expect(
       Promise.all([ensureTestSandboxBrowser(params), ensureTestSandboxBrowser(params)]),
     ).resolves.toHaveLength(2);
@@ -193,12 +183,7 @@ describe("ensureSandboxBrowser create args", () => {
       bridge: { server: { listening: true } },
     });
 
-    const result = await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg,
-    });
+    const result = await ensureTestSandboxBrowser(browserParams(cfg));
 
     expect(dockerMocks.execDocker).toHaveBeenCalledWith(
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
@@ -240,12 +225,7 @@ describe("ensureSandboxBrowser create args", () => {
       ],
     });
 
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg,
-    });
+    await ensureTestSandboxBrowser(browserParams(cfg));
 
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
@@ -273,14 +253,9 @@ describe("ensureSandboxBrowser create args", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    await expect(
-      ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg: buildConfig(false),
-      }),
-    ).rejects.toThrow("Docker daemon is not available");
+    await expect(ensureTestSandboxBrowser(browserParams())).rejects.toThrow(
+      "Docker daemon is not available",
+    );
 
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
   });
@@ -301,10 +276,7 @@ describe("ensureSandboxBrowser create args", () => {
       },
     }));
     const common = {
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
+      ...browserParams(),
       evaluateEnabled: true,
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     };
@@ -361,14 +333,7 @@ describe("ensureSandboxBrowser create args", () => {
       const cfg = buildConfig(false);
       cfg.browser.autoStartTimeoutMs = 50;
 
-      await expect(
-        ensureTestSandboxBrowser({
-          scopeKey: "session:test",
-          workspaceDir: harness.testWorkspaceDir,
-          agentWorkspaceDir: harness.testWorkspaceDir,
-          cfg,
-        }),
-      ).rejects.toThrow(
+      await expect(ensureTestSandboxBrowser(browserParams(cfg))).rejects.toThrow(
         status === 200
           ? "probe completed before bridge creation"
           : "hung container has been forcefully removed",
@@ -446,12 +411,7 @@ describe("ensureSandboxBrowser create args", () => {
       // the fixture's stalled request. Advance that same 250ms deadline only
       // after real request admission; never replace fetch or its abort signal.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const startup = ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg,
-      });
+      const startup = ensureTestSandboxBrowser(browserParams(cfg));
       startupResult = startup.then(
         () => {
           settled = true;
@@ -531,12 +491,7 @@ describe("ensureSandboxBrowser create args", () => {
     const cfg = buildConfig(false);
     cfg.browser.cdpSourceRange = "10.0.0.0/24";
 
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg,
-    });
+    await ensureTestSandboxBrowser(browserParams(cfg));
 
     const envEntries = requireDockerCreateEnvEntries();
     expect(envEntries).toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=10.0.0.0/24");
@@ -553,26 +508,16 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
     bridgeMocks.stopBrowserBridgeServer.mockRejectedValueOnce(new Error("bridge cleanup failed"));
 
-    await expect(
-      ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg: buildConfig(false),
-      }),
-    ).rejects.toThrow("bridge cleanup failed");
+    await expect(ensureTestSandboxBrowser(browserParams())).rejects.toThrow(
+      "bridge cleanup failed",
+    );
 
     expect(harness.BROWSER_BRIDGES.get("session:test")).toBe(cached);
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
 
     bridgeMocks.stopBrowserBridgeServer.mockClear();
     dockerMocks.execDocker.mockClear();
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
-    });
+    await ensureTestSandboxBrowser(browserParams());
 
     const rmCallIndex = dockerMocks.execDocker.mock.calls.findIndex(([args]) => args[0] === "rm");
     expect(bridgeMocks.stopBrowserBridgeServer.mock.invocationCallOrder[0]).toBeLessThan(
@@ -585,14 +530,7 @@ describe("ensureSandboxBrowser create args", () => {
     const cfg = buildConfig(false);
     cfg.browser.network = "none";
 
-    await expect(
-      ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg,
-      }),
-    ).rejects.toThrow(
+    await expect(ensureTestSandboxBrowser(browserParams(cfg))).rejects.toThrow(
       'Sandbox browser network mode "none" is unsupported because browser control requires a host-reachable published CDP port.',
     );
     expect(dockerMocks.dockerContainerState).not.toHaveBeenCalled();
@@ -620,14 +558,9 @@ describe("ensureSandboxBrowser create args", () => {
     });
     const cfg = buildConfig(false);
     cfg.docker.tmpfs = [];
-    await expect(
-      ensureTestSandboxBrowser({
-        scopeKey: "session:test",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg,
-      }),
-    ).rejects.toThrow("openclaw sandbox recreate --browser --session session:test");
+    await expect(ensureTestSandboxBrowser(browserParams(cfg))).rejects.toThrow(
+      "openclaw sandbox recreate --browser --session session:test",
+    );
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
     expect(bridgeMocks.stopBrowserBridgeServer).not.toHaveBeenCalled();
@@ -644,12 +577,7 @@ describe("ensureSandboxBrowser create args", () => {
     cfg.docker.dangerouslyAllowReservedContainerTargets = true;
     cfg.browser.binds = [`${customRoot}:/workspace/skills:rw`];
 
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg,
-    });
+    await ensureTestSandboxBrowser(browserParams(cfg, workspaceDir));
 
     const bindArgs = collectDockerFlagValues(requireDockerCreateArgs(), "-v");
     const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);

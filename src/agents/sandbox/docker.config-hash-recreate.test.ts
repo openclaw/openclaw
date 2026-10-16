@@ -21,6 +21,20 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     ensureSandboxCreateCallForTest,
   } = harness;
 
+  const containerParams = (
+    cfg: Parameters<typeof harness.ensureSandboxContainer>[0]["cfg"],
+    workspaceDir = "/tmp/workspace",
+  ) => ({
+    scopeKey: "shared",
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    cfg,
+  });
+  const podmanParams = (cfg: Parameters<typeof containerParams>[0]) => ({
+    ...containerParams(cfg),
+    engine: harness.PODMAN_SANDBOX_ENGINE,
+  });
+
   it("serializes concurrent provisioning for one container", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
@@ -28,12 +42,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     spawnState.inspectRunning = false;
     registryMocks.readRegistryEntry.mockResolvedValue(null);
 
-    const params = {
-      scopeKey: "shared",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      cfg,
-    };
+    const params = containerParams(cfg, workspaceDir);
     const [first, second] = await Promise.all([
       harness.ensureSandboxContainer(params),
       harness.ensureSandboxContainer(params),
@@ -150,10 +159,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     await expect(
       harness.ensureSandboxContainer({
-        scopeKey: "shared",
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        cfg,
+        ...containerParams(cfg, workspaceDir),
         requireCurrentConfig: true,
       }),
     ).rejects.toThrow("restricted dispatch requires the current container config");
@@ -299,92 +305,32 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
   });
 
-  it.each([{ user: "0" }, { user: "1001:000" }])(
-    "rejects zero-valued rootless Podman user $user",
-    async ({ user }) => {
+  it.each([
+    { user: "0", error: /cannot use UID or GID 0/iu },
+    { user: "1001:000", error: /cannot use UID or GID 0/iu },
+    { user: "node", error: /must be a numeric UID or UID:GID/iu },
+    { user: "1001:1002", version: "4.2.0", error: /requires Podman 4\.3 or newer/iu },
+    {
+      gpus: "all",
+      rootless: false,
+      version: "4.9.3",
+      error: /GPU passthrough requires Podman 5\.0 or newer/iu,
+    },
+  ])(
+    "rejects unsupported Podman policy %j before creation",
+    async ({ user, gpus, rootless = true, version = "5.0.0", error }) => {
       const cfg = createSandboxConfig([]);
       cfg.docker.user = user;
+      cfg.docker.gpus = gpus;
+      spawnState.podmanInfo = `${rootless}\tfalse\t\t${version}\n`;
       spawnState.inspectRunning = false;
       registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-      await expect(
-        harness.ensureSandboxContainer({
-          engine: harness.PODMAN_SANDBOX_ENGINE,
-          scopeKey: "shared",
-          workspaceDir: "/tmp/workspace",
-          agentWorkspaceDir: "/tmp/workspace",
-          cfg,
-        }),
-      ).rejects.toThrow(/cannot use UID or GID 0/iu);
-
+      await expect(harness.ensureSandboxContainer(podmanParams(cfg))).rejects.toThrow(error);
       expect(spawnState.calls).not.toContainEqual(
-        expect.objectContaining({
-          command: "podman",
-          args: expect.arrayContaining(["create"]),
-        }),
+        expect.objectContaining({ command: "podman", args: expect.arrayContaining(["create"]) }),
       );
     },
   );
-
-  it("rejects Podman versions without mapped keep-id support", async () => {
-    const cfg = createSandboxConfig([]);
-    cfg.docker.user = "1001:1002";
-    spawnState.podmanInfo = "true\tfalse\t\t4.2.0\n";
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/requires Podman 4\.3 or newer/iu);
-  });
-
-  it("rejects Podman GPU passthrough before Podman 5", async () => {
-    const cfg = createSandboxConfig([]);
-    cfg.docker.gpus = "all";
-    spawnState.podmanInfo = "false\tfalse\t\t4.9.3\n";
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/GPU passthrough requires Podman 5\.0 or newer/iu);
-  });
-
-  it("rejects nonnumeric users for rootless Podman keep-id", async () => {
-    const cfg = createSandboxConfig([]);
-    cfg.docker.user = "node";
-    spawnState.inspectRunning = false;
-    registryMocks.readRegistryEntry.mockResolvedValue(null);
-
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/must be a numeric UID or UID:GID/iu);
-
-    expect(spawnState.calls).not.toContainEqual(
-      expect.objectContaining({
-        command: "podman",
-        args: expect.arrayContaining(["create"]),
-      }),
-    );
-  });
 
   it("rejects a Podman runtime recorded for a different engine target", async () => {
     const cfg = createSandboxConfig([]);
@@ -399,15 +345,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       image: cfg.docker.image,
     });
 
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/active Podman connection changed/u);
+    await expect(harness.ensureSandboxContainer(podmanParams(cfg))).rejects.toThrow(
+      /active Podman connection changed/u,
+    );
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     expect(spawnState.calls).not.toContainEqual(
       expect.objectContaining({
@@ -437,15 +377,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       image: cfg.docker.image,
     });
 
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).resolves.toEqual({ containerName: "oc-test-podman-shared", containerId: "c".repeat(64) });
+    await expect(harness.ensureSandboxContainer(podmanParams(cfg))).resolves.toEqual({
+      containerName: "oc-test-podman-shared",
+      containerId: "c".repeat(64),
+    });
 
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("oc-test-podman-shared");
     expect(spawnState.calls).toContainEqual(
@@ -473,15 +408,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       image: cfg.docker.image,
     });
 
-    await expect(
-      harness.ensureSandboxContainer({
-        engine: harness.PODMAN_SANDBOX_ENGINE,
-        scopeKey: "shared",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        cfg,
-      }),
-    ).rejects.toThrow(/unable to connect to Podman socket/iu);
+    await expect(harness.ensureSandboxContainer(podmanParams(cfg))).rejects.toThrow(
+      /unable to connect to Podman socket/iu,
+    );
 
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
     expect(spawnState.calls).not.toContainEqual(

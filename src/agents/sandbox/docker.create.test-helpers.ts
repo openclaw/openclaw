@@ -65,12 +65,7 @@ function usePodmanMachine() {
 }
 
 function createRegistryMock() {
-  return {
-    readRegistryEntry: registryMocks.readRegistryEntry,
-    removeRegistryEntry: registryMocks.removeRegistryEntry,
-    updateRegistry: registryMocks.updateRegistry,
-    completeSandboxRegistryReservation: registryMocks.completeSandboxRegistryReservation,
-  };
+  return registryMocks;
 }
 
 vi.mock("./registry.js", createRegistryMock);
@@ -256,8 +251,6 @@ function createSandboxConfig(
 }
 
 export function createSandboxContainerTestHarness() {
-  // Keep loaded modules and temporary directories per suite. Shared mock modules
-  // are reset by the hooks installed for that suite.
   let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
   let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
   let PODMAN_SANDBOX_ENGINE: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;

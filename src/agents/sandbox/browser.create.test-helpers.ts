@@ -45,11 +45,7 @@ async function createDockerMock() {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
-    dockerContainerState: dockerMocks.dockerContainerState,
-    execDocker: dockerMocks.execDocker,
-    readDockerContainerEnvVar: dockerMocks.readDockerContainerEnvVar,
-    readDockerContainerLabel: dockerMocks.readDockerContainerLabel,
-    readDockerPort: dockerMocks.readDockerPort,
+    ...dockerMocks,
   };
 }
 
@@ -76,19 +72,13 @@ async function createEngineMock() {
 vi.mock("./container-engine.js", createEngineMock);
 
 function createRegistryMock() {
-  return {
-    readBrowserRegistry: registryMocks.readBrowserRegistry,
-    updateBrowserRegistry: registryMocks.updateBrowserRegistry,
-  };
+  return registryMocks;
 }
 
 vi.mock("./registry.js", createRegistryMock);
 
 function createBridgeMock() {
-  return {
-    startBrowserBridgeServer: bridgeMocks.startBrowserBridgeServer,
-    stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
-  };
+  return bridgeMocks;
 }
 
 vi.mock("../../plugin-sdk/browser-bridge.js", createBridgeMock);
@@ -136,8 +126,6 @@ async function createProfilesMock() {
 vi.mock("../../plugin-sdk/browser-profiles.js", createProfilesMock);
 
 export function createSandboxBrowserTestHarness() {
-  // Keep loaded modules and temporary directories per suite. Shared mock modules
-  // are reset by the hooks installed for that suite.
   let BROWSER_BRIDGES: Map<string, unknown>;
   let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
   let prepareSandboxMountPlan: typeof import("./mount-plan.js").prepareSandboxMountPlan;
@@ -270,11 +258,10 @@ export function createSandboxBrowserTestHarness() {
   }
 
   function requireDockerCreateArgs(): string[] {
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    if (!createArgs) {
-      throw new Error("expected docker create args");
-    }
-    return createArgs;
+    return requireValue(
+      findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create"),
+      "docker create args",
+    );
   }
 
   function snapshotDockerCreateEnvEntries(args: string[]): string[] | undefined {
@@ -283,10 +270,10 @@ export function createSandboxBrowserTestHarness() {
   }
 
   function requireDockerCreateEnvEntries(): string[] {
-    if (!capturedDockerCreateEnvEntries) {
-      throw new Error("expected the docker create environment file to exist during create");
-    }
-    return capturedDockerCreateEnvEntries;
+    return requireValue(
+      capturedDockerCreateEnvEntries,
+      "the docker create environment file to exist during create",
+    );
   }
 
   function requireValue<T>(value: T | null | undefined, label: string): T {
@@ -308,9 +295,7 @@ export function createSandboxBrowserTestHarness() {
     return resolved;
   }
 
-  beforeAll(async () => {
-    await loadFreshBrowserModulesForTest();
-  });
+  beforeAll(loadFreshBrowserModulesForTest);
 
   beforeEach(() => {
     testWorkspaceDir = tempDirs.make("openclaw-browser-workspace-");
@@ -325,16 +310,14 @@ export function createSandboxBrowserTestHarness() {
       stderr: "",
       code: 0,
     });
-    dockerMocks.dockerContainerState.mockClear();
-    dockerMocks.execDocker.mockClear();
-    dockerMocks.readDockerContainerEnvVar.mockClear();
-    dockerMocks.readDockerContainerLabel.mockClear();
-    dockerMocks.readDockerPort.mockClear();
-    registryMocks.readBrowserRegistry.mockClear();
-    registryMocks.updateBrowserRegistry.mockClear();
-    bridgeMocks.startBrowserBridgeServer.mockClear();
-    bridgeMocks.stopBrowserBridgeServer.mockClear();
-    runtimeMocks.log.mockClear();
+    for (const mock of Object.values({
+      ...dockerMocks,
+      ...registryMocks,
+      ...bridgeMocks,
+      ...runtimeMocks,
+    })) {
+      mock.mockClear();
+    }
     capturedDockerCreateEnvEntries = undefined;
 
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
