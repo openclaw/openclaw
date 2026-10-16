@@ -11,6 +11,11 @@ import { updateMaintenanceError } from "./update-maintenance-error.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(`Recovery cleanup: ${report.stateDir}`);
+  if (report.missingOriginals > 0) {
+    defaultRuntime.log(
+      `Missing recovery originals: ${report.missingOriginals} (historical receipts retained; no bytes on disk).`,
+    );
+  }
   for (const item of report.artifacts) {
     defaultRuntime.log(
       `  ${item.outcome}: ${item.path} (${item.bytes} bytes; ${item.reason})${item.detail ? ` ${item.detail}` : ""}`,

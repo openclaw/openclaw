@@ -79,7 +79,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
 }) {
   const {
     claims,
-    inventory: { report, references },
+    inventory: { artifacts, references },
   } = collectHistoricalArchiveSources(params);
   const failures: Array<{
     target: SessionSqliteMigrationTargetInput;
@@ -122,9 +122,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       continue;
     }
     for (const refs of group.filter((candidate) => candidate !== survivor)) {
-      const item = report.artifacts.find(
-        (candidate) => candidate.path === refs[0]!.move.archivePath,
-      )!;
+      const item = artifacts.find((candidate) => candidate.path === refs[0]!.move.archivePath)!;
       survivors.set(item.path, survivor);
       try {
         assertSurvivor(refs);
@@ -252,7 +250,12 @@ export async function retireSessionSqliteRecovery(params: {
       }
       // Verified historical dependencies affect selection now, but stay provisional until consent.
       protectRecoveryDependencies(report.artifacts, references, adoptions);
-      const verified = summarizeRecoveryCleanup(report.stateDir, report.artifacts, "preview");
+      const verified = summarizeRecoveryCleanup(
+        report.stateDir,
+        report.artifacts,
+        "preview",
+        report.missingOriginals,
+      );
       const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
       const selected = candidates.filter((item) => item.kind !== "update-capture");
       const captures = candidates.filter((item) => item.kind === "update-capture");
@@ -331,6 +334,7 @@ export async function retireSessionSqliteRecovery(params: {
         report.artifacts.some((item) => item.outcome === "failed" || item.outcome === "blocked")
           ? "blocked"
           : "complete",
+        report.missingOriginals,
       );
     },
   });
