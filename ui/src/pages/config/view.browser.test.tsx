@@ -138,6 +138,42 @@ describe("config form and navigation", () => {
     expect(defaults.props.onFormPatch).not.toHaveBeenCalled();
   });
 
+  it.each([{}, { locale: "de" }])(
+    "leaves the UI language to Appearance in the Prefs form (prefs %o)",
+    (prefs) => {
+      const onFormPatch = vi.fn();
+      const onFormRemove = vi.fn();
+      const { container } = renderConfigView({
+        activeSection: "ui",
+        schema: object({
+          ui: object({
+            prefs: object({
+              chatShowToolCalls: { type: "boolean" },
+              locale: { type: "string", maxLength: 20 },
+              theme: { type: "string", enum: ["claw", "knot"] },
+            }),
+          }),
+        }),
+        uiHints: {
+          "ui.prefs.chatShowToolCalls": { advanced: false },
+          "ui.prefs.locale": { advanced: false },
+          "ui.prefs.theme": { advanced: false },
+        },
+        formValue: { ui: { prefs } },
+        onFormPatch,
+        onFormRemove,
+      });
+
+      const titles = Array.from(container.querySelectorAll(".settings-row__title")).map((label) =>
+        label.textContent?.trim(),
+      );
+      expect(titles).toEqual(["Prefs", "Chat Show Tool Calls", "Theme"]);
+      expect(normalizedText(container)).not.toContain("Locale");
+      expect(onFormPatch).not.toHaveBeenCalled();
+      expect(onFormRemove).not.toHaveBeenCalled();
+    },
+  );
+
   it("places a Control UI Browser preference in the same settings group before schema rows", () => {
     const { container } = renderConfigView({
       schema: object({

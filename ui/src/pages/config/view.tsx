@@ -1,7 +1,10 @@
 import { createMemo, createSignal, For, Show, untrack } from "solid-js";
 import "../../styles/lobster-pet.css";
 import { ConfigForm } from "../../components/config-form.render.tsx";
-import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
+import {
+  countSensitiveConfigValues,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -38,6 +41,35 @@ import type { ConfigProps } from "./view-types.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
 void warmJson5().catch(() => undefined);
+
+// Appearance → Language owns ui.prefs.locale; the generic Prefs form could only offer a bare text box.
+function withoutLanguagePref(schema: JsonSchema | null): JsonSchema | null {
+  const ui = schema?.properties?.ui;
+  const prefs = ui?.properties?.prefs;
+  if (!schema || !ui || !prefs?.properties || !("locale" in prefs.properties)) {
+    return schema;
+  }
+  const { locale: _locale, ...prefsProperties } = prefs.properties;
+  return {
+    ...schema,
+    properties: {
+      ...schema.properties,
+      ui: {
+        ...ui,
+        properties: {
+          ...ui.properties,
+          prefs: {
+            ...prefs,
+            properties: prefsProperties,
+            ...(prefs.required
+              ? { required: prefs.required.filter((key) => key !== "locale") }
+              : {}),
+          },
+        },
+      },
+    },
+  };
+}
 
 function resetContentScroll(target: EventTarget | null) {
   queueMicrotask(() => {
@@ -162,14 +194,16 @@ export function Config(props: ConfigProps) {
           }
         : analysis.schema;
     const setupSchema = formSchema?.properties?.wizard;
-    const editorSchema = setupSchema
-      ? {
-          ...formSchema,
-          properties: Object.fromEntries(
-            Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
-          ),
-        }
-      : formSchema;
+    const editorSchema = withoutLanguagePref(
+      setupSchema
+        ? {
+            ...formSchema,
+            properties: Object.fromEntries(
+              Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
+            ),
+          }
+        : formSchema,
+    );
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
