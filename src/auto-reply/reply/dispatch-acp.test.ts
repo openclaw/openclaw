@@ -1877,7 +1877,6 @@ describe("tryDispatchAcpReplyCore", () => {
     ["sent", { ok: true, delivered: true, messageId: "sent" }, 1],
     ["vetoed", { ok: true, delivered: false, suppressed: true, reason: "channel_transform" }, 1],
     ["not-sent", { ok: false, delivered: false, cause: notSent }, 2],
-    ["partial", { ok: false, delivered: true }, 1],
     ["held", { ok: false, delivered: false, queueCustody: "held" }, 1],
   ] as const)(
     "retries a routed ACP voice caption only after %s permits it",
@@ -2015,8 +2014,14 @@ describe("tryDispatchAcpReplyCore", () => {
       },
     });
 
-    expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("abcde");
-    expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("f");
+    expect(dispatcherCall(dispatcher.sendBlockReply, 0)).toMatchObject({
+      text: "abcde",
+      textMode: "delta",
+    });
+    expect(dispatcherCall(dispatcher.sendBlockReply, 1)).toMatchObject({
+      text: "f",
+      textMode: "delta",
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

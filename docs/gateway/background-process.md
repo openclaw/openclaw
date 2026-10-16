@@ -181,10 +181,11 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
+Managed exec on Linux with Node or Bun uses a dedicated
 child subreaper. It acquires kernel child ownership before launch, adopts orphaned
 descendants, and stops and reaps them even if they create another process group
-or session. Completion requires the kernel to report no remaining children, the
+or session. Negotiated worker workspace commands use the same owner through their
+Node host. Completion requires the kernel to report no remaining children, the
 matching owner receipt, and output drain. It does not depend on group-directed
 signals, a process-table census, or inherited-pipe closure alone.
 

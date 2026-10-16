@@ -7,8 +7,8 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import { LitContent } from "../../lit/solid-content.tsx";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   ChatProviderReviewDialog,
@@ -53,7 +53,7 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   });
   return (
     <>
-      <LitContent value={frame().layout} />
+      <PaneLayout layout={frame().layout} />
       <ChatProviderReviewDialog owner={providerReview} />
       <Show when={frame().capabilityDialogs}>
         {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}

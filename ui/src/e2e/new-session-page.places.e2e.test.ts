@@ -229,6 +229,7 @@ suite.define(() => {
           .count(),
       ).toBe(0);
       const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
+      await page.locator('.new-session-page__composer [data-chat-thinking-select="true"]').click();
       expect(await fastMode.count()).toBe(1);
       expect(await fastMode.getAttribute("aria-checked")).toBe("false");
       expect(
@@ -236,6 +237,7 @@ suite.define(() => {
           element.classList.contains("chat-controls__speed-option"),
         ),
       ).toBe(true);
+      await page.keyboard.press("Escape");
       expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
       await incognitoToggle.click();
       await expect.poll(() => incognitoToggle.getAttribute("aria-checked")).toBe("true");

@@ -1364,9 +1364,7 @@ describe("openclaw test instance", () => {
     await expectPathMissing(instance.state.root);
   });
 
-  it
-    .runIf(process.platform === "linux" && !process.versions.bun)
-    .for(["cleanup", "forced-stop"] as const)(
+  it.runIf(process.platform === "linux").for(["cleanup", "forced-stop"] as const)(
     "reclaims a stopped detached descendant before releasing Gateway state (%s)",
     async (action, { signal }) => {
       const { instance, tracePath } = await createFakeGateway("detached-stopped");

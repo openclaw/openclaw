@@ -175,6 +175,15 @@ hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
 Installed TypeScript plugins use the embedded Jiti loader and Babel transformer.
+On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
+the standalone executable's Bun mode. This preserves npm registry authentication,
+configuration, lockfile integrity checks, and the installer's disabled lifecycle
+scripts without requiring a host Node, Bun, or npm installation. The manifest's
+`runtime.packageManager` records the npm version, entrypoint, file count, and bytes;
+the `packageManager` resource category includes its runtime dependencies and licenses.
+Documentation, source maps, and TypeScript declarations are excluded from this closure.
+Installed plugins resolve host SDK imports to the embedded image through the
+existing native plugin resolvers; host SDK JavaScript is not restored on disk.
 The builder captures constant conditional-export resolutions before compilation;
 these modules remain lazy and do not require JavaScript in the sidecar.
 
@@ -276,7 +285,15 @@ After the network denial, allow only bind and connect within the isolated root:
 ```
 
 Keep IP networking, the operator's home, Keychain, launchctl, and host SQLite
-libraries denied. Neither operation contacts an IP network service.
+libraries denied. Neither operation contacts an IP network service. Bun
+standalone cleanup reads process-group membership through macOS `libproc` without
+executing `/bin/ps`; no process-exec allowance for `ps` is needed.
+
+Doctor reports `SQLite (doctor process): <path> (<version>, extension loading enabled)`
+in its **Database engines** diagnostic, including for isolated profiles and
+host-managed installs. Packaging checks should assert that the path points to the
+artifact's `runtime/lib/libsqlite3.dylib`. This diagnostic describes the library
+selected by the Doctor process; it does not require host-service inspection.
 
 Use a short, canonical temporary root: Darwin limits Unix socket paths to 103
 bytes. The broker's fallback for longer paths is outside the isolated root and

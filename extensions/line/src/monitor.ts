@@ -1,7 +1,10 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createTypingKeepaliveLoop,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
@@ -55,25 +58,6 @@ type LineWebhookTarget = {
 
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
-function startLineLoadingKeepalive(params: {
-  cfg: OpenClawConfig;
-  userId: string;
-  accountId?: string;
-}): () => void {
-  const trigger = () => {
-    void showLoadingAnimation(params.userId, {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      loadingSeconds: 20,
-    }).catch(() => {});
-  };
-
-  trigger();
-  const timer = setInterval(trigger, 18_000);
-
-  return () => clearInterval(timer);
-}
-
 export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
   const {
     channelAccessToken,
@@ -108,15 +92,20 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
       // its delivery run on that same one so the two can never disagree.
       const turnConfig = deliveryControl.cfg;
 
-      const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
-
-      const stopLoading = shouldShowLoading
-        ? startLineLoadingKeepalive({
-            cfg: turnConfig,
-            userId: ctx.userId!,
-            accountId: ctx.accountId,
-          })
-        : null;
+      const loading =
+        ctx.userId && !ctx.isGroup
+          ? createTypingKeepaliveLoop({
+              intervalMs: 18_000,
+              onTick: () =>
+                showLoadingAnimation(ctx.userId!, {
+                  cfg: turnConfig,
+                  accountId: ctx.accountId,
+                  loadingSeconds: 20,
+                }).catch(() => {}),
+            })
+          : null;
+      void loading?.tick();
+      loading?.start();
 
       // The inbound context already resolved the sender's name for the agent;
       // reading it back costs nothing instead of asking LINE a second time.
@@ -202,12 +191,7 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
-                  if (ctx.userId && !ctx.isGroup) {
-                    void showLoadingAnimation(ctx.userId, {
-                      cfg: turnConfig,
-                      accountId: ctx.accountId,
-                    }).catch(() => {});
-                  }
+                  void loading?.tick();
 
                   const deliveryResult = await deliverLineAutoReply({
                     payload,
@@ -257,7 +241,7 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
         }
         throw err;
       } finally {
-        stopLoading?.();
+        loading?.stop();
       }
     },
   });

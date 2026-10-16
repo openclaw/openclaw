@@ -28,6 +28,7 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
+  databasePluginOwners?: import("../../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {

@@ -17,6 +17,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.resolve("scripts/release-telegram-candidate-archive.py");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scratch = () => tempDirs.make("openclaw-archive-guard-");
 const pythonExecPath = (() => {
   for (const candidate of [
     "/opt/homebrew/bin/python3.12",
@@ -53,7 +54,15 @@ function expectFailure(args: string[], message: string) {
   const result = runHelper(args);
   expect(result.status, result.stdout).toBe(1);
   expect(result.stderr).toContain(message);
-  return result;
+}
+
+function rejectArchive(archive: string, message: string, limits: readonly string[] = []) {
+  const destination = `${archive}-output`;
+  expectFailure(
+    ["extract-zstd", archive, destination, "--allowed-root", "candidate", ...limits],
+    message,
+  );
+  expect(existsSync(destination)).toBe(false);
 }
 
 function compressTar(tarPath: string): string {
@@ -66,12 +75,11 @@ function compressTar(tarPath: string): string {
 }
 
 function makeTarArchive(
-  root: string,
   name: string,
   members: string,
-  format: "USTAR_FORMAT" | "PAX_FORMAT" = "USTAR_FORMAT",
+  format: "USTAR_FORMAT" | "PAX_FORMAT" | "GNU_FORMAT" = "USTAR_FORMAT",
 ): string {
-  const tarPath = path.join(root, `${name}.tar`);
+  const tarPath = path.join(scratch(), `${name}.tar`);
   const python = `
 import io
 import sys
@@ -93,7 +101,8 @@ ${members}
   return compressTar(tarPath);
 }
 
-function makeCompressedArchive(root: string, fileSize = 32): string {
+function makeCompressedArchive(fileSize = 32): string {
+  const root = scratch();
   const source = path.join(root, "source");
   const candidate = path.join(source, "candidate");
   mkdirSync(candidate, { recursive: true });
@@ -149,11 +158,10 @@ zstd -T0 -3 -q -o "$ARCHIVE"
 }
 
 function makeDeclaredExtensionArchive(
-  root: string,
   kind: "gnu-longname" | "pax" | "pax-global",
   size: number,
 ): string {
-  const tarPath = path.join(root, `${kind}.tar`);
+  const tarPath = path.join(scratch(), `${kind}.tar`);
   const python = String.raw`
 import sys
 import tarfile
@@ -176,28 +184,11 @@ with open(sys.argv[1], "wb") as output:
   return compressTar(tarPath);
 }
 
-function makeLongMetadataArchive(
-  root: string,
-  kind: "gnu-longname" | "pax-path" | "symlink",
-): string {
-  const tarPath = path.join(root, `${kind}-metadata.tar`);
-  const python = String.raw`
-import io
-import sys
-import tarfile
-
-kind = sys.argv[2]
-archive_format = tarfile.GNU_FORMAT if kind == "gnu-longname" else tarfile.PAX_FORMAT
-with tarfile.open(sys.argv[1], "w", format=archive_format) as archive:
-    manifest = tarfile.TarInfo("manifest.json")
-    manifest_payload = b'{"version":1}\n'
-    manifest.size = len(manifest_payload)
-    archive.addfile(manifest, io.BytesIO(manifest_payload))
-
-    root = tarfile.TarInfo("candidate")
-    root.type = tarfile.DIRTYPE
-    archive.addfile(root)
-
+function makeLongMetadataArchive(kind: "gnu-longname" | "pax-path" | "symlink"): string {
+  return makeTarArchive(
+    `${kind}-metadata`,
+    String.raw`
+    kind = "${kind}"
     long_value = "a" * 4097
     if kind in {"gnu-longname", "pax-path"}:
         member = tarfile.TarInfo(f"candidate/{long_value}")
@@ -208,17 +199,13 @@ with tarfile.open(sys.argv[1], "w", format=archive_format) as archive:
         member.type = tarfile.SYMTYPE
         member.linkname = long_value
         archive.addfile(member)
-`;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, kind], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
-  return compressTar(tarPath);
+`,
+    kind === "gnu-longname" ? "GNU_FORMAT" : "PAX_FORMAT",
+  );
 }
 
-function makeCumulativePaxArchive(root: string): string {
+function makeCumulativePaxArchive(): string {
   return makeTarArchive(
-    root,
     "cumulative-pax",
     String.raw`
     for index in range(5):
@@ -230,9 +217,8 @@ function makeCumulativePaxArchive(root: string): string {
   );
 }
 
-function makeValidHardlinkArchive(root: string): string {
+function makeValidHardlinkArchive(): string {
   return makeTarArchive(
-    root,
     "valid-hardlink",
     String.raw`
     target = tarfile.TarInfo("candidate/a-target.txt")
@@ -382,9 +368,7 @@ describe("release Telegram candidate archive guard", () => {
   );
 
   it("rejects a member whose parent directory was not declared first", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
     const archive = makeTarArchive(
-      root,
       "missing-parent",
       String.raw`
     child = tarfile.TarInfo("candidate/missing/child.txt")
@@ -393,41 +377,29 @@ describe("release Telegram candidate archive guard", () => {
 `,
       "USTAR_FORMAT",
     );
-    const destination = path.join(root, "missing-parent-output");
-
-    expectFailure(
-      ["extract-zstd", archive, destination, "--allowed-root", "candidate"],
-      "archive member parent is not a prior directory",
-    );
-    expect(existsSync(destination)).toBe(false);
+    rejectArchive(archive, "archive member parent is not a prior directory");
   });
 
-  it("rejects compressed archives over the expanded-size cap and cleans up", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root, 4096);
-    const destination = path.join(root, "expanded-limit");
-
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        destination,
-        "--allowed-root",
-        "candidate",
-        "--max-expanded-bytes",
-        "1024",
-        "--max-stream-bytes",
-        `${1024 * 1024}`,
-      ],
+  it.each([
+    [
       "expanded size exceeds",
-    );
-    expect(existsSync(destination)).toBe(false);
+      4096,
+      ["--max-expanded-bytes", "1024", "--max-stream-bytes", `${1024 * 1024}`],
+    ],
+    ["member count exceeds 2", 32, ["--max-members", "2"]],
+    ["path metadata exceeds 10 bytes", 32, ["--max-path-bytes", "10"]],
+    [
+      "decompressed archive stream exceeds",
+      32,
+      ["--max-expanded-bytes", `${1024 * 1024}`, "--max-stream-bytes", "1024"],
+    ],
+  ] as const)("rejects archives when %s and cleans up", (message, fileSize, limits) => {
+    rejectArchive(makeCompressedArchive(fileSize), message, limits);
   });
 
   it("extracts a prior-target hard link without retaining TarInfo records", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeValidHardlinkArchive(root);
-    const destination = path.join(root, "hardlink-success");
+    const archive = makeValidHardlinkArchive();
+    const destination = `${archive}-output`;
 
     const result = expectSuccess([
       "extract-zstd",
@@ -445,109 +417,34 @@ describe("release Telegram candidate archive guard", () => {
     expect(statSync(link).ino).toBe(statSync(target).ino);
   });
 
-  it("rejects compressed archives over the member-count cap and cleans up", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const destination = path.join(root, "member-limit");
-
-    expectFailure(
-      ["extract-zstd", archive, destination, "--allowed-root", "candidate", "--max-members", "2"],
-      "member count exceeds 2",
-    );
-    expect(existsSync(destination)).toBe(false);
-  });
-
-  it.each(["pax", "gnu-longname"] as const)(
+  it.each(["pax", "gnu-longname", "pax-global"] as const)(
     "rejects a declared %s extension before reading its payload",
     (kind) => {
-      const root = tempDirs.make("openclaw-archive-guard-");
-      const archive = makeDeclaredExtensionArchive(root, kind, 4096);
-      const destination = path.join(root, `${kind}-limit`);
-
-      expectFailure(
-        [
-          "extract-zstd",
-          archive,
-          destination,
-          "--allowed-root",
-          "candidate",
-          "--max-extension-bytes",
-          "1024",
-        ],
-        "extension payload exceeds 1024 bytes",
+      rejectArchive(
+        makeDeclaredExtensionArchive(kind, 4096),
+        kind === "pax-global"
+          ? "unsupported global PAX header"
+          : "extension payload exceeds 1024 bytes",
+        kind === "pax-global" ? [] : ["--max-extension-bytes", "1024"],
       );
-      expect(existsSync(destination)).toBe(false);
     },
   );
 
-  it("rejects a global PAX header before reading its payload", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeDeclaredExtensionArchive(root, "pax-global", 4096);
-    const destination = path.join(root, "pax-global-limit");
-
-    expectFailure(
-      ["extract-zstd", archive, destination, "--allowed-root", "candidate"],
-      "unsupported global PAX header",
-    );
-    expect(existsSync(destination)).toBe(false);
-  });
-
   it("rejects archives over the cumulative extension payload cap", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCumulativePaxArchive(root);
-    const destination = path.join(root, "extension-total-limit");
-
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        destination,
-        "--allowed-root",
-        "candidate",
-        "--max-extension-bytes",
-        "1024",
-        "--max-extension-total-bytes",
-        "2048",
-      ],
-      "extension payload total exceeds 2048 bytes",
-    );
-    expect(existsSync(destination)).toBe(false);
+    rejectArchive(makeCumulativePaxArchive(), "extension payload total exceeds 2048 bytes", [
+      "--max-extension-bytes",
+      "1024",
+      "--max-extension-total-bytes",
+      "2048",
+    ]);
   });
 
   it.each(["pax-path", "gnu-longname", "symlink"] as const)(
     "rejects an overlong %s path value",
     (kind) => {
-      const root = tempDirs.make("openclaw-archive-guard-");
-      const archive = makeLongMetadataArchive(root, kind);
-      const destination = path.join(root, `${kind}-path-limit`);
-
-      expectFailure(
-        ["extract-zstd", archive, destination, "--allowed-root", "candidate"],
-        "exceeds 4096 bytes",
-      );
-      expect(existsSync(destination)).toBe(false);
+      rejectArchive(makeLongMetadataArchive(kind), "exceeds 4096 bytes");
     },
   );
-
-  it("rejects archives over the aggregate path metadata cap", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const destination = path.join(root, "path-limit");
-
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        destination,
-        "--allowed-root",
-        "candidate",
-        "--max-path-bytes",
-        "10",
-      ],
-      "path metadata exceeds 10 bytes",
-    );
-    expect(existsSync(destination)).toBe(false);
-  });
 
   it("rejects a hard link from the candidate tree to the manifest", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
@@ -559,7 +456,6 @@ describe("release Telegram candidate archive guard", () => {
     linkSync(manifest, path.join(candidate, "manifest-copy.json"));
 
     const tarPath = path.join(root, "hardlink.tar");
-    const archivePath = `${tarPath}.zst`;
     const tarResult = spawnSync(
       "tar",
       ["-cf", tarPath, "-C", source, "manifest.json", "candidate"],
@@ -569,27 +465,11 @@ describe("release Telegram candidate archive guard", () => {
       },
     );
     expect(tarResult.status, tarResult.stderr).toBe(0);
-    const zstdResult = spawnSync("zstd", ["-q", "-f", tarPath, "-o", archivePath], {
-      encoding: "utf8",
-    });
-    expect(zstdResult.status, zstdResult.stderr).toBe(0);
-
-    expectFailure(
-      [
-        "extract-zstd",
-        archivePath,
-        path.join(root, "hardlink-output"),
-        "--allowed-root",
-        "candidate",
-      ],
-      "hard link target leaves candidate root",
-    );
+    rejectArchive(compressTar(tarPath), "hard link target leaves candidate root");
   });
 
   it("rejects a link that replaces a previously extracted descendant directory", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
     const archive = makeTarArchive(
-      root,
       "link-prefix",
       String.raw`
     prefix = tarfile.TarInfo("candidate/prefix")
@@ -607,22 +487,11 @@ describe("release Telegram candidate archive guard", () => {
 `,
       "USTAR_FORMAT",
     );
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        path.join(root, "link-prefix-output"),
-        "--allowed-root",
-        "candidate",
-      ],
-      "archive has duplicate path",
-    );
+    rejectArchive(archive, "archive has duplicate path");
   });
 
   it("rejects a member nested under a prior link", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
     const archive = makeTarArchive(
-      root,
       "link-parent",
       String.raw`
     link = tarfile.TarInfo("candidate/link")
@@ -636,22 +505,11 @@ describe("release Telegram candidate archive guard", () => {
 `,
       "USTAR_FORMAT",
     );
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        path.join(root, "link-parent-output"),
-        "--allowed-root",
-        "candidate",
-      ],
-      "path traverses a non-directory member",
-    );
+    rejectArchive(archive, "path traverses a non-directory member");
   });
 
   it("rejects sparse archive members before extraction", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
     const archive = makeTarArchive(
-      root,
       "sparse",
       String.raw`
     sparse = tarfile.TarInfo("candidate/sparse.bin")
@@ -664,51 +522,14 @@ describe("release Telegram candidate archive guard", () => {
 `,
       "PAX_FORMAT",
     );
-    expectFailure(
-      ["extract-zstd", archive, path.join(root, "sparse-output"), "--allowed-root", "candidate"],
-      "unsupported sparse member",
-    );
-  });
-
-  it("rejects compressed archives over the stream cap and cleans up", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const destination = path.join(root, "stream-limit");
-
-    expectFailure(
-      [
-        "extract-zstd",
-        archive,
-        destination,
-        "--allowed-root",
-        "candidate",
-        "--max-expanded-bytes",
-        `${1024 * 1024}`,
-        "--max-stream-bytes",
-        "1024",
-      ],
-      "decompressed archive stream exceeds",
-    );
-    expect(existsSync(destination)).toBe(false);
+    rejectArchive(archive, "unsupported sparse member");
   });
 
   it("rejects a concatenated zstd frame after the tar payload", () => {
-    const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
-    const trailerPath = path.join(root, "trailer.txt");
-    const trailerArchive = `${trailerPath}.zst`;
+    const archive = makeCompressedArchive();
+    const trailerPath = `${archive}-trailer.txt`;
     writeFileSync(trailerPath, "EXFILTRATED-CONCATENATED-FRAME");
-    const zstdResult = spawnSync("zstd", ["-q", "-f", trailerPath, "-o", trailerArchive], {
-      encoding: "utf8",
-    });
-    expect(zstdResult.status, zstdResult.stderr).toBe(0);
-    appendFileSync(archive, readFileSync(trailerArchive));
-
-    const destination = path.join(root, "concatenated-output");
-    expectFailure(
-      ["extract-zstd", archive, destination, "--allowed-root", "candidate"],
-      "non-zero data after tar end",
-    );
-    expect(existsSync(destination)).toBe(false);
+    appendFileSync(archive, readFileSync(compressTar(trailerPath)));
+    rejectArchive(archive, "non-zero data after tar end");
   });
 });

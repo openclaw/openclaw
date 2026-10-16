@@ -13,7 +13,7 @@ import type {
   PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
 import type { PluginStateRetentionContract } from "./doctor-retired-state.js";
-import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export type PluginDoctorMigrationResourceCollectionParams = {
@@ -23,6 +23,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
   workspaceDir?: string;
   warnings: PluginDoctorMigrationBackupWarning[];
   requireLocalResources?: boolean;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 /** Select one whole-plugin data scope for both rehearsal inventory and execution. */

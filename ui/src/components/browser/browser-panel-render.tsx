@@ -303,22 +303,32 @@ function InspectTooltip(props: ControllerProps) {
   );
 }
 
+function NativeViewport(props: ControllerProps) {
+  let stage!: HTMLDivElement;
+  // Native geometry retains this viewport’s synchronous presentation owner.
+  onSettled(() => untrack(() => props.controller.native.presentation).mountStage(stage));
+  return (
+    <div
+      ref={(element) => (stage = element)}
+      class="bp-stage bp-stage--native"
+      aria-busy={props.controller.native.activeTab?.loading ? "true" : "false"}
+    >
+      {props.controller.native.activeTab?.loading ? (
+        <span class="bp-native-loading" role="status">
+          {t("browser.loading")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function ViewportContent(props: ControllerProps) {
   return (
     <Switch>
       <Match
         when={Boolean(props.controller.native.activeTab) && props.controller.mode === "interact"}
       >
-        <div
-          class="bp-stage bp-stage--native"
-          aria-busy={props.controller.native.activeTab?.loading ? "true" : "false"}
-        >
-          {props.controller.native.activeTab?.loading ? (
-            <span class="bp-native-loading" role="status">
-              {t("browser.loading")}
-            </span>
-          ) : null}
-        </div>
+        <NativeViewport controller={props.controller} />
       </Match>
       <Match
         when={

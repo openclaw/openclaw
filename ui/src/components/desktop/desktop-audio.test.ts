@@ -1,35 +1,30 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   AudioSocketMock,
   desktopAudioStream,
   stubDesktopAudio,
 } from "./desktop-audio.test-support.ts";
-import { DesktopAudio } from "./desktop-audio.ts";
+import { createDesktopAudio, type DesktopAudio } from "./desktop-audio.ts";
 import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 
 describe("desktop audio connection", () => {
   let audio: DesktopAudio;
+  let unmount: () => void;
   beforeEach(() => {
     stubDesktopAudio();
-    audio = new DesktopAudio(
-      {
-        ownerDocument: document,
-        embedded: false,
-        presented: false,
-        documentMode: false,
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
-      },
-      () => true,
-      vi.fn(),
-    );
+    ({ unmount } = mountSolid(() => {
+      audio = createDesktopAudio(
+        { ownerDocument: document, isConnected: true, embedded: false, presented: false },
+        () => ({ connected: true, reconnect: vi.fn() }),
+      );
+      return null;
+    }));
   });
   afterEach(() => {
-    audio.close();
+    unmount();
     vi.unstubAllGlobals();
   });
   function connect() {
@@ -53,9 +48,9 @@ describe("desktop audio connection", () => {
     const lateOpen = socket.captureDispatch("open");
     const lateClose = socket.captureDispatch("close");
     expect(socket.listenerCount).toBe(4);
-    audio.unmute();
+    audio.toggle();
     if (action === "mute") {
-      audio.mute();
+      audio.toggle();
     } else {
       connect();
     }
@@ -63,20 +58,20 @@ describe("desktop audio connection", () => {
     await Promise.resolve();
     expect(socket.send).not.toHaveBeenCalledWith('{"action":"start"}');
     expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
-    if (action !== "mute") {
+    if (action === "replace") {
       expect(socket.listenerCount).toBe(0);
       lateMessage(new MessageEvent("message", { data: new ArrayBuffer(4) }));
       lateError(new Event("error"));
       lateOpen(new Event("open"));
       lateClose(new Event("close"));
-      expect(audio.state).toBe("muted");
+      expect(audio.state()).toBe("muted");
       expect(socket.close).toHaveBeenCalledOnce();
       const replacement = AudioSocketMock.instances.at(-1)!;
       expect(replacement.listenerCount).toBe(4);
-      audio.unmute();
+      audio.toggle();
       await Promise.resolve();
       replacement.message('{"state":"started"}');
-      expect(audio.state).toBe("playing");
+      expect(audio.state()).toBe("playing");
       audio.close();
       expect(replacement.listenerCount).toBe(0);
     }
@@ -90,24 +85,24 @@ describe("desktop audio connection", () => {
       },
     );
     const socket = connect();
-    audio.unmute();
+    audio.toggle();
     await Promise.resolve();
-    expect(audio.state).toBe("blocked");
+    expect(audio.state()).toBe("blocked");
     expect(socket.send).not.toHaveBeenCalledWith('{"action":"start"}');
     socket.message('{"state":"stopped"}');
     vi.stubGlobal("AudioContext", AudioContextMock);
-    audio.unmute();
+    audio.toggle();
     await Promise.resolve();
     socket.message('{"state":"started"}');
-    expect(audio.state).toBe("playing");
+    expect(audio.state()).toBe("playing");
   });
 
   it("ignores a superseded start and old PCM until the fresh start acknowledgment", async () => {
     const socket = connect();
-    audio.unmute();
+    audio.toggle();
     await Promise.resolve();
-    audio.mute();
-    audio.unmute();
+    audio.toggle();
+    audio.toggle();
     await Promise.resolve();
     const context = AudioContextMock.instances.at(-1)!;
     expect(socket.send.mock.calls.map(([text]) => JSON.parse(text).action)).toEqual([
@@ -117,7 +112,7 @@ describe("desktop audio connection", () => {
     socket.message('{"state":"started"}');
     socket.message(new Uint8Array([255, 127, 0]).buffer);
     socket.message(new ArrayBuffer(4));
-    expect(audio.state).toBe("starting");
+    expect(audio.state()).toBe("starting");
     expect(context.sources).toHaveLength(0);
     socket.message('{"state":"stopped"}');
     expect(socket.send.mock.calls.map(([text]) => JSON.parse(text).action)).toEqual([
@@ -128,11 +123,11 @@ describe("desktop audio connection", () => {
     // Even after sending start, an unacknowledged three-byte stereo tail
     // must never become the new capture's sample remainder.
     socket.message(new Uint8Array([255, 127, 0]).buffer);
-    expect(audio.state).toBe("starting");
+    expect(audio.state()).toBe("starting");
     expect(context.sources).toHaveLength(0);
     socket.message('{"state":"started"}');
     socket.message(new Uint8Array([0, 128, 255, 127, 0, 64, 0, 192]).buffer);
-    expect(audio.state).toBe("playing");
+    expect(audio.state()).toBe("playing");
     expect(context.sources).toHaveLength(1);
     expect(Array.from(context.sources[0]!.buffer!.getChannelData(0))).toEqual([-1, 0.5]);
     expect(Array.from(context.sources[0]!.buffer!.getChannelData(1))).toEqual([
@@ -145,16 +140,16 @@ describe("desktop audio connection", () => {
 
   it("waits for every stop barrier after repeated mute/unmute before starting capture", async () => {
     const socket = connect();
-    audio.unmute();
+    audio.toggle();
     await Promise.resolve();
     socket.message('{"state":"started"}');
     socket.message(new ArrayBuffer(4));
     const oldContext = AudioContextMock.instances[0]!;
-    audio.mute();
-    audio.unmute();
+    audio.toggle();
+    audio.toggle();
     await Promise.resolve();
-    audio.mute();
-    audio.unmute();
+    audio.toggle();
+    audio.toggle();
     await Promise.resolve();
     expect(oldContext.sources[0]!.stop).toHaveBeenCalledOnce();
     expect(oldContext.close).toHaveBeenCalledOnce();
@@ -168,14 +163,15 @@ describe("desktop audio connection", () => {
     expect(socket.send).toHaveBeenCalledTimes(4);
     socket.message('{"state":"started"}');
     socket.message(new ArrayBuffer(4));
-    expect(audio.state).toBe("playing");
+    expect(audio.state()).toBe("playing");
     expect(AudioContextMock.instances.at(-1)!.sources).toHaveLength(1);
     expect(oldContext.sources).toHaveLength(1);
   });
 
   it("does not let a stop acknowledgment bypass a pending browser resume", async () => {
     const socket = connect();
-    audio.mute();
+    audio.toggle();
+    audio.toggle();
     const deferred = createDeferred();
     vi.stubGlobal(
       "AudioContext",
@@ -183,18 +179,18 @@ describe("desktop audio connection", () => {
         override resume = vi.fn(() => deferred.promise);
       },
     );
-    audio.unmute();
+    audio.toggle();
     socket.message('{"state":"stopped"}');
     socket.message('{"state":"started"}');
     socket.message(new ArrayBuffer(4));
     expect(socket.send).not.toHaveBeenCalledWith('{"action":"start"}');
-    expect(AudioContextMock.instances[0]!.sources).toHaveLength(0);
+    expect(AudioContextMock.instances.at(-1)!.sources).toHaveLength(0);
     deferred.resolve();
     await Promise.resolve();
     expect(socket.send).toHaveBeenLastCalledWith('{"action":"start"}');
-    expect(audio.state).toBe("starting");
+    expect(audio.state()).toBe("starting");
     socket.message('{"state":"started"}');
-    expect(audio.state).toBe("playing");
+    expect(audio.state()).toBe("playing");
   });
 
   it.each([
@@ -205,20 +201,20 @@ describe("desktop audio connection", () => {
     "silences server $state with playing=$playing and rejects late acknowledgments",
     async ({ playing, state }) => {
       const socket = connect();
-      audio.unmute();
+      audio.toggle();
       await Promise.resolve();
       if (playing) {
         socket.message('{"state":"started"}');
         socket.message(new ArrayBuffer(4));
       }
       socket.message(JSON.stringify({ state, message: "capture failed" }));
-      expect(audio.state).toBe("error");
+      expect(audio.state()).toBe("error");
       socket.message('{"state":"started"}');
       socket.message(new ArrayBuffer(4));
       socket.message('{"state":"stopped"}');
       socket.message('{"state":"started"}');
       socket.message(new ArrayBuffer(4));
-      expect(audio.state).toBe("error");
+      expect(audio.state()).toBe("error");
       expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
       expect(AudioContextMock.instances[0]!.sources).toHaveLength(playing ? 1 : 0);
     },
@@ -226,10 +222,10 @@ describe("desktop audio connection", () => {
 
   it("reports unsupported and absent audio without opening a socket", () => {
     audio.connect({}, "wss://gateway.test");
-    expect(audio.state).toBe("unavailable");
+    expect(audio.state()).toBe("unavailable");
     vi.stubGlobal("AudioContext", undefined);
     audio.connect({ audio: desktopAudioStream }, "wss://gateway.test");
-    expect(audio.state).toBe("unsupported");
+    expect(audio.state()).toBe("unsupported");
     expect(AudioSocketMock.instances).toHaveLength(0);
   });
 });

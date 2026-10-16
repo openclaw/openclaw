@@ -239,6 +239,16 @@ credential, lease, and external-effect authority stays with the execution owner.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
+Cron history reads selection metadata in bounded keyset batches using the
+`created_at, task_id` indexes. Completion-time ordering, exact totals, search,
+and live session visibility still select the response page; only that page's
+response fields are hydrated. Summary pages exclude diagnostics and delivery
+traces in SQL, and neither view loads trigger or script recovery state.
+Diagnostic searches retain their existing text semantics. Transcript links use
+the same lightweight identities without loading every run's detail payload.
+The Gateway checks disclosure authority after page hydration; a concurrent
+removal or visibility revocation may shorten a page until the next refresh.
+
 Scope receipts to the data actually changed. Memory-index DML, for example,
 declares no session-row or transcript changes and preserves unrelated session
 actor replicas. Transcript mutations still update or invalidate their session
@@ -665,6 +675,20 @@ leaves stored messages unchanged and retains the database owner's failed-write
 cache invalidation. Cold actors, content or topology changes, unknown writes,
 and insufficient retained coverage use the canonical reader. No extra receipt,
 freshness query, permission grant, or stored format is introduced.
+
+Model-prompt capture selects the current user message, applies its immutable
+projection, and commits through one worker command. It preserves metadata written
+since the recorder's admission and returns the stored projection for identical
+captures. Arbitrary transcript rewrite callbacks retain host preparation because
+their work is not serializable; the closed model-prompt projection needs no host
+prepare round trip.
+
+Gateway run-lifecycle events use the deterministic entry reducer in the same
+worker commit. Goal pauses and recovery updates derive from the current stored
+entry. The commit receipt carries the resulting failure and recovery facts back
+to the Gateway, which publishes runtime changes and appends failure records in
+the existing order. Terminal persistence still completes before reply accounting
+and final-delivery custody.
 
 Trajectory append and retention writers publish the session and trajectory
 sequence range they changed. Their trajectory-only SQL declares no session-row

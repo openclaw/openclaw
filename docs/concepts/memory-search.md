@@ -42,7 +42,7 @@ explicitly:
 {
   memory: {
     search: {
-      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "lmstudio", "github-copilot", "openai-compatible"
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -83,19 +83,20 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 ## Supported providers
 
-| Provider          | ID                  | Needs API key | Notes                             |
-| ----------------- | ------------------- | ------------- | --------------------------------- |
-| Bedrock           | `bedrock`           | No            | Uses the AWS credential chain     |
-| DeepInfra         | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`       |
-| Gemini            | `gemini`            | Yes           | Supports image/audio indexing     |
-| GitHub Copilot    | `github-copilot`    | No            | Uses your Copilot subscription    |
-| Local             | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB   |
-| LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
-| Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
-| Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
-| OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
-| Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
+| Provider                | ID                  | Needs API key | Notes                                   |
+| ----------------------- | ------------------- | ------------- | --------------------------------------- |
+| Bedrock                 | `bedrock`           | No            | Uses the AWS credential chain           |
+| DeepInfra               | `deepinfra`         | Yes           | Default model `BAAI/bge-m3`             |
+| Gemini                  | `gemini`            | Yes           | Supports image/audio indexing           |
+| GitHub Copilot          | `github-copilot`    | No            | Uses your Copilot subscription          |
+| Local                   | `local`             | No            | Managed llama.cpp GGUF, ~0.3 GB         |
+| LM Studio               | `lmstudio`          | No            | Local/self-hosted server                |
+| Mistral                 | `mistral`           | Yes           | Default model `mistral-embed`           |
+| Ollama                  | `ollama`            | No            | Local/self-hosted server                |
+| [oMLX](/providers/omlx) | `omlx`              | No            | Apple Silicon; explicit embedding model |
+| OpenAI                  | `openai`            | Depends       | API key or eligible Codex OAuth         |
+| OpenAI-compatible       | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint       |
+| Voyage                  | `voyage`            | Yes           | Default model `voyage-4-large`          |
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 

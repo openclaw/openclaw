@@ -10,9 +10,9 @@ A Solid component must never render a tag that a Lit class still registers. The 
 
 Stateless Lit template helpers (functions returning `html` with no lifecycle, e.g. icon templates) may exist in both renderers until their last Lit caller is ported. Then delete the Lit original.
 
-## The bridge: Solid inside Lit
+## The bridge: native hosts for Solid
 
-`defineSolidBridge(tag, content, spec)` in `ui/src/lit/solid-bridge.ts` registers the tag as a minimal non-Lit element that mounts the Solid component in its own light DOM. Lit callers stay unchanged:
+`defineSolidBridge(tag, content, spec)` in `ui/src/lit/solid-bridge.ts` registers an `HTMLElement` that mounts the Solid component in its own light DOM. Its public API serves both imperative custom-element callers and Solid components. Remaining Lit callers can still use the same tag during the content migration:
 
 ```ts
 export const Tooltip = defineSolidBridge(
@@ -25,16 +25,16 @@ export const Tooltip = defineSolidBridge(
 );
 ```
 
-What the bridge guarantees (all covered by `solid-bridge.test.tsx`):
+The bridge preserves these contracts; `solid-bridge.test.tsx` exercises native and Solid entry points:
 
 - **Properties and attributes:** properties set before upgrade are captured; declared properties mirror into props; attributes convert by declared or default type; `reflect` writes primitives back.
-- **Commit timing:** a property write commits Solid DOM and `flush()`es in a microtask, before a Lit parent's `updateComplete` resumes. It never flushes inside a Solid callback.
-- **Child content:** caller-provided children (including Lit's part markers) move into Solid's `props.children` and keep working when the Lit caller re-renders.
+- **Commit timing:** imperative property updates batch, and the host's `updateComplete` resolves after synchronous Solid output commits. Solid-owned hosts participate in their parent's render cycle.
+- **Child content:** caller-owned nodes and markers move into Solid's `props.children` and retain their identity through later DOM updates and reconnects, including named tooltip slots.
 - **Moves and disconnects:** a move within one task keeps the root (the live sidebar depends on this); a real disconnect disposes it.
-- **Context:** the bridge requests the application context through the `@lit/context` protocol event and provides it as `ApplicationProvider`. A context replacement remounts the subtree.
+- **Context:** the bridge requests application context through the native `context-request` event and provides it as `ApplicationProvider`. A context replacement remounts the subtree; no Lit context provider is installed.
 - **Solid callers:** the returned component renders the same tag as a Solid-owned host that is never double-mounted, and context flows through the nested root.
 
-The bridge is interim. It and its exact-path ratchet exception die with the last Lit caller.
+Keep the bridge's public API and existing native tag contracts at the Lit cutover. Retire its temporary template adapters after their last production callers are ported.
 
 Before retaining an adapter, trace its production callers. If all callers are Solid and no native custom-element API remains, import the component directly and delete the bridge registration, legacy facade, and coupled tests. Preserve lazy imports during that cutover. A native tag with an existing imperative contract (such as the lazy tooltip host) is still a real boundary; do not remove it just because its content renders with Solid.
 

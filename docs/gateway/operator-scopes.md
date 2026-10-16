@@ -106,9 +106,14 @@ Reconnecting rechecks current permission before replaying a Stop for its origina
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
-agent access, and runtime and sandbox requirements still apply. The
-`artifacts.list`, `artifacts.get`, and `artifacts.download` APIs require
-the broader `operator.read` scope.
+agent access, and runtime and sandbox requirements still apply.
+
+Session readers can also use `artifacts.list`, `artifacts.get`, and
+`artifacts.download` for artifacts in a conversation they can currently read.
+Both session-key and run-ID queries retain the selected session's visibility,
+identity, and lifecycle checks. An artifact ID alone does not grant access to
+another conversation's files; reads and downloads recheck access before returning
+content.
 
 Hidden native sub-agents started through `sessions_spawn` use the initiating
 person's session-write authority for the exact owned child and its private

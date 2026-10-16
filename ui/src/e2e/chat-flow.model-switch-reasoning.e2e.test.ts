@@ -74,6 +74,11 @@ suite.define(() => {
       });
       const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
       const effortSelect = main.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.evaluate((trigger) => {
+        const details = trigger.closest("details")!;
+        details.open = true;
+        details.dispatchEvent(new Event("toggle"));
+      });
       await expect
         .poll(async () => ({
           effortDisabled: await effortSelect.getAttribute("data-chat-thinking-disabled"),
@@ -91,6 +96,7 @@ suite.define(() => {
         slider.dispatchEvent(new Event("change", { bubbles: true }));
       });
       await expectRequestCountStable(gateway, "sessions.patch", 1);
+      await page.keyboard.press("Escape");
 
       await gateway.setMethodResponse("sessions.list", chatSessionListResponse([solSession]));
       const sessionsListCount = (await gateway.getRequests("sessions.list")).length;

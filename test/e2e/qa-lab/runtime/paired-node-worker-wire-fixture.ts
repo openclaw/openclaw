@@ -117,6 +117,7 @@ export function createWireWorkspaceSettlementWaiter() {
 }
 export type WireNodeRead = {
   nodeId: string;
+  commands?: string[];
   approvalState?: string;
   connected?: boolean;
   paired?: boolean;
@@ -311,6 +312,7 @@ async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Prom
 async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
+  requiredCommands: readonly string[],
 ): Promise<WireNodeRead> {
   return await waitUntil(async () => {
     const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
@@ -318,7 +320,8 @@ async function waitForApprovedWireNode(
     return approved?.approvalState === "approved" &&
       approved.connected === true &&
       approved.paired === true &&
-      approved.sessionHost === true
+      approved.sessionHost === true &&
+      requiredCommands.every((command) => approved.commands?.includes(command))
       ? approved
       : undefined;
   });
@@ -680,7 +683,11 @@ export async function createPairedNodeWorkerHost(
 
   await supervisor.initialize();
   await connect();
-  await waitForApprovedWireNode(options.operator, identity.deviceId);
+  await waitForApprovedWireNode(
+    options.operator,
+    identity.deviceId,
+    options.pluginRuntime?.manifest.commands ?? [],
+  );
   return host;
 }
 

@@ -184,7 +184,7 @@ export function applyLocalNoAuthHeaders(
 /** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
-  auth: ResolvedProviderAuth | null | undefined,
+  auth: Pick<ResolvedProviderAuth, "apiKey"> | null | undefined,
 ): T {
   const headers = applyLocalNoAuthHeaders(model.api, auth?.apiKey, model.headers);
   return headers === model.headers ? model : { ...model, headers };

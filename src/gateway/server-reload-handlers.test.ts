@@ -3861,7 +3861,7 @@ describe("gateway Gmail hot reload handlers", () => {
       harness.writeConfig(harness.deferredConfig, "stale-generation-restart", 1);
 
       await expect(reloadError).resolves.toBe(
-        "config restart failed: GatewayHotReloadStaleSecretsError: runtime secrets changed while config hot reload was deferred",
+        "config reload failed: GatewayHotReloadStaleSecretsError: runtime secrets changed while config hot reload was deferred",
       );
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
       expect({
@@ -3891,7 +3891,7 @@ describe("gateway Gmail hot reload handlers", () => {
       harness.writeConfig(harness.invalidConfig, "invalid-b", 2);
       await clock.wake();
       await expect(reloadError).resolves.toBe(
-        "config restart failed: Error: required SecretRef MISSING_RESTART_TOKEN is unavailable",
+        "config reload failed: Error: required SecretRef MISSING_RESTART_TOKEN is unavailable",
       );
 
       expect(harness.activateRuntimeSecrets.prepareSnapshot.mock.calls[0]?.[0].config).toEqual(
@@ -4061,7 +4061,7 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(harness.promoteSnapshot).not.toHaveBeenCalled();
         if (outcome === "AbortError") {
           expect(harness.logReload.error).toHaveBeenCalledWith(
-            "config restart failed: AbortError: admitted secret read aborted",
+            "config reload failed: AbortError: admitted secret read aborted",
           );
         }
       } finally {
@@ -4141,7 +4141,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       await expect(reloadError).resolves.toBe(
-        "config restart failed: Error: required SecretRef RESTART_A_TOKEN is unavailable",
+        "config reload failed: Error: required SecretRef RESTART_A_TOKEN is unavailable",
       );
       expect(harness.activateRuntimeSecrets.prepareSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({

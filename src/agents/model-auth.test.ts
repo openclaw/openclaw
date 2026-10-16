@@ -939,8 +939,6 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       } as Model<"openai-completions">,
       {
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        source: "models.providers.custom (synthetic local key)",
-        mode: "api-key",
       },
     );
 

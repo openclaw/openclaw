@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import {
   createInitializationContext,
   createTestChatPane,
@@ -10,17 +9,17 @@ import {
 import { createPageState } from "./chat-state-page.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 
-function PaneLabels(props: { label: string | undefined; id: string }) {
+// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
+vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
+
+function FrameLayout(props: { label?: string; id?: string; stream?: string | null }) {
   return (
     <>
       <span>{props.label}</span>
       <span>{props.id}</span>
+      <output>{props.stream}</output>
     </>
   );
-}
-
-function StreamOutput(props: { value: string | null }) {
-  return <output>{props.value}</output>;
 }
 
 // MessageChannel supplies distinct browser tasks without a timer or a real-frame race.
@@ -57,7 +56,7 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: solidContent(PaneLabels, { label: pane.paneLabel, id: pane.paneId }),
+      layout: { component: FrameLayout, props: { label: pane.paneLabel, id: pane.paneId } },
     }),
     presentedChanged: () => {},
   });
@@ -169,7 +168,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   pane.state = state;
   pane.chatState.attach(state);
   Object.assign(pane, {
-    render: () => ({ layout: solidContent(StreamOutput, { value: state.chatStream }) }),
+    render: () => ({ layout: { component: FrameLayout, props: { stream: state.chatStream } } }),
   });
   const updates = vi.spyOn(pane, "render");
   state.chatStream = "First stream revision";

@@ -7,7 +7,6 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -121,7 +120,7 @@ describe("chat pane retained presentation", () => {
     });
     const lifecycle = pane;
     lifecycle.render = () => ({
-      layout: emptyLegacyContent,
+      layout: null,
       capabilityDialogs: undefined,
       providerReviewSource: undefined,
     });

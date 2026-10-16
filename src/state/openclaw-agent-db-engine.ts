@@ -1,8 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import type { SearchSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
-import type { PostgresSqlConnection } from "../infra/sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type PostgresSqlConnection,
+} from "../infra/sql-connection.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { VERSION } from "../version.js";
@@ -18,6 +24,31 @@ import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-se
 
 export function agentEngineInput() {
   return getDatabaseEngineInput("agent");
+}
+
+/** Enabled features prepare their definitions; the agent opener retains DDL custody. */
+export function admitAgentEngineSearchExtensions(
+  db: EngineConnection,
+  definitions: Readonly<Record<string, SearchSchema>>,
+  admit: (stage: "transaction" | "commit") => void,
+): void {
+  if (!isPostgresSqlConnection(db)) {
+    return;
+  }
+  db.runTransaction(
+    () => {
+      admit("transaction");
+      for (const [name, definition] of Object.entries(definitions)) {
+        admitStoreSearch(db, definition, { extension: name });
+      }
+    },
+    {
+      withCommit: (commit) => {
+        admit("commit");
+        commit();
+      },
+    },
+  );
 }
 
 const agentEngineSchema = {

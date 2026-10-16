@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { formatUiError } from "../../../lib/format-error.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
@@ -379,10 +380,17 @@ describe("realtime Talk microphone inputs", () => {
   });
 
   it("reports camera permission denial with actionable guidance", async () => {
-    const getUserMedia = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+    const cause = new DOMException("denied", "NotAllowedError");
+    const getUserMedia = vi.fn().mockRejectedValue(cause);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
-    await expect(openRealtimeTalkCamera(undefined)).rejects.toThrow("Camera access is blocked");
+    const opening = openRealtimeTalkCamera(undefined);
+    await expect(opening).rejects.toThrow("Camera access is blocked");
+    const error: unknown = await opening.catch((reason: unknown) => reason);
+    expect(error).toHaveProperty("cause", cause);
+    expect(formatUiError(error)).toBe(
+      "Camera access is blocked. Allow camera access in browser site settings.",
+    );
   });
 
   it("reports a missing camera", async () => {

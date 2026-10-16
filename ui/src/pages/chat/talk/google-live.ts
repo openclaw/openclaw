@@ -72,7 +72,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly camera: RealtimeTalkCameraOwner;
   private active = false;
   private readonly startup = Promise.withResolvers<RealtimeTalkTransportStartResult>();
-  private startupError: Error | undefined;
   private cameraPublished = false;
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
@@ -171,9 +170,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.failConnection(ws, "Realtime connection failed");
     });
     const result = await this.startup.promise;
-    if (this.startupError) {
-      throw this.startupError;
-    }
     return this.closed ? "cancelled" : result;
   }
 
@@ -262,8 +258,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     if (!this.active) {
-      this.startupError = new Error(detail);
-      this.startup.reject(this.startupError);
+      this.startup.reject(new Error(detail));
       try {
         this.stop({ emitClosed: false });
       } catch {

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, onCleanup, onSettled } from "solid-js";
+import { For, createEffect, createMemo, onCleanup, onSettled, untrack } from "solid-js";
 import { createTabsController, type TabsOptions } from "../../lib/tabs-controller.ts";
 import { bindShadowStyles } from "./shadow-styles.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
@@ -30,40 +30,37 @@ export type TabsProps = TabsOptions & {
 export function Tabs(props: TabsProps) {
   let element!: HTMLDivElement;
   let controller: ReturnType<typeof createTabsController> | undefined;
-  let options: TabsOptions = {};
   let styles: ReturnType<typeof bindShadowStyles> | undefined;
   let styleTexts: readonly string[] = [];
-  createEffect(
-    () => ({
-      active: props.active,
-      defaultActive: props.defaultActive,
-      orientation: props.orientation,
-      activation: props.activation,
-      onSelect: props.onSelect,
-      onActivate: props.onActivate,
-      items: props.items,
-      shadowStyles: props.shadowStyles,
-    }),
-    (snapshot) => {
-      options = snapshot;
-      const nextStyles = [tabsStyles, ...(snapshot.shadowStyles ?? [])];
-      if (
-        nextStyles.length !== styleTexts.length ||
-        nextStyles.some((css, index) => css !== styleTexts[index])
-      ) {
-        styleTexts = nextStyles;
-        styles?.dispose();
-        styles = undefined;
-      }
-      if (controller) {
-        styles ??= bindShadowStyles(element, styleTexts);
-        styles.sync();
-        controller.sync();
-      }
-    },
-  );
+  const options = createMemo(() => ({
+    active: props.active,
+    defaultActive: props.defaultActive,
+    orientation: props.orientation,
+    activation: props.activation,
+    onSelect: props.onSelect,
+    onActivate: props.onActivate,
+    items: props.items,
+    shadowStyles: props.shadowStyles,
+  }));
+  createEffect(options, (snapshot) => {
+    const nextStyles = [tabsStyles, ...(snapshot.shadowStyles ?? [])];
+    if (
+      nextStyles.length !== styleTexts.length ||
+      nextStyles.some((css, index) => css !== styleTexts[index])
+    ) {
+      styleTexts = nextStyles;
+      styles?.dispose();
+      styles = undefined;
+    }
+    if (controller) {
+      styles ??= bindShadowStyles(element, styleTexts);
+      styles.sync();
+      controller.sync();
+    }
+  });
   onSettled(() => {
-    controller = createTabsController(element, () => options);
+    // DOM operations sample current options; the effect above owns dependency tracking.
+    controller = createTabsController(element, () => untrack(options));
     styles = bindShadowStyles(element, styleTexts);
   });
   onCleanup(() => {

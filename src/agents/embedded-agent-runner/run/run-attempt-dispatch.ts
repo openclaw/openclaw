@@ -531,7 +531,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     runtimePlan,
     observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
+      applyLocalNoAuthHeaderOverride(
+        effectiveModel,
+        runtime.runtimeAuthState ?? runtime.apiKeyInfo,
+      ),
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
       runtime.transportConfig,
     ),

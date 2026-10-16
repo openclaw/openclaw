@@ -56,7 +56,7 @@ function drawComposer(attachment = false, goal = false) {
   return {
     composer: container.querySelector<HTMLElement>(".agent-chat__input")!,
     trigger: container.querySelector<HTMLElement>(".context-ring")!,
-    popover: container.querySelector<HTMLElement>(".context-usage__popover")!,
+    popover: container.querySelector<HTMLElement>(".context-usage [data-anchored-overlay]")!,
   };
 }
 
@@ -91,7 +91,13 @@ describe("context usage popup geometry", () => {
       "Output",
       "126",
     ]);
-    await expect.poll(() => readout.every(isPainted)).toBe(true);
+    const readoutPainted = () => {
+      const current = [
+        ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
+      ];
+      return current.length === readout.length && current.every(isPainted);
+    };
+    await expect.poll(readoutPainted).toBe(true);
     const box = popover.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(1280);
@@ -100,7 +106,7 @@ describe("context usage popup geometry", () => {
     await expect.poll(() => popover.checkVisibility()).toBe(false);
     expect(document.activeElement).toBe(trigger);
     await page.elementLocator(trigger).click();
-    await expect.poll(() => readout.every(isPainted)).toBe(true);
+    await expect.poll(readoutPainted).toBe(true);
     await page
       .elementLocator(container)
       .click({ position: { x: container.clientWidth - 2, y: 2 } });

@@ -32,7 +32,7 @@ import { waitForAbortSignal } from "../infra/abort-signal.js";
 import {
   completeGatewayBootLifecycle,
   type GatewayBootLifecycleCompletion,
-  readGatewayLastShutdown,
+  readGatewayLastShutdownAsync,
   recordGatewayBootStart,
 } from "../infra/gateway-boot-lifecycle.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
@@ -784,7 +784,7 @@ it.skipIf(process.platform !== "linux")(
       expect(agent.db.isOpen).toBe(false);
       expect(shared.isOpen).toBe(false);
       expect(closeBroker).toHaveBeenCalled();
-      expect(readGatewayLastShutdown(fixture.state.env)).toEqual({
+      expect(await readGatewayLastShutdownAsync(fixture.state.env)).toEqual({
         reason: expect.stringMatching(/restart \(SIGTERM: gateway\.restart\)$/),
         completedAtMs,
       });
