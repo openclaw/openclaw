@@ -3107,7 +3107,6 @@
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../../plugins/hook-runner-global.js","e99e5ff1e445b4bfddd103d4af5d5dfdd4021a0c719b4fc8ec542f56529ce7c8",1]
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../../plugins/provider-external-auth.js","899644bd9da698ae4313e5cbe30efe147059bd425f1f59fc2ec5ccc719aca42e",1]
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../../plugins/provider-hook-runtime.js","e193bc5136d471cdd90321b774e51313f7cd7ad0a8483caa65dd55a4542dfd5a",1]
-["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../../plugins/provider-runtime.js","28ee8599c1989f140103a6ae58b93acba82e09209db66f6acc185a24cad8ec18",1]
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../embedded-agent-runner/run/attempt.js","a84d87468f3afe44c7a43ff649a7dd7e6f0a138b4c06114f2bd950a4ac297d5f",1]
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../harness/runtime-plugin.js","f63cbc8c4730e09e88312f2aefe9210b6f1628a6093055bbe3dc8a8675bf6dea",1]
 ["src/agents/test-helpers/embedded-agent-runner-e2e-mocks.ts","../harness/selection.js","55a239fcb4927c27f5d7cbdb933008cfec8c564192b2f601ef5b47c5cbb9d396",1]
