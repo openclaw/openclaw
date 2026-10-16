@@ -45,12 +45,10 @@ vi.mock("../mcp-oauth.js", () => ({
 
 describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
   beforeEach(() => {
-    authMocks.loadExecApprovalsReadOnlyAsync
-      .mockReset()
-      .mockResolvedValue({ version: 1, agents: {} });
-    authMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
-    authMocks.resolveApiKeyForProfile.mockReset();
-    authMocks.resolveMcpOAuthAccessToken.mockReset();
+    for (const mock of Object.values(authMocks)) {
+      mock.mockReset();
+    }
+    authMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({ version: 1, agents: {} });
   });
 
   it("projects exact-agent durable grants with server policy precedence in runtime preparation", async () => {

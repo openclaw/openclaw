@@ -1,7 +1,6 @@
-/** Tests Claude-style bundle-MCP config-file overlays for CLI backends. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -12,48 +11,29 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import {
-  prepareCliBundleMcpCaptureAttempt,
-  prepareCliBundleMcpConfig as prepareConfig,
-} from "./bundle-mcp.js";
+  type CliMcpParams,
+  loopbackConfig,
+  policyConfig,
+  prepareMcp as prepareCliBundleMcpConfig,
+  readMcpConfig as readConfig,
+  trackMcpPreparation,
+  userMcpConfig,
+} from "./bundle-mcp-fixtures.test-support.js";
+import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
   prepareBundleProbeCliConfig as prepareProbe,
   requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
-  writeCliMcpPolicyProbeServer,
 } from "./bundle-mcp.test-support.js";
 
 setupCliBundleMcpTestHarness();
 
-type CliMcpParams = Parameters<typeof prepareConfig>[0];
-async function trackPreparation(preparation: ReturnType<typeof prepareConfig>) {
-  const prepared = await preparation;
-  onTestFinished(() => prepared.cleanup?.());
-  return prepared;
-}
-const prepareCliBundleMcpConfig = (params: CliMcpParams) => trackPreparation(prepareConfig(params));
 const prepareBundleProbeCliConfig = (params: Parameters<typeof prepareProbe>[0]) =>
-  trackPreparation(prepareProbe(params));
-
-function prepareClaudeConfig(params: Partial<CliMcpParams>) {
-  return prepareCliBundleMcpConfig({
-    enabled: true,
-    mode: "claude-config-file",
-    backend: { command: "node", args: ["./fake-claude.mjs"] },
-    workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-    ...params,
-  });
-}
-
-async function readConfig(
-  prepared: Awaited<ReturnType<typeof prepareClaudeConfig>>,
-  filePath = requireMcpConfigPath(prepared.backend.args),
-) {
-  return JSON.parse(await fs.readFile(filePath, "utf-8")) as {
-    mcpServers?: Record<string, McpServerConfig>;
-  };
-}
+  trackMcpPreparation(prepareProbe(params));
+const prepareClaudeConfig = (params: Partial<CliMcpParams>) =>
+  prepareCliBundleMcpConfig({ mode: "claude-config-file", ...params });
 
 const nodeServer = (script: string) => ({ command: "node", args: [script] });
 const writeServers = (filePath: string, mcpServers: Record<string, McpServerConfig>) =>
@@ -68,19 +48,7 @@ async function preparePolicy(
   } & Partial<CliMcpParams> = {},
 ) {
   const { tools, server, runtimeToolsAllow, ...params } = options;
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    tools,
-    mcp: {
-      servers: {
-        docs: {
-          command: process.execPath,
-          args: server?.args ?? [await writeCliMcpPolicyProbeServer()],
-          ...server,
-        },
-      },
-    },
-  };
+  const config = await policyConfig({ tools, server });
   return prepareClaudeConfig({
     backend: { command: "claude", args: ["--print"] },
     config,
@@ -167,27 +135,24 @@ describe("prepareCliBundleMcpConfig", () => {
       { HOME: cliBundleMcpHarness.bundleProbeHomeDir },
       async () =>
         await prepareCliBundleMcpConfig({
-          enabled: true,
           mode: "gemini-system-settings",
           backend: { command: "gemini" },
           workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-          config: {
-            plugins: { entries: { [pluginId]: { enabled: true } } },
-            mcp: {
-              servers: {
-                user: {
-                  command: "node",
-                  env: { PLUGIN_ROOT: "/user/plugin", PLUGIN_DATA: userDataPath },
-                },
+          config: userMcpConfig(
+            {
+              user: {
+                command: "node",
+                env: { PLUGIN_ROOT: "/user/plugin", PLUGIN_DATA: userDataPath },
               },
             },
-          },
+            { plugins: { entries: { [pluginId]: { enabled: true } } } },
+          ),
         }),
     );
 
     expect((await fs.stat(agentDataDir)).isDirectory()).toBe(true);
     await expect(fs.stat(userDataPath)).rejects.toMatchObject({ code: "ENOENT" });
-    const raw = await readConfig(prepared, prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string);
+    const raw = await readConfig(prepared, true);
     expect(raw.mcpServers?.remote).toMatchObject({
       type: "http",
       url: "https://example.test/mcp",
@@ -212,10 +177,7 @@ describe("prepareCliBundleMcpConfig", () => {
         args: ["--disallowedTools=Bash(rm *)"],
       },
       workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: { servers: { "docs.prod": nodeServer("docs.mjs") } },
-      },
+      config: userMcpConfig({ "docs.prod": nodeServer("docs.mjs") }),
       toolOverrides: {
         mcpToolsDeny: { "docs.prod": ["read.value", "read:value"] },
         webSearch: false,
@@ -279,8 +241,7 @@ describe("prepareCliBundleMcpConfig", () => {
       toolOverrides: { mcpServers: { openclaw: false } },
     });
 
-    const raw = await readConfig(prepared);
-    expect(raw.mcpServers).toEqual({});
+    expect((await readConfig(prepared)).mcpServers).toEqual({});
   });
 
   it("strips variadic Claude --mcp-config values and merges every listed config", async () => {
@@ -323,32 +284,19 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {
-    const additionalConfig = {
-      mcpServers: {
-        openclaw: {
-          type: "http",
-          url: "http://127.0.0.1:23119/mcp",
-          headers: {
-            Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
-          },
-        },
-      },
-    };
-    const prepared = await prepareBundleProbeCliConfig({
-      additionalConfig,
-      env: {
-        OPENCLAW_MCP_TOKEN: "lb-tk-123",
-        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+    const additionalConfig = loopbackConfig({
+      headers: {
+        Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+        "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
       },
     });
-    const otherEnvPrepared = await prepareBundleProbeCliConfig({
-      additionalConfig,
-      env: {
-        OPENCLAW_MCP_TOKEN: "other-loopback-token",
-        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-      },
-    });
+    const prepare = (token: string) =>
+      prepareBundleProbeCliConfig({
+        additionalConfig,
+        env: { OPENCLAW_MCP_TOKEN: token, OPENCLAW_MCP_CLI_CAPTURE_KEY: "" },
+      });
+    const prepared = await prepare("lb-tk-123");
+    const otherEnvPrepared = await prepare("other-loopback-token");
 
     const raw = await readConfig(prepared);
     expect(prepared.backend.args).toContain("--strict-mcp-config");

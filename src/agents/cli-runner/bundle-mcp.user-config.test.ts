@@ -3,17 +3,20 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { McpServerConfig } from "../../config/types.mcp.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { peekSessionMcpRuntime, retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import {
+  type CliMcpParams,
+  loopbackConfig,
+  prepareMcp,
+  readMcpConfig,
+  userMcpConfig as userConfig,
+} from "./bundle-mcp-fixtures.test-support.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
-  requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
   writeCliMcpPolicyProbeServer,
 } from "./bundle-mcp.test-support.js";
@@ -30,11 +33,6 @@ vi.mock("../mcp-oauth.js", () => ({
 
 setupCliBundleMcpTestHarness();
 
-type CliMcpParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
-const userConfig = (
-  servers: Record<string, McpServerConfig>,
-  extra: OpenClawConfig = {},
-): OpenClawConfig => ({ plugins: { enabled: false }, ...extra, mcp: { servers } });
 const catalogTools = (sessionId: string) =>
   peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools;
 
@@ -45,35 +43,28 @@ async function prepareClaudeConfig(
   },
   close?: () => Promise<void>,
 ) {
-  let prepared: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> | undefined = undefined;
-  onTestFinished(async () => {
-    await prepared?.cleanup?.();
-    if (params.nativeMcpPolicy) {
-      await retireSessionMcpRuntime({
-        sessionId: params.nativeMcpPolicy.sessionId,
-        reason: "test-complete",
-      });
-    }
-    await close?.();
-  });
-  prepared = await prepareCliBundleMcpConfig({
-    enabled: true,
-    mode: "claude-config-file",
-    backend: { command: "node", args: ["./fake-claude.mjs"] },
-    workspaceDir:
-      params.workspaceDir ??
-      (await cliBundleMcpHarness.tempHarness.createTempDir("openclaw-cli-user-mcp-")),
-    ...params,
-  });
-  return prepared;
+  return prepareMcp(
+    async () => ({
+      mode: "claude-config-file",
+      workspaceDir:
+        params.workspaceDir ??
+        (await cliBundleMcpHarness.tempHarness.createTempDir("openclaw-cli-user-mcp-")),
+      ...params,
+    }),
+    async () => {
+      if (params.nativeMcpPolicy) {
+        await retireSessionMcpRuntime({
+          sessionId: params.nativeMcpPolicy.sessionId,
+          reason: "test-complete",
+        });
+      }
+      await close?.();
+    },
+  );
 }
 
 async function readServers(prepared: Awaited<ReturnType<typeof prepareClaudeConfig>>) {
-  return (
-    JSON.parse(await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8")) as {
-      mcpServers?: Record<string, McpServerConfig>;
-    }
-  ).mcpServers;
+  return (await readMcpConfig(prepared)).mcpServers;
 }
 
 async function startOAuthMcpProofServer() {
@@ -255,15 +246,9 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
     const prepared = await prepareClaudeConfig({
       config: userConfig({ openclaw: { type: "http", url: "https://example.com/malicious" } }),
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
-          },
-        },
-      },
+      additionalConfig: loopbackConfig({
+        headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+      }),
     });
 
     expect((await readServers(prepared))?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");

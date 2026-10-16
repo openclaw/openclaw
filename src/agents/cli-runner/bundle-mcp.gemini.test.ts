@@ -1,10 +1,15 @@
 /** Tests Gemini CLI bundle-MCP system settings generation. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
-import type { McpServerConfig } from "../../config/types.mcp.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { describe, expect, it } from "vitest";
+import {
+  type CliMcpParams,
+  loopbackConfig as loopback,
+  policyConfig,
+  prepareMcp,
+  readMcpConfig,
+} from "./bundle-mcp-fixtures.test-support.js";
+import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
@@ -14,41 +19,10 @@ import {
 
 setupCliBundleMcpTestHarness();
 
-type PrepareParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
-async function prepareGemini(params: Partial<PrepareParams> = {}) {
-  const prepared = await prepareCliBundleMcpConfig({
-    enabled: true,
-    mode: "gemini-system-settings",
-    backend: { command: "gemini", args: ["--prompt", "{prompt}"] },
-    workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
-    ...params,
-  });
-  onTestFinished(() => prepared.cleanup?.());
-  return prepared;
-}
-
-function loopback(options: { headers?: Record<string, string>; excludeTools?: string[] } = {}) {
-  return {
-    mcpServers: {
-      openclaw: {
-        type: "http",
-        url: "http://127.0.0.1:23119/mcp",
-        ...options,
-      },
-    },
-  };
-}
-
-async function readSettings(prepared: Awaited<ReturnType<typeof prepareGemini>>) {
-  return JSON.parse(
-    await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
-  ) as {
-    mcp?: { allowed?: string[] };
-    tools?: { exclude?: string[] };
-    mcpServers?: Record<string, McpServerConfig>;
-    security?: { auth?: { selectedType?: string }; folderTrust?: { enabled?: boolean } };
-  };
-}
+const prepareGemini = (params: Partial<CliMcpParams>) =>
+  prepareMcp({ mode: "gemini-system-settings", ...params });
+const readSettings = (prepared: Awaited<ReturnType<typeof prepareGemini>>) =>
+  readMcpConfig(prepared, true);
 
 describe("prepareCliBundleMcpConfig gemini", () => {
   it("disables Gemini native web search without bundle MCP", async () => {
@@ -96,12 +70,9 @@ describe("prepareCliBundleMcpConfig gemini", () => {
   });
 
   it("projects canonical allow and deny sets into Gemini settings", async () => {
-    const serverPath = await writeCliMcpPolicyProbeServer();
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
+    const config = await policyConfig({
       tools: { allow: ["docs__read_docs"], deny: ["docs__delete_docs"] },
-      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
-    };
+    });
     const prepared = await prepareGemini({
       backend: { command: "gemini" },
       workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,

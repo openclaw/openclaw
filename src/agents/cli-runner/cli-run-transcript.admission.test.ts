@@ -155,11 +155,10 @@ beforeEach(() => {
   mocks.admit.mockImplementation(async (write) => write());
   mocks.patch.mockImplementation(
     async (_target, _update, options: NonNullable<Parameters<typeof patchSessionEntryCore>[2]>) => {
-      if (!current) {
-        return null;
+      const entry = current ? { ...current } : null;
+      if (entry) {
+        options.onCommittedSource?.(source, entry);
       }
-      const entry = { ...current };
-      options.onCommittedSource?.(source, entry);
       return entry;
     },
   );
