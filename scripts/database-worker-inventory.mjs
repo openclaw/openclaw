@@ -958,9 +958,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["runSessionMaintenanceMetadataInTransaction"],
+        operations: [
+          "runSessionMaintenanceMetadataInTransaction",
+          "runSessionMaintenanceMetadataInTransaction.run",
+        ],
         evidence:
-          "Only openclaw-agent-execution-maintenance.ts and runSessionMaintenanceMetadataInDatabase call this transaction. The former is registered solely in the execution worker; the latter is called only by the reclamation kernel, whose native branch requires an off-thread or schema/agent-maintenance owner.",
+          "Only openclaw-agent-execution-maintenance.ts and runSessionMaintenanceMetadataInDatabase call this transaction. The former is registered solely in the execution worker; the latter is called only by the reclamation kernel, whose native branch requires an off-thread or schema/agent-maintenance owner. Its local run callback stays synchronous and never escapes: PostgreSQL invokes it directly; SQLite invokes it inside runWithSqliteBusyTimeout.",
       },
     ],
   ],

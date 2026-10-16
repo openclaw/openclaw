@@ -48,6 +48,7 @@ type ProviderProfile = ModelProviderCard["profiles"][number];
 export type ProviderProfilesViewProps = {
   usageClient?: GatewayBrowserClient | null;
   usageAgentId?: string;
+  registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -512,7 +513,11 @@ function ProviderProfileRow(
   },
 ) {
   let cancelDrag: (() => void) | undefined;
-  onCleanup(() => cancelDrag?.());
+  let releaseUsage: (() => void) | undefined;
+  onCleanup(() => {
+    cancelDrag?.();
+    releaseUsage?.();
+  });
   const profile = () => props.row.profile;
   const group = () => props.row.group;
   const provider = () => group().provider;
@@ -614,6 +619,7 @@ function ProviderProfileRow(
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
       {provider() === "openai" && profile().type !== "api_key" ? (
         <openclaw-model-account-usage
+          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
           prop:client={props.usageClient ?? null}
           prop:agentId={props.usageAgentId ?? ""}
           prop:profileId={profile().profileId}

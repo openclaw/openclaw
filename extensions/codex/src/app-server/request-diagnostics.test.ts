@@ -80,9 +80,10 @@ async function record() {
 }
 
 function start(run: Parameters<typeof withCodexAppServerJsonClient>[1], options: Options = {}) {
-  return withCodexAppServerJsonClient({ timeoutMs: 50, ...options }, run).catch(
-    (error: unknown) => error,
-  );
+  return withCodexAppServerJsonClient(
+    { timeoutMs: 50, pluginConfig: { appServer: { requestTimeoutMs: 10 } }, ...options },
+    run,
+  ).catch((error: unknown) => error);
 }
 
 describe("scoped Codex timeout diagnostics", () => {
@@ -96,12 +97,12 @@ describe("scoped Codex timeout diagnostics", () => {
     const run = vi.fn(async () => undefined);
     const result = start(run);
     await entered.promise;
-    await vi.advanceTimersByTimeAsync(50);
-    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await result).toMatchObject({ name: "AgentHarnessPreflightError" });
     expect((await record()).attributes).toMatchObject({
       phase: "acquire-client",
-      timeoutMs: 50,
-      elapsedMs: 50,
+      timeoutMs: 100,
+      elapsedMs: 150,
       scopeAttemptOrdinal: 1,
       requestStartedCount: 0,
       currentRequestCount: 0,
@@ -191,7 +192,7 @@ describe("scoped Codex timeout diagnostics", () => {
         options.onAcquireObservation?.({ boundary: "cleanup" });
         options.onAcquireObservation?.({ boundary: "cleanup" });
       }
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(150);
       await result;
       const logged = await record();
       if (ordering === "before timeout") {
@@ -330,8 +331,8 @@ describe("scoped Codex timeout diagnostics", () => {
       });
       const result = start(async () => undefined);
       await entered.promise;
-      await vi.advanceTimersByTimeAsync(50);
-      expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await result).toMatchObject({ name: "AgentHarnessPreflightError" });
       const logged = await record();
       expect(logged.attributes).toMatchObject({
         lastStartedClientInstanceId: clientInstanceId,
@@ -349,7 +350,7 @@ describe("scoped Codex timeout diagnostics", () => {
     },
   );
 
-  it("keeps the default 60 second whole-scope deadline", async () => {
+  it("keeps the default 60 second callback deadline", async () => {
     const entered = createDeferred<void>();
     const finish = createDeferred<void>();
     shared.acquire.mockResolvedValue(client());

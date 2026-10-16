@@ -5,6 +5,7 @@ import {
   resolveMessageRole,
 } from "../../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import { hasVisiblePreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -86,6 +87,8 @@ export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = fal
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
+    (cards.length === 0 &&
+      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
   );
 }

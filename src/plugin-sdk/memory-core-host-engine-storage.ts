@@ -71,6 +71,8 @@ export type {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+export { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { DatabaseSearchCapabilityUnavailableError } from "../infra/database-engine/capability-unavailable.js";
 
 /** Health probe result for embedding provider availability checks. */
 export type MemoryEmbeddingProbeResult = {

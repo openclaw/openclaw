@@ -29,7 +29,7 @@ export class NewSessionDraft {
   private stopLifetime: (() => void) | undefined;
   private boundGateway: ApplicationContext["gateway"] | undefined;
   private stopGateway: (() => void) | undefined;
-  private readonly requestUpdate: () => void;
+  private readonly changed: () => void;
   private modelDefaultsPolicy: "last-used" | "configured" | null | undefined;
 
   private protectPrivateDraftFromReload() {
@@ -141,11 +141,11 @@ export class NewSessionDraft {
         pickerIdPrefix?: string;
       },
   ) {
-    const requestUpdate = (this.requestUpdate = () => {
+    const changed = (this.changed = () => {
       if (this.privateDraftReview && !this.privateDraftReview.isCurrent()) {
         this.privateDraftReview.controller.abort("draft-changed");
       }
-      callbacks.requestUpdate();
+      callbacks.changed();
     });
     this.gateway = new DraftGatewayState(
       () => ({
@@ -166,7 +166,7 @@ export class NewSessionDraft {
         preferenceScope: callbacks.preferenceScope,
         readPalettePreference: callbacks.readPalettePreference,
         readAgents: () => read().context?.agents,
-        requestUpdate,
+        changed,
         updateComplete: callbacks.updateComplete,
         onInvalidate: (reset, outcome) => {
           this.invalidate(reset, outcome);
@@ -191,7 +191,7 @@ export class NewSessionDraft {
         isAdmin: this.place?.isAdmin() ?? false,
       }),
       {
-        requestUpdate,
+        changed,
         updateComplete: callbacks.updateComplete,
         onProjectMissing: () => this.place.clearProjectSelection(),
         onSelectProject: (projectId) => this.place.selectProjectId(projectId),
@@ -212,7 +212,7 @@ export class NewSessionDraft {
         pendingPlacementSessionKey: this.submission?.pendingPlacement.sessionKey ?? "",
       }),
       {
-        requestUpdate,
+        changed,
         onError: (error) =>
           error === null ? this.submission.clearError() : this.submission.setError(error),
         onClearError: (error) => this.submission.clearError(error),
@@ -220,7 +220,7 @@ export class NewSessionDraft {
     );
     this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, {
       ...callbacks,
-      requestUpdate,
+      changed,
     });
     this.submission.draftPersistence.modelSelection = {
       read: () =>
@@ -246,7 +246,7 @@ export class NewSessionDraft {
       const stopReloadGuard = this.protectPrivateDraftFromReload();
       const wake = () => {
         this.synchronize();
-        this.requestUpdate();
+        this.changed();
       };
       document.addEventListener("visibilitychange", wake);
       this.stopLifetime = () => {
@@ -315,7 +315,7 @@ export class NewSessionDraft {
       ? "configured"
       : this.read().context?.config?.current.newSessionModelDefaults;
     if (!this.place.agentsHydrated && this.agentsReady()) {
-      this.place.setAgentsHydrated(true);
+      this.place.agentsHydrated = true;
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
       const { context, data } = this.read();

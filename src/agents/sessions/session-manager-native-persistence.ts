@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
@@ -15,6 +14,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
@@ -123,7 +123,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     const isCurrentView = () =>
       this.sessionId === sessionId &&
       sameSessionTranscriptTargetBinding(scope, this.persistenceTarget);
-    const onPendingTransaction = (database: DatabaseSync) => {
+    const onPendingTransaction = (database: EngineConnection) => {
       if (!isCurrentView()) {
         return;
       }

@@ -197,7 +197,7 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
   );
 }
 
-export function isRetryableNativeHookRelayBridgeLookupError(params: {
+function isRetryableNativeHookRelayBridgeLookupError(params: {
   error: unknown;
   elapsedMs: number;
 }): boolean {

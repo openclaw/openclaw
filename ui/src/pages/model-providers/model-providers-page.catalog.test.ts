@@ -22,6 +22,7 @@ import {
   retryCatalog,
   requestCount,
   waitForProviders,
+  publishRouteData,
 } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
@@ -324,13 +325,12 @@ describe("Models page catalog publication", () => {
     publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
     await waitForSolid(() => expect(publicationStarted).toBe(true));
     await drainPageUpdates(page);
-    expect(page.state.data?.catalogError).toBeNull();
     expect(page.querySelectorAll('.model-providers__catalog-progress[role="alert"]')).toHaveLength(
       1,
     );
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     publication.resolve(failed);
-    await waitForSolid(() => expect(page.state.data?.catalogError).not.toBeNull());
+    await waitForSolid(() => expect(page.view.props.catalogDiscoveryError).not.toBeNull());
     await drainPageUpdates(page);
 
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
@@ -353,7 +353,7 @@ describe("Models page catalog publication", () => {
     expect(discover).toHaveBeenCalledTimes(2);
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
-    expect(page.state.data?.catalogError).toBeNull();
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
   });
 
   it.each(["utility"] as const)(
@@ -543,7 +543,7 @@ describe("Models page catalog publication", () => {
     await drainPageUpdates(page);
     expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
-    expect(page.state.data?.catalogError).toBeNull();
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
@@ -603,8 +603,8 @@ describe("Models page catalog publication", () => {
     await waitForProviders(second, savedModelConfig);
     await retryCatalog(first);
     await retryCatalog(second);
-    expect(first.state.selectedAgentId).toBe("main");
-    expect(second.state.selectedAgentId).toBe("writer");
+    expect(first.view.props.usageAgentId).toBe("main");
+    expect(second.view.props.usageAgentId).toBe("writer");
     publishCatalog(context, "main", preparedCatalog);
     first.routeData = {
       ...createEmptyModelProvidersRouteData(context),
@@ -635,7 +635,7 @@ describe("Models page catalog publication", () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
-    page.setState("data", {
+    publishRouteData(page, {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       authStatus: createAuthStatus([
         ...["claude-cli", "anthropic"].map((provider) => ({
@@ -652,14 +652,14 @@ describe("Models page catalog publication", () => {
       ]),
       updatedAt: 1,
     });
-    const unrelatedProvider = structuredClone(page.state.data?.authStatus?.providers[2]);
+    const unrelatedProvider = structuredClone(page.view.props.authStatus?.providers[2]);
 
-    page.profileActions.setOrder("anthropic", "anthropic", ["claude:two", "claude:one"]);
+    page.view.props.onProfileOrderChange("anthropic", "anthropic", ["claude:two", "claude:one"]);
 
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
-    await vi.waitFor(() => expect(page.state.profileOrders.anthropic).toBeUndefined());
+    await vi.waitFor(() => expect(page.view.props.profileOrders.anthropic).toBeUndefined());
     expect(
-      page.state.data?.authStatus?.providers.map(({ provider, profileOrder }) => ({
+      page.view.props.authStatus?.providers.map(({ provider, profileOrder }) => ({
         provider,
         profileOrder,
       })),
@@ -668,7 +668,7 @@ describe("Models page catalog publication", () => {
       { provider: "anthropic", profileOrder: ["claude:two", "claude:one"] },
       { provider: "openai", profileOrder: ["openai:one", "openai:two"] },
     ]);
-    expect(page.state.data?.authStatus?.providers[2]).toEqual(unrelatedProvider);
+    expect(page.view.props.authStatus?.providers[2]).toEqual(unrelatedProvider);
   });
 
   it("keeps a saved profile order when an older refresh finishes afterward", async () => {
@@ -692,7 +692,7 @@ describe("Models page catalog publication", () => {
         },
       ],
     };
-    page.setState("data", {
+    publishRouteData(page, {
       ...EMPTY_MODEL_PROVIDERS_DATA,
       authStatus,
       updatedAt: 1,
@@ -711,21 +711,21 @@ describe("Models page catalog publication", () => {
       return originalRequest(method);
     });
 
-    const refreshing = page.refresh("forced");
+    page.view.props.onRefresh();
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
-    page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
+    page.view.props.onProfileOrderChange("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
     await vi.waitFor(() => expect(authStatusCalls).toBe(2));
-    await vi.waitFor(() => expect(page.state.profileOrders.openai).toBeUndefined());
-    expect(page.state.data?.authStatus?.providers[0]?.profileOrder).toEqual([
+    await vi.waitFor(() => expect(page.view.props.profileOrders.openai).toBeUndefined());
+    expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
     ]);
 
     staleStatus.resolve(authStatus);
-    await refreshing;
+    await drainPageUpdates(page);
 
-    expect(page.state.data?.authStatus?.providers[0]?.profileOrder).toEqual([
+    expect(page.view.props.authStatus?.providers[0]?.profileOrder).toEqual([
       "openai:two",
       "openai:one",
     ]);

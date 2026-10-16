@@ -35,40 +35,33 @@ type DiscordActivityPendingLaunch =
   | { state: "single"; widgetId: string; createdAt: number }
   | { state: "ambiguous"; createdAt: number };
 
-type AtomicPluginStateKeyedStore<T> = PluginStateKeyedStore<T> & {
-  observe: NonNullable<PluginStateKeyedStore<T>["observe"]>;
-  compareAndApply: NonNullable<PluginStateKeyedStore<T>["compareAndApply"]>;
-};
+type ActivityKeyedStore<T> = Pick<
+  PluginStateKeyedStore<T, 2>,
+  "register" | "observe" | "compareAndApply" | "lookup" | "consume" | "delete" | "entries"
+>;
 
 type DiscordActivityStores = {
-  widgets: AtomicPluginStateKeyedStore<DiscordActivityWidget>;
-  sessions: PluginStateKeyedStore<DiscordActivitySession>;
-  docTokens: PluginStateKeyedStore<DiscordActivityDocToken>;
-  launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
+  widgets: ActivityKeyedStore<DiscordActivityWidget>;
+  sessions: ActivityKeyedStore<DiscordActivitySession>;
+  docTokens: ActivityKeyedStore<DiscordActivityDocToken>;
+  launches: ActivityKeyedStore<DiscordActivityPendingLaunch>;
 };
 
-function requireAtomicComparison<T>(
-  store: PluginStateKeyedStore<T>,
-): AtomicPluginStateKeyedStore<T> {
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error("Discord Activities require atomic plugin state comparisons");
-  }
-  return store as AtomicPluginStateKeyedStore<T>;
-}
-
 export function openDiscordActivityStores(
-  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+  openKeyedStore: <T>(
+    options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+  ) => ActivityKeyedStore<T>,
 ): DiscordActivityStores {
   const openStore = <T>(namespace: string, maxEntries: number, defaultTtlMs: number) =>
     openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest", defaultTtlMs });
   return {
-    widgets: requireAtomicComparison(
-      openStore<DiscordActivityWidget>("activities-widgets", 64, WIDGET_TTL_MS),
-    ),
+    widgets: openStore<DiscordActivityWidget>("activities-widgets", 64, WIDGET_TTL_MS),
     sessions: openStore<DiscordActivitySession>("activities-sessions", 256, SESSION_TTL_MS),
     docTokens: openStore<DiscordActivityDocToken>("activities-doc-tokens", 256, DOC_TOKEN_TTL_MS),
-    launches: requireAtomicComparison(
-      openStore<DiscordActivityPendingLaunch>("activities-launches", 256, PENDING_LAUNCH_TTL_MS),
+    launches: openStore<DiscordActivityPendingLaunch>(
+      "activities-launches",
+      256,
+      PENDING_LAUNCH_TTL_MS,
     ),
   };
 }
@@ -78,7 +71,7 @@ function pendingLaunchKey(accountId: string, channelId: string, discordUserId: s
 }
 
 async function applyActivityStoreIntent<T>(
-  store: AtomicPluginStateKeyedStore<T>,
+  store: ActivityKeyedStore<T>,
   key: string,
   intent: (current: T | undefined) => PluginStateCompareIntent<T>,
 ): Promise<"applied" | "unchanged"> {

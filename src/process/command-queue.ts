@@ -703,26 +703,6 @@ export function countQueuedCommandsInLane(lane: string, matches: CommandLaneEntr
   return state ? selectQueuedCommandEntries(state, matches).length : 0;
 }
 
-/** Select queue entries before awaited Stop preparation can admit another turn. */
-export function prepareCommandLaneClear(lane: string, matches: CommandLaneEntryFilter) {
-  const cleaned = normalizeLane(lane);
-  const state = getQueueState().lanes.get(cleaned);
-  const entries = state ? selectQueuedCommandEntries(state, matches) : [];
-  return (select: CommandLaneEntryFilter = () => true) => {
-    if (!state || getQueueState().lanes.get(cleaned) !== state) {
-      return 0;
-    }
-    let removed = 0;
-    for (const entry of entries) {
-      if (select(entry.sessionTarget) && removeLaneQueueEntry(state.queue, entry)) {
-        removed += 1;
-        entry.reject(new CommandLaneClearedError(cleaned));
-      }
-    }
-    return removed;
-  };
-}
-
 export function clearCommandLane(
   lane: string = CommandLane.Main,
   matches?: CommandLaneEntryFilter,
@@ -733,7 +713,18 @@ export function clearCommandLane(
     return 0;
   }
   if (matches) {
-    return prepareCommandLaneClear(cleaned, matches)();
+    const entries = selectQueuedCommandEntries(state, matches);
+    if (getQueueState().lanes.get(cleaned) !== state) {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (removeLaneQueueEntry(state.queue, entry)) {
+        removed += 1;
+        entry.reject(new CommandLaneClearedError(cleaned));
+      }
+    }
+    return removed;
   }
   const removed = state.queue.length;
   let entry: QueueEntry | undefined;

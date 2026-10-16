@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; fresh agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. PostgreSQL agent schemas currently support bootstrap only. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution

@@ -11,7 +11,6 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -430,7 +429,7 @@ describe("streaming Markdown DOM", () => {
     const MediaButton = () => <button>Media</button>;
     const prepared = prepareMarkdownMedia(
       [{ type: "image", image: { url: "https://example.invalid/image.png" } }],
-      () => solidContent(MediaButton, {}),
+      MediaButton,
     );
     drawContent("<p>Original</p>", prepared.media);
     drawContent(prepared.markdown, prepared.media);
@@ -453,7 +452,7 @@ describe("streaming Markdown DOM", () => {
     async ({ before, after, suffix }) => {
       let policy = "allowed";
       const connections: boolean[] = [];
-      function MediaCard(props: { label: string }) {
+      function MediaCard(props: Parameters<MarkdownMedia["render"]>[0]) {
         const presented = useContext(ContentPresentation);
         let activated = false;
         createEffect(presented, (active) => {
@@ -466,7 +465,11 @@ describe("streaming Markdown DOM", () => {
           }
           return undefined;
         });
-        return <button>{props.label}</button>;
+        const label = () => {
+          void props.item;
+          return policy;
+        };
+        return <button>{label()}</button>;
       }
       const prepared = prepareMarkdownMedia(
         [
@@ -474,7 +477,7 @@ describe("streaming Markdown DOM", () => {
           { type: "image", image: { url: "https://example.invalid/image.png" } },
           ...(after ? [{ type: "text" as const, text: after }] : []),
         ],
-        () => solidContent(MediaCard, { label: policy }),
+        MediaCard,
       );
       draw(prepared.markdown, { media: prepared.media });
       const paragraph = container.querySelector("p");

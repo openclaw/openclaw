@@ -1,11 +1,12 @@
+import type { Component } from "solid-js";
 import type { ProjectedMessageContent } from "./chat-message-media.ts";
 
-type PositionedMedia = Exclude<ProjectedMessageContent, { type: "text" }>;
+export type PositionedMedia = Exclude<ProjectedMessageContent, { type: "text" }>;
 export type MarkdownMedia = {
   prefix: string;
   text: string;
   items: PositionedMedia[];
-  render: (item: PositionedMedia, index: number) => unknown;
+  render: Component<{ item: PositionedMedia; index: number }>;
 };
 
 export function prepareMarkdownMedia(

@@ -1,4 +1,3 @@
-// OpenClaw agent database tests cover agent-scoped DB storage and migrations.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -22,6 +21,8 @@ import {
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
 } from "../test-utils/agent-deletion-journal.js";
+// OpenClaw agent database tests cover agent-scoped DB storage and migrations.
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
@@ -65,6 +66,7 @@ import {
   isSameOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
 import {
+  fixtureVolumeHasFileAlias,
   removeCanonicalValidationFromHistoricalAgentFixture,
   seedSchema19SessionKeyRepairFixture,
 } from "./openclaw-agent-db.test-support.js";
@@ -280,31 +282,16 @@ async function migrateAndOpenLegacyAgentDatabaseForTest(
   return openOpenClawAgentDatabase(options);
 }
 
-const tempVolumeIsCaseInsensitive = (() => {
-  const probeDir = fs.realpathSync(createTempStateDir());
-  const probePath = path.join(probeDir, "CaseProbe");
-  fs.writeFileSync(probePath, "probe");
-  try {
-    const probe = fs.lstatSync(probePath, { bigint: true });
-    const alias = fs.lstatSync(path.join(probeDir, "caseProbe"), { bigint: true });
-    return probe.dev === alias.dev && probe.ino === alias.ino;
-  } catch {
-    return false;
-  }
-})();
-
-const tempVolumeIsNormalizationInsensitive = (() => {
-  const probeDir = fs.realpathSync(createTempStateDir());
-  const probePath = path.join(probeDir, "CaféProbe");
-  fs.writeFileSync(probePath, "probe");
-  try {
-    const probe = fs.lstatSync(probePath, { bigint: true });
-    const alias = fs.lstatSync(path.join(probeDir, "CaféProbe"), { bigint: true });
-    return probe.dev === alias.dev && probe.ino === alias.ino;
-  } catch {
-    return false;
-  }
-})();
+const tempVolumeIsCaseInsensitive = fixtureVolumeHasFileAlias(
+  createTempStateDir(),
+  "CaseProbe",
+  "caseProbe",
+);
+const tempVolumeIsNormalizationInsensitive = fixtureVolumeHasFileAlias(
+  createTempStateDir(),
+  "CaféProbe",
+  "CaféProbe",
+);
 
 function downgradeV21AgentDatabaseToV13(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
@@ -883,7 +870,7 @@ describe("openclaw agent database", () => {
     const result = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => {
         expect(db).not.toBe(owner.db);
-        expect(() => db.enableLoadExtension(true)).not.toThrow();
+        expect(() => requireNativeSqliteDatabase(db).enableLoadExtension(true)).not.toThrow();
         expect(() => db.prepare("DELETE FROM auth_profile_store").run()).toThrow(/readonly/iu);
         return db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get();
       },
@@ -2451,9 +2438,11 @@ describe("openclaw agent database", () => {
     createCanonicalAgentIndexDrift(databasePath);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
-      canonicalShape,
-    );
+    expect(
+      normalizeSqliteSchemaShapeSql(
+        collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
+      ),
+    ).toEqual(canonicalShape);
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(
       reopened.db
@@ -2495,9 +2484,11 @@ describe("openclaw agent database", () => {
     }
 
     const repaired = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
-    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(repaired.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(expectedShape),
-    );
+    expect(
+      normalizeSqliteSchemaShapeSql(
+        collectSqliteSchemaShape(requireNativeSqliteDatabase(repaired.db)),
+      ),
+    ).toEqual(normalizeSqliteSchemaShapeSql(expectedShape));
     expect(
       repaired.db
         .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")

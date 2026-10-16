@@ -1232,7 +1232,7 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("renders visible and attributed rows while filtering malformed or empty history", () => {
+  it("renders visible rows while filtering malformed or empty history, even with attribution", () => {
     const visible = assistantMessage("still visible", 1);
     const forwarded = assistantMessage([{ type: "text", text: "" }], 2, {
       senderLabel: "Forwarded from main",
@@ -1240,10 +1240,7 @@ describe("buildCachedChatItems", () => {
     const groups = messageGroups({
       messages: [null, {}, userMessage(SENDER_METADATA_BLOCK, 0), visible, forwarded],
     });
-    expect(groups).toMatchObject([
-      { role: "assistant", messages: [{ message: visible }] },
-      { role: "assistant", senderLabel: "Forwarded from main", messages: [{ message: forwarded }] },
-    ]);
+    expect(groups).toMatchObject([{ role: "assistant", messages: [{ message: visible }] }]);
   });
 
   it("does not expose malformed tool stream entries to message rendering", () => {

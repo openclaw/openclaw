@@ -6,6 +6,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
@@ -297,9 +298,11 @@ export function copySqliteSessionGenerationRows(params: {
       navigation_valid: parameter((row) => row.navigation_valid),
     }),
   );
-  // UTF-16 destinations retain native TEXT byte accounting and JSON semantics.
-  // UTF-8 stores can preserve encoded payloads without another codec round trip.
-  const destinationEncoding = params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
+  // PostgreSQL receives plain JSON; UTF-16 SQLite retains native TEXT byte accounting.
+  // UTF-8 SQLite can preserve encoded payloads without another codec round trip.
+  const destinationEncoding = isPostgresSqlConnection(params.destination.db)
+    ? undefined
+    : params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
   if (destinationEncoding !== "UTF-8") {
     for (const row of iterateSqliteQuerySync(
       params.source.db,

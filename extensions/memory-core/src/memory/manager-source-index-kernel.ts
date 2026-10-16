@@ -211,7 +211,8 @@ export class MemorySourceIndexKernel {
       removedIds = [];
       // Decide from the last row for each ID before writing relational rows.
       // A repeated ID can change and then return to its original embedding.
-      const vectors = [
+      const reusable = new Set<string>();
+      let vectors = [
         ...new Map(
           batch.flatMap((row) =>
             row.embedding === undefined
@@ -231,12 +232,24 @@ export class MemorySourceIndexKernel {
           this.deleteVectors(entry.path, source, [row.id]);
           return false;
         }
-        const old = executeSqliteQueryTakeFirstSync(
-          this.database,
-          db.selectFrom("memory_index_chunks").select("embedding").where("id", "=", row.id),
-        );
-        return !old || !Buffer.from(old.embedding).equals(encodeMemoryEmbedding(row.embedding));
+        reusable.add(row.id);
+        return true;
       });
+      if (reusable.size > 0) {
+        const previousEmbeddings = new Map(
+          executeSqliteQuerySync(
+            this.database,
+            db
+              .selectFrom("memory_index_chunks")
+              .select(["id", "embedding"])
+              .where("id", "in", [...reusable]),
+          ).rows.map((row) => [row.id, row.embedding]),
+        );
+        vectors = vectors.filter((row) => {
+          const old = previousEmbeddings.get(row.id);
+          return !old || !Buffer.from(old).equals(encodeMemoryEmbedding(row.embedding));
+        });
+      }
       writeMemoryChunks(
         this.database,
         {

@@ -551,6 +551,7 @@ describe("codex conversation binding", () => {
         config: {},
         pluginConfig: {},
         runtime: {
+          config: { current: () => ({}) },
           modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
           state: {
             openSyncKeyedStore: () => stateStore,

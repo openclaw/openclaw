@@ -9,8 +9,8 @@ UI ownership rules here; repo-global architecture, proof, Git rules in root `AGE
 
 Solid route modules expose `renderSolid(props)` from the existing lazy page import.
 The outlet mounts that renderer once and supplies live `data`, `loaderPending`, and
-`presented` props; loader updates must preserve page-local state. Unported route
-modules keep `render`. Keep page imports inside their route's `component` loader.
+`presented` props; loader updates must preserve page-local state. Keep page
+imports inside their route's `component` loader.
 
 ## State Ownership And Async Results
 

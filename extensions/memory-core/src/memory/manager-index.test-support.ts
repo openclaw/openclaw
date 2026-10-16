@@ -13,7 +13,10 @@ import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/pl
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
@@ -659,7 +662,9 @@ export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseS
   if (!databasePath) {
     throw new Error("Memory index fixture has no database path");
   }
-  return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
+  return requireNativeSqliteDatabase(
+    openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db,
+  );
 }
 
 export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
