@@ -37,6 +37,7 @@ type Run = NonNullable<UpdateCommandOptions["run"]>;
 
 export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   const { executionParams, mocks, successfulUpdate, phaseAdmission } = inputs;
+  const gitTarget = { sha: "a".repeat(40), version: "2026.9.2" };
   const withPhase = async (
     phase: Phase,
     exercise: (fixture: {
@@ -56,7 +57,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       await fs.writeFile(path.join(state, "openclaw.json"), "{}");
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.2" }),
+        JSON.stringify({ name: "openclaw", version: gitTarget.version }),
       );
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
       const env = { OPENCLAW_STATE_DIR: state };
@@ -111,7 +112,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         mocks.runGitUpdate.mockImplementation(
           async (options: Parameters<typeof updateGitInstall>[0]) => {
             beforeCall.run?.();
-            await options.inspectGitTarget({ sha: "a".repeat(40), version: "2026.9.2" });
+            await options.inspectGitTarget(gitTarget);
             events.push("inspected");
             return { ...successfulUpdate, mode: "git", root };
           },
@@ -201,11 +202,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           const recorded = await fixture.readRun();
           expect(recorded?.phase).toBe(phase);
           if (phase === "staging") {
-            expect(recorded?.target).toMatchObject({
-              kind: "git",
-              sha: "a".repeat(40),
-              version: "2026.9.2",
-            });
+            expect(recorded?.target).toMatchObject({ kind: "git", ...gitTarget });
           }
           release.resolve();
           expect(await pending).toMatchObject({ result: { status: "ok" } });

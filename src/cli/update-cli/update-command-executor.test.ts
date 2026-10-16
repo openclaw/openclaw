@@ -5,13 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import * as sqliteLocation from "../../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -34,27 +32,17 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const fixture = useExecutorFixture("update-executor-", {
+  beforeCleanup: closeStateDatabaseForTest,
+  restoreEnv: true,
+});
 let root: string;
 let temporary: string;
 beforeEach(() => {
-  root = fs.realpathSync(dirs.make("update-executor-"));
-  temporary = path.join(root, "private-tmp");
-  fs.mkdirSync(temporary, { mode: 0o700 });
-  // Select only the private database location; the lease, process-start checks,
-  // and exact-row comparisons are the production owner.
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+  ({ root, control: temporary } = fixture());
 });
 
 // The installed parent prepares the database before a sealed actor can acquire a lease.

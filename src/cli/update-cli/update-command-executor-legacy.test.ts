@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
-import { waitForDead } from "../../../test/helpers/process-wait.js";
+import { waitForDead, waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -60,14 +60,14 @@ it.skipIf(process.platform === "win32").each([
       }
       try {
         await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-          process.stdout.write('LEAF_READY\\n');
+          fs.writeFileSync(root+'/ready','ready');
           while(!fs.existsSync(root+'/proceed')) await setTimeout(10);
           let current=false;
           try {fence.assertCurrent();current=true;fs.writeFileSync(root+'/effect','owned');}
           finally {observe(current);}
         });
       } catch(error) {
-        if(${lifetime === "altered grant"}) {observe(false);process.stdout.write('LEAF_REFUSED\\n');}
+        if(${lifetime === "altered grant"}) {observe(false);fs.writeFileSync(root+'/ready','refused');}
         process.stderr.write(String(error));process.exitCode=1;
       }
     `;
@@ -149,7 +149,6 @@ it.skipIf(process.platform === "win32").each([
       detached: true,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
-    const ready = createDeferred();
     const secondReady = createDeferred();
     const secondExited = createDeferred<unknown>();
     child.on("message", (message) => {
@@ -160,17 +159,11 @@ it.skipIf(process.platform === "win32").each([
       }
     });
     let output = "";
-    let stdout = "";
-    expectDefined(child.stdout, "Legacy fixture stdout").on("data", (chunk) => {
-      output += String(chunk);
-      stdout += String(chunk);
-      if (stdout.includes("LEAF_READY\n") || stdout.includes("LEAF_REFUSED\n")) {
-        ready.resolve();
-      }
-    });
-    expectDefined(child.stderr, "Legacy fixture stderr").on("data", (chunk) => {
-      output += String(chunk);
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      expectDefined(stream, "Legacy fixture output").on("data", (chunk) => {
+        output += String(chunk);
+      });
+    }
     const closed = once(child, "close");
     const exited = once(child, "exit");
     void exited.catch(() => {}); // Admission can fail before the exit join.
@@ -184,13 +177,9 @@ it.skipIf(process.platform === "win32").each([
     const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     try {
       await wait(
-        Promise.race([
-          managed && lifetime === "live"
-            ? Promise.all([ready.promise, secondReady.promise])
-            : ready.promise,
-          closed.then(() => {
-            throw new Error(`Legacy descendant exited before admission: ${output}`);
-          }),
+        Promise.all([
+          waitForFixtureFile(file("ready"), closed),
+          ...(managed && lifetime === "live" ? [secondReady.promise] : []),
         ]),
       );
       if (!child.pid) {

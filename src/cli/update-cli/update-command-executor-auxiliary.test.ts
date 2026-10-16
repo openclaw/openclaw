@@ -2,16 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
+import { assert, beforeEach, expect, it, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getGatewayServiceUpdateNativeCommand } from "../../daemon/service-update-authority.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -25,34 +19,21 @@ import {
   type UpdateCommandChildGrant,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { useExecutorFixture, useExecutorReceipts } from "./update-command-executor.test-support.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("auxiliary-node-owner-", { splitRoots: true });
+const receipts = useExecutorReceipts();
 const nodeExecPath = resolveTestNodeExecPath();
 let root: string;
 let serviceRoot: string;
-let receipts: FixtureReceiptChannel;
 let run: NonNullable<UpdateCommandOptions["run"]>;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts?.close();
-});
 beforeEach(() => {
   run = { runId: randomUUID(), env: process.env };
-  const base = fs.realpathSync(dirs.make("auxiliary-node-owner-"));
-  root = path.join(base, "package-B");
-  serviceRoot = path.join(base, "service-A");
-  const control = path.join(base, "control");
-  for (const directory of [root, serviceRoot, control]) {
-    fs.mkdirSync(directory, { mode: 0o700 });
-  }
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  ({ root, serviceRoot } = fixture());
 });
-afterEach(() => vi.restoreAllMocks());
 
 function withOwner<T>(
   operation: (fence: UpdateRecoveryFence, executor: UpdateCommandExecutor) => Promise<T>,
@@ -86,32 +67,11 @@ function expectReleaseRefused(fence: UpdateRecoveryFence, reason = "not current"
   expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(reason);
 }
 
-// A receipt may arrive after the command settles; the fixture writes its marker first.
-function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
-  const settled = Promise.resolve(operation).then(
-    () => {
-      expect(fs.existsSync(marker)).toBe(true);
-    },
-    (error: unknown) => {
-      if (!fs.existsSync(marker)) {
-        throw error;
-      }
-    },
-  );
-  return Promise.race([receipts.waitFor(marker, "ready"), settled]);
-}
-
 function runBoundChild(
   _grant: UpdateCommandChildGrant,
   beforeInput: (pid: number, argv?: readonly string[]) => void,
-) {
-  return runChild(beforeInput, "require('node:fs').readFileSync(0,'utf8')");
-}
-
-function runChild(
-  beforeInput: (pid: number, argv?: readonly string[]) => void,
-  program: string,
-  options: { killGraceMs?: number } = {},
+  program = "require('node:fs').readFileSync(0,'utf8')",
+  killGraceMs?: number,
 ) {
   return runUtf8CommandWithTimeout([process.execPath, "-e", program], {
     input: "",
@@ -119,7 +79,7 @@ function runChild(
     timeoutMs: 10000,
     killProcessTree: true,
     requireProcessTreeExtinction: true,
-    ...options,
+    killGraceMs,
   });
 }
 
@@ -139,11 +99,14 @@ function effectArgs(effect: string, value = "'unauthorized'") {
 }
 
 function installer(
-  params: Omit<Parameters<typeof createPackageRuntimeRecovery>[0], "root" | "timeoutMs"> & {
-    timeoutMs?: number;
-  },
+  params: Partial<Omit<Parameters<typeof createPackageRuntimeRecovery>[0], "root">> = {},
 ) {
-  const recovery = createPackageRuntimeRecovery({ root, timeoutMs: 10000, ...params });
+  const recovery = createPackageRuntimeRecovery({
+    root,
+    opts: { run },
+    timeoutMs: 10000,
+    ...params,
+  });
   assert(recovery.installCommand);
   return recovery.installCommand;
 }
@@ -181,13 +144,13 @@ it.for(["initializing", "admitted"] as const)(
         [
           "--input-type=module",
           "-e",
-          `${fixtureReceiptClientSource(receipts.endpoint)}
+          `${fixtureReceiptClientSource(receipts.channel.endpoint)}
           import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid,nodeOptions:process.env.NODE_OPTIONS}));sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer)}},10);`,
         ],
         preload.env,
       );
       try {
-        await withinTest(fixtureReadyBeforeSettlement(ready, installing), signal);
+        await withinTest(receipts.ready(ready, installing), signal);
         expectReleaseRefused(fence, "The update process is still running.");
         await expect(executor.enter(root, { serviceRoot })).rejects.toThrow(
           "The update process is still running.",
@@ -213,7 +176,6 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
     const work = withOwner(async (fence) => {
       if (failure === "nonzero" || failure === "timeout" || failure === "unsettled") {
         const install = installer({
-          opts: { run },
           timeoutMs: failure === "timeout" ? 150 : 10000,
         });
         const childCode =
@@ -338,18 +300,18 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
 }) => {
   const ready = path.join(root, "draining");
   const proceed = path.join(root, "finish-drain");
-  const descendant = `${fixtureReceiptClientSource(receipts.endpoint)}
+  const descendant = `${fixtureReceiptClientSource(receipts.channel.endpoint)}
   import fs from 'node:fs';process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
   const program = `const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
   await withOwner(async (fence) => {
     const pending = withUpdateCommandExecutorChild(
       fence,
       root,
-      (_grant, beforeInput) => runChild(beforeInput, program, { killGraceMs: 5000 }),
+      (grant, beforeInput) => runBoundChild(grant, beforeInput, program, 5000),
       { auxiliaryPreflight: true },
     );
     try {
-      await withinTest(fixtureReadyBeforeSettlement(ready, pending), signal);
+      await withinTest(receipts.ready(ready, pending), signal);
       expectReleaseRefused(fence, "The update process is still running.");
       expectBusy(root);
     } finally {
@@ -407,17 +369,12 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
         return result;
       });
     });
-    const outcome = await withOwner(async () => {
-      const install = installer({ opts: { run } });
-      await install(nodeExecPath, effectArgs(effect), preload.env);
-    }).then(
-      () => "installed",
-      () => "refused",
-    );
+    await expect(
+      withOwner(async () => installer()(nodeExecPath, effectArgs(effect), preload.env)),
+    ).rejects.toThrow("did not complete");
     expect([effect, preload.marker].map(fs.existsSync)).toEqual([false, false]);
     expect(observed).toMatchObject({ code: 1, stdout: "", stderr: "" });
     expect(fs.readFileSync(drained, "utf8")).toBe("settled");
-    expect(outcome).toBe("refused");
     expectReleased();
   },
 );
@@ -548,7 +505,7 @@ it.each(["before-launch", "at-input"] as const)(
       });
     const work = withOwner(async () => {
       run.requesterAuthority = { requester: {}, isCurrent: () => requesterCurrent };
-      const install = installer({ opts: { run } });
+      const install = installer();
       if (boundary === "before-launch") {
         revoke();
       }
