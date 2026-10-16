@@ -145,7 +145,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
 
   readonly pinnedSessions = new SidebarPinnedSessions(this);
-  readonly sessionProjection = new SidebarSessionProjection(undefined, this);
+  readonly sessionProjection = new SidebarSessionProjection();
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
@@ -320,7 +320,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   override disconnectedCallback() {
-    this.sessionProjection.dispose();
+    this.sessionProjection.invalidate();
     this.homeMemos.clear();
     super.disconnectedCallback();
   }
