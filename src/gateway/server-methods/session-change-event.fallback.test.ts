@@ -25,6 +25,19 @@ import { createSessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { emitSessionsChanged, flushPendingSessionsChangedEvents } from "./session-change-event.js";
 
+function pluginNotices(pluginId: string) {
+  const lease = createPluginRuntimeCapabilityLease(pluginId);
+  const notices = vi.fn();
+  createPluginServiceGatewayEvents({ pluginId, broadcast: vi.fn(), lease })!.onSessionsChanged(
+    notices,
+  );
+  return { lease, notices };
+}
+
+function expectFrame(frames: unknown[], payload: unknown) {
+  expect(frames).toEqual([expect.objectContaining({ event: "sessions.changed", payload })]);
+}
+
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
   vi.restoreAllMocks();
@@ -130,13 +143,7 @@ it.each(["ready", "preparation"] as const)(
         connect: { ...recipient.connect, scopes: [] },
         socket: { ...recipient.socket, send: noRead },
       });
-      const lease = createPluginRuntimeCapabilityLease("fallback-proof");
-      const notices = vi.fn();
-      createPluginServiceGatewayEvents({
-        pluginId: "fallback-proof",
-        broadcast: vi.fn(),
-        lease,
-      })!.onSessionsChanged(notices);
+      const { lease, notices } = pluginNotices("fallback-proof");
       const reads: { describe: number; snapshot: number; sql: number }[] = [];
       const describe = vi.spyOn(projection, "describe");
       const snapshot = vi.spyOn(projection, "snapshot");
@@ -184,25 +191,18 @@ it.each(["ready", "preparation"] as const)(
         });
         await flushPendingSessionsChangedEvents(context);
         if (failure === "ready") {
-          expect(
-            reads.map(({ describe: describeCount, snapshot: snapshotCount }) => ({
-              describe: describeCount,
-              snapshot: snapshotCount,
-            })),
-          ).toEqual([{ describe: 0, snapshot: 0 }]);
-          expect(frames).toEqual([
+          expect(reads).toMatchObject([{ describe: 0, snapshot: 0 }]);
+          expectFrame(
+            frames,
             expect.objectContaining({
-              event: "sessions.changed",
-              payload: expect.objectContaining({
-                sessionKey,
-                reason: "patch",
-                session: expect.objectContaining({
-                  sessionId: "private-session",
-                  repository: { url: repository.url, branch: repository.branch },
-                }),
+              sessionKey,
+              reason: "patch",
+              session: expect.objectContaining({
+                sessionId: "private-session",
+                repository: { url: repository.url, branch: repository.branch },
               }),
             }),
-          ]);
+          );
           expect(noRead).not.toHaveBeenCalled();
           expect(projection.selectEntries()).toEqual([]);
           return;
@@ -217,17 +217,12 @@ it.each(["ready", "preparation"] as const)(
           agentId: "main",
           reason: "patch",
         });
-        expect(frames).toEqual([
-          expect.objectContaining({
-            event: "sessions.changed",
-            payload: {
-              reason: "update",
-              agentId: "main",
-              catalogChanged: true,
-              ts: expect.any(Number),
-            },
-          }),
-        ]);
+        expectFrame(frames, {
+          reason: "update",
+          agentId: "main",
+          catalogChanged: true,
+          ts: expect.any(Number),
+        });
         expect(noRead).not.toHaveBeenCalled();
         expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set());
         expect(broadcast.mock.calls[1]?.[2]).toEqual(new Set(["conn-1", "no-read"]));
@@ -290,13 +285,7 @@ it.each(ownerCases)(
       );
       const broadcaster = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
       const broadcast = vi.fn(broadcaster.broadcastToConnIds);
-      const lease = createPluginRuntimeCapabilityLease("fallback-scope");
-      const notices = vi.fn();
-      createPluginServiceGatewayEvents({
-        pluginId: "fallback-scope",
-        broadcast: vi.fn(),
-        lease,
-      })!.onSessionsChanged(notices);
+      const { lease, notices } = pluginNotices("fallback-scope");
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,

@@ -119,8 +119,14 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
   };
 }
 
-function install(overrides: Partial<SessionCatalogProvider>) {
-  const catalog = provider(overrides);
+function install(
+  overrides: Partial<SessionCatalogProvider>,
+  sessions?: ReturnType<typeof session>[],
+) {
+  const catalog = provider({
+    ...(sessions ? { list: vi.fn(async () => [host(sessions)]) } : {}),
+    ...overrides,
+  });
   hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
 }
 
@@ -135,6 +141,47 @@ function page(threadId: string, text?: string) {
 function locator(threadId: string, extra: Record<string, unknown> = {}) {
   return { catalogId: "codex", hostId: "gateway:local", threadId, ...extra };
 }
+
+function expectForbidden(
+  respond: ReturnType<typeof vi.fn>,
+  message?: string | ReturnType<typeof expect.stringContaining>,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: ErrorCodes.FORBIDDEN,
+      ...(message ? { message } : {}),
+    }),
+  );
+}
+
+function expectCatalog(respond: ReturnType<typeof vi.fn>, listedHost: ReturnType<typeof host>) {
+  expect(respond).toHaveBeenCalledWith(true, {
+    catalogs: [expect.objectContaining({ hosts: [listedHost] })],
+  });
+}
+
+function mutationProvider(key: string) {
+  return {
+    read: vi.fn(async () => page(key)),
+    continueSession: vi.fn(async () => ({ sessionKey: `agent:main:${key}` })),
+    archive: vi.fn(async () => ({ ok: true as const })),
+  };
+}
+
+function expectNoDispatch(catalog: Partial<ReturnType<typeof mutationProvider>>) {
+  for (const method of Object.values(catalog)) {
+    expect(method).not.toHaveBeenCalled();
+  }
+}
+
+const mutations = [
+  ["sessions.catalog.read", {}],
+  ["sessions.catalog.import", {}],
+  ["sessions.catalog.continue", {}],
+  ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
+] as const;
 
 async function call(
   method: keyof typeof sessionCatalogHandlers,
@@ -205,110 +252,52 @@ describe("session catalog caller visibility", () => {
     hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);
   });
 
-  it("rejects hidden targets before read, import, continue, or archive dispatch", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    setActors([["agent:main:other", "profile-other"]]);
-    const list = vi.fn(async () => [host([session("other-thread", "agent:main:other")])]);
-    const read = vi.fn(async () => page("other-thread"));
-    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:other" }));
-    const archive = vi.fn(async () => ({ ok: true as const }));
-    install({ list, read, continueSession, archive });
-
-    for (const [method, params] of [
-      ["sessions.catalog.read", {}],
-      ["sessions.catalog.import", {}],
-      ["sessions.catalog.continue", {}],
-      ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
-    ] as const) {
-      const respond = await call(method, locator("other-thread", params), client("profile-owner"));
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.FORBIDDEN,
-          message: "session catalog thread is not visible to this caller",
-        }),
-      );
-    }
-    expect(read).not.toHaveBeenCalled();
-    expect(continueSession).not.toHaveBeenCalled();
-    expect(archive).not.toHaveBeenCalled();
-  });
-
-  it("denies colliding channel creators across catalog operations", async () => {
-    sessionEntries = [
-      {
-        sessionKey: "agent:main:collision",
-        entry: {
-          createdActor: { type: "human", source: "channel", id: "profile-owner" },
-          visibility: "draft",
+  it.each(["foreign", "channel collision", "shared Gateway owner"] as const)(
+    "rejects %s targets before provider dispatch",
+    async (kind) => {
+      const collision = kind === "channel collision";
+      const gatewayOwner = kind === "shared Gateway owner";
+      const caller = gatewayOwner ? GATEWAY_OWNER_PROFILE_ID : "profile-owner";
+      hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(!collision);
+      sessionEntries = [
+        {
+          sessionKey: "agent:main:target",
+          entry: {
+            createdActor: {
+              type: "human",
+              source: collision ? "channel" : "profile",
+              id: kind === "foreign" ? "profile-other" : caller,
+            },
+            ...(collision ? { visibility: "draft" as const } : {}),
+          },
         },
-      },
-    ];
-    const read = vi.fn(async () => page("collision"));
-    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:collision" }));
-    const archive = vi.fn(async () => ({ ok: true as const }));
-    install({
-      list: vi.fn(async () => [host([session("collision", "agent:main:collision")])]),
-      read,
-      continueSession,
-      archive,
-    });
-    const cfg = roleConfig("none");
-    for (let pass = 0; pass < 2; pass++) {
-      const listed = await call("sessions.catalog.list", {}, client("profile-owner"), cfg);
-      expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
-    }
-    for (const method of [
-      "sessions.catalog.read",
-      "sessions.catalog.continue",
-      "sessions.catalog.archive",
-    ] as const) {
-      const result = await call(
-        method,
-        locator(
-          "collision",
-          method === "sessions.catalog.archive" ? { confirmNoOtherRunner: true } : {},
-        ),
-        client("profile-owner"),
-        cfg,
-      );
-      expect(result).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
-      );
-    }
-    expect(read).not.toHaveBeenCalled();
-    expect(continueSession).not.toHaveBeenCalled();
-    expect(archive).not.toHaveBeenCalled();
-  });
-
-  it("rejects reads for a shared owner multi-identity caller", async () => {
-    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-    setActors([["agent:main:owner", GATEWAY_OWNER_PROFILE_ID]]);
-    const read = vi.fn(async () => page("owner-thread", "private host history"));
-    install({
-      list: vi.fn(async () => [host([session("owner-thread", "agent:main:owner")])]),
-      read,
-    });
-
-    const transcript = await call(
-      "sessions.catalog.read",
-      locator("owner-thread"),
-      client(GATEWAY_OWNER_PROFILE_ID),
-    );
-
-    expect(transcript).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.FORBIDDEN,
-        message: "session catalog thread is not visible to this caller",
-      }),
-    );
-    expect(read).not.toHaveBeenCalled();
-  });
+      ];
+      const catalog = gatewayOwner
+        ? { read: vi.fn(async () => page("target", "private host history")) }
+        : mutationProvider("target");
+      install(catalog, [session("target", "agent:main:target")]);
+      const cfg = collision ? roleConfig("none") : {};
+      if (collision) {
+        for (let pass = 0; pass < 2; pass++) {
+          const listed = await call("sessions.catalog.list", {}, client(caller), cfg);
+          expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
+        }
+      }
+      const operations = gatewayOwner
+        ? mutations.slice(0, 1)
+        : collision
+          ? mutations.filter(([method]) => method !== "sessions.catalog.import")
+          : mutations;
+      for (const [method, extra] of operations) {
+        const result = await call(method, locator("target", extra), client(caller), cfg);
+        expectForbidden(
+          result,
+          collision ? undefined : "session catalog thread is not visible to this caller",
+        );
+      }
+      expectNoDispatch(catalog);
+    },
+  );
 
   it("shares only Gateway-hosted catalog rows with authenticated operators", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
@@ -372,9 +361,7 @@ describe("session catalog caller visibility", () => {
       requestClient,
     );
 
-    expect(listed).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ hosts: [listedHost] })],
-    });
+    expectCatalog(listed, listedHost);
     expect(transcript).toHaveBeenCalledWith(true, readResult);
   });
 
@@ -395,9 +382,7 @@ describe("session catalog caller visibility", () => {
     release.resolve();
 
     for (const respond of await Promise.all([before, after])) {
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [expect.objectContaining({ hosts: [listedHost] })],
-      });
+      expectCatalog(respond, listedHost);
     }
     expect(list).toHaveBeenCalledOnce();
   });
@@ -434,14 +419,11 @@ describe("session catalog caller visibility", () => {
       ["agent:main:owned", "profile-owner"],
       ["agent:main:other", "profile-other"],
     ]);
-    const list = vi.fn(async () => [
-      host([
-        session("owned-thread", "agent:main:owned"),
-        session("other-thread", "agent:main:other"),
-      ]),
-    ]);
     const read = vi.fn(async () => page("other-thread"));
-    install({ list, read });
+    install({ read }, [
+      session("owned-thread", "agent:main:owned"),
+      session("other-thread", "agent:main:other"),
+    ]);
     const config = roleConfig("none");
 
     const listed = await call("sessions.catalog.list", {}, client("profile-owner"), config);
@@ -455,43 +437,26 @@ describe("session catalog caller visibility", () => {
     expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([
       expect.objectContaining({ threadId: "owned-thread" }),
     ]);
-    expect(foreign).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
-    );
+    expectForbidden(foreign);
     expect(read).not.toHaveBeenCalled();
   });
 
   it("blocks foreign catalog continue and archive for view roles without explicit membership", async () => {
     setActors([["agent:main:other", "profile-other"]]);
-    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:other" }));
-    const archive = vi.fn(async () => ({ ok: true as const }));
-    install({
-      list: vi.fn(async () => [host([session("other-thread", "agent:main:other")])]),
-      continueSession,
-      archive,
-    });
+    const catalog = mutationProvider("other");
+    install(catalog, [session("other-thread", "agent:main:other")]);
     const config = roleConfig("view");
 
-    for (const [method, extra] of [
-      ["sessions.catalog.continue", {}],
-      ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
-    ] as const) {
+    for (const [method, extra] of mutations.slice(2)) {
       const respond = await call(
         method,
         locator("other-thread", extra),
         client("profile-owner"),
         config,
       );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
-      );
+      expectForbidden(respond);
     }
-    expect(continueSession).not.toHaveBeenCalled();
-    expect(archive).not.toHaveBeenCalled();
+    expectNoDispatch(catalog);
   });
 
   it("permits a view-capped person to archive a foreign session after explicit membership", async () => {
@@ -537,10 +502,7 @@ describe("session catalog caller visibility", () => {
   it("rejects catalog adoption before the provider creates a disallowed agent session", async () => {
     setActors([["agent:main:owned", "profile-owner"]]);
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:owned" }));
-    install({
-      list: vi.fn(async () => [host([session("owned-thread", "agent:main:owned")])]),
-      continueSession,
-    });
+    install({ continueSession }, [session("owned-thread", "agent:main:owned")]);
 
     const respond = await call(
       "sessions.catalog.continue",
@@ -550,14 +512,7 @@ describe("session catalog caller visibility", () => {
     );
 
     expect(continueSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.FORBIDDEN,
-        message: expect.stringContaining('cannot create sessions for agent "main"'),
-      }),
-    );
+    expectForbidden(respond, expect.stringContaining('cannot create sessions for agent "main"'));
   });
 
   it("keeps operator.admin unrestricted despite a configured none role", async () => {
@@ -572,8 +527,6 @@ describe("session catalog caller visibility", () => {
       roleConfig("none"),
     );
 
-    expect(listed).toHaveBeenCalledWith(true, {
-      catalogs: [expect.objectContaining({ hosts: [listedHost] })],
-    });
+    expectCatalog(listed, listedHost);
   });
 });

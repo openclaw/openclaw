@@ -185,14 +185,13 @@ function preparePlacementProjection(
   return { update };
 }
 
-let restorePerformanceClock: () => void;
-
 beforeEach((context) => {
   vi.useFakeTimers();
   // Publication budgets must advance on the same clock as debounce timers.
   const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  restorePerformanceClock = () => clock.mockRestore();
-  context.onTestFinished(restorePerformanceClock);
+  context.onTestFinished(() => {
+    clock.mockRestore();
+  });
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
     key,
     label: mocks.rowLabel,
@@ -334,10 +333,9 @@ describe("sessions.changed coalescing", () => {
       vi.useRealTimers();
       mocks.warn.mockClear();
       const context = createContext();
-      const cfg = context.getRuntimeConfig();
       const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
       const projection = createSessionRowProjectionFixture({
-        cfg,
+        cfg: context.getRuntimeConfig(),
         store: Object.fromEntries(
           keys.map((key) => [key, { sessionId: key, updatedAt: 1, label: "committed" }]),
         ),
@@ -647,15 +645,9 @@ describe("sessions.changed coalescing", () => {
 
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
-      expect.objectContaining({
-        activeRunIds: ["ops-global-run"],
-        hasActiveRun: true,
-      }),
+      expect.objectContaining({ activeRunIds: ["ops-global-run"], hasActiveRun: true }),
       expect.anything(),
-      expect.objectContaining({
-        agentId: "ops",
-        sessionKeys: ["global"],
-      }),
+      expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] }),
     );
     const payload = broadcasts(context)[0]?.[1];
     expect(payload).not.toHaveProperty("agentId");
