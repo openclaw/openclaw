@@ -55,6 +55,11 @@ describe("Ollama configured output budgets", () => {
     { id: "custom", baseUrl: "https://ollama.com", expected: 262_144 },
     { id: "custom:cloud", baseUrl: "http://127.0.0.1:11434", expected: 262_144 },
     { id: "custom", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
+    { id: "minimax-m3", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
+    { id: "kimi-k3", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
+    { id: "minimax-m3", baseUrl: "https://ollama.com", expected: 262_144 },
+    { id: "kimi-k3:cloud", baseUrl: "http://127.0.0.1:11434", expected: 262_144 },
+    { id: "minimax-m3", baseUrl: "http://127.0.0.1:11434", maxTokens: 1024, expected: 1024 },
     { id: "custom", baseUrl: "https://ollama.com", maxTokens: 1024, expected: 1024 },
     { id: "custom", baseUrl: "https://ollama.com", providerMaxTokens: 2048, expected: 2048 },
   ])(

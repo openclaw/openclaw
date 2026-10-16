@@ -1,4 +1,4 @@
-import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { isCloudModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
@@ -70,12 +70,11 @@ export function resolveOllamaOutputBudget(params: {
   contextWindow?: number;
   remote?: boolean;
 }): number {
-  return (
-    resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
-    (params.remote || isCloudModelRef(params.modelId)
-      ? (params.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW)
-      : OLLAMA_DEFAULT_MAX_TOKENS)
-  );
+  return params.remote || isCloudModelRef(params.modelId)
+    ? (resolveOllamaCloudDefaultModel(params.modelId)?.maxTokens ??
+        params.contextWindow ??
+        OLLAMA_DEFAULT_CONTEXT_WINDOW)
+    : OLLAMA_DEFAULT_MAX_TOKENS;
 }
 
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;

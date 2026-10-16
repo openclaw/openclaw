@@ -478,7 +478,9 @@ export function buildDefaultOllamaCloudModelDefinition(
   model: (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number],
 ): ModelDefinitionConfig {
   return {
-    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities]),
+    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities], {
+      remote: true,
+    }),
     compat: {
       supportsTools: true,
       supportsUsageInStreaming: true,

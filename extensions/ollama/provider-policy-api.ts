@@ -1,13 +1,13 @@
-import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+} from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isCloudModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelProviderConfig,
   ProviderToolSearchPolicyContext,

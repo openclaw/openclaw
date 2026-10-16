@@ -7,6 +7,7 @@ const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn<typeof fetchWithSsrFG
 // mock-isolation: Capture native HTTP payloads without DNS or network activity.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: fetchMock }));
 
+import { buildOllamaModelDefinition } from "./provider-models.js";
 import { createOllamaStreamFn } from "./stream.runtime.js";
 
 const baseModel: Model = {
@@ -84,6 +85,21 @@ describe("native Ollama output guards", () => {
       options: { num_predict: expected },
     });
   });
+
+  it.each(["minimax-m3", "kimi-k3"])(
+    "sends the local default for a bare %s catalog collision",
+    async (id) => {
+      const definition = buildOllamaModelDefinition(id);
+      const model = { ...baseModel, id, maxTokens: definition.maxTokens };
+      const stream = await createOllamaStreamFn(model.baseUrl)(model, {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      });
+      await stream.result();
+      expect(JSON.parse(requestBodyText(fetchMock.mock.calls[0]?.[0].init?.body))).toMatchObject({
+        options: { num_predict: 8192 },
+      });
+    },
+  );
 
   it("replays preserved blocks and the repetition marker through the native request", async () => {
     const stream = await createOllamaStreamFn(baseModel.baseUrl)(baseModel, {

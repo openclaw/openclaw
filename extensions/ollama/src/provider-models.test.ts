@@ -163,7 +163,9 @@ describe("ollama provider models", () => {
     { id: "glm-5.2", contextWindow: 1_000_000, maxTokens: 131_072 },
   ])("keeps the cloud output budget for $id aliases", ({ id, contextWindow, maxTokens }) => {
     for (const modelId of [id, `${id}:cloud`, `${id}-cloud`]) {
-      expect(buildOllamaModelDefinition(modelId)).toMatchObject({
+      expect(
+        buildOllamaModelDefinition(modelId, undefined, undefined, { remote: true }),
+      ).toMatchObject({
         id: modelId,
         contextWindow,
         maxTokens,
@@ -173,6 +175,10 @@ describe("ollama provider models", () => {
 
   it.each([
     { name: "local-model", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "minimax-m3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "kimi-k3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
+    { name: "minimax-m3", baseUrl: "https://ollama.com", maxTokens: 524_288 },
+    { name: "kimi-k3", baseUrl: "https://ollama.com", maxTokens: 1_048_576 },
     { name: "glm-5.2:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 131_072 },
     { name: "unknown:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 262_144 },
     { name: "unknown", baseUrl: "https://ollama.com", maxTokens: 262_144 },
