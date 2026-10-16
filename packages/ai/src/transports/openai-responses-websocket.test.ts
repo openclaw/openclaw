@@ -82,7 +82,7 @@ const clientFixture = {
   },
 };
 const client = clientFixture as never;
-const firstUser = { role: "user", content: "first" };
+const firstUser = { role: "user" as const, content: "first" };
 const assistantOutput = {
   type: "message",
   id: "msg_1",
@@ -364,7 +364,8 @@ describe("native OpenAI Responses WebSocket transport", () => {
       );
     };
     try {
-      await expect(failTurn()).rejects.toThrow("failed after request dispatch");
+      // Vitest's async matcher retains the rejection until the test finishes.
+      await assert.rejects(failTurn(), /failed after request dispatch/);
       const control = new WeakRef({ unowned: true });
       await nextTurn();
       queryObjects(WeakRef);
