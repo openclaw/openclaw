@@ -44,6 +44,10 @@ vi.mock("./workspace-path-containment.js", () => ({
 
 import { sessionGroupHandlers } from "./sessions-groups.js";
 
+function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
 function updateOptions(
   params: Record<string, unknown>,
   respond: ReturnType<typeof vi.fn>,
@@ -61,14 +65,15 @@ function updateOptions(
 }
 
 function renameOptions(params: Record<string, unknown>, respond: ReturnType<typeof vi.fn>) {
-  return {
-    params,
-    respond,
-    context: {
-      getRuntimeConfig: () => ({}),
-      getSessionEventSubscriberConnIds: () => new Set<string>(),
-    },
-  } as unknown as GatewayRequestHandlerOptions;
+  const { client: _client, ...options } = updateOptions(params, respond);
+  return options;
+}
+
+function run(method: keyof typeof sessionGroupHandlers, options: GatewayRequestHandlerOptions) {
+  return expectDefined(
+    sessionGroupHandlers[method],
+    `sessionGroupHandlers["${method}"] test invariant`,
+  )(options);
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -84,16 +89,9 @@ describe("sessions.groups.put", () => {
       throw new groupMocks.NotEmpty(message);
     });
     const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.put"],
-      'sessionGroupHandlers["sessions.groups.put"] test invariant',
-    )(updateOptions({ names: ["Keep"] }, respond));
+    await run("sessions.groups.put", updateOptions({ names: ["Keep"] }, respond));
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST", message }),
-    );
+    expectFailure(respond, { code: "INVALID_REQUEST", message });
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
@@ -111,10 +109,7 @@ describe("sessions.groups.put", () => {
     const assertTargetCurrent = vi.fn();
     options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
 
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.put"],
-      'sessionGroupHandlers["sessions.groups.put"] test invariant',
-    )(options);
+    await run("sessions.groups.put", options);
 
     expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
       cfg,
@@ -138,12 +133,9 @@ describe("sessions.groups.put", () => {
       throw error;
     });
     const respond = vi.fn();
-    await expect(
-      expectDefined(
-        sessionGroupHandlers["sessions.groups.put"],
-        'sessionGroupHandlers["sessions.groups.put"] test invariant',
-      )(updateOptions({ names: [] }, respond)),
-    ).rejects.toBe(error);
+    await expect(run("sessions.groups.put", updateOptions({ names: [] }, respond))).rejects.toBe(
+      error,
+    );
     expect(respond).not.toHaveBeenCalled();
   });
 });
@@ -159,56 +151,42 @@ describe("sessions.groups.update", () => {
 
   it("rejects a relative cwd before mutating defaults", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(updateOptions({ name: "Travel", cwd: "tmp/travel", worktree: false }, respond));
+    await run(
+      "sessions.groups.update",
+      updateOptions({ name: "Travel", cwd: "tmp/travel", worktree: false }, respond),
+    );
 
     expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectFailure(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects a stale target without recreating it", async () => {
     groupMocks.update.mockReturnValue(null);
     const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(updateOptions({ name: "Travel", cwd: "/tmp/travel", worktree: true }, respond));
+    await run(
+      "sessions.groups.update",
+      updateOptions({ name: "Travel", cwd: "/tmp/travel", worktree: true }, respond),
+    );
 
     expect(groupMocks.update).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown session group: Travel",
-      }),
-    );
+    expectFailure(respond, {
+      code: "INVALID_REQUEST",
+      message: "unknown session group: Travel",
+    });
   });
 
   it("rejects a non-admin cwd outside configured workspaces", async () => {
     pathMocks.resolveContainment.mockResolvedValue(null);
     const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(
+    await run(
+      "sessions.groups.update",
       updateOptions({ name: "Travel", cwd: "/outside/travel", worktree: false }, respond, [
         "operator.write",
       ]),
     );
 
     expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-    );
+    expectFailure(respond, { message: expect.stringContaining("operator.admin") });
   });
 
   it("persists the canonical workspace-contained cwd for a write caller", async () => {
@@ -235,10 +213,7 @@ describe("sessions.groups.update", () => {
       assertCurrent,
       assertTargetCurrent: vi.fn(),
     };
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(options);
+    await run("sessions.groups.update", options);
 
     expect(assertCurrent).toHaveBeenCalledOnce();
     expect(changes).not.toHaveBeenCalled();
@@ -286,10 +261,7 @@ describe("sessions.groups.update", () => {
       ["operator.write"],
     );
     options.context.getRuntimeConfig = () => runtimeConfig;
-    const update = expectDefined(
-      sessionGroupHandlers["sessions.groups.update"],
-      'sessionGroupHandlers["sessions.groups.update"] test invariant',
-    )(options);
+    const update = run("sessions.groups.update", options);
 
     await vi.waitFor(() => expect(pathMocks.resolveContainment).toHaveBeenCalledOnce());
     runtimeConfig = retiredConfig;
@@ -298,11 +270,7 @@ describe("sessions.groups.update", () => {
 
     expect(pathMocks.isCurrent).toHaveBeenCalledWith(containment, retiredConfig);
     expect(groupMocks.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
-    );
+    expectFailure(respond, { message: expect.stringContaining("operator.admin") });
   });
 });
 
@@ -314,18 +282,11 @@ describe("sessions.groups.rename", () => {
   it("rejects an unknown source group", async () => {
     groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
     const respond = vi.fn();
-    await expectDefined(
-      sessionGroupHandlers["sessions.groups.rename"],
-      'sessionGroupHandlers["sessions.groups.rename"] test invariant',
-    )(renameOptions({ name: "Missing", to: "Other" }, respond));
+    await run("sessions.groups.rename", renameOptions({ name: "Missing", to: "Other" }, respond));
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "unknown session group: Missing",
-      }),
-    );
+    expectFailure(respond, {
+      code: "INVALID_REQUEST",
+      message: "unknown session group: Missing",
+    });
   });
 });

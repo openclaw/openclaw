@@ -52,6 +52,26 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
+function expectSuccess(respond: ReturnType<typeof vi.fn>, result: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
+function readEntry(env: NodeJS.ProcessEnv, sessionKey: string) {
+  return loadSessionEntry({ agentId: "main", env, sessionKey });
+}
+
+function seedEntry(
+  env: NodeJS.ProcessEnv,
+  sessionKey: string,
+  entry: Parameters<typeof upsertSessionEntryCore>[1],
+) {
+  return upsertSessionEntryCore({ agentId: "main", env, sessionKey }, { updatedAt: 1, ...entry });
+}
+
+function handoffConfig(): OpenClawConfig {
+  return { agents: { entries: { main: {}, research: { identity: { name: "Research" } } } } };
+}
+
 const withSessionMutationState = setupSessionMutationState();
 let caseNumber = 0;
 beforeEach(() => {
@@ -229,7 +249,7 @@ describe("sessions.patch", () => {
         context: context({}),
         respond,
       } as never);
-      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expectSuccess(respond, expect.any(Object));
       const entry = loadSessionEntry(scope);
       expect(entry?.thinkingLevel).toBeUndefined();
       expect(entry?.contextWindow).toBeUndefined();
@@ -254,10 +274,7 @@ describe("sessions.patch", () => {
         const failed = kind === "failed";
         const sessionId = failed ? "failed-permission-update" : "unsupported-permissions";
         const sessionKey = `agent:main:${sessionId}`;
-        await upsertSessionEntryCore(
-          { agentId: "main", env: state.env, sessionKey },
-          { sessionId, updatedAt: 1, permissionMode: "guarded" },
-        );
+        await seedEntry(state.env, sessionKey, { sessionId, permissionMode: "guarded" });
         const abort = vi.fn();
         const handle = failed
           ? {
@@ -291,12 +308,10 @@ describe("sessions.patch", () => {
           );
           if (failed) {
             expect(abort).toHaveBeenCalledOnce();
-            expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject(
-              {
-                permissionMode: "read-only",
-                label: "Updated session",
-              },
-            );
+            expect(readEntry(state.env, sessionKey)).toMatchObject({
+              permissionMode: "read-only",
+              label: "Updated session",
+            });
             expect(patched).toHaveBeenCalledWith(
               expect.objectContaining({
                 sessionKey,
@@ -306,9 +321,7 @@ describe("sessions.patch", () => {
               }),
             );
           } else {
-            expect(
-              loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
-            ).toBe("guarded");
+            expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("guarded");
           }
           expect(isSessionPermissionChangePending(sessionId)).toBe(false);
         } finally {
@@ -331,10 +344,7 @@ describe("sessions.patch", () => {
         const requestContext = context(cfg);
         const requestClient = client();
         requestClient.connect.scopes = ["operator.admin"];
-        await upsertSessionEntryCore(
-          { agentId: "main", env: state.env, sessionKey },
-          { sessionId, updatedAt: 1, permissionMode: "guarded" },
-        );
+        await seedEntry(state.env, sessionKey, { sessionId, permissionMode: "guarded" });
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const catalogEntered = createDeferredCore();
@@ -390,18 +400,14 @@ describe("sessions.patch", () => {
             expect(patched).not.toHaveBeenCalled();
             expect(isSessionPermissionChangePending(sessionId)).toBe(false);
             expect(responses[0]).not.toHaveBeenCalled();
-            expect(
-              loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
-            ).toBe("guarded");
+            expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("guarded");
           }
           catalogRelease.resolve(snapshot);
           await Promise.race([entered.promise, first]);
           expect(applyPermissionMode).toHaveBeenCalledTimes(1);
           expect(responses[0]).not.toHaveBeenCalled();
           expect(isSessionPermissionChangePending(sessionId)).toBe(true);
-          expect(
-            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
-          ).toBe("full");
+          expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("full");
           second = patch("read-only", 1);
           await Promise.resolve();
           expect(applyPermissionMode).toHaveBeenCalledTimes(1);
@@ -411,18 +417,14 @@ describe("sessions.patch", () => {
             "full",
             "read-only",
           ]);
-          expect(responses[0]).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-          expect(responses[1]).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+          expectSuccess(responses[0], expect.any(Object));
+          expectSuccess(responses[1], expect.any(Object));
           expect(patched).toHaveBeenCalledTimes(2);
           expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(prepareCatalog ? 1 : 0);
           expect(isSessionPermissionChangePending(sessionId)).toBe(false);
-          expect(
-            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
-          ).toBe("read-only");
+          expect(readEntry(state.env, sessionKey)?.permissionMode).toBe("read-only");
           if (prepareCatalog) {
-            expect(
-              loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.thinkingLevel,
-            ).toBe("low");
+            expect(readEntry(state.env, sessionKey)?.thinkingLevel).toBe("low");
           }
         } finally {
           catalogRelease.resolve(snapshot);
@@ -534,18 +536,14 @@ describe("sessions.patch", () => {
           });
           catalogRelease.resolve();
           await pending;
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              outcomes: [
-                revokeFirst
-                  ? { key: keys[0], ok: false, error: expect.any(Object) }
-                  : { key: keys[0], ok: true },
-                { key: keys[1], ok: true },
-              ],
-            },
-            undefined,
-          );
+          expectSuccess(respond, {
+            outcomes: [
+              revokeFirst
+                ? { key: keys[0], ok: false, error: expect.any(Object) }
+                : { key: keys[0], ok: true },
+              { key: keys[1], ok: true },
+            ],
+          });
           for (const [index, key] of keys.entries()) {
             const applied = index === 1 || !revokeFirst;
             expect(loadSessionEntry(scope(key))?.permissionMode).toBe(
@@ -610,14 +608,14 @@ describe("sessions.patch", () => {
             sessionMutationAuthorization: authorization.authorization,
             respond,
           } as never);
-          expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+          expectSuccess(respond, expect.any(Object));
         } finally {
           authorization.authorization?.release?.();
         }
       };
 
       await patch(true);
-      const entry = loadSessionEntry({ agentId: "main", env: state.env, sessionKey });
+      const entry = readEntry(state.env, sessionKey);
       expect(entry).toMatchObject({
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: profileId },
@@ -631,9 +629,7 @@ describe("sessions.patch", () => {
       ).toBe(true);
 
       await patch(false);
-      expect(
-        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.pinnedAt,
-      ).toBeUndefined();
+      expect(readEntry(state.env, sessionKey)?.pinnedAt).toBeUndefined();
     });
   });
 });
@@ -646,15 +642,11 @@ describe("sessions.assignOwner", () => {
         const handoff = revokeRequester ? "revoked-handoff" : "lifecycle-handoff";
         const sessionKey = `agent:main:${handoff}`;
         const sessionId = `session-${handoff}`;
-        await upsertSessionEntryCore(
-          { agentId: "main", env: state.env, sessionKey },
-          {
-            sessionId,
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "profile-creator" },
-          },
-        );
+        await seedEntry(state.env, sessionKey, {
+          sessionId,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+        });
         const cfg = {
           agents: { ownership: "explicit", entries: { main: {}, research: {} } },
         } as OpenClawConfig;
@@ -700,9 +692,7 @@ describe("sessions.assignOwner", () => {
               }),
             ]),
           ).resolves.toBe("blocked");
-          expect(
-            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-          ).toBeUndefined();
+          expect(readEntry(state.env, sessionKey)?.owner).toBeUndefined();
           if (revokeRequester) {
             requesterCurrent = false;
           }
@@ -712,9 +702,7 @@ describe("sessions.assignOwner", () => {
         }
         if (revokeRequester) {
           await expect(assignment).rejects.toThrow("assignment requester authority ended");
-          expect(
-            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-          ).toBeUndefined();
+          expect(readEntry(state.env, sessionKey)?.owner).toBeUndefined();
         } else {
           await expect(assignment).resolves.toMatchObject({
             responses: [[true, { owner: { actor: { type: "agent", id: "research" } } }, undefined]],
@@ -729,26 +717,15 @@ describe("sessions.assignOwner", () => {
       const sessionKey = "agent:main:handoff";
       const ownerProfile = ensureProfileForEmail("requester@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release };
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId: "session-handoff",
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "spawn",
-          createdActor: { type: "agent", id: "main" },
-          createdAt: 1,
-          parentSessionKey: "agent:main:main",
-        },
-      );
-      const cfg = {
-        agents: {
-          entries: {
-            main: {},
-            research: { identity: { name: "Research" } },
-          },
-        },
-      } as OpenClawConfig;
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-handoff",
+        visibility: "shared",
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "main" },
+        createdAt: 1,
+        parentSessionKey: "agent:main:main",
+      });
+      const cfg = handoffConfig();
       const requestContext = context(cfg);
       await expect(
         dispatchGatewayMethodInProcess(
@@ -773,13 +750,11 @@ describe("sessions.assignOwner", () => {
         },
       });
 
-      expect(
-        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-      ).toMatchObject({
+      expect(readEntry(state.env, sessionKey)?.owner).toMatchObject({
         actor: { type: "human", id: ownerProfile.id },
         assignedBy: { type: "agent", id: "main" },
       });
-      expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject({
+      expect(readEntry(state.env, sessionKey)).toMatchObject({
         createdVia: "spawn",
         createdActor: { type: "agent", id: "main" },
         createdAt: 1,
@@ -794,23 +769,12 @@ describe("sessions.assignOwner", () => {
     async (visibility) => {
       await withSessionMutationState(async (state) => {
         const sessionKey = "agent:main:handoff";
-        await upsertSessionEntryCore(
-          { agentId: "main", env: state.env, sessionKey },
-          {
-            sessionId: "session-handoff",
-            updatedAt: 1,
-            visibility,
-            createdActor: { type: "human", source: "profile", id: "profile-creator" },
-          },
-        );
-        const cfg = {
-          agents: {
-            entries: {
-              main: {},
-              research: { identity: { name: "Research" } },
-            },
-          },
-        } as OpenClawConfig;
+        await seedEntry(state.env, sessionKey, {
+          sessionId: "session-handoff",
+          visibility,
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+        });
+        const cfg = handoffConfig();
         vi.spyOn(Date, "now").mockReturnValue(4242);
 
         const result = await invoke({
@@ -835,7 +799,7 @@ describe("sessions.assignOwner", () => {
             undefined,
           ],
         ]);
-        expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner).toEqual({
+        expect(readEntry(state.env, sessionKey)?.owner).toEqual({
           actor: { type: "agent", id: "research" },
           assignedBy: { type: "human", id: "profile-viewer" },
           assignedAt: 4242,
@@ -864,9 +828,10 @@ describe("sessions.assignOwner", () => {
             undefined,
           ],
         ]);
-        expect(
-          loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner?.actor,
-        ).toEqual({ type: "human", id: durableOwner.id });
+        expect(readEntry(state.env, sessionKey)?.owner?.actor).toEqual({
+          type: "human",
+          id: durableOwner.id,
+        });
 
         const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
         if (!target) {
@@ -891,15 +856,11 @@ describe("sessions.assignOwner", () => {
   it("rejects hidden viewers, unidentified callers, and unknown owner targets", async () => {
     await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:private-handoff";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId: "session-private-handoff",
-          updatedAt: 1,
-          visibility: "draft",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
-        },
-      );
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-private-handoff",
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
+      });
       const cfg = {
         agents: { entries: { main: {}, research: {} } },
       } as OpenClawConfig;
@@ -958,15 +919,12 @@ describe("sessions.assignOwner", () => {
         message: expect.stringContaining("unexpected property 'agentToolCaller'"),
       });
 
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId: "session-private-handoff",
-          updatedAt: 2,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
-        },
-      );
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-private-handoff",
+        updatedAt: 2,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "profile-creator" },
+      });
       for (const owner of [
         { type: "human" as const, id: "unknown-profile" },
         { type: "human" as const, id: "discord:channel:123" },
@@ -982,9 +940,7 @@ describe("sessions.assignOwner", () => {
           message: `unknown session owner "${owner.id}"`,
         });
       }
-      expect(
-        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-      ).toBeUndefined();
+      expect(readEntry(state.env, sessionKey)?.owner).toBeUndefined();
     });
   });
 });

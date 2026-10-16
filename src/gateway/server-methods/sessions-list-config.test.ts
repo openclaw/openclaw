@@ -36,6 +36,19 @@ afterEach(() => vi.restoreAllMocks());
 
 const readDatabases = history.withSessionHistoryWorkerDatabases;
 
+function withScopes(cfg: OpenClawConfig, scopes: OperatorScope[]): OpenClawConfig {
+  return { ...cfg, gateway: { auth: { identityScopes: { "viewer@example.test": scopes } } } };
+}
+
+function resolvedKeyFacts() {
+  return createConfigResolutionFacts(
+    [],
+    new Map(),
+    undefined,
+    new Map([["models.providers.unit.apiKey", "UNIT_KEY"]]),
+  );
+}
+
 function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
   vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation((targets, consume) =>
     readDatabases(targets, (owners) =>
@@ -264,10 +277,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
         return result;
       };
       for (const scopes of [["operator.read"], ["operator.admin"]] satisfies OperatorScope[][]) {
-        await publish(
-          { ...cfg, gateway: { auth: { identityScopes: { "viewer@example.test": scopes } } } },
-          false,
-        );
+        await publish(withScopes(cfg, scopes), false);
       }
       const { gateway: _gateway, ...withoutGateway } = cfg;
       await publish(withoutGateway, false);
@@ -280,10 +290,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
         visibility: "shared",
         label: "Changed during reload",
       });
-      cfg = {
-        ...cfg,
-        gateway: { auth: { identityScopes: { "viewer@example.test": ["operator.read"] } } },
-      };
+      cfg = withScopes(cfg, ["operator.read"]);
       setRuntimeConfigSnapshot(cfg);
       expect((await list()).sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
         "Changed during reload",
@@ -291,11 +298,10 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       expect(reads).toEqual([]);
 
       const changedModel = await publish(
-        {
-          ...cfg,
-          agents: { ...cfg.agents, defaults: { model: "unit-test/changed" } },
-          gateway: { auth: { identityScopes: { "viewer@example.test": ["operator.admin"] } } },
-        },
+        withScopes(
+          { ...cfg, agents: { ...cfg.agents, defaults: { model: "unit-test/changed" } } },
+          ["operator.admin"],
+        ),
         true,
       );
       expect(changedModel.sessions.map((row) => row.model)).toEqual(["changed", "changed"]);
@@ -303,41 +309,16 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       for (const [index, facts] of [
         createConfigResolutionFacts([]),
         createConfigResolutionFacts([], new Map([["models.providers.unit.apiKey", "UNIT_KEY"]])),
-        createConfigResolutionFacts(
-          [],
-          new Map(),
-          undefined,
-          new Map([["models.providers.unit.apiKey", "UNIT_KEY"]]),
-        ),
+        resolvedKeyFacts(),
       ].entries()) {
-        const next: OpenClawConfig = {
-          ...cfg,
-          gateway: {
-            auth: {
-              identityScopes: {
-                "viewer@example.test": [index % 2 === 0 ? "operator.read" : "operator.admin"],
-              },
-            },
-          },
-        };
+        const next = withScopes(cfg, [index % 2 === 0 ? "operator.read" : "operator.admin"]);
         setConfigResolutionFacts(next, facts);
         await publish(next, true);
       }
 
       reads.length = 0;
-      const forced: OpenClawConfig = {
-        ...cfg,
-        gateway: { auth: { identityScopes: { "viewer@example.test": ["operator.admin"] } } },
-      };
-      setConfigResolutionFacts(
-        forced,
-        createConfigResolutionFacts(
-          [],
-          new Map(),
-          undefined,
-          new Map([["models.providers.unit.apiKey", "UNIT_KEY"]]),
-        ),
-      );
+      const forced = withScopes(cfg, ["operator.admin"]);
+      setConfigResolutionFacts(forced, resolvedKeyFacts());
       context.getRuntimeConfig = () => forced;
       sessionChanges.emit({ all: true, scope: "config", factsInvalidated: true });
       await list();

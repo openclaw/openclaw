@@ -22,6 +22,28 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+async function archiveProjection(cfg: OpenClawConfig) {
+  const release = retainSessionListForegroundWork();
+  const context = requestContext(cfg);
+  await initializeSessionReadContext(context);
+  const projection = getSessionRowProjection(context)!;
+  return {
+    context,
+    projection,
+    [Symbol.dispose]() {
+      projection.dispose();
+      release();
+    },
+  };
+}
+
+const readerRoles: NonNullable<OpenClawConfig["gateway"]>["roles"] = {
+  default: "reader",
+  definitions: {
+    reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+  },
+};
+
 it("pages and searches archived sessions without materializing excluded candidates", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
@@ -41,41 +63,34 @@ it("pages and searches archived sessions without materializing excluded candidat
         },
       );
     }
-    const release = retainSessionListForegroundWork();
-    const context = requestContext(cfg);
     const client = identifiedClient("archive-viewer");
-    await initializeSessionReadContext(context);
-    const projection = getSessionRowProjection(context)!;
+    using fixture = await archiveProjection(cfg);
+    const { context, projection } = fixture;
     const list = (request: Parameters<typeof listSessions>[0]["request"]) =>
       listSessions({ context, client, request });
-    try {
-      await projection.ensureMaterialized();
-      expect(projection.materializedCount).toBe(3);
-      const first = await list({ archived: true, limit: 2 });
-      expect(first).toMatchObject({ count: 2, totalCount: 4, nextOffset: 2 });
-      expect(first.sessions.map((row) => row.sessionId)).toEqual(["row-6", "row-4"]);
-      expect(projection.materializedCount).toBe(5);
-      const mixed = await list({ archived: "all", offset: 1, limit: 3 });
-      expect(mixed).toMatchObject({ count: 3, totalCount: 7, nextOffset: 4 });
-      expect(mixed.sessions.map((row) => row.sessionId)).toEqual(["row-5", "row-4", "row-3"]);
-      expect(projection.materializedCount).toBe(5);
-      const searched = await list({
-        archived: true,
-        search: "anthropic",
-        hasBoard: false,
-        limit: 1,
-      });
-      expect(searched).toMatchObject({ count: 1, totalCount: 4, nextOffset: 1 });
-      expect(searched.sessions[0]?.sessionId).toBe("row-6");
-      expect(projection.materializedCount).toBe(5);
-      const tail = await list({ archived: true, offset: 2, limit: 2 });
-      expect(tail).toMatchObject({ count: 2, totalCount: 4, nextOffset: null });
-      expect(tail.sessions.map((row) => row.sessionId)).toEqual(["row-2", "row-0"]);
-      expect(projection.materializedCount).toBe(7);
-    } finally {
-      projection.dispose();
-      release();
-    }
+    await projection.ensureMaterialized();
+    expect(projection.materializedCount).toBe(3);
+    const first = await list({ archived: true, limit: 2 });
+    expect(first).toMatchObject({ count: 2, totalCount: 4, nextOffset: 2 });
+    expect(first.sessions.map((row) => row.sessionId)).toEqual(["row-6", "row-4"]);
+    expect(projection.materializedCount).toBe(5);
+    const mixed = await list({ archived: "all", offset: 1, limit: 3 });
+    expect(mixed).toMatchObject({ count: 3, totalCount: 7, nextOffset: 4 });
+    expect(mixed.sessions.map((row) => row.sessionId)).toEqual(["row-5", "row-4", "row-3"]);
+    expect(projection.materializedCount).toBe(5);
+    const searched = await list({
+      archived: true,
+      search: "anthropic",
+      hasBoard: false,
+      limit: 1,
+    });
+    expect(searched).toMatchObject({ count: 1, totalCount: 4, nextOffset: 1 });
+    expect(searched.sessions[0]?.sessionId).toBe("row-6");
+    expect(projection.materializedCount).toBe(5);
+    const tail = await list({ archived: true, offset: 2, limit: 2 });
+    expect(tail).toMatchObject({ count: 2, totalCount: 4, nextOffset: null });
+    expect(tail.sessions.map((row) => row.sessionId)).toEqual(["row-2", "row-0"]);
+    expect(projection.materializedCount).toBe(7);
   });
 });
 
@@ -88,27 +103,20 @@ it("resolves a cold archived key through the registered handler", async () => {
       { agentId: "main", sessionKey: key },
       { sessionId: "archived-exact", updatedAt: 1, archivedAt: 1, label: "Archived exact" },
     );
-    const release = retainSessionListForegroundWork();
-    const context = requestContext(cfg);
-    await initializeSessionReadContext(context);
-    const projection = getSessionRowProjection(context)!;
-    try {
-      expect(projection.materializedCount).toBe(0);
-      const respond = vi.fn();
-      await sessionReadHandlers["sessions.resolve"]!({
-        req: { type: "req", id: "archive-resolve", method: "sessions.resolve" },
-        params: { key },
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ key }), undefined);
-      expect(projection.materializedCount).toBe(1);
-    } finally {
-      projection.dispose();
-      release();
-    }
+    using fixture = await archiveProjection(cfg);
+    const { context, projection } = fixture;
+    expect(projection.materializedCount).toBe(0);
+    const respond = vi.fn();
+    await sessionReadHandlers["sessions.resolve"]!({
+      req: { type: "req", id: "archive-resolve", method: "sessions.resolve" },
+      params: { key },
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ key }), undefined);
+    expect(projection.materializedCount).toBe(1);
   });
 });
 
@@ -116,14 +124,7 @@ it("keeps archived visibility and membership current without warming hidden rows
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
-      gateway: {
-        roles: {
-          default: "reader",
-          definitions: {
-            reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-          },
-        },
-      },
+      gateway: { roles: readerRoles },
     };
     setRuntimeConfigSnapshot(cfg);
     const viewer = ensureProfileForEmail("archive-viewer@example.test").id;
@@ -145,31 +146,24 @@ it("keeps archived visibility and membership current without warming hidden rows
     }
     const target = { agentId: "main", sessionKey: "agent:main:visible" };
     addSessionMember(target, { identityId: viewer, addedBy: owner });
-    const release = retainSessionListForegroundWork();
-    const context = requestContext(cfg);
     const client = identifiedClient(viewer);
-    await initializeSessionReadContext(context);
-    const projection = getSessionRowProjection(context)!;
-    try {
-      const first = await listSessions({ context, client, request: { archived: true } });
-      expect(first).toMatchObject({
-        totalCount: 1,
-        sessions: [{ key: target.sessionKey, sharingRole: "member" }],
-      });
-      expect(projection.materializedCount).toBe(1);
-      removeSessionMember(target, viewer);
-      const second = await listSessions({ context, client, request: { archived: true } });
-      expect(second).toMatchObject({
-        totalCount: 1,
-        sessions: [{ key: target.sessionKey, sharingRole: "viewer" }],
-      });
-      expect(
-        projection.capture({ agentId: "main", key: "agent:main:hidden" })?.materialized,
-      ).toBeUndefined();
-    } finally {
-      projection.dispose();
-      release();
-    }
+    using fixture = await archiveProjection(cfg);
+    const { context, projection } = fixture;
+    const first = await listSessions({ context, client, request: { archived: true } });
+    expect(first).toMatchObject({
+      totalCount: 1,
+      sessions: [{ key: target.sessionKey, sharingRole: "member" }],
+    });
+    expect(projection.materializedCount).toBe(1);
+    removeSessionMember(target, viewer);
+    const second = await listSessions({ context, client, request: { archived: true } });
+    expect(second).toMatchObject({
+      totalCount: 1,
+      sessions: [{ key: target.sessionKey, sharingRole: "viewer" }],
+    });
+    expect(
+      projection.capture({ agentId: "main", key: "agent:main:hidden" })?.materialized,
+    ).toBeUndefined();
   });
 });
 
@@ -183,14 +177,7 @@ it("hides cold archived cross-agent swarm children from a global parent", async 
           defaults: { systemAgent: { agentId: "main" } },
           entries: { main: {}, work: {} },
         },
-        gateway: {
-          roles: {
-            default: "reader",
-            definitions: {
-              reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-            },
-          },
-        },
+        gateway: { roles: readerRoles },
       };
       setRuntimeConfigSnapshot(cfg);
       const viewer = ensureProfileForEmail("swarm-viewer@example.test").id;

@@ -34,14 +34,44 @@ import type { RespondFn } from "./types.js";
 
 useChatAbortRegistryFixture();
 
+function lifecycleConfig() {
+  const current = getRuntimeConfig();
+  const cfg = { ...current, agents: { ...current.agents, entries: { main: {}, research: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  return cfg;
+}
+
+async function mutate(
+  method: string,
+  params: Record<string, unknown>,
+  cfg: ReturnType<typeof getRuntimeConfig>,
+) {
+  const respond = vi.fn();
+  await handleGatewayRequest({
+    req: { type: "req", id: "lifecycle-scope", method, params },
+    client: sharingPolicyClient({
+      user: ensureProfileForEmail("operator@example.test").id,
+      scopes: ["operator.admin"],
+    }),
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    respond,
+    isWebchatConnect: () => false,
+    extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
+  });
+  expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+}
+
+function clearQueues(keys: string[]) {
+  for (const key of keys) {
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
+  }
+}
+
 it.each(["sweep", "cleanup"] as const)(
   "%s removes the recorded raw child owner without deleting another agent's global session",
   async (flow) => {
-    const cfg = {
-      ...getRuntimeConfig(),
-      agents: { ...getRuntimeConfig().agents, entries: { main: {}, research: {} } },
-    };
-    setRuntimeConfigSnapshot(cfg);
+    const cfg = lifecycleConfig();
     for (const agentId of ["main", "research"]) {
       await upsertSessionEntryCore(
         { agentId, sessionKey: "global" },
@@ -124,14 +154,7 @@ it.each([
   { method: "sessions.reset", key: "global", agentId: "main" },
   { method: "sessions.delete", key: "shared", agentId: "main" },
 ])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
-  const cfg = {
-    ...getRuntimeConfig(),
-    agents: {
-      ...getRuntimeConfig().agents,
-      entries: { main: {}, research: {} },
-    },
-  };
-  setRuntimeConfigSnapshot(cfg);
+  const cfg = lifecycleConfig();
   const foreignAgentId = agentId === "main" ? "research" : "main";
   const target = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
@@ -198,24 +221,12 @@ it.each([
       )
       .toBe(true);
     const owned = followup(agentId, targetId, target.canonicalKey);
-    const respond = vi.fn();
     const params = {
       key,
       agentId,
       ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
     };
-    await handleGatewayRequest({
-      req: { type: "req", id: "lifecycle-scope", method, params },
-      client: sharingPolicyClient({
-        user: ensureProfileForEmail("operator@example.test").id,
-        scopes: ["operator.admin"],
-      }),
-      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
-    });
-    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+    await mutate(method, params, cfg);
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
@@ -249,10 +260,7 @@ it.each([
   } finally {
     operation.complete();
     release.resolve();
-    for (const queueKey of queueKeys) {
-      clearFollowupQueue(queueKey);
-      clearFollowupDrainCallback(queueKey);
-    }
+    clearQueues(queueKeys);
     clearCommandLane(lane);
     await Promise.allSettled([blocker, queuedResult, ownedResult]);
   }
@@ -274,30 +282,15 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
     operation.setPhase("running");
     operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
     try {
-      const respond = vi.fn();
       const params = {
         key,
         ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
       };
-      await handleGatewayRequest({
-        req: { type: "req", id: "lifecycle-owned", method, params },
-        client: sharingPolicyClient({
-          user: ensureProfileForEmail("operator@example.test").id,
-          scopes: ["operator.admin"],
-        }),
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
-      });
-      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+      await mutate(method, params, cfg);
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {
       operation.complete();
-      for (const queueKey of [key, sessionId]) {
-        clearFollowupQueue(queueKey);
-        clearFollowupDrainCallback(queueKey);
-      }
+      clearQueues([key, sessionId]);
     }
   },
 );

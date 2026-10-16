@@ -45,7 +45,15 @@ import { loadGatewayModelCatalog as loadActualGatewayModelCatalog } from "../ser
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionLog } from "./sessions-shared.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+function expectSuccess(respond: ReturnType<typeof vi.fn>, result: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
+function expectFailure(respond: ReturnType<typeof vi.fn>, error: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
+}
 
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
@@ -108,6 +116,31 @@ function patchRequest(context: GatewayRequestContext) {
     } as never);
 }
 
+function patchMany(
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  respond: GatewayRequestHandlerOptions["respond"],
+  sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"],
+) {
+  return sessionMutationHandlers["sessions.patchMany"]!({
+    req: { type: "req", id: "patch-many", method: "sessions.patchMany", params },
+    params,
+    respond,
+    context,
+    client: null,
+    isWebchatConnect: () => false,
+    sessionMutationAuthorization,
+  });
+}
+
+function readEntry(sessionKey: string, agentId = "main") {
+  return loadSessionEntry({ agentId, sessionKey });
+}
+
+function seedEntry(sessionKey: string, agentId = "main") {
+  return upsertSessionEntryCore({ agentId, sessionKey }, { sessionId: sessionKey, updatedAt: 1 });
+}
+
 test.each(["sessions.patch", "sessions.patchMany"] as const)(
   "%s bounds a stalled catalog without committing and permits retry",
   async (method) => {
@@ -117,13 +150,9 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
         (name) => ({ key: `agent:main:catalog-deadline-${name}` }),
       );
       for (const { key } of targets) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          { sessionId: key, updatedAt: 1 },
-        );
+        await seedEntry(key);
       }
-      const entries = () =>
-        targets.map(({ key }) => loadSessionEntry({ agentId: "main", sessionKey: key }));
+      const entries = () => targets.map(({ key }) => readEntry(key));
       const before = entries();
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -246,12 +275,10 @@ test("catalog reload releases the agent writer while preserving same-session ord
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
       // Join independent work before advancing the diagnostic clock or releasing the catalog.
       await metadataPatch;
-      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expectSuccess(metadataResponse, expect.any(Object));
       expect(catalogResponse).not.toHaveBeenCalled();
       expect(successorResponse).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: catalogKey })?.pinnedAt,
-      ).toBeUndefined();
+      expect(readEntry(catalogKey)?.pinnedAt).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
       clock += 1_500;
@@ -264,22 +291,16 @@ test("catalog reload releases the agent writer while preserving same-session ord
       logSpy.mockRestore();
       setDiagnosticsEnabledForProcess(previousDiagnostics);
     }
-    expect(catalogResponse).toHaveBeenCalledWith(false, undefined, {
+    expectFailure(catalogResponse, {
       code: "UNAVAILABLE",
       message: "Session patch failed unexpectedly. Retry the request.",
       retryable: true,
     });
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: catalogKey })?.contextWindow,
-    ).toBeUndefined();
-    expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(successorResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: catalogKey })?.pinnedAt).toEqual(
-      expect.any(Number),
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
-      expect.any(Number),
-    );
+    expect(readEntry(catalogKey)?.contextWindow).toBeUndefined();
+    expectSuccess(metadataResponse, expect.any(Object));
+    expectSuccess(successorResponse, expect.any(Object));
+    expect(readEntry(catalogKey)?.pinnedAt).toEqual(expect.any(Number));
+    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
     expect(records).toHaveLength(2);
     expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toMatch(
       /^slow session patch 1500ms method=sessions\.patch .* catalog=1500ms(?: |$)/,
@@ -373,18 +394,17 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
         await Promise.allSettled([pending, mutation]);
       }
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-      const stored = loadSessionEntry({ agentId: "main", sessionKey: storedKey });
+      const stored = readEntry(storedKey);
       if (change === "cleared-selection") {
-        expect(response).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        expectSuccess(response, expect.any(Object));
         expect(stored).toMatchObject({ sessionId: "before" });
         expect(stored?.modelOverride).toBeUndefined();
         expect(stored?.providerOverride).toBeUndefined();
         expect(stored?.thinkingLevel).toBeUndefined();
         expect(stored?.contextWindow).toBeUndefined();
       } else if (change === "identity") {
-        expect(response).toHaveBeenCalledWith(
-          false,
-          undefined,
+        expectFailure(
+          response,
           expect.objectContaining({
             code: "INVALID_REQUEST",
             details: { reason: "session-changed" },
@@ -393,29 +413,27 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
         expect(stored).toMatchObject({ sessionId: "replacement", label: "Replacement" });
         expect(stored?.contextWindow).toBeUndefined();
       } else if (change === "alias") {
-        expect(response).toHaveBeenCalledWith(false, undefined, {
+        expectFailure(response, {
           code: "UNAVAILABLE",
           message: "Session patch failed unexpectedly. Retry the request.",
           retryable: true,
         });
         expect(stored).toMatchObject({ sessionId: "before" });
         expect(stored?.contextWindow).toBeUndefined();
-        expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toMatchObject({
+        expect(readEntry(key)).toMatchObject({
           sessionId: "replacement",
           label: "Replacement",
         });
-        expect(
-          loadSessionEntry({ agentId: "main", sessionKey: key })?.contextWindow,
-        ).toBeUndefined();
+        expect(readEntry(key)?.contextWindow).toBeUndefined();
       } else {
-        expect(changed).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        expect(response).toHaveBeenCalledWith(false, undefined, {
+        expectSuccess(changed, expect.any(Object));
+        expectFailure(response, {
           code: "INVALID_REQUEST",
           message: "label already in use: Claimed",
         });
         expect(stored?.label).toBeUndefined();
         expect(stored?.contextWindow).toBeUndefined();
-        expect(loadSessionEntry({ agentId: "main", sessionKey: otherKey })?.label).toBe("Claimed");
+        expect(readEntry(otherKey)?.label).toBe("Claimed");
       }
     });
   },
@@ -428,16 +446,10 @@ test("patchMany prepares singleton agent groups without blocking another session
       key: `agent:${agentId}:catalog-batch`,
     }));
     for (const [index, { key }] of targets.entries()) {
-      await upsertSessionEntryCore(
-        { agentId: index === 0 ? "main" : "secondary", sessionKey: key },
-        { sessionId: key, updatedAt: 1 },
-      );
+      await seedEntry(key, index === 0 ? "main" : "secondary");
     }
     const metadataKey = "agent:main:batch-independent";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: metadataKey },
-      { sessionId: metadataKey, updatedAt: 1 },
-    );
+    await seedEntry(metadataKey);
     const catalog =
       createDeferredCore<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
     const entered = createDeferredCore();
@@ -464,12 +476,7 @@ test("patchMany prepares singleton agent groups without blocking another session
         timingRecords.push(message);
       }
     });
-    const batch = sessionMutationHandlers["sessions.patchMany"]!({
-      params: { targets, patch: { contextWindow: "extended" } },
-      respond,
-      context,
-      client: null,
-    } as never);
+    const batch = patchMany(context, { targets, patch: { contextWindow: "extended" } }, respond);
     const metadataResponse = vi.fn();
     let metadataPatch: Promise<void> | void = undefined;
     try {
@@ -477,7 +484,7 @@ test("patchMany prepares singleton agent groups without blocking another session
       expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
       metadataPatch = patchRequest(context)({ key: metadataKey, pinned: true }, metadataResponse);
       await metadataPatch;
-      expect(metadataResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expectSuccess(metadataResponse, expect.any(Object));
       expect(respond).not.toHaveBeenCalled();
     } finally {
       clock += 1_500;
@@ -497,20 +504,11 @@ test("patchMany prepares singleton agent groups without blocking another session
     expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "main" });
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "secondary" });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { outcomes: targets.map(({ key }) => ({ key, ok: true })) },
-      undefined,
-    );
+    expectSuccess(respond, { outcomes: targets.map(({ key }) => ({ key, ok: true })) });
     for (const [index, { key }] of targets.entries()) {
-      expect(
-        loadSessionEntry({ agentId: index === 0 ? "main" : "secondary", sessionKey: key })
-          ?.contextWindow,
-      ).toBe("extended");
+      expect(readEntry(key, index === 0 ? "main" : "secondary")?.contextWindow).toBe("extended");
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: metadataKey })?.pinnedAt).toEqual(
-      expect.any(Number),
-    );
+    expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
     expect(timingRecords).toEqual([
       expect.stringMatching(
         /^slow session patch 1500ms method=sessions\.patchMany .* catalog=3000ms(?: |$)/,
@@ -524,44 +522,32 @@ test("a multi-target agent group retains ordered label claims around catalog loa
     await captureRuntimeConfigAsyncReader()();
     const targets = ["first", "second"].map((name) => ({ key: `agent:main:ordered-${name}` }));
     for (const { key } of targets) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        { sessionId: key, updatedAt: 1 },
-      );
+      await seedEntry(key);
     }
     const loadGatewayModelCatalog = vi.fn(async () => []);
     const respond = vi.fn();
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      params: { targets, patch: { label: "Winner", thinkingLevel: "low" } },
+    await patchMany(
+      patchContext(loadGatewayModelCatalog),
+      { targets, patch: { label: "Winner", thinkingLevel: "low" } },
       respond,
-      context: patchContext(loadGatewayModelCatalog),
-      client: null,
-    } as never);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        outcomes: [
-          { key: targets[0]!.key, ok: true },
-          {
-            key: targets[1]!.key,
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "label already in use: Winner" },
-          },
-        ],
-      },
-      undefined,
     );
+    expectSuccess(respond, {
+      outcomes: [
+        { key: targets[0]!.key, ok: true },
+        {
+          key: targets[1]!.key,
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: "label already in use: Winner" },
+        },
+      ],
+    });
     expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: targets[0]!.key })).toMatchObject({
+    expect(readEntry(targets[0]!.key)).toMatchObject({
       label: "Winner",
       thinkingLevel: "low",
     });
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: targets[1]!.key })?.label,
-    ).toBeUndefined();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: targets[1]!.key })?.thinkingLevel,
-    ).toBeUndefined();
+    expect(readEntry(targets[1]!.key)?.label).toBeUndefined();
+    expect(readEntry(targets[1]!.key)?.thinkingLevel).toBeUndefined();
   });
 });
 
@@ -648,14 +634,13 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
       expect(committed).toHaveBeenCalledOnce();
       release.resolve();
       await request;
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
+      expectFailure(
+        respond,
         expect.objectContaining({
           details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
         }),
       );
-      const current = loadSessionEntry({ agentId: "main", sessionKey });
+      const current = readEntry(sessionKey);
       expect(current).toMatchObject({
         sessionId: "session-draft-replacement",
         visibility: "draft",
@@ -701,7 +686,7 @@ test("patch timing covers preparation and lifecycle finalization before cleanup"
     const response = vi.fn();
     try {
       await patchRequest(patchContext(async () => []))({ key, pinned: true }, response);
-      expect(response).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expectSuccess(response, expect.any(Object));
       const timing = log.mock.calls.find(([message]) =>
         message.startsWith("slow session patch 1200ms method=sessions.patch "),
       )?.[0];
@@ -753,14 +738,7 @@ test("patchMany creates one shared physical store through original per-agent dir
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
     await expect(fs.stat(physicalFile)).rejects.toMatchObject({ code: "ENOENT" });
     // The existing direct method harness uses null only for a trusted internal caller.
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      req: { type: "req", id: "shared-alias-birth", method: "sessions.patchMany", params },
-      params,
-      respond: response,
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await patchMany(context, params, response);
     expect(response).toHaveBeenCalledExactlyOnceWith(
       true,
       { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
@@ -791,19 +769,7 @@ test("patchMany creates one shared physical store through original per-agent dir
       })),
       patch: { model: "openai/gpt-5.6-sol", pinned: true },
     };
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      req: {
-        type: "req",
-        id: "shared-alias-current",
-        method: "sessions.patchMany",
-        params: currentParams,
-      },
-      params: currentParams,
-      respond: currentResponse,
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await patchMany(context, currentParams, currentResponse);
     expect(currentResponse).toHaveBeenCalledExactlyOnceWith(
       true,
       { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
@@ -864,25 +830,12 @@ test("patchMany excludes a revoked cold-store promotion while its independent st
     try {
       await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(successfulPath)).rejects.toMatchObject({ code: "ENOENT" });
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        req: {
-          type: "req",
-          id: "independent-cold-promotion",
-          method: "sessions.patchMany",
-          params,
-        },
-        params,
-        respond,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-        sessionMutationAuthorization: {
-          assertCurrent() {},
-          assertTargetCurrent({ sessionKey }) {
-            if (sessionKey === failed.key) {
-              source.signal.throwIfAborted();
-            }
-          },
+      await patchMany(context, params, respond, {
+        assertCurrent() {},
+        assertTargetCurrent({ sessionKey }) {
+          if (sessionKey === failed.key) {
+            source.signal.throwIfAborted();
+          }
         },
       });
       expect(failedOpenAdmissions).toBe(1);
