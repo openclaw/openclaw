@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-// Voice Call tests cover runtime plugin behavior.
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,7 +146,59 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
+function createRuntime(options: Partial<Parameters<typeof createVoiceCallRuntime>[0]> = {}) {
+  return createVoiceCallRuntime({
+    scheduler: createTestPluginServiceScheduler(),
+    config: createBaseConfig(),
+    coreConfig: {},
+    agentRuntime: {} as never,
+    ...options,
+  });
+}
+
+function setConsultCall(overrides: Record<string, unknown> = {}) {
+  mocks.managerGetCall.mockReturnValue({
+    callId: "call-1",
+    agentId: "main",
+    direction: "inbound",
+    from: "+15550001234",
+    to: "+15550009999",
+    transcript: [],
+    ...overrides,
+  });
+}
+
+function createConsultRuntime<T>(runEmbeddedAgent: T, sessionStore: Record<string, unknown> = {}) {
+  return {
+    resolveAgentDir: vi.fn(() => "/tmp/agent"),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveAgentIdentity: vi.fn(),
+    resolveThinkingDefault: vi.fn(() => "high"),
+    resolveAgentTimeoutMs: vi.fn(() => 30_000),
+    ensureAgentWorkspace: vi.fn(async () => {}),
+    session: createMockSessionRuntime(sessionStore),
+    runEmbeddedAgent,
+  };
+}
+
+function createRealtimeConfig() {
+  const config = createBaseConfig();
+  config.realtime.enabled = true;
+  return config;
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-record");
+
+function requireRealtimeTools() {
+  const { tools } = requireRecord(
+    mocks.realtimeHandlerCtorArgs[0]?.[0],
+    "realtime handler options",
+  );
+  if (!Array.isArray(tools)) {
+    throw new Error("expected realtime handler tools to be an array");
+  }
+  return tools;
+}
 
 function requireRealtimeConsultToolHandler() {
   const registeredToolHandler = expectDefined(
@@ -208,13 +259,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("explains the missing phone-call owner before provisioning a runtime", async () => {
     await expect(
-      createVoiceCallRuntime({
-        scheduler: createTestPluginServiceScheduler(),
-        config: createBaseConfig(),
+      createRuntime({
         coreConfig: {
           agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
         },
-        agentRuntime: {} as never,
       }),
     ).rejects.toThrow("Set plugins.entries.voice-call.config.agentId to a configured agent ID.");
     expect(mocks.webhookCtorArgs).toHaveLength(0);
@@ -237,11 +285,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "operator",
     },
   ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    const runtime = await createRuntime({
       config: { ...createBaseConfig(), agentId },
       coreConfig,
-      agentRuntime: {} as never,
     });
     expect(runtime.config.agentId).toBe("operator");
     await runtime.stop();
@@ -260,11 +306,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
 
     await expect(
-      createVoiceCallRuntime({
-        scheduler: createTestPluginServiceScheduler(),
+      createRuntime({
         config,
-        coreConfig: {},
-        agentRuntime: {} as never,
       }),
     ).rejects.toThrow("init failed");
 
@@ -300,12 +343,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       stop: tunnelStop,
     });
 
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
-      config: createBaseConfig(),
-      coreConfig: {} as OpenClawConfig,
-      agentRuntime: {} as never,
-    });
+    const runtime = await createRuntime({});
 
     const firstStop = runtime.stop();
     const secondStop = runtime.stop();
@@ -336,12 +374,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const drain = createDeferred<void>();
     mocks.webhookStop.mockRejectedValue(transportFailure);
     mocks.managerStop.mockReturnValue(drain.promise);
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
-      config: createBaseConfig(),
-      coreConfig: {},
-      agentRuntime: {} as never,
-    });
+    const runtime = await createRuntime({});
     let settled = false;
     const stopped = runtime.stop().catch((error: unknown) => {
       settled = true;
@@ -363,12 +396,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     } as OpenClawConfig;
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
-      config: createBaseConfig(),
+    await createRuntime({
       coreConfig,
       fullConfig,
-      agentRuntime: {} as never,
     });
 
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
@@ -376,8 +406,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
-    const config = createBaseConfig();
-    config.realtime.enabled = true;
+    const config = createRealtimeConfig();
     config.agentId = "operator";
     config.realtime.agentContext = {
       enabled: true,
@@ -394,12 +423,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
         },
       },
     };
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    const runtime = await createRuntime({
       config,
-      coreConfig: {},
       fullConfig,
-      agentRuntime: {} as never,
     });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
@@ -434,9 +460,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
     const briefRegistration = await resolveCallRegistration({
       callId: "call-brief",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
+      ...outboundContact,
       agentId: "operator",
       metadata: { brief: { task: "Arrange a plumber visit", approvals: "No paid work" } },
     });
@@ -467,11 +491,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     "fails closed when %s falls back to a local-only webhook",
     async (provider) => {
       await expect(
-        createVoiceCallRuntime({
-          scheduler: createTestPluginServiceScheduler(),
+        createRuntime({
           config: createExternalProviderConfig({ provider }),
-          coreConfig: {} as OpenClawConfig,
-          agentRuntime: {} as never,
         }),
       ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
       expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
@@ -480,54 +501,33 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
     await expect(
-      createVoiceCallRuntime({
-        scheduler: createTestPluginServiceScheduler(),
+      createRuntime({
         config: createExternalProviderConfig({
           provider: "twilio",
           publicUrl: "http://127.0.0.1:3334/voice/webhook",
         }),
-        coreConfig: {} as OpenClawConfig,
-        agentRuntime: {} as never,
       }),
     ).rejects.toThrow("twilio requires a publicly reachable webhook URL");
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts an explicit public URL for external voice providers", async () => {
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
-      config: createExternalProviderConfig({
-        provider: "twilio",
-        publicUrl: "https://voice.example.com/voice/webhook",
-      }),
-      coreConfig: {} as OpenClawConfig,
-      agentRuntime: {} as never,
-    });
-
-    expect(runtime.webhookUrl).toBe("https://voice.example.com/voice/webhook");
-    expect(runtime.publicUrl).toBe("https://voice.example.com/voice/webhook");
-
-    await runtime.stop();
-  });
-
-  it("does not log duplicate webhook and public URLs when they match", async () => {
+  it("accepts an explicit public URL without logging it twice", async () => {
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
     };
 
-    const runtime = await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    const runtime = await createRuntime({
       config: createExternalProviderConfig({
         provider: "twilio",
         publicUrl: "https://voice.example.com/voice/webhook",
       }),
-      coreConfig: {} as OpenClawConfig,
-      agentRuntime: {} as never,
       logger,
     });
 
+    expect(runtime.webhookUrl).toBe("https://voice.example.com/voice/webhook");
+    expect(runtime.publicUrl).toBe("https://voice.example.com/voice/webhook");
     expect(logger.info).toHaveBeenCalledWith(
       "[voice-call] Webhook URL: https://voice.example.com/voice/webhook",
     );
@@ -561,14 +561,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     }));
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
+      ...createConsultRuntime(runEmbeddedAgent, sessionStore),
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -584,21 +577,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
-    const realtimeHandlerOptions = requireRecord(
-      mocks.realtimeHandlerCtorArgs[0]?.[0],
-      "realtime handler options",
-    );
-    const tools = realtimeHandlerOptions.tools;
-    if (!Array.isArray(tools)) {
-      throw new Error("expected realtime handler tools to be an array");
-    }
+    const tools = requireRealtimeTools();
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
       "openclaw_end_call",
       "openclaw_agent_consult",
@@ -617,13 +601,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
       expectDefined(runEmbeddedAgent.mock.calls.at(0), "embedded OpenClaw consult call")[0],
       "embedded OpenClaw consult params",
     );
-    expect(consultParams.agentId).toBe("support");
-    expect(consultParams.sessionKey).toBe("agent:support:voice:15550009999");
-    expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
-    expect(consultParams.messageProvider).toBe("voice");
-    expect(consultParams.lane).toBe("voice");
-    expect(consultParams.provider).toBe("openai");
-    expect(consultParams.model).toBe("gpt-5.4");
+    expect(consultParams).toMatchObject({
+      agentId: "support",
+      sessionKey: "agent:support:voice:15550009999",
+      spawnedBy: "agent:main:discord:channel:general",
+      messageProvider: "voice",
+      lane: "voice",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
     expect(consultParams.toolsAllow).toEqual([
       "read",
       "web_search",
@@ -645,8 +631,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
-    const config = createBaseConfig();
-    config.realtime.enabled = true;
+    const config = createRealtimeConfig();
     config.realtime.toolPolicy = "none";
     config.realtime.tools = [
       {
@@ -663,21 +648,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
-      agentRuntime: {} as never,
     });
 
-    const realtimeHandlerOptions = requireRecord(
-      mocks.realtimeHandlerCtorArgs[0]?.[0],
-      "realtime handler options",
-    );
-    const tools = realtimeHandlerOptions.tools;
-    if (!Array.isArray(tools)) {
-      throw new Error("expected realtime handler tools to be an array");
-    }
+    const tools = requireRealtimeTools();
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
       "openclaw_end_call",
       "custom_tool",
@@ -693,34 +668,17 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("rejects a realtime consult whose lifecycle owner already aborted", async () => {
-    const config = createBaseConfig();
-    config.realtime.enabled = true;
+    const config = createRealtimeConfig();
     const runEmbeddedAgent = vi.fn();
     const sessionStore: Record<string, unknown> = {};
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
+      ...createConsultRuntime(runEmbeddedAgent, sessionStore),
     };
-    mocks.managerGetCall.mockReturnValue({
-      callId: "call-aborted",
-      agentId: "main",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      transcript: [],
-    });
+    setConsultCall({ callId: "call-aborted" });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -748,29 +706,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const sessionStore: Record<string, unknown> = {};
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
+      ...createConsultRuntime(runEmbeddedAgent, sessionStore),
     };
-    mocks.managerGetCall.mockReturnValue({
-      callId: "call-1",
-      sessionKey: "voice:call:call-1",
-      agentId: "main",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      transcript: [],
-    });
+    setConsultCall({ sessionKey: "voice:call:call-1" });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -790,8 +731,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("blocks locked Codex realtime consults before fast context or model dispatch", async () => {
-    const config = createBaseConfig();
-    config.realtime.enabled = true;
+    const config = createRealtimeConfig();
     const sessionStore: Record<string, unknown> = {
       "agent:main:voice:15550001234": {
         sessionId: "locked-codex-session",
@@ -801,29 +741,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     };
     const runEmbeddedAgent = vi.fn();
-    const agentRuntime = {
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
-    };
-    mocks.managerGetCall.mockReturnValue({
-      callId: "call-locked",
-      agentId: "main",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      transcript: [],
-    });
+    const agentRuntime = createConsultRuntime(runEmbeddedAgent, sessionStore);
+    setConsultCall({ callId: "call-locked" });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -836,8 +758,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
-    const config = createBaseConfig();
-    config.realtime.enabled = true;
+    const config = createRealtimeConfig();
     config.realtime.fastContext = {
       enabled: true,
       timeoutMs: 800,
@@ -850,24 +771,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       meta: {},
     }));
     const sessionStore: Record<string, unknown> = {};
-    const agentRuntime = {
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
-    };
-    mocks.managerGetCall.mockReturnValue({
-      callId: "call-1",
-      agentId: "main",
-      direction: "inbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      transcript: [],
-    });
+    const agentRuntime = createConsultRuntime(runEmbeddedAgent, sessionStore);
+    setConsultCall();
     mocks.resolveRealtimeFastContextConsult.mockResolvedValue({
       handled: true,
       result: {
@@ -875,10 +780,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -946,10 +849,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
         transcript: [],
       };
       mocks.managerGetCall.mockReturnValue(call);
-      await createVoiceCallRuntime({
-        scheduler: createTestPluginServiceScheduler(),
+      await createRuntime({
         config,
-        coreConfig: {} as OpenClawConfig,
         agentRuntime: { session: createMockSessionRuntime({}) } as never,
       });
       return { handler: requireRealtimeConsultToolHandler(), open, search };
@@ -1003,28 +904,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     }));
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
-      resolveAgentDir: vi.fn(() => "/tmp/agent"),
-      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-      resolveAgentIdentity: vi.fn(),
-      resolveThinkingDefault: vi.fn(() => "high"),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      session: createMockSessionRuntime(sessionStore),
-      runEmbeddedAgent,
+      ...createConsultRuntime(runEmbeddedAgent, sessionStore),
     };
-    mocks.managerGetCall.mockReturnValue({
-      callId: "call-1",
-      agentId: "main",
-      direction: "outbound",
-      from: "+15550001234",
-      to: "+15550009999",
-      transcript: [],
-    });
+    setConsultCall({ direction: "outbound" });
 
-    await createVoiceCallRuntime({
-      scheduler: createTestPluginServiceScheduler(),
+    await createRuntime({
       config,
-      coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
