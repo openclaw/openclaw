@@ -39,7 +39,12 @@ it.each(["closed-scope", "released-source"] as const)(
     registerContextEngineInRegistry(registry, "legacy", fallbackFactory, "core");
     const resolve = () =>
       withPluginRuntimeRegistryScope(registry, () =>
-        resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
+        resolveContextEngine({
+          plugins: {
+            entries: { fixture: { enabled: true } },
+            slots: { contextEngine: selectedId },
+          },
+        }),
       );
     const work = new AsyncWorkScope();
     const continuation = work.run(() => AsyncLocalStorage.snapshot());
@@ -114,7 +119,12 @@ it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)
     const result = owner
       .run(() =>
         withPluginRuntimeRegistryScope(registry, () =>
-          resolveContextEngine({ plugins: { slots: { contextEngine: "cancelled-factory" } } }),
+          resolveContextEngine({
+            plugins: {
+              entries: { fixture: { enabled: true } },
+              slots: { contextEngine: "cancelled-factory" },
+            },
+          }),
         ),
       )
       .then(
@@ -177,7 +187,12 @@ it.each(["success", "failure", "abort"] as const)(
     const pending = owner.run(() =>
       withPluginRuntimeRegistryScope(registry, () =>
         resolveContextEngine(
-          { plugins: { slots: { contextEngine: "initialized-source" } } },
+          {
+            plugins: {
+              entries: { fixture: { enabled: true } },
+              slots: { contextEngine: "initialized-source" },
+            },
+          },
           {
             initialize: async () => {
               await ensureContextEnginesInitialized();

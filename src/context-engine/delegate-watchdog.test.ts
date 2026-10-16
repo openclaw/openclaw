@@ -11,6 +11,7 @@ import {
 } from "./registry.js";
 import {
   captureContextEngineRegistryStateForTests,
+  contextEngineConfig,
   resetContextEngineRuntimeQuarantineForTests,
 } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
@@ -80,7 +81,7 @@ async function registerPlugin(compact: ContextEngine["compact"], ownsCompaction 
     "plugin:delegating-plugin",
     { allowSameOwnerRefresh: true },
   );
-  return { plugins: { slots: { contextEngine: engineId } } };
+  return contextEngineConfig(engineId, "delegating-plugin");
 }
 
 // A plugin-owned checkpoint runs before delegating, like a memory plugin.

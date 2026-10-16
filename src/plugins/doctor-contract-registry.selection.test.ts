@@ -370,6 +370,33 @@ describe("doctor-contract-registry selection", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
+  it("selects a mixed-case manifest Doctor owner from its canonical config entry", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        config: { ...cfg, repairedBy: "MiXeD-upgrade-proof" },
+        changes: ["mixed-case owner repaired config"],
+      }),
+    }));
+    mockDoctorPlugins({
+      id: "MiXeD-upgrade-proof",
+      rootDir: pluginRoot,
+      channels: [],
+      providers: [],
+      doctorContract: { configRepair: true },
+    });
+    const config = { plugins: { entries: { "mixed-upgrade-proof": { enabled: true } } } };
+    const result = harness.registry.applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: harness.registry.collectRelevantDoctorPluginIds(config),
+    });
+    expect(result.changes).toEqual(["mixed-case owner repaired config"]);
+    expect(result.config).toHaveProperty("repairedBy", "MiXeD-upgrade-proof");
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       harness.registry.collectDoctorConfigRepairPluginIds(

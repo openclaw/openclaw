@@ -391,7 +391,22 @@ describe("harness runtime plugins", () => {
   });
 
   it("includes and enables the context-engine owner in the prepared load plan", () => {
+    const metadataSnapshot = createMemoryPlanMetadataSnapshot();
+    const template = metadataSnapshot.registryIndex.plugins[0];
+    if (!template) {
+      throw new Error("Missing installed-plugin fixture");
+    }
     const plan = runtimePlan({
+      metadataSnapshot: {
+        ...metadataSnapshot,
+        registryIndex: {
+          ...metadataSnapshot.registryIndex,
+          plugins: [
+            ...metadataSnapshot.registryIndex.plugins,
+            { ...template, ...installedProviderRecord("custom-context-engine") },
+          ],
+        },
+      },
       config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
       basePluginIds: [],
     });
@@ -423,6 +438,59 @@ describe("harness runtime plugins", () => {
     expect(plan.pluginIds).toEqual(expected);
     expect(plan.config?.plugins?.entries).toBeUndefined();
     expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
+  });
+
+  it("loads only the declared owner for a differently named engine", () => {
+    const originalSnapshot = createMemoryPlanMetadataSnapshot();
+    const index = originalSnapshot.registryIndex;
+    const template = index.plugins[0];
+    if (!template) {
+      throw new Error("Missing installed-plugin fixture");
+    }
+    const registryIndex = {
+      ...index,
+      plugins: [
+        ...index.plugins,
+        { ...template, pluginId: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] },
+      ],
+    };
+    const plan = loadPlan({
+      metadataSnapshot: { ...originalSnapshot, registryIndex },
+      config: {
+        plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+      },
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+    expect(plan.pluginIds).toEqual(["vendor-plugin"]);
+    expect(plan.config?.plugins?.entries?.["vendor-plugin"]).toEqual({ enabled: true });
+  });
+
+  it("scopes a mixed-case context-engine owner by its exact runtime ID", () => {
+    const metadataSnapshot = createMemoryPlanMetadataSnapshot();
+    const template = metadataSnapshot.registryIndex.plugins[0];
+    if (!template) {
+      throw new Error("Missing installed-plugin fixture");
+    }
+    const plan = loadPlan({
+      metadataSnapshot: {
+        ...metadataSnapshot,
+        registryIndex: {
+          ...metadataSnapshot.registryIndex,
+          plugins: [
+            ...metadataSnapshot.registryIndex.plugins,
+            { ...template, pluginId: "MiXeD-demo", contextEngineIds: ["canonical-engine"] },
+          ],
+        },
+      },
+      config: { plugins: { allow: ["mixed-demo"], slots: { contextEngine: "canonical-engine" } } },
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+    expect(plan.pluginIds).toEqual(["MiXeD-demo"]);
+    expect(plan.config?.plugins?.entries?.["MiXeD-demo"]).toEqual({ enabled: true });
   });
 
   it.each<[OpenClawConfig["plugins"], string[]]>([
