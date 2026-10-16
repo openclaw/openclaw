@@ -192,6 +192,15 @@ function executionSource(
   };
 }
 const source = executionSource();
+function readEntries(
+  execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
+  key: string,
+  request = source,
+) {
+  return execution.runExisting(request, (scope) =>
+    scope.execute({ type: "session.entry.read", input: { sessionKeys: [key] } }),
+  );
+}
 
 it("recovers after a failed operation with successful native close", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-")) };
@@ -201,11 +210,7 @@ it("recovers after a failed operation with successful native close", async () =>
 
   // 1. The operation fails because the native store becomes unavailable mid-run.
   Atomics.store(new Int32Array(fault.enabled), 0, 2);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
-    )
-    .catch((error: unknown) => error);
+  const failure: unknown = await readEntries(first, fault.marker).catch((error: unknown) => error);
   Atomics.store(new Int32Array(fault.enabled), 0, 0);
   expect(failure).toBeInstanceOf(Error);
   console.log(`[close-wedge] operation failure: ${formatErrorMessageWithCode(failure)}`);
@@ -226,11 +231,7 @@ it("recovers after a failed operation with successful native close", async () =>
       console.log(`[close-wedge] re-admission failure: ${formatErrorMessageWithCode(error)}`);
       throw error;
     });
-  expect(
-    await retry.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
-    ),
-  ).toMatchObject({ entries: [] });
+  expect(await readEntries(retry, "recovered")).toMatchObject({ entries: [] });
   await retry.release();
 });
 
@@ -238,11 +239,7 @@ it("reopens a native generation lost between operations before dispatch", async 
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
   const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
   await execution.prepare(source);
-  expect(
-    await execution.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["healthy"] } }),
-    ),
-  ).toMatchObject({ entries: [] });
+  expect(await readEntries(execution, "healthy")).toMatchObject({ entries: [] });
   const claim = execution.captureGenerationClaim();
   expect(() => claim.assertCurrent()).not.toThrow();
 
@@ -263,11 +260,7 @@ it("reopens a native generation lost between operations before dispatch", async 
   expect(replacement?.identity).toBe(claim.identity);
   expect(replacement?.incarnation).not.toBe(claim.incarnation);
   expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
-  expect(
-    await execution.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["still-healthy"] } }),
-    ),
-  ).toMatchObject({ entries: [] });
+  expect(await readEntries(execution, "still-healthy")).toMatchObject({ entries: [] });
   await execution.release();
 });
 
@@ -277,20 +270,14 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   let authority: SqliteWorkerExecutionAuthority | undefined;
   const observed = executionSource((captured) => (authority = captured));
   await first.prepare(observed);
-  await first.runExisting(observed, (scope) =>
-    scope.execute({ type: "session.entry.read", input: { sessionKeys: ["healthy"] } }),
-  );
+  await readEntries(first, "healthy", observed);
   expect(authority).toBeDefined();
   const original = authority!;
   expect(readAgentDatabaseExecutionAuthority(original)).toBe(true);
 
   // The fault stays enabled through the whole retry below.
   Atomics.store(new Int32Array(fault.enabled), 0, 1);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
-    )
-    .catch((error: unknown) => error);
+  const failure: unknown = await readEntries(first, fault.marker).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
   expect(formatErrorMessageWithCode(failure)).toContain("Agent operation and cleanup failed");
   expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
@@ -330,11 +317,7 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   // Once the cause is gone the same agent recovers without a process restart.
   Atomics.store(new Int32Array(fault.enabled), 0, 0);
   const recovered = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  expect(
-    await recovered.runExisting(observed, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKeys: ["recovered"] } }),
-    ),
-  ).toMatchObject({ entries: [] });
+  expect(await readEntries(recovered, "recovered", observed)).toMatchObject({ entries: [] });
   expect(recovered.capturePreparedGenerationClaim()).toBeDefined();
   expect(authority!.logical.buffer).toBe(original.logical.buffer);
   expect(authority!.native.buffer).not.toBe(original.native.buffer);

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { deriveContextEngineTurnOutboxState } from "../agents/harness/context-engine-turn-outbox-state.js";
@@ -24,6 +24,30 @@ import {
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
+
+function readRow(database: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
+  return database.prepare(sql).get(...params);
+}
+function readRows(database: DatabaseSync, sql: string) {
+  return database.prepare(sql).all();
+}
+function witness(database: DatabaseSync) {
+  return captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" });
+}
+function expectVersion(database: DatabaseSync, version = OPENCLAW_AGENT_SCHEMA_VERSION) {
+  expect(readRow(database, "PRAGMA user_version")?.user_version).toBe(version);
+  expect(readRow(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
+}
+function migrateLegacyStore(database: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) {
+  return withAgentDatabaseMaintenanceLease({ env }, async () =>
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId: "main",
+      env,
+      path: pathname,
+      register: false,
+    }),
+  );
+}
 
 function seedSchema(database: DatabaseSync) {
   database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
@@ -126,10 +150,12 @@ describe("agent JSON predicate migration", () => {
     for (const [index, entry] of sessionEntries.entries()) {
       const expected = deriveSessionPredicateColumns(entry);
       expect(
-        database
-          .prepare(`SELECT entry_json, CAST(session_started_at AS TEXT) AS session_started_at,
-        has_optional_references FROM session_nodes WHERE session_key = ?`)
-          .get(`agent:main:case-${index}`),
+        readRow(
+          database,
+          `SELECT entry_json, CAST(session_started_at AS TEXT) AS session_started_at,
+        has_optional_references FROM session_nodes WHERE session_key = ?`,
+          `agent:main:case-${index}`,
+        ),
       ).toEqual({
         entry_json: entry,
         session_started_at: expected.session_started_at?.toString() ?? null,
@@ -144,25 +170,26 @@ describe("agent JSON predicate migration", () => {
       expect(readEvent.get(index + 1), event).toEqual(deriveTranscriptPredicateFields(event));
     }
     expect(
-      database
-        .prepare(`SELECT event_zstd, navigation_json FROM transcript_events
-      WHERE session_id = 'history' AND seq = ?`)
-        .get(events.length + 1),
+      readRow(
+        database,
+        `SELECT event_zstd, navigation_json FROM transcript_events
+      WHERE session_id = 'history' AND seq = ?`,
+        events.length + 1,
+      ),
     ).toEqual({ event_zstd: new Uint8Array(compressedBytes), navigation_json: navigation });
     expect(
-      database
-        .prepare(
-          "SELECT event_json FROM transcript_events WHERE event_json IS NOT NULL ORDER BY seq",
-        )
-        .all(),
+      readRows(
+        database,
+        "SELECT event_json FROM transcript_events WHERE event_json IS NOT NULL ORDER BY seq",
+      ),
     ).toEqual(events.map((event_json) => ({ event_json })));
     for (const [index, payload] of payloads.entries()) {
       expect(
-        database
-          .prepare(
-            "SELECT payload_json, payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?",
-          )
-          .get(String(index)),
+        readRow(
+          database,
+          "SELECT payload_json, payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?",
+          String(index),
+        ),
       ).toEqual({
         payload_json: JSON.stringify(payload),
         payload_state: deriveContextEngineTurnOutboxState(payload),
@@ -190,10 +217,7 @@ describe("agent JSON predicate migration", () => {
         database.exec(`INSERT INTO transcript_events (session_id, seq, event_json, created_at)
           VALUES ('history', 1, '{"type":"message","message":{"role":"user"}}', 1)`);
         database.exec("ANALYZE");
-        const original = captureOpenClawMigrationWitness(database, {
-          role: "agent",
-          agentId: "main",
-        });
+        const original = witness(database);
         if (outcome === "rollback") {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
@@ -229,20 +253,13 @@ describe("agent JSON predicate migration", () => {
         });
         database.setAuthorizer(null);
         const expectedVersion = outcome === "rollback" ? 25 : OPENCLAW_AGENT_SCHEMA_VERSION;
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(expectedVersion);
-        expect(
-          assertOpenClawMigrationWitnessPreserved(
-            original,
-            captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
-          ),
-        ).toEqual({ warnings: [] });
-        const columns = database
-          .prepare("PRAGMA table_info(transcript_events)")
-          .all()
-          .map((row) => row.name);
+        expectVersion(database, expectedVersion);
+        expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({
+          warnings: [],
+        });
+        const columns = readRows(database, "PRAGMA table_info(transcript_events)").map(
+          (row) => row.name,
+        );
         expect(columns.includes("navigation_type")).toBe(outcome !== "rollback");
         // Read-only session readers refuse migrated stores without startup columns.
         expect(hasPendingAgentStartupColumns(captureSqliteSchemaFacts(database).tableSql)).toBe(
@@ -250,19 +267,21 @@ describe("agent JSON predicate migration", () => {
         );
         if (outcome === "without-outbox") {
           expect(
-            database
-              .prepare("SELECT name FROM sqlite_schema WHERE name = 'context_engine_turn_outbox'")
-              .get(),
+            readRow(
+              database,
+              "SELECT name FROM sqlite_schema WHERE name = 'context_engine_turn_outbox'",
+            ),
           ).toBeUndefined();
         }
         if (outcome === "missing-additive-indexes") {
           expect(
-            database
-              .prepare(`SELECT name FROM sqlite_schema WHERE name IN (
+            readRows(
+              database,
+              `SELECT name FROM sqlite_schema WHERE name IN (
               'idx_agent_transcript_context_pending', 'idx_agent_session_nodes_label',
               'idx_agent_session_nodes_entry_not_valid'
-            )`)
-              .all(),
+            )`,
+            ),
           ).toEqual([]);
         }
       });
@@ -298,51 +317,36 @@ describe("agent outbox sequence migration", () => {
         for (const row of rows) {
           insert.run(row.enqueue_sequence, row.advancement_key, row.payload_json);
         }
-        const indexes = database
-          .prepare(
-            "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
-          )
-          .all();
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          ensureOpenClawAgentDatabaseSchema(database, {
-            agentId: "main",
-            env: state.env,
-            path: pathname,
-            register: false,
-          });
-        });
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
+        const indexes = readRows(
+          database,
+          "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
         );
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        expect(database.prepare("PRAGMA table_info(context_engine_turn_outbox)").all()).toEqual(
+        await migrateLegacyStore(database, pathname, state.env);
+        expectVersion(database);
+        expect(readRows(database, "PRAGMA table_info(context_engine_turn_outbox)")).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ name: "enqueue_sequence", type: "INTEGER", pk: 1 }),
             expect.objectContaining({ name: "advancement_key", type: "TEXT", notnull: 1, pk: 0 }),
           ]),
         );
         expect(
-          database
-            .prepare(
-              "SELECT enqueue_sequence, advancement_key, payload_json FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
-            )
-            .all(),
+          readRows(
+            database,
+            "SELECT enqueue_sequence, advancement_key, payload_json FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+          ),
         ).toEqual(rows);
         expect(
-          database
-            .prepare(
-              "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
-            )
-            .all(),
+          readRows(
+            database,
+            "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
+          ),
         ).toEqual(indexes);
         expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(
           "Historical fixture must not discard context_engine_turn_outbox data",
         );
         expect(() => insert.run(100, "z-first", "{}")).toThrow(/UNIQUE/);
-        expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readRow(database, "PRAGMA integrity_check")?.integrity_check).toBe("ok");
+        expect(readRows(database, "PRAGMA foreign_key_check")).toEqual([]);
       });
     },
   );
@@ -350,8 +354,8 @@ describe("agent outbox sequence migration", () => {
   it("preserves the previous rowids, payloads and FIFO across migration, vacuum and reopen", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const pathname = state.path("outbox-v26.sqlite");
-      const database = new DatabaseSync(pathname);
-      try {
+      {
+        using database = new DatabaseSync(pathname);
         database.exec(
           fs.readFileSync(
             new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
@@ -359,51 +363,28 @@ describe("agent outbox sequence migration", () => {
           ),
         );
         database.exec(`PRAGMA user_version = 26;
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 26, 'main', 1, 1);`);
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', 'agent', 26, 'main', 1, 1);`);
         const insert = database.prepare(`INSERT INTO context_engine_turn_outbox
-          (rowid, advancement_key, engine_id, session_id, payload_json, payload_state, attempt_count, last_attempt_at, last_error, created_at)
-          VALUES (?, ?, 'test', 'session', ?, ?, 3, 7, 'retry', ?)`);
+        (rowid, advancement_key, engine_id, session_id, payload_json, payload_state, attempt_count, last_attempt_at, last_error, created_at)
+        VALUES (?, ?, 'test', 'session', ?, ?, 3, 7, 'retry', ?)`);
         insert.run(7, "z-first", '{"state":"ready"}', "ready", 90);
         insert.run(40, "m-blocked", '{"state":"blocked"}', "blocked", 1);
         insert.run(91, "a-last", '{"state":"accepted"}', "accepted", 20);
-        const originalRows = database
-          .prepare(
-            "SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid",
-          )
-          .all();
-        const original = captureOpenClawMigrationWitness(database, {
-          role: "agent",
-          agentId: "main",
-        });
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          ensureOpenClawAgentDatabaseSchema(database, {
-            agentId: "main",
-            env: state.env,
-            path: pathname,
-            register: false,
-          });
-        });
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
+        const originalRows = readRows(
+          database,
+          "SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid",
         );
-        expect(
-          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        expect(
-          assertOpenClawMigrationWitnessPreserved(
-            original,
-            captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
-          ),
-        ).toEqual({ warnings: [] });
+        const original = witness(database);
+        await migrateLegacyStore(database, pathname, state.env);
+        expectVersion(database);
+        expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({
+          warnings: [],
+        });
         database.exec("VACUUM");
         expect(
-          database
-            .prepare("SELECT * FROM context_engine_turn_outbox ORDER BY enqueue_sequence")
-            .all(),
+          readRows(database, "SELECT * FROM context_engine_turn_outbox ORDER BY enqueue_sequence"),
         ).toEqual(originalRows);
-      } finally {
-        database.close();
       }
       using reopened = new DatabaseSync(pathname);
       ensureOpenClawAgentDatabaseSchema(reopened, {
