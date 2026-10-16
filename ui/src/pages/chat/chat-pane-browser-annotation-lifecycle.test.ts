@@ -132,7 +132,7 @@ function mountedPanes(session = "current") {
     vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
       throw stopAfterRestore;
     });
-    expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterRestore);
+    expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterRestore);
     return pane;
   };
   return { owner, context, mount };

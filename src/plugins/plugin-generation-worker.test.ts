@@ -128,6 +128,7 @@ it("publishes native admission to pinned install roots while capture storage is 
                 source: fixture.entry,
               });
               try {
+                expect(fs.existsSync(state.statePath("tmp", "plugin-captures"))).toBe(false);
                 const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
                 expect(fs.readFileSync(captured).equals(fixture.bytes)).toBe(true);
                 const persisted = await readPersistedInstalledPluginIndex({

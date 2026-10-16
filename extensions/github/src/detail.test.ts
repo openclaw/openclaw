@@ -800,6 +800,211 @@ describe("GitHub detail public read boundary", () => {
   );
 });
 
+describe("progressive GitHub documents", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("delivers the overview before slow checks, loads discussion independently, and reads files only on demand", async () => {
+    const input = target("pull");
+    const checks = createDeferred<Response>();
+    const checksStarted = createDeferred<void>();
+    const upstream = authenticatedFetch(
+      item({ comments: 1, review_comments: 1, changed_files: 1 }),
+    );
+    let delayChecks = true;
+    const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+      if (delayChecks && new URL(requestUrl(url)).pathname.endsWith("/check-runs")) {
+        delayChecks = false;
+        checksStarted.resolve();
+        return checks.promise;
+      }
+      return upstream(url, options);
+    });
+    const selected = identity("progressive");
+    const overview = await loadGitHubDetail(input, selected, fetchMock, false, "overview");
+    expect(overview).toMatchObject({
+      title: "Read me",
+      body: "# Markdown\n\n  indentation  ",
+      revision: sha,
+      deferredSections: ["checks", "files", "discussion"],
+      partial: false,
+    });
+    expect(overview.checks).toBeUndefined();
+    expect(overview.comments).toBeUndefined();
+    expect(overview.files).toBeUndefined();
+    expect(
+      fetchMock.mock.calls.every(
+        ([url]) => !/\/(?:comments|files|check-runs|status)(?:\?|$)/u.test(requestUrl(url)),
+      ),
+    ).toBe(true);
+
+    const pendingChecks = loadGitHubDetail(input, selected, fetchMock, false, "checks");
+    await checksStarted.promise;
+    try {
+      const discussion = await loadGitHubDetail(
+        input,
+        identity("progressive"),
+        fetchMock,
+        false,
+        "discussion",
+      );
+      expect(discussion).toMatchObject({
+        revision: sha,
+        commentsTotal: 2,
+        commentsTruncated: false,
+      });
+      expect(discussion.comments).toHaveLength(2);
+      expect(discussion.checks).toBeUndefined();
+      expect(discussion.files).toBeUndefined();
+      const paths = fetchMock.mock.calls.map(([url]) => new URL(requestUrl(url)).pathname);
+      expect(paths.filter((path) => path.endsWith("/pulls/1"))).toHaveLength(1);
+      expect(paths.some((path) => path.endsWith("/files"))).toBe(false);
+      const files = await loadGitHubDetail(input, selected, fetchMock, false, "files");
+      expect(files).toMatchObject({
+        revision: sha,
+        filesTotal: 1,
+        filesTruncated: false,
+        files: [{ path: "src/file.ts", patch: file().patch }],
+      });
+      expect(files.comments).toBeUndefined();
+      expect(files.checks).toBeUndefined();
+    } finally {
+      checks.resolve(json({ total_count: 0, check_runs: [] }));
+    }
+    expect(await pendingChecks).toMatchObject({
+      revision: sha,
+      checks: { commit: sha, state: "neutral" },
+    });
+    // Omitting section still returns the shipped full document, not the overview cache.
+    const complete = await loadGitHubDetail(input, selected, fetchMock);
+    expect(complete).toMatchObject({
+      partial: false,
+      commentsTotal: 2,
+      filesTotal: 1,
+      checks: { commit: sha, state: "neutral" },
+    });
+    expect(complete.comments).toHaveLength(2);
+    expect(complete.files).toHaveLength(1);
+    expect(complete.deferredSections).toBeUndefined();
+  });
+
+  it("retires cached sections when a refreshed overview selects another head", async () => {
+    const input = target("pull");
+    let currentSha = sha;
+    const upstream = authenticatedFetch();
+    const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+      const path = new URL(requestUrl(url)).pathname;
+      if (path.endsWith("/pulls/1")) {
+        return json(item({ head: { sha: currentSha } }));
+      }
+      if (path.endsWith("/status")) {
+        return json({ sha: currentSha, total_count: 0, statuses: [] });
+      }
+      return upstream(url, options);
+    });
+    const selected = identity("progressive-refresh");
+    await loadGitHubDetail(input, selected, fetchMock, false, "overview");
+    expect(
+      (await loadGitHubDetail(input, selected, fetchMock, false, "checks")).checks?.commit,
+    ).toBe(sha);
+    currentSha = "d".repeat(40);
+    const overview = await loadGitHubDetail(input, selected, fetchMock, true, "overview");
+    const checks = await loadGitHubDetail(input, selected, fetchMock, false, "checks");
+    expect(overview.revision).toBe(currentSha);
+    expect(checks).toMatchObject({
+      revision: currentSha,
+      checks: { commit: currentSha, state: "neutral" },
+    });
+  });
+
+  it("rejects an on-demand PR diff if its head moves during the files read", async () => {
+    const input = target("pull");
+    const upstream = authenticatedFetch(item({ changed_files: 1 }));
+    let filesRead = false;
+    const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+      const path = new URL(requestUrl(url)).pathname;
+      if (filesRead && path.endsWith("/pulls/1")) {
+        return json(item({ changed_files: 1, head: { sha: "d".repeat(40) } }));
+      }
+      const result = await upstream(url, options);
+      filesRead ||= path.endsWith("/files");
+      return result;
+    });
+    await expect(
+      loadGitHubDetail(input, identity(), fetchMock, false, "files"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rechecks current visibility and caller authority when sections reuse a settled overview", async () => {
+    const input = target("pull");
+    const selected = identity("progressive-authority");
+    const upstream = authenticatedFetch();
+    await loadGitHubDetail(input, selected, upstream, false, "overview");
+    selected.assertSelected = () => {
+      throw new Error("Reader retired");
+    };
+    const blocked = vi.fn<typeof fetch>();
+    await expect(loadGitHubDetail(input, selected, blocked, false, "checks")).rejects.toThrow(
+      "Reader retired",
+    );
+    expect(blocked).not.toHaveBeenCalled();
+    const privateRepo = vi.fn<typeof fetch>(async () =>
+      json({ id: 123, private: true, visibility: "private" }),
+    );
+    await expect(
+      loadGitHubDetail(input, identity("progressive-authority"), privateRepo, false, "discussion"),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(privateRepo).toHaveBeenCalledTimes(1);
+    // A completed source never retains the first caller's assertions.
+    await expect(
+      loadGitHubDetail(input, identity("progressive-authority"), upstream, false, "checks"),
+    ).resolves.toMatchObject({ revision: sha, checks: { state: "neutral" } });
+  });
+
+  it("does not label updated issue discussion with a cached overview revision", async () => {
+    const input = target("issue");
+    const selected = identity("progressive-issue-update");
+    const overview = await loadGitHubDetail(
+      input,
+      selected,
+      authenticatedFetch(item()),
+      false,
+      "overview",
+    );
+    const updatedAt = "2026-10-17T00:00:00Z";
+    const discussion = await loadGitHubDetail(
+      input,
+      selected,
+      authenticatedFetch(item({ updated_at: updatedAt })),
+      false,
+      "discussion",
+    );
+    expect(overview.revision).toBe(date);
+    expect(discussion.revision).toBe(updatedAt);
+  });
+
+  it.each(["issue", "commit"] as const)(
+    "defers only supported %s sections and binds them to the source revision",
+    async (kind) => {
+      const input = target(kind);
+      const fetchMock = authenticatedFetch(kind === "commit" ? commit() : item());
+      const selected = identity("progressive-" + kind);
+      const overview = await loadGitHubDetail(input, selected, fetchMock, false, "overview");
+      expect(overview.revision).toBe(kind === "commit" ? sha : date);
+      expect(overview.deferredSections).toEqual(
+        kind === "commit" ? ["files", "discussion"] : ["discussion"],
+      );
+      expect(overview.files).toBeUndefined();
+      expect(overview.comments).toBeUndefined();
+      const discussion = await loadGitHubDetail(input, selected, fetchMock, false, "discussion");
+      expect(discussion).toMatchObject({
+        revision: overview.revision,
+        comments: [],
+        commentsTotal: 0,
+      });
+    },
+  );
+});
+
 describe("GitHub detail target validation", () => {
   it.each([
     null,

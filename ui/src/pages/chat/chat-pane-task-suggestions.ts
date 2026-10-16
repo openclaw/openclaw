@@ -115,9 +115,9 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     this.activeTaskSuggestionId = next.id;
     this.taskSuggestionSwapDirection = direction;
     this.taskSuggestionSwapGeneration += 1;
-    this.requestUpdate();
+    this.invalidate();
     void this.updateComplete.then(() => {
-      const activeCard = [...this.querySelectorAll<HTMLElement>(".task-suggestion")].find(
+      const activeCard = [...this.element.querySelectorAll<HTMLElement>(".task-suggestion")].find(
         (card) => card.dataset.taskId === next.id,
       );
       activeCard
@@ -214,15 +214,15 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         this.state.lastError = failure;
         this.state.chatError = failure;
       }
-      this.requestUpdate();
+      this.invalidate();
       return;
     }
     this.taskSuggestionCopiedIds.add(suggestion.id);
-    this.requestUpdate();
+    this.invalidate();
     setTimeout(() => {
       this.taskSuggestionCopiedIds.delete(suggestion.id);
       if (this.isConnected) {
-        this.requestUpdate();
+        this.invalidate();
       }
     }, 2000);
   };
@@ -285,7 +285,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           operation.outcome.repository
         ) {
           Object.assign(operation.outcome.repository, patch);
-          this.requestUpdate();
+          this.invalidate();
         }
       },
       onAcceptTaskSuggestion: (
@@ -383,7 +383,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       this.taskSuggestionBusyIds.add(suggestion.id);
     }
     this.setTaskSuggestions(this.taskSuggestions);
-    this.requestUpdate();
+    this.invalidate();
     let restoreDismissed = false;
     try {
       if (operation.action === "accept") {
@@ -451,7 +451,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
                 return;
               }
               repository.projects = result.projects.filter((project) => Boolean(project.repoRoot));
-              this.requestUpdate();
+              this.invalidate();
             })
             .catch(() => {
               // An explicit path remains usable when the optional project catalog is unavailable.
@@ -472,7 +472,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         this.taskSuggestionBusyIds.delete(suggestion.id);
         if (operation.action === "accept" && !ownsScope()) {
           this.reconcileTaskSuggestionConnection(false);
-          this.requestUpdate();
+          this.invalidate();
         }
         if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
           if (restoreDismissed) {
@@ -484,7 +484,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             this.setTaskSuggestions(restored);
           }
           this.setTaskSuggestions(this.taskSuggestions);
-          this.requestUpdate();
+          this.invalidate();
           if (action === "dismiss") {
             // Replace stale reads after every outcome, including refused dismissals,
             // so another card's completion cannot discard their reconciliation.

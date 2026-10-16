@@ -129,7 +129,7 @@ describe("completed-work duration", () => {
       transcript.hostUpdated();
     };
     const controller = createChatState({
-      requestUpdate: rerender,
+      invalidate: rerender,
       updateComplete: Promise.resolve(true),
     });
     const dispose = controller.dispose;

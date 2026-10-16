@@ -104,7 +104,7 @@ function prepareImage(
   source: HTMLImageElement,
   base: string,
   loadImage: LoadImage | undefined,
-  isCurrent: () => boolean,
+  signal: AbortSignal,
 ): void {
   const url = documentUrl(source.getAttribute("src") ?? "", base);
   const label = source.alt.trim() || translate("linkReader.image");
@@ -138,14 +138,14 @@ function prepareImage(
     image.loading = "lazy";
     image.decoding = "async";
     const unavailable = () => {
-      if (!isCurrent()) {
+      if (signal.aborted) {
         return;
       }
       image.hidden = true;
       status.textContent = translate("linkReader.imageUnavailable", { title: label });
       status.setAttribute("role", "status");
     };
-    image.addEventListener("error", unavailable, { once: true });
+    image.addEventListener("error", unavailable, { once: true, signal });
     if (linkedImage) {
       wrapper.append(image);
     } else {
@@ -156,7 +156,7 @@ function prepareImage(
     }
     if (loadImage) {
       void loadImage(url.href).then((imageUrl) => {
-        if (isCurrent() && image.isConnected) {
+        if (!signal.aborted && image.isConnected) {
           image.src = imageUrl;
         }
       }, unavailable);
@@ -183,7 +183,7 @@ export function LinkReaderMarkdown(props: { body: string; base: string; loadImag
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
   createEffect(source, ([body, base, loadImage]) => {
-    let current = true;
+    const lifetime = new AbortController();
     let rendered: string;
     try {
       rendered = markdown.render(body, documentOptions);
@@ -224,12 +224,10 @@ export function LinkReaderMarkdown(props: { body: string; base: string; loadImag
       input.disabled = true;
     }
     for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
-      prepareImage(image, base, loadImage, () => current);
+      prepareImage(image, base, loadImage, lifetime.signal);
     }
     element.replaceChildren(fragment);
-    return () => {
-      current = false;
-    };
+    return () => lifetime.abort();
   });
   return (
     <div

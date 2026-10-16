@@ -1,9 +1,8 @@
-import { createComponent, createSignal, merge, onCleanup } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -72,7 +71,8 @@ describe("composer queue", () => {
     { key: "ArrowUp", expected: ["c", "b"] },
     { key: "ArrowDown", expected: ["c", "d"] },
   ])("moves the focused row on $key", async ({ key, expected }) => {
-    const host = new ControllerHost();
+    const host = {};
+    let invalidate = () => {};
     const waiting = (id: string, createdAt: number): ChatQueueItem => ({
       id,
       text: id,
@@ -83,7 +83,7 @@ describe("composer queue", () => {
     const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
     const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
       queue = ids.map((id, index) => waiting(id, index));
-      host.requestUpdate();
+      invalidate();
     });
     const onQueueRemove = vi.fn();
     view = mountSolid(
@@ -93,7 +93,7 @@ describe("composer queue", () => {
           presented: () => true,
           read: () => queue,
         });
-        onCleanup(host.subscribe(() => lifecycle.invalidate()));
+        invalidate = () => lifecycle.invalidate();
         return createComponent(renderChatQueueSolid, {
           get queue() {
             return lifecycle.snapshot();
@@ -104,8 +104,6 @@ describe("composer queue", () => {
       },
       { container },
     );
-    host.connect();
-    onTestFinished(() => host.disconnect());
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-queue__grip")).toHaveLength(4),
     );

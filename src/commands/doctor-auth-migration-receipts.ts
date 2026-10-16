@@ -44,7 +44,7 @@ export type AuthProfileMigrationSourceReceipt = {
   env?: NodeJS.ProcessEnv;
 };
 
-export function createAuthProfileMigrationSourceReceipt(params: {
+function createAuthProfileMigrationSourceReceipt(params: {
   sourcePath: string;
   sourceBytes: Buffer;
   sourceRecordCount: number;

@@ -966,7 +966,7 @@ describe("standalone image metadata", () => {
       errors.length = 0;
       let result: unknown;
       if (owner === "runtime") {
-        context.loadRuntimePluginCandidate({
+        const steps = context.loadRuntimePluginCandidate({
           candidate: { source: sourcePath, rootDir, origin },
           manifestRecord: { channels: [], configSchema: {} },
           context: { normalized: { slots: {} }, shouldLoadModules: true, env: {} },
@@ -980,6 +980,10 @@ describe("standalone image metadata", () => {
           logger: {},
           loadPluginModule: loadModule,
         });
+        let step = steps.next();
+        while (!step.done) {
+          step = steps.next();
+        }
         result = loadModule.mock.calls.at(-1)?.[0];
       } else if (owner === "legacy") {
         result = context.loadLegacySessionSurface({
