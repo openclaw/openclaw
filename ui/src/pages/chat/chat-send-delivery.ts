@@ -17,7 +17,9 @@ import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
+  CHAT_OUTBOX_AUTO_RESEND_WINDOW_MS,
   flushStoredChatOutbox,
+  recordChatOutboxSendConnection,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
   scheduleStoredChatOutboxRetry,
   type ChatOutboxDrainDependencies,
@@ -45,6 +47,7 @@ import { requestChatSend } from "./chat-send-request.ts";
 import {
   formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  UNCONFIRMED_CHAT_SEND_ERROR,
   requiresChatInputConsumption,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
@@ -237,10 +240,32 @@ async function sendPreparedChatMessage(
   const requestConnectionIsCurrent = captureChatConnectionOwner(host);
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
+  // Attachment/settings preparation can outlast the window approved by reconciliation.
+  if (
+    options?.automaticResend &&
+    startedAt - (prepared.sendFirstAttemptAtMs ?? 0) > CHAT_OUTBOX_AUTO_RESEND_WINDOW_MS
+  ) {
+    const parked = setState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
+    surfaceChatDeliveryFailure(
+      host,
+      sessionKey,
+      prepared.agentId,
+      parked ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
+      { inline: Boolean(parked) },
+    );
+    return "pending";
+  }
   const requestStartedAtMs = controlUiNowMs();
   const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
+    // Do not infer a first attempt for legacy rows whose prior age is unknown.
+    sendFirstAttemptAtMs:
+      item.sendFirstAttemptAtMs ??
+      ((item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined
+        ? startedAt
+        : undefined),
+    sendAutoResends: (item.sendAutoResends ?? 0) + (options?.automaticResend ? 1 : 0),
     sendError: undefined,
     sendRunId: runId,
     sendState: "sending",
@@ -252,6 +277,7 @@ async function sendPreparedChatMessage(
     surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     return "pending";
   }
+  recordChatOutboxSendConnection(host, id);
   registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
   recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   const scope = {

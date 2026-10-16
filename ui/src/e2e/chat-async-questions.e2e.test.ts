@@ -31,7 +31,7 @@ const questionMessage = {
 };
 
 suite.define(() => {
-  it("keeps an admitted optional answer with its original outbox owner after reconnect", async () => {
+  it("keeps an admitted optional answer with its original outbox owner after reconnect outside the automatic resend window", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -44,6 +44,8 @@ suite.define(() => {
       const admitted = await readOutboxQueue(page);
       expect(admitted).toHaveLength(1);
       expect(requireRecord(firstRequest.params).message).toBe(`> ${title}\n\n${answer}`);
+      // Preserve manual-retry ownership coverage beyond the two-minute resend window.
+      await page.clock.setFixedTime(Date.now() + 3 * 60_000);
       await reconnectMockGateway(page, gateway);
       await expect
         .poll(async () => (await readOutboxQueue(page))[0]?.sendState)

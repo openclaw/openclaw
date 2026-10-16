@@ -21,6 +21,51 @@ const suite = createChatFlowE2eSuite();
 const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
 
 suite.define(() => {
+  it("automatically resends an ACK-lost message and drains its successor without a click", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "chat.history": {
+            messages: [],
+            sessionInfo: { hasActiveRun: false, status: "done" },
+          },
+          "chat.send": { status: "ok", messageSeq: 2 },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await gateway.deferNext("chat.send");
+      await composer.fill("first interrupted message");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const first = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(first.params).idempotencyKey, "original key");
+      await gateway.setOnline(false);
+      await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
+      // Complete the lost response on the closed socket, before holding the retry ACK.
+      await gateway.resolveDeferred("chat.send", { runId, status: "ok", messageSeq: 1 });
+      await composer.fill("second queued message");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await page.locator(".chat-queue").getByText("second queued message").waitFor();
+      await gateway.deferNext("chat.send");
+      await gateway.setOnline(true);
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]!.params)).toMatchObject({
+        idempotencyKey: runId,
+        message: "first interrupted message",
+      });
+      await page.getByRole("button", { name: "Sending message...", exact: true }).waitFor();
+      expect(await page.locator('.chat-send-status[data-send-state="unconfirmed"]').count()).toBe(
+        0,
+      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+      await gateway.resolveDeferred("chat.send", { runId, status: "ok", messageSeq: 1 });
+      const delivered = await waitForRequests(gateway, "chat.send", 3);
+      expect(requireRecord(delivered[2]!.params).message).toBe("second queued message");
+      await page.locator(".chat-queue").waitFor({ state: "detached" });
+      await expectRequestCountStable(gateway, "chat.send", 3);
+    });
+  });
+
   it("keeps delivery recovery visible and keyboard-reachable in narrow chat", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 320, height: 844 } },
@@ -178,7 +223,7 @@ suite.define(() => {
   });
 
   it.each(["retry", "discard", "exact authoritative history proof"] as const)(
-    "parks an ACK-lost send for review until %s",
+    "parks an expired ACK-lost send for review until %s",
     async (action) => {
       const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       const artifactDir = proofRoot
@@ -241,6 +286,8 @@ suite.define(() => {
           expect(await reconnectStatus.getByRole("button", { name: /Retry/ }).count()).toBe(0);
           await reconnectStatus.getByRole("button", { name: "Discard", exact: true }).waitFor();
           await captureProof("00-waiting-for-reconnect");
+          // Preserve manual-review coverage outside the automatic resend window.
+          await page.clock.setFixedTime(Date.now() + 3 * 60_000);
           await gateway.setOnline(true);
 
           const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');

@@ -3602,6 +3602,8 @@ describe("handleSendChat", () => {
           "Blob-backed reconnect send",
         );
         const reference = expectDefined(stored.attachmentPayload, "reconnect payload reference");
+        // Keep this passive consumption/preview test outside automatic resend's window.
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3 * 60_000);
         markQueuedChatSendsWaitingForReconnect(source);
         if (retry) {
           const unconfirmed: typeof stored = { ...stored, sendState: "unconfirmed" };

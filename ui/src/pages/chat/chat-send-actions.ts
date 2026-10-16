@@ -58,6 +58,8 @@ const resetRetryState = (
     // Local payload failure cannot erase an uncertain transport attempt. Keep its
     // identity until the explicitly admitted retry actually reaches transport.
     sendAttempts: uncertain ? entry.sendAttempts : 0,
+    sendFirstAttemptAtMs: uncertain ? entry.sendFirstAttemptAtMs : undefined,
+    sendAutoResends: uncertain ? entry.sendAutoResends : undefined,
     // A failed delivery keeps its diagnostic while an explicit retry waits for
     // run admission; the transcript uses it to retain the same optimistic row.
     sendError: entry.sendState === "failed" ? entry.sendError : undefined,

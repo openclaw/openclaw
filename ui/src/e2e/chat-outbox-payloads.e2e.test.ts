@@ -34,7 +34,7 @@ const suite = createChatFlowE2eSuite({
 });
 
 suite.define(() => {
-  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", async () => {
+  it("sends and explicitly retries an attachment after a non-local plain HTTP reload outside the automatic resend window", async () => {
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -90,6 +90,8 @@ suite.define(() => {
         );
         const original = (await readQueue(page))[0]!;
         assert(original.attachmentPayload);
+        // Keep the parked-row adoption and explicit retry path beyond the two-minute window.
+        await page.clock.setFixedTime(Date.now() + 3 * 60_000);
         const releasePreviewReads = await holdOutboxPreviewReads(page);
         await page.reload();
         await waitForControlUiGatewayReady(page);
@@ -139,7 +141,7 @@ suite.define(() => {
     );
   });
 
-  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", async () => {
+  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK outside the automatic resend window", async () => {
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -187,7 +189,8 @@ suite.define(() => {
           }),
         );
         await expect.poll(() => payloadCount(page)).toBe(1);
-        // Reload destroys the pending ACK. The restored attempted row must require review.
+        // Reload destroys the pending ACK; an attempt beyond the two-minute window needs review.
+        await page.clock.setFixedTime(Date.now() + 3 * 60_000);
         await page.reload();
         await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);

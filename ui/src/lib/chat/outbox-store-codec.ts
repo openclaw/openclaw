@@ -255,6 +255,12 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
+  for (const key of ["sendFirstAttemptAtMs", "sendAutoResends"] as const) {
+    const value = asFiniteNumber(entry[key]);
+    if (value !== undefined && value >= 0) {
+      item[key] = value;
+    }
+  }
   for (const key of ["localCommandArgs", "localCommandName", "sessionKey"] as const) {
     const fieldValue = normalizeOptionalString(entry[key]);
     if (fieldValue) {

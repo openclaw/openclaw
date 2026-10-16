@@ -182,6 +182,9 @@ export type ChatQueueItem = {
   localCommandName?: string;
   pendingRunId?: string;
   sendAttempts?: number;
+  /** Wall clock of the first transport attempt; absent on legacy stored rows. */
+  sendFirstAttemptAtMs?: number;
+  sendAutoResends?: number;
   sendError?: string;
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */

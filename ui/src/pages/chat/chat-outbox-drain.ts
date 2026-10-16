@@ -51,6 +51,7 @@ import { isChatBusy } from "./run-lifecycle.ts";
 export type QueuedChatSendResult = "sent" | "pending" | "failed";
 export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = PendingComposerSnapshot & {
+  automaticResend?: boolean;
   /** Fresh selected-session sends may let the Gateway resolve its effective active-run mode. */
   allowActiveRunSend?: boolean;
   /** Confirmation-triggered sends retain their UI owner across preparation waits. */
@@ -86,6 +87,39 @@ type StoredChatOutboxDrainLane = {
 };
 
 const observedOutboxEvents = new WeakMap<GatewayBrowserClient, WeakSet<GatewayEventFrame>>();
+
+// Stay below the Gateway's five-minute DEDUPE_TTL_MS. Early capacity eviction or
+// a restart of a non-restart-safe send can still duplicate an admitted input.
+export const CHAT_OUTBOX_AUTO_RESEND_WINDOW_MS = 2 * 60_000;
+export const CHAT_OUTBOX_AUTO_RESEND_MAX = 3;
+
+const sendConnectionEpochs = new WeakMap<GatewayBrowserClient, Map<string, number | undefined>>();
+
+export function recordChatOutboxSendConnection(host: ChatHost, id: string): void {
+  if (!host.client) {
+    return;
+  }
+  const epochs = sendConnectionEpochs.get(host.client) ?? new Map();
+  epochs.set(id, host.connectionEpoch);
+  sendConnectionEpochs.set(host.client, epochs);
+}
+
+function canAutomaticallyResend(host: ChatHost, item: ChatQueueItem): boolean {
+  const epochs = host.client ? sendConnectionEpochs.get(host.client) : undefined;
+  const age = Date.now() - (item.sendFirstAttemptAtMs ?? Number.NEGATIVE_INFINITY);
+  return Boolean(
+    // Only transport-uncertain sends; a Gateway rejection stays failed for review.
+    (item.sendState === "waiting-reconnect" || item.sendState === "unconfirmed") &&
+    item.sendRunId &&
+    !item.localCommandName &&
+    !item.pendingRunId &&
+    ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined) &&
+    age >= 0 &&
+    age <= CHAT_OUTBOX_AUTO_RESEND_WINDOW_MS &&
+    (item.sendAutoResends ?? 0) < CHAT_OUTBOX_AUTO_RESEND_MAX &&
+    !(epochs?.has(item.id) && epochs.get(item.id) === host.connectionEpoch),
+  );
+}
 
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
@@ -174,8 +208,7 @@ async function reconcileStoredChatOutboxHead(
   ) {
     return "send";
   }
-  // Passive unknown sends need positive delivery proof; only an explicit retry
-  // may continue through idle reconciliation to the same idempotency key.
+  // Bounded reconnect retries share explicit retry's idle verification and key.
   if (
     history === "blocked" ||
     history === "continue" ||
@@ -186,7 +219,7 @@ async function reconcileStoredChatOutboxHead(
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
     return "blocked";
   }
-  if ((item.sendAttempts ?? 0) > 0) {
+  if (!neverAttempted) {
     // History and run metadata are non-atomic; verify idle before parking unknown.
     const verifiedHistory = await readCurrentStoredChatHistory(...historyArgs);
     if (verifiedHistory === "blocked" || verifiedHistory === "continue") {
@@ -468,6 +501,7 @@ async function drainStoredChatOutbox(
     const freshAdmission = lane.freshAdmissions.delete(item.id);
     const pendingOptions = lane.pendingOptions.get(item.id);
     const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
+    const automaticResend = !freshAdmission && canAutomaticallyResend(host, item);
     if (!freshAdmission || retryUnconfirmed || !visible) {
       // History reconciles canonical stored versions, not the live row's transport alias.
       const reconciled = await reconcileStoredChatOutboxHead(
@@ -475,7 +509,7 @@ async function drainStoredChatOutbox(
         outbox,
         storedItem,
         dependencies,
-        retryUnconfirmed,
+        retryUnconfirmed || automaticResend,
       );
       if (reconciled === "blocked") {
         return "blocked";
@@ -493,10 +527,18 @@ async function drainStoredChatOutbox(
       continue;
     }
     chatOutboxOwner(host).syncHost(host);
+    if (automaticResend) {
+      // Preparation can fail before transport; do not spin on the same row/epoch.
+      recordChatOutboxSendConnection(host, item.id);
+    }
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,
-      visible ? pendingOptions : { ...pendingOptions, routingSessionKey: undefined },
+      {
+        ...pendingOptions,
+        ...(!visible ? { routingSessionKey: undefined } : {}),
+        ...(automaticResend ? { automaticResend: true } : {}),
+      },
       outbox.sessionKey,
     );
     lane.outcomes.set(item.id, result);
