@@ -65,21 +65,15 @@ describe("persisted implicit-main roster migration", () => {
       { $include: "./included.json" },
       async (channelsSnapshot, configPath) => {
         const includePath = path.join(path.dirname(configPath), "included.json");
+        const list = [{ id: "ops", default: true }];
         expect(channelsSnapshot.sourceConfigBeforeMigrations?.agents?.entries).toBeUndefined();
         expect(channelsSnapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
 
-        await fs.writeFile(
-          includePath,
-          JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } }),
-        );
+        await fs.writeFile(includePath, JSON.stringify({ agents: { list } }));
         const rosterSnapshot = await readSnapshot();
-        expect(rosterSnapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list", [
-          { id: "ops", default: true },
-        ]);
+        expect(rosterSnapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list", list);
         expect(rosterSnapshot.valid).toBe(false);
-        expect(rosterSnapshot.sourceConfig).toHaveProperty("agents.list", [
-          { id: "ops", default: true },
-        ]);
+        expect(rosterSnapshot.sourceConfig).toHaveProperty("agents.list", list);
         expect(rosterSnapshot.sourceConfig.agents?.entries).toBeUndefined();
       },
       { "included.json": { channels: { telegram: { enabled: true } } } },

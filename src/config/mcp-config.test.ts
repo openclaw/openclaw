@@ -7,6 +7,10 @@ import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
 
+function stdio(command: string, arg: string) {
+  return { command, args: [arg] };
+}
+
 function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
 }
@@ -84,13 +88,13 @@ async function withMcpConfigHome<T>(
   );
 }
 
-async function readValidMcpConfig() {
+async function readMcpServers() {
   const loaded = await listConfiguredMcpServers();
   expect(loaded.ok).toBe(true);
   if (!loaded.ok) {
     throw new Error("expected MCP config to load");
   }
-  return loaded;
+  return loaded.mcpServers;
 }
 
 async function withMcpServers(servers: Record<string, unknown>, fn: () => Promise<void>) {
@@ -102,72 +106,61 @@ describe("config mcp config", () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "context7",
-        server: { command: "uvx", args: ["context7-mcp"] },
+        server: stdio("uvx", "context7-mcp"),
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await readValidMcpConfig();
-      expect(loaded.mcpServers.context7).toEqual({ command: "uvx", args: ["context7-mcp"] });
+      expect((await readMcpServers()).context7).toEqual(stdio("uvx", "context7-mcp"));
 
       const unsetResult = await unsetConfiguredMcpServer({ name: "context7" });
       expect(unsetResult.ok).toBe(true);
 
-      const reloaded = await readValidMcpConfig();
-      expect(reloaded.mcpServers).toStrictEqual({});
+      expect(await readMcpServers()).toStrictEqual({});
     });
   });
 
   it("does not overwrite an existing server in create-only mode", async () => {
-    await withMcpServers({ docs: { command: "node", args: ["existing.mjs"] } }, async () => {
+    await withMcpServers({ docs: stdio("node", "existing.mjs") }, async () => {
       const result = await setConfiguredMcpServer({
         name: "docs",
-        server: { command: "uvx", args: ["docs-mcp"] },
+        server: stdio("uvx", "docs-mcp"),
         createOnly: true,
       });
 
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining("already exists") });
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok && loaded.mcpServers.docs).toEqual({
-        command: "node",
-        args: ["existing.mjs"],
-      });
+      expect((await readMcpServers()).docs).toEqual(stdio("node", "existing.mjs"));
     });
   });
 
   it("only replaces a server that still matches the expected config", async () => {
-    await withMcpServers({ docs: { command: "node", args: ["current.mjs"] } }, async () => {
+    await withMcpServers({ docs: stdio("node", "current.mjs") }, async () => {
       const stale = await setConfiguredMcpServer({
         name: "docs",
-        server: { command: "uvx", args: ["docs@2"] },
-        expectedServer: { command: "node", args: ["stale.mjs"] },
+        server: stdio("uvx", "docs@2"),
+        expectedServer: stdio("node", "stale.mjs"),
       });
       expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
 
       const replaced = await setConfiguredMcpServer({
         name: "docs",
-        server: { command: "uvx", args: ["docs@2"] },
-        expectedServer: { command: "node", args: ["current.mjs"] },
+        server: stdio("uvx", "docs@2"),
+        expectedServer: stdio("node", "current.mjs"),
       });
       expect(replaced.ok).toBe(true);
 
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok && loaded.mcpServers.docs).toEqual({ command: "uvx", args: ["docs@2"] });
+      expect((await readMcpServers()).docs).toEqual(stdio("uvx", "docs@2"));
     });
   });
 
   it("does not remove a server that changed after ownership inspection", async () => {
-    await withMcpServers({ docs: { command: "node", args: ["changed.mjs"] } }, async () => {
+    await withMcpServers({ docs: stdio("node", "changed.mjs") }, async () => {
       const result = await unsetConfiguredMcpServer({
         name: "docs",
-        expectedServer: { command: "uvx", args: ["docs-mcp"] },
+        expectedServer: stdio("uvx", "docs-mcp"),
       });
 
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok && loaded.mcpServers.docs).toEqual({
-        command: "node",
-        args: ["changed.mjs"],
-      });
+      expect((await readMcpServers()).docs).toEqual(stdio("node", "changed.mjs"));
     });
   });
 
@@ -215,8 +208,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await readValidMcpConfig();
-      expect(loaded.mcpServers.billing).toEqual(billing);
+      expect((await readMcpServers()).billing).toEqual(billing);
     });
   });
 
@@ -249,8 +241,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await readValidMcpConfig();
-      expect(loaded.mcpServers.remote).toEqual({
+      expect((await readMcpServers()).remote).toEqual({
         url: "https://example.com/mcp",
         transport: "streamable-http",
       });

@@ -11,7 +11,7 @@ import {
   registerRuntimeConfigWriteListener,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 
 type IncludeReferenceFixture = {
   suiteRootTracker: Pick<ReturnType<typeof createSuiteTempRootTracker>, "make">;
@@ -32,35 +32,53 @@ const pluginConfig = (old: PluginEntry, addDemo = false) => ({
 const jsonFile = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const parsedInclude = { plugins: { $include: "./config/plugins.json5" } };
 
-export function registerPluginIncludeReferenceRepairTest({
-  suiteRootTracker,
-  allowConfigPathWrite,
-  ioMocks,
-}: IncludeReferenceFixture) {
+async function referenceFixture(
+  { suiteRootTracker, allowConfigPathWrite }: IncludeReferenceFixture,
+  name: string,
+  tokenName: string,
+  token: string,
+  extra: Record<string, string> = {},
+) {
+  const paths = await createPluginIncludeFixture(await suiteRootTracker.make(name));
+  const authoredOldEntry = { enabled: true, config: { token: `\${${tokenName}}`, ...extra } };
+  const oldEntry = { ...authoredOldEntry, config: { token, ...extra } };
+  const initialPluginsRaw = jsonFile(pluginConfig(authoredOldEntry).plugins);
+  await fs.writeFile(paths.pluginsPath, initialPluginsRaw, "utf-8");
+  const snapshot = createSnapshot({
+    hash: `hash-${name}`,
+    path: paths.configPath,
+    parsed: parsedInclude,
+    sourceConfig: pluginConfig(oldEntry),
+  });
+  snapshot.authoredConfig = pluginConfig(authoredOldEntry);
+  const writeOptions = {
+    expectedConfigPath: paths.configPath,
+    envSnapshotForRestore: { [tokenName]: token },
+    assertConfigPathForWrite: allowConfigPathWrite,
+    includeFileTargetsForWrite: {
+      [paths.pluginsPath]: await resolveIncludeTarget(paths.pluginsPath),
+    },
+  };
+  return { ...paths, authoredOldEntry, oldEntry, initialPluginsRaw, snapshot, writeOptions };
+}
+
+export function registerPluginIncludeReferenceRepairTest(fixture: IncludeReferenceFixture) {
+  const { ioMocks } = fixture;
   it("repairs invalid config through a single-file top-level plugins include", async () => {
-    const home = await suiteRootTracker.make("include");
-    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    const authoredOldEntry = {
-      enabled: true,
-      config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
-    };
-    await fs.writeFile(pluginsPath, jsonFile(pluginConfig(authoredOldEntry).plugins), "utf-8");
+    const { configPath, pluginsPath, authoredOldEntry, oldEntry, snapshot, writeOptions } =
+      await referenceFixture(
+        fixture,
+        "include",
+        "OPENCLAW_TEST_PLUGIN_TOKEN",
+        "plugin-token-runtime",
+        {
+          optional: "${OPTIONAL_TOKEN}",
+        },
+      );
     const previousBackupPath = `${pluginsPath}.bak`;
     await fs.writeFile(previousBackupPath, "previous backup", { mode: 0o644 });
-    const oldEntry = {
-      enabled: true,
-      config: { token: "plugin-token-runtime", optional: "${OPTIONAL_TOKEN}" },
-    };
-    const snapshot: ConfigFileSnapshot = {
-      ...createSnapshot({
-        hash: "hash-include",
-        path: configPath,
-        parsed: parsedInclude,
-        sourceConfig: pluginConfig(oldEntry),
-      }),
-      valid: false,
-      issues: [{ path: "plugins.load.paths", message: "plugin path not found: /gone" }],
-    };
+    snapshot.valid = false;
+    snapshot.issues = [{ path: "plugins.load.paths", message: "plugin path not found: /gone" }];
     const nextConfig = pluginConfig(oldEntry, true);
     const refreshedSnapshot = createSnapshot({
       hash: "hash-include-refreshed",
@@ -68,17 +86,8 @@ export function registerPluginIncludeReferenceRepairTest({
       parsed: parsedInclude,
       sourceConfig: nextConfig,
     });
-    snapshot.authoredConfig = pluginConfig(authoredOldEntry);
     ioMocks.readConfigFileSnapshotForWrite
-      .mockResolvedValueOnce({
-        snapshot,
-        writeOptions: {
-          expectedConfigPath: configPath,
-          envSnapshotForRestore: { OPENCLAW_TEST_PLUGIN_TOKEN: "plugin-token-runtime" },
-          assertConfigPathForWrite: allowConfigPathWrite,
-          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        },
-      })
+      .mockResolvedValueOnce({ snapshot, writeOptions })
       .mockResolvedValueOnce({
         snapshot: refreshedSnapshot,
         writeOptions: { expectedConfigPath: configPath },
@@ -104,9 +113,8 @@ export function registerPluginIncludeReferenceRepairTest({
           },
         },
         io: {
+          ...ioMocks,
           env: { OPENCLAW_TEST_PLUGIN_TOKEN: "plugin-token-after-read" },
-          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
-          writeConfigFile: ioMocks.writeConfigFile,
         },
       });
     } finally {
@@ -142,28 +150,16 @@ export function registerPluginIncludeReferenceRepairTest({
   });
 }
 
-export function registerIncludeReferencePreflightTest({
-  suiteRootTracker,
-  allowConfigPathWrite,
-  ioMocks,
-}: IncludeReferenceFixture) {
+export function registerIncludeReferencePreflightTest(fixture: IncludeReferenceFixture) {
+  const { ioMocks } = fixture;
   it("preflights the restored include payload with the current environment", async () => {
-    const home = await suiteRootTracker.make("include-restored-preflight");
-    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    const authoredOldEntry = {
-      enabled: true,
-      config: { token: "${OPENCLAW_TEST_INCLUDE_TOKEN}" },
-    };
-    const initialPluginsRaw = jsonFile(pluginConfig(authoredOldEntry).plugins);
-    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
-    const oldEntry = { enabled: true, config: { token: "old-token" } };
-    const snapshot = createSnapshot({
-      hash: "hash-include-restored-preflight",
-      path: configPath,
-      parsed: parsedInclude,
-      sourceConfig: pluginConfig(oldEntry),
-    });
-    snapshot.authoredConfig = pluginConfig(authoredOldEntry);
+    const { pluginsPath, oldEntry, initialPluginsRaw, snapshot, writeOptions } =
+      await referenceFixture(
+        fixture,
+        "include-restored-preflight",
+        "OPENCLAW_TEST_INCLUDE_TOKEN",
+        "old-token",
+      );
     const observedSources: OpenClawConfig[] = [];
 
     try {
@@ -179,17 +175,11 @@ export function registerIncludeReferencePreflightTest({
         replaceConfigFile({
           baseHash: snapshot.hash,
           snapshot,
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            envSnapshotForRestore: { OPENCLAW_TEST_INCLUDE_TOKEN: "old-token" },
-            assertConfigPathForWrite: allowConfigPathWrite,
-            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-          },
+          writeOptions,
           nextConfig: pluginConfig(oldEntry, true),
           io: {
+            ...ioMocks,
             env: { OPENCLAW_TEST_INCLUDE_TOKEN: "new-token" },
-            readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
-            writeConfigFile: ioMocks.writeConfigFile,
           },
         }),
       ).rejects.toThrow(/active SecretRef resolution failed: stop before write/);

@@ -35,7 +35,7 @@ function resolveConfigIssueLineInRaw(raw: string, pathSegments: PathSegment[]): 
   return match?.[1] ? Number(match[1]) : undefined;
 }
 
-function appendReceivedValueHint(message: string, pathValue: string, value: unknown): string {
+function receivedHint(value: unknown, pathValue = "some.path", message = "invalid input"): string {
   const pathSegments = pathValue.split(".");
   let root: unknown = value;
   for (const segment of pathSegments.toReversed()) {
@@ -94,33 +94,25 @@ describe("resolveConfigIssueLineInRaw", () => {
 
 describe("appendReceivedValueHint", () => {
   it("keeps truncated received values on a valid UTF-16 boundary", () => {
-    const message = appendReceivedValueHint(
-      "invalid input",
-      "gateway.bind",
-      `${"x".repeat(155)}🎉tail`,
-    );
+    const message = receivedHint(`${"x".repeat(155)}🎉tail`, "gateway.bind");
     expect(message).toBe(`invalid input, got: "${"x".repeat(155)}...`);
   });
 
   it("skips sensitive paths", () => {
-    expect(appendReceivedValueHint("invalid token", "channels.telegram.botToken", "abc123")).toBe(
+    expect(receivedHint("abc123", "channels.telegram.botToken", "invalid token")).toBe(
       "invalid token",
     );
   });
 
   it("skips object values", () => {
-    expect(appendReceivedValueHint("invalid input", "some.path", { nested: true })).toBe(
-      "invalid input",
-    );
+    expect(receivedHint({ nested: true })).toBe("invalid input");
   });
 
   it.each([
     [Number.NaN, "NaN"],
     [-0, "-0"],
   ])("renders JSON5 number %s without coercing it to null", (value, label) => {
-    expect(appendReceivedValueHint("invalid input", "some.path", value)).toBe(
-      `invalid input, got: ${label}`,
-    );
+    expect(receivedHint(value)).toBe(`invalid input, got: ${label}`);
   });
 });
 

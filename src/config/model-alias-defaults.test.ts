@@ -81,6 +81,10 @@ describe("applyModelDefaults", () => {
     return applyModelDefaults({ agents: { defaults: { models } } }).agents?.defaults?.models;
   }
 
+  function modelRefs(primary: string, fallbacks = [primary]) {
+    return { model: { primary, fallbacks }, models: { [primary]: {} } };
+  }
+
   function buildCustomProviderManifestRegistry() {
     return {
       plugins: [
@@ -139,21 +143,14 @@ describe("applyModelDefaults", () => {
   });
 
   it("normalizes the retired Together default primary and fallback refs", () => {
-    const cfg = {
+    const next = applyModelDefaults({
       agents: {
-        defaults: {
-          model: {
-            primary: "together/moonshotai/Kimi-K2.5",
-            fallbacks: ["together/moonshotai/Kimi-K2.5", "openai/gpt-5.5"],
-          },
-          models: {
-            "together/moonshotai/Kimi-K2.5": {},
-          },
-        },
+        defaults: modelRefs("together/moonshotai/Kimi-K2.5", [
+          "together/moonshotai/Kimi-K2.5",
+          "openai/gpt-5.5",
+        ]),
       },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
+    });
     expect(next.agents?.defaults?.model).toEqual({
       primary: "together/moonshotai/Kimi-K2.6",
       fallbacks: ["together/moonshotai/Kimi-K2.6", "openai/gpt-5.5"],
@@ -164,23 +161,9 @@ describe("applyModelDefaults", () => {
   });
 
   it("normalizes retired Gemini per-agent model refs", () => {
-    const cfg = {
-      agents: {
-        entries: {
-          ops: {
-            model: {
-              primary: "google/gemini-3-pro-preview",
-              fallbacks: ["google/gemini-3-pro-preview"],
-            },
-            models: {
-              "google/gemini-3-pro-preview": {},
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
+    const next = applyModelDefaults({
+      agents: { entries: { ops: modelRefs("google/gemini-3-pro-preview") } },
+    });
     expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
