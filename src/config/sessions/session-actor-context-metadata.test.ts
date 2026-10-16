@@ -238,9 +238,11 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         },
       });
       const appended = {
-        ...question,
+        type: "message",
         id: "after-window",
         parentId: events.at(-1)!.id,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: question.message,
       };
       const command: Mutation = {
         type: "session.actor.appendTranscriptEvent",
@@ -248,9 +250,18 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
           target: f.target,
           commandId: "append-after-window",
           phaseId: "append",
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: f.read().entry?.lifecycleRevision ?? null,
-          eventJson: JSON.stringify(appended),
+          append: {
+            kind: "metadata",
+            input: {
+              scope: f.scope,
+              event: appended,
+              message: {
+                messageJson: JSON.stringify(appended.message),
+                cwd: "/synthetic",
+              },
+              options: {},
+            },
+          },
         },
       };
       const rewritten = {
@@ -259,7 +270,7 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
       };
       try {
         await f.prepare(command);
-        expect(f.mutate(command).kind).toBe("committed");
+        expect(f.mutate(command)).toMatchObject({ kind: "committed" });
         context.install();
         expect(context.accounting()).toMatchObject({
           kind: "value",

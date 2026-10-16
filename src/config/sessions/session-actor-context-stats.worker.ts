@@ -3,6 +3,7 @@ import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-project
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
 import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 
 /** Cold admission and changed context boundaries count once; ordinary appends carry deltas. */
 export function initializeSessionActorContextStats(
@@ -42,6 +43,7 @@ export function initializeSessionActorContextStats(
       },
       // A metadata-only rewrite can change retained-prefix bytes without rotating generation.
       (projection) => readVisibleTranscriptStats(projection, true),
+      state.transcript.complete ? projectSessionTranscriptFacts(state) : undefined,
     );
     if (result.kind === "value") {
       state.transcript.contextStats = result.value;

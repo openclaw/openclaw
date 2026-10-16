@@ -32,6 +32,7 @@ import { projectSessionTranscriptFacts } from "./session-transcript-projection-f
 import type {
   SessionTranscriptContextMetadata,
   SessionTranscriptContextStats,
+  SessionTranscriptProjectionFacts,
 } from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
@@ -449,6 +450,7 @@ export function readCurrentProjectionSnapshot<T>(
   database: TranscriptReadDatabase,
   resolved: CurrentTranscriptProjection["resolved"],
   read: (projection: CurrentTranscriptProjection) => T,
+  prepared?: SessionTranscriptProjectionFacts & { contextStats?: SessionTranscriptContextStats },
 ) {
   const diagnostics: Record<string, string | number> = { sessionId: resolved.sessionId };
   const readerOperation = captureSqliteReaderOwner()?.operation;
@@ -456,7 +458,7 @@ export function readCurrentProjectionSnapshot<T>(
     diagnostics.readerOperation = readerOperation;
   }
   const readSnapshot = () => {
-    const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+    const snapshot = prepared ?? readProjectionSnapshot(database, resolved.sessionId);
     if (snapshot.state) {
       diagnostics.activeEvents = snapshot.state.activeEventCount;
       diagnostics.activeMessages = snapshot.state.activeMessageCount;
