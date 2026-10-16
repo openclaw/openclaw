@@ -1,11 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   admitStoreSearch,
-  DatabaseSearchCapabilityUnavailableError,
-  getDatabaseEngineSelection,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  DatabaseSearchCapabilityUnavailableError,
+  getDatabaseEngineSelection,
+  requireNodeSqlite,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 /** Reject unavailable search before a missing store can become an empty native index. */
 export function requireMemorySearchCapability(databasePath: string): void {

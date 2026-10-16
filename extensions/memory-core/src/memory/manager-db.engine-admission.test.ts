@@ -1,4 +1,4 @@
-import * as engineRuntime from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import * as engineRuntime from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, expect, it, vi } from "vitest";
 import { openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 
