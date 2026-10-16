@@ -151,6 +151,37 @@ describe("telegram message cache", () => {
     expect((await get(reloadedCache, "9000"))?.resolvedMedia).toBeUndefined();
   });
 
+  it("retires a precisely identified message from the live map and persisted store", async () => {
+    const cache = createTelegramMessageCache();
+    await record(cache, message(1, "Ada"));
+    await record(cache, message(2, "Ada"));
+
+    expect(await cache.retireMessage({ accountId: "default", chatId: 7, messageId: 1 })).toBe(true);
+    expect(await get(cache, "1")).toBeNull();
+    expect((await get(cache, "2"))?.messageId).toBe("2");
+    expect(await store.lookup(key("1"))).toBeUndefined();
+    expect(await store.lookup(key("2"))).toBeDefined();
+
+    // A fresh bucket must not resurrect the retired entry.
+    expect(await reloadGet("1")).toBeNull();
+    expect((await reloadGet("2"))?.messageId).toBe("2");
+
+    expect(await cache.retireMessage({ accountId: "default", chatId: 7, messageId: 1 })).toBe(
+      false,
+    );
+  });
+
+  it("retires a message given a numeric message id and leaves other chats untouched", async () => {
+    const cache = createTelegramMessageCache();
+    const group = { id: -1001, type: "supergroup" as const, title: "Local group" };
+    await record(cache, message(5, "Ada"));
+    await record(cache, message(5, "Ada", { chat: group }), { chatId: group.id });
+
+    expect(await cache.retireMessage({ accountId: "default", chatId: 7, messageId: 5 })).toBe(true);
+    expect(await get(cache, "5")).toBeNull();
+    expect((await get(cache, "5", { chatId: group.id }))?.messageId).toBe("5");
+  });
+
   it("resolves external reply references only from the same chat without inventing message bodies", async () => {
     const cache = createTelegramMessageCache();
     const chat = { id: -1001, type: "supergroup", title: "Local group" };
