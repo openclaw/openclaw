@@ -6,36 +6,26 @@ import {
   restoreSnapshotSession,
   snapshotSections,
   snapshotSessions,
-  type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshot as model } from "./sidebar-snapshot.test-support.ts";
 
-const model: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
-  mode: "roster",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
-  entries: [],
-  sessions: [],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
-  ownerId: null,
-  involvingMe: false,
-  footer: { id: "operator", name: "Riley" },
-  brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
-};
-
+function captureRoster(rows: Parameters<typeof sessionsResult>[0]) {
+  return captureBootRoster({
+    result: sessionsResult(rows, 1),
+    agentId: "main",
+    groups: [],
+    groupSettings: [],
+    sectionOrder: [],
+    loading: false,
+    error: null,
+  });
+}
+function displayRow(key: string, label: string, pinned = false) {
+  return restoreSnapshotSession(
+    { key, label, pinned, isChild: false, children: [] },
+    pinned ? key : "",
+  );
+}
 describe("sidebar display snapshot admission", () => {
   it("keeps primary routing and header facts in the display snapshot without private or live authority", () => {
     const stable = {
@@ -53,21 +43,10 @@ describe("sidebar display snapshot admission", () => {
       activeModel: "stale-model",
     };
     Reflect.set(liveRow, "incognito", false);
-    const roster = captureBootRoster({
-      result: sessionsResult(
-        [
-          liveRow,
-          { key: "agent:main:private", kind: "direct", incognito: true, label: "Private title" },
-        ],
-        1,
-      ),
-      agentId: "main",
-      groups: [],
-      groupSettings: [],
-      sectionOrder: [],
-      loading: false,
-      error: null,
-    });
+    const roster = captureRoster([
+      liveRow,
+      { key: "agent:main:private", kind: "direct", incognito: true, label: "Private title" },
+    ]);
     const saved = parseSidebarSnapshot({ ...model, roster });
     expect(saved?.roster?.result.sessions).toEqual([stable]);
     expect(JSON.stringify(saved)).not.toMatch(
@@ -87,15 +66,7 @@ describe("sidebar display snapshot admission", () => {
       kind: "direct" as const,
       label: `Session ${index}`,
     }));
-    const roster = captureBootRoster({
-      result: sessionsResult(sessions, 1),
-      agentId: "main",
-      groups: [],
-      groupSettings: [],
-      sectionOrder: [],
-      loading: false,
-      error: null,
-    });
+    const roster = captureRoster(sessions);
     const saved = parseSidebarSnapshot({ ...model, roster });
     expect(saved).not.toBeNull();
     expect(saved?.roster?.result.sessions).toEqual(sessions.slice(0, 200));
@@ -135,10 +106,7 @@ describe("sidebar display snapshot admission", () => {
   });
 
   it("excludes incognito roots and descendants and restores no live mutation facts", () => {
-    const row = restoreSnapshotSession(
-      { key: "agent:main:visible", label: "Project", pinned: true, isChild: false, children: [] },
-      "agent:main:visible",
-    );
+    const row = displayRow("agent:main:visible", "Project", true);
     const privateRow = { ...row, key: "agent:main:private", incognito: true };
     const captured = snapshotSessions(
       [
@@ -159,10 +127,7 @@ describe("sidebar display snapshot admission", () => {
   });
 
   it("omits incognito-only section metadata and counts while preserving existing empty groups", () => {
-    const visible = restoreSnapshotSession(
-      { key: "agent:main:public", label: "Public", pinned: false, isChild: false, children: [] },
-      "",
-    );
+    const visible = displayRow("agent:main:public", "Public");
     const hidden = { ...visible, key: "agent:main:private", incognito: true };
     const counts = {
       totalRowCount: 2,

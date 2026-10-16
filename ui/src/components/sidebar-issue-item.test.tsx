@@ -6,6 +6,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationOverlays } from "../app/overlays.ts";
 import type { ConfirmAndStartUpdateParams } from "../app/update-confirmation.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
@@ -35,8 +36,14 @@ const item: SidebarAttentionItem = {
 };
 
 const container = document.createElement("div");
+function find<K extends keyof HTMLElementTagNameMap>(selector: K): HTMLElementTagNameMap[K] | null;
+function find<T extends Element = HTMLElement>(selector: string): T | null;
+function find(selector: string) {
+  return container.querySelector(selector);
+}
 let dispose: (() => void) | undefined;
-function render(view: (() => JSX.Element) | null, host: HTMLElement) {
+function render(view: (() => JSX.Element) | null) {
+  const host = container;
   dispose?.();
   if (view && !host.isConnected) {
     document.body.append(host);
@@ -46,8 +53,11 @@ function render(view: (() => JSX.Element) | null, host: HTMLElement) {
 }
 
 afterEach(() => {
-  render(null, container);
+  render(null);
   container.remove();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("SidebarIssueItem", () => {
@@ -57,44 +67,34 @@ describe("SidebarIssueItem", () => {
       onNavigate: vi.fn(),
       onOpen: vi.fn(),
     };
-    render(() => <SidebarIssueItem item={item} handlers={shared} />, container);
-    expect(container.querySelector(".sidebar-issues-panel__dismiss")).toBeNull();
+    render(() => <SidebarIssueItem item={item} handlers={shared} />);
+    expect(find(".sidebar-issues-panel__dismiss")).toBeNull();
 
     const onDismiss = vi.fn();
-    render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />, container);
-    container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")?.click();
+    render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
+    find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")?.click();
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 });
 
 describe("renderSidebarScopeUpgradeItem", () => {
   it("shows the exact approval command for the pending access request", () => {
-    render(
-      () =>
-        renderSidebarScopeUpgradeItem({
-          state: { phase: "pending", requestId: "9c21fe9d-6f53-4420-a273-f447920314dd" },
-          onCancel: vi.fn(),
-          onRequest: vi.fn(),
-          onRetry: vi.fn(),
-        }),
-      container,
+    render(() =>
+      renderSidebarScopeUpgradeItem({
+        state: { phase: "pending", requestId: "9c21fe9d-6f53-4420-a273-f447920314dd" },
+        onCancel: vi.fn(),
+        onRequest: vi.fn(),
+        onRetry: vi.fn(),
+      }),
     );
 
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    expect(find('[role="status"]')?.textContent).toContain(
       "openclaw devices approve 9c21fe9d-6f53-4420-a273-f447920314dd",
     );
   });
 });
 
 describe("renderSidebarMentionItem", () => {
-  beforeEach(() => {
-    document.body.append(container);
-  });
-  afterEach(() => {
-    container.remove();
-    vi.useRealTimers();
-  });
-
   const mention: MentionInboxItem = {
     id: "mention-riley",
     senderProfileId: "profile-riley",
@@ -133,7 +133,7 @@ describe("renderSidebarMentionItem", () => {
     } else {
       const [current, setCurrent] = createSignal(params);
       setMention = setCurrent;
-      render(() => <SidebarMentionItem {...current()} />, container);
+      render(() => <SidebarMentionItem {...current()} />);
     }
     return params;
   }
@@ -142,14 +142,13 @@ describe("renderSidebarMentionItem", () => {
     vi.useFakeTimers({ now: mention.createdAt + 5 * 60_000 });
     const excerpt = '<img src="about:blank" onerror="alert(1)"> & **release notes**';
     const { onNavigate, onDismiss } = renderMention({ mention: { ...mention, excerpt } });
-    const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
+    const renderedExcerpt = find(".sidebar-mention-row__excerpt")!;
     expect(renderedExcerpt.textContent).toBe(excerpt);
     expect(renderedExcerpt.children).toHaveLength(0);
     expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
-    await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-relative-time",
-    )?.updateComplete;
-    const details = container.querySelector("details")!;
+    await find<HTMLElement & { updateComplete: Promise<boolean> }>("openclaw-relative-time")
+      ?.updateComplete;
+    const details = find("details")!;
     const summary = details.querySelector("summary")!;
     const title = summary.querySelector(".sidebar-issues-panel__entity")!;
     expect(title.textContent).toBe("Release notes");
@@ -162,7 +161,7 @@ describe("renderSidebarMentionItem", () => {
     expect(details.open).toBe(false);
     summary.click();
     expect(details.open).toBe(true);
-    const open = container.querySelector<HTMLAnchorElement>("a[href]")!;
+    const open = find<HTMLAnchorElement>("a[href]")!;
     expect(open.getAttribute("href")).toBe(pathname);
     expect(open.closest(".sidebar-issues-panel__body")).not.toBeNull();
 
@@ -197,27 +196,42 @@ describe("renderSidebarMentionItem", () => {
 
   it("disables repeated dismissal while leaving the session link usable", () => {
     const { onNavigate, onDismiss } = renderMention({ dismissing: true });
-    const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
+    const dismiss = find<HTMLButtonElement>("[data-mention-id] button")!;
     expect(dismiss.disabled).toBe(true);
     dismiss.click();
     expect(onDismiss).not.toHaveBeenCalled();
 
-    container.querySelector("summary")!.click();
-    container.querySelector<HTMLAnchorElement>("a[href]")!.click();
+    find("summary")!.click();
+    find<HTMLAnchorElement>("a[href]")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
   });
 });
 
+type UpdateCard = HTMLElement & {
+  updateComplete: Promise<boolean>;
+  prepareRetry: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>;
+  canUpdate: boolean;
+  canNativeUpdate: boolean;
+  onCheckStatus?: () => Promise<boolean>;
+};
+function renderUpdate(
+  context: Pick<ApplicationContext, "gateway" | "overlays">,
+  onDismiss?: () => void,
+) {
+  render(() =>
+    renderSidebarUpdateSurface({
+      context,
+      onDismiss,
+      onNavigate: vi.fn(),
+      watchUpdateProgress: undefined,
+    }),
+  );
+  return find<UpdateCard>("openclaw-sidebar-update-card")!;
+}
 describe("renderSidebarUpdateSurface", () => {
   beforeEach(() => {
-    document.body.append(container);
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("localStorage", createStorageMock());
-  });
-  afterEach(() => {
-    container.remove();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
   it.each([false, true])(
     "prepares retry from live application state after the card unmounts with access revoked=%s",
@@ -247,23 +261,9 @@ describe("renderSidebarUpdateSurface", () => {
       };
       let preparing: Promise<unknown> | undefined;
       try {
-        render(
-          () =>
-            renderSidebarUpdateSurface({
-              context: { gateway: harness.gateway, overlays },
-              onNavigate: vi.fn(),
-              watchUpdateProgress: undefined,
-            }),
-          container,
-        );
-        const card = container.querySelector<
-          HTMLElement & {
-            updateComplete: Promise<boolean>;
-            prepareRetry: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>;
-          }
-        >("openclaw-sidebar-update-card")!;
+        const card = renderUpdate({ gateway: harness.gateway, overlays });
         await card.updateComplete;
-        render(null, container);
+        render(null);
         expect(card.isConnected).toBe(false);
         preparing = card.prepareRetry();
         await entered.promise;
@@ -296,61 +296,26 @@ describe("renderSidebarUpdateSurface", () => {
   );
 
   it.each([
-    {
-      scope: "operator.read",
-      methods: ["update.status"],
-      canCheck: false,
-      canUpdate: false,
-      canNativeUpdate: false,
-    },
-    {
-      scope: "operator.admin",
-      methods: ["update.status"],
-      canCheck: true,
-      canUpdate: false,
-      canNativeUpdate: false,
-    },
-    {
-      scope: "operator.admin",
-      methods: ["update.run"],
-      canCheck: false,
-      canUpdate: false,
-      canNativeUpdate: true,
-    },
-  ])(
-    "gates discovery and fresh confirmation for $scope with $methods",
-    async ({ scope, methods, canCheck, canUpdate, canNativeUpdate }) => {
+    ["operator.read", "update.status", false, false],
+    ["operator.admin", "update.status", true, false],
+    ["operator.admin", "update.run", false, true],
+  ] as const)(
+    "gates discovery and fresh confirmation for %s with %s",
+    async (scope, method, canCheck, canNativeUpdate) => {
       const request = vi.fn(async () => ({}));
       const harness = updateRunHarness(request);
       harness.update({
         hello: {
           ...harness.gateway.snapshot.hello!,
           auth: { role: "operator", scopes: [scope] },
-          features: { methods },
+          features: { methods: [method] },
         },
       });
       const overlays = createApplicationOverlays(harness.gateway);
       try {
-        render(
-          () =>
-            renderSidebarUpdateSurface({
-              context: { gateway: harness.gateway, overlays },
-              onDismiss: vi.fn(),
-              onNavigate: vi.fn(),
-              watchUpdateProgress: undefined,
-            }),
-          container,
-        );
-        const card = container.querySelector<
-          HTMLElement & {
-            updateComplete: Promise<boolean>;
-            canUpdate: boolean;
-            canNativeUpdate: boolean;
-            onCheckStatus?: () => Promise<boolean>;
-          }
-        >("openclaw-sidebar-update-card")!;
+        const card = renderUpdate({ gateway: harness.gateway, overlays }, vi.fn());
         await card.updateComplete;
-        expect(card.canUpdate).toBe(canUpdate);
+        expect(card.canUpdate).toBe(false);
         expect(card.canNativeUpdate).toBe(canNativeUpdate);
         expect(Boolean(card.onCheckStatus)).toBe(canCheck);
         const details = card.querySelector("details")!;
@@ -413,22 +378,10 @@ describe("renderSidebarUpdateSurface", () => {
           ),
         };
         const dismiss = vi.fn();
-        render(
-          () =>
-            renderSidebarUpdateSurface({
-              context,
-              onDismiss: () => dismiss(dismissal),
-              onNavigate: vi.fn(),
-              watchUpdateProgress: undefined,
-            }),
-          container,
-        );
-        const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-          "openclaw-sidebar-update-card",
-        )!;
+        const card = renderUpdate(context, () => dismiss(dismissal));
         await card.updateComplete;
         expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
-        container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
+        find<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
         expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
         expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
       } finally {

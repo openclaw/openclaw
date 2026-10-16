@@ -26,6 +26,11 @@ import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
 
+function part<T extends HTMLElement = HTMLElement>(root: ParentNode, name: string) {
+  return root.querySelector<T>(`.sidebar-issues-panel__${name}`)!;
+}
+const bounds = (element: Element | Range) => element.getBoundingClientRect();
+const style = (element: Element) => getComputedStyle(element);
 const mountedPanels = new Map<Element, () => void>();
 function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams) {
   return () => createComponent(SidebarAttentionPanel, params);
@@ -131,31 +136,23 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         }),
         shell,
       );
-      await waitForSolid(() =>
-        expect(shell.querySelector(".sidebar-issues-panel__tabs")).not.toBeNull(),
-      );
+      await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
       await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
         "openclaw-tooltip",
       )?.updateComplete;
-      const populatedHeader = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
-      const populatedTabs = shell.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
-      const headerHeight = populatedHeader.getBoundingClientRect().height;
-      const tabsTop = populatedTabs.getBoundingClientRect().top;
+      const populatedHeader = part(shell, "header");
+      const populatedTabs = part(shell, "tabs");
+      const headerHeight = bounds(populatedHeader).height;
+      const tabsTop = bounds(populatedTabs).top;
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = shell.querySelector<HTMLButtonElement>(
-        ".sidebar-issues-panel__dismiss-shown",
-      )!;
+      const placeholder = part<HTMLButtonElement>(shell, "dismiss-shown");
       expect(placeholder.disabled).toBe(true);
       expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-      expect(getComputedStyle(placeholder).visibility).toBe("hidden");
-      expect(
-        shell.querySelector(".sidebar-issues-panel__header")!.getBoundingClientRect().height,
-      ).toBe(headerHeight);
-      expect(shell.querySelector(".sidebar-issues-panel__tabs")!.getBoundingClientRect().top).toBe(
-        tabsTop,
-      );
+      expect(style(placeholder).visibility).toBe("hidden");
+      expect(part(shell, "header").getBoundingClientRect().height).toBe(headerHeight);
+      expect(part(shell, "tabs").getBoundingClientRect().top).toBe(tabsTop);
       shell.remove();
     }
   });
@@ -180,7 +177,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           row.getAttribute("data-mention-id"),
         ),
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
-      shell.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!.click();
+      part<HTMLButtonElement>(shell, "dismiss-shown").click();
 
       if (selectedTab === "system") {
         expect(params.mentions.dismiss).not.toHaveBeenCalled();
@@ -210,7 +207,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     render(renderSidebarAttentionPanel({ ...params, selectedTab: "mentions" }), shell);
 
     expect(shell.querySelector('[data-mention-id="mention-a"]')).not.toBeNull();
-    expect(shell.querySelector(".sidebar-issues-panel__empty")).toBeNull();
+    expect(part(shell, "empty")).toBeNull();
     const error = shell.querySelector('.sidebar-issues-panel__mentions-note[role="status"]')!;
     expect(error.textContent).toContain("Connection interrupted");
     const refresh = error.querySelector<HTMLButtonElement>("button")!;
@@ -266,20 +263,18 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
-      expect(getComputedStyle(attention).position).toBe("fixed");
-      expect(getComputedStyle(attention).display).toBe("flex");
-      expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-        chrome.getBoundingClientRect().right + 8,
-      );
+      expect(style(attention).position).toBe("fixed");
+      expect(style(attention).display).toBe("flex");
+      expect(bounds(attention).left).toBeGreaterThanOrEqual(bounds(chrome).right + 8);
       const paint = () => ({
-        border: getComputedStyle(inbox).borderTopWidth,
-        background: getComputedStyle(inbox).backgroundColor,
+        border: style(inbox).borderTopWidth,
+        background: style(inbox).backgroundColor,
       });
       expect(Number.parseFloat(paint().border)).toBeGreaterThan(0);
       const resting = paint();
       expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
-      expect(getComputedStyle(inbox).boxShadow).not.toBe("none");
-      expect(getComputedStyle(inbox).backdropFilter).toBe("blur(10px)");
+      expect(style(inbox).boxShadow).not.toBe("none");
+      expect(style(inbox).backdropFilter).toBe("blur(10px)");
       const { page } = await import("vitest/browser");
       await page.elementLocator(inbox).hover();
       const hovered = paint();
@@ -292,25 +287,23 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(paint()).toEqual(resting);
 
       document.documentElement.classList.add("openclaw-native-nav");
-      expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(8);
+      expect(bounds(attention).left).toBeGreaterThanOrEqual(8);
 
       document.documentElement.classList.add("openclaw-native-macos");
-      expect(getComputedStyle(attention).top).toBe("52px");
+      expect(style(attention).top).toBe("52px");
 
       shell.append(nativeChrome);
       document.documentElement.classList.add("openclaw-native-web-chrome");
-      expect(attention.getBoundingClientRect().left).toBe(chrome.getBoundingClientRect().right + 8);
-      expect(nativeChrome.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-        attention.getBoundingClientRect().right + 8,
-      );
+      expect(bounds(attention).left).toBe(bounds(chrome).right + 8);
+      expect(bounds(nativeChrome).left).toBeGreaterThanOrEqual(bounds(attention).right + 8);
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
-      expect(getComputedStyle(inbox).boxShadow).toBe("none");
-      expect(getComputedStyle(inbox).backdropFilter).toBe("none");
+      expect(style(inbox).boxShadow).toBe("none");
+      expect(style(inbox).backdropFilter).toBe("none");
       attention.classList.remove("sidebar-attention--floating");
       shell.classList.remove("shell--floating-attention");
       expect(paint()).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)" });
-      expect(getComputedStyle(inbox).boxShadow).toBe("none");
-      expect(getComputedStyle(inbox).backdropFilter).toBe("none");
+      expect(style(inbox).boxShadow).toBe("none");
+      expect(style(inbox).backdropFilter).toBe("none");
     },
   );
 
@@ -366,7 +359,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       document.body.append(shell);
 
       await waitForSolid(() => expect(fixture.querySelector('[role="tab"]')).not.toBeNull());
-      const group = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__tabs");
+      const group = part(fixture, "tabs");
       const header = document.createElement("header");
       header.className = "sidebar-issues-panel__header";
       fixture.prepend(header);
@@ -377,37 +370,31 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(group!.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("tab-0");
 
       const badge = badgeTab!.querySelector<HTMLElement>(".hub-tab__badge");
-      const list = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__list");
+      const list = part(fixture, "list");
       const item = fixture.querySelector<HTMLElement>("[data-attention-kind]");
-      const summary = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__summary");
+      const summary = part(fixture, "summary");
       const track = group!;
       const nav = group!;
 
-      expect(group!.getBoundingClientRect().width).toBeLessThanOrEqual(fixture.clientWidth);
-      expect(getComputedStyle(group!).overflowX).toBe("auto");
-      expect(getComputedStyle(group!).backgroundColor).toBe(
-        getComputedStyle(header).backgroundColor,
-      );
-      expect(getComputedStyle(group!).backgroundColor).not.toBe(
-        getComputedStyle(list!).backgroundColor,
-      );
+      expect(bounds(group!).width).toBeLessThanOrEqual(fixture.clientWidth);
+      expect(style(group!).overflowX).toBe("auto");
+      expect(style(group!).backgroundColor).toBe(style(header).backgroundColor);
+      expect(style(group!).backgroundColor).not.toBe(style(list!).backgroundColor);
       // The track hairline is the header/list separator; it must span the panel.
       expect(track).not.toBeNull();
       const colorProbe = document.createElement("span");
       colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
       track.append(colorProbe);
-      const separatorColor = getComputedStyle(colorProbe).color;
+      const separatorColor = style(colorProbe).color;
       colorProbe.remove();
       const paint = document.createElement("canvas").getContext("2d")!;
       paint.fillStyle = separatorColor;
       paint.fillRect(0, 0, 1, 1);
       expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
-      expect(getComputedStyle(track).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
-      expect(getComputedStyle(track).paddingBottom).toBe("2px");
-      expect(track!.getBoundingClientRect().width).toBeGreaterThanOrEqual(
-        nav.getBoundingClientRect().width - 1,
-      );
-      expect(getComputedStyle(nav).overflowX).toBe("auto");
+      expect(style(track).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
+      expect(style(track).paddingBottom).toBe("2px");
+      expect(bounds(track!).width).toBeGreaterThanOrEqual(bounds(nav).width - 1);
+      expect(style(nav).overflowX).toBe("auto");
       if (width === 320) {
         expect(nav.scrollWidth).toBeGreaterThan(nav.clientWidth);
       }
@@ -417,8 +404,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         )!;
         const range = document.createRange();
         range.selectNodeContents(label);
-        const labelBounds = range.getBoundingClientRect();
-        const tabBounds = tab.getBoundingClientRect();
+        const labelBounds = bounds(range);
+        const tabBounds = bounds(tab);
         if (index > 0) {
           expect(tabBounds.left).toBeGreaterThanOrEqual(
             tabs[index - 1]!.getBoundingClientRect().right - 1,
@@ -434,7 +421,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         );
         const tabBadge = tab.querySelector<HTMLElement>(".hub-tab__badge");
         if (tabBadge) {
-          const badgeBounds = tabBadge.getBoundingClientRect();
+          const badgeBounds = bounds(tabBadge);
           expect(
             badgeBounds.left,
             `${label.textContent} does not overlap its count`,
@@ -450,34 +437,31 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ["End", tabs.at(-1)!],
         ["Home", tabs[0]!],
       ] as const) {
-        const openingTransform = getComputedStyle(fixture).transform;
+        const openingTransform = style(fixture).transform;
         await userEvent.keyboard(`{${key}}`);
         expect(document.activeElement).toBe(tab);
         await expect
           .poll(
             () => {
-              const bounds = tab.getBoundingClientRect();
-              const viewport = nav.getBoundingClientRect();
-              return Math.max(viewport.left - bounds.left, bounds.right - viewport.right);
+              const tabBounds = bounds(tab);
+              const viewport = bounds(nav);
+              return Math.max(viewport.left - tabBounds.left, tabBounds.right - viewport.right);
             },
             {
               message: `${key} keeps the focused tab inside its scrollport during ${openingTransform}`,
             },
           )
           .toBeLessThanOrEqual(1);
-        const viewport = nav.getBoundingClientRect();
-        const separator = track!.getBoundingClientRect();
+        const viewport = bounds(nav);
+        const separator = bounds(track!);
         expect(separator.left).toBeLessThanOrEqual(viewport.left + 1);
         expect(separator.right).toBeGreaterThanOrEqual(viewport.right - 1);
       }
       // Count badges render as pills separated from the tab label.
       expect(badge).not.toBeNull();
-      expect(getComputedStyle(badge!).borderRadius).not.toBe("0px");
-      expect(getComputedStyle(summary!).paddingBlock).toBe("8px");
-      expect(item!.getBoundingClientRect().right).toBeCloseTo(
-        list!.getBoundingClientRect().right,
-        1,
-      );
+      expect(style(badge!).borderRadius).not.toBe("0px");
+      expect(style(summary!).paddingBlock).toBe("8px");
+      expect(bounds(item!).right).toBeCloseTo(bounds(list!).right, 1);
     },
   );
 
@@ -503,27 +487,25 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     `;
     document.body.append(shell);
 
-    const dismiss = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss")!;
-    const dismissShown = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss-shown")!;
-    const close = shell.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
+    const dismiss = part(shell, "dismiss");
+    const dismissShown = part(shell, "dismiss-shown");
+    const close = part(shell, "mobile-close");
     const panel = shell.querySelector<HTMLElement>(".sidebar-issues-panel")!;
-    const header = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
-    const list = shell.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
-    const style = getComputedStyle(dismiss);
+    const header = part(shell, "header");
+    const list = part(shell, "list-wrap");
+    const dismissStyle = style(dismiss);
 
-    expect(style.opacity).toBe("1");
-    expect(style.pointerEvents).not.toBe("none");
-    expect(dismiss.getBoundingClientRect().width).toBeGreaterThanOrEqual(40);
-    expect(dismiss.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
-    expect(dismissShown.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
-    expect(close.getBoundingClientRect().width).toBe(36);
-    expect(close.getBoundingClientRect().height).toBe(36);
-    expect(getComputedStyle(close).borderTopWidth).toBe("1px");
-    expect(getComputedStyle(close).borderRadius).toBe("9999px");
-    expect(getComputedStyle(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(panel).backgroundColor).toBe(getComputedStyle(header).backgroundColor);
-    expect(getComputedStyle(header).backgroundColor).not.toBe(
-      getComputedStyle(list).backgroundColor,
-    );
+    expect(dismissStyle.opacity).toBe("1");
+    expect(dismissStyle.pointerEvents).not.toBe("none");
+    expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
+    expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
+    expect(bounds(dismissShown).height).toBeGreaterThanOrEqual(40);
+    expect(bounds(close).width).toBe(36);
+    expect(bounds(close).height).toBe(36);
+    expect(style(close).borderTopWidth).toBe("1px");
+    expect(style(close).borderRadius).toBe("9999px");
+    expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(style(panel).backgroundColor).toBe(style(header).backgroundColor);
+    expect(style(header).backgroundColor).not.toBe(style(list).backgroundColor);
   });
 });
