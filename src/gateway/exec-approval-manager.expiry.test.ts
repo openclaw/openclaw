@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { copyFile, rename, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
@@ -6,17 +8,16 @@ import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
-  createTestApprovalFixture,
   createTestApprovalManager,
   createApprovalScheduler,
   createPreparedTestApprovalManager,
 } from "./exec-approval-manager.test-support.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
 
-const resolver = { kind: "system", id: "fixture" } as const;
-
 describe("ExecApprovalManager timeout expiry publication", () => {
+  const tempDirs: string[] = [];
   let scheduled: ReturnType<typeof createApprovalScheduler>;
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -26,6 +27,10 @@ describe("ExecApprovalManager timeout expiry publication", () => {
   afterEach(async () => {
     await scheduled.scheduler.stop();
     vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) {
+      await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "s.sqlite"));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   function holdWorkerInputCapacity() {
@@ -54,11 +59,19 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     );
   });
 
-  it.for(["cancellation", "storage repair"] as const)(
+  it.each(["cancellation", "storage repair"] as const)(
     "lets the deadline win when %s waits for transaction admission",
-    async (operation, test) => {
+    async (operation) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      const { manager } = createTestApprovalFixture(test, { scheduler: scheduled.scheduler });
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-queued-expiry-"));
+      tempDirs.push(dir);
+      const manager = new ExecApprovalManager({
+        scheduler: scheduled.scheduler,
+        persistence: {
+          runtimeEpoch: "queued-expiry",
+          databaseOptions: { path: path.join(dir, "s.sqlite") },
+        },
+      });
       const record = manager.create({ command: "echo queued" }, 1_000, "queued-expiry");
       const { decision } = await manager.register(record, 1_000);
       if (operation === "storage repair") {
@@ -83,8 +96,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       );
       const transition =
         operation === "cancellation"
-          ? manager.forceDenyDetailed(record.id, "run-aborted", resolver, "cancelled")
-          : manager.resolveDetailed(record.id, "deny", resolver);
+          ? manager.forceDenyDetailed(
+              record.id,
+              "run-aborted",
+              { kind: "system", id: "fixture" },
+              "cancelled",
+            )
+          : manager.resolveDetailed(record.id, "deny", { kind: "system", id: "fixture" });
       try {
         await entered.promise;
         clock.mockReturnValue(record.expiresAtMs);
@@ -105,15 +123,6 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
     },
   );
-
-  async function replaceDatabase(databasePath: string) {
-    const original = await stat(databasePath);
-    await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    const replacement = `${databasePath}.replacement`;
-    await copyFile(databasePath, replacement);
-    await rename(replacement, databasePath);
-    expect((await stat(databasePath)).ino).not.toBe(original.ino);
-  }
 
   async function prepareExpiry(testContext: TestContext) {
     const refused = createDeferredCore<unknown>();
@@ -142,35 +151,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       ).values(),
     ];
     const invoke = async (timer: (typeof timers)[number] | undefined) => {
-      await expectDefined(timer, "approval timer").run();
+      expect(timer).toBeDefined();
+      if (typeof timer?.run !== "function") {
+        throw new Error("expected approval timer callback");
+      }
+      await timer.run();
     };
-    const read = (options = databaseOptions) =>
-      operatorApprovalStore.getOperatorApprovalDetailed({
-        id: record.id,
-        databaseOptions: options,
-        nowMs: record.createdAtMs,
-      });
     return {
-      expire: async () => {
-        clock.mockReturnValue(record.expiresAtMs);
-        await invoke(deadlines()[0]);
-      },
-      refuseNext: () =>
-        vi
-          .mocked(operatorApprovalStore.forceDenyOperatorApproval)
-          .mockRejectedValueOnce(
-            new SqliteWorkerError("synthetic pre-execution unavailable", "unavailable"),
-          ),
-      expectStored: async (expected: object, options = databaseOptions) => {
-        expect(await read(options)).toMatchObject({ outcome: "found", record: expected });
-      },
-      read,
-      terminalEvents: () => onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal"),
-      expectUnsettled: () => {
-        expect(decisionSettled).not.toHaveBeenCalled();
-        expect(onExpired).not.toHaveBeenCalled();
-        expect(handoff).not.toHaveBeenCalled();
-      },
       manager,
       databaseOptions,
       record,
@@ -184,49 +171,77 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       handoff,
       observation,
       onExpired,
+      onLifecycle,
     };
   }
 
   it.for(["overloaded", "unavailable"] as const)(
     "expires the original waiter after %s admission recovers without a client read",
     async (code, testContext) => {
-      const fixture = await prepareExpiry(testContext);
-      const { record, deadlines } = fixture;
+      const {
+        databaseOptions,
+        record,
+        clock,
+        deadlines,
+        invoke,
+        refused,
+        onError,
+        decision,
+        decisionSettled,
+        handoff,
+        observation,
+        onExpired,
+        onLifecycle,
+      } = await prepareExpiry(testContext);
       expect(deadlines()).toHaveLength(1);
       const releaseCapacity = code !== "unavailable" ? holdWorkerInputCapacity() : undefined;
       if (code === "unavailable") {
-        fixture.refuseNext();
+        vi.mocked(operatorApprovalStore.forceDenyOperatorApproval).mockRejectedValueOnce(
+          new SqliteWorkerError("synthetic pre-execution unavailable", "unavailable"),
+        );
       }
       try {
-        await fixture.expire();
-        await expect(
-          Promise.race([fixture.refused.promise, fixture.decision]),
-        ).resolves.toBeInstanceOf(Error);
-        expect(fixture.onError.mock.calls[0]?.[0]).toMatchObject({ code });
-        fixture.expectUnsettled();
-        expect(fixture.terminalEvents()).toHaveLength(0);
+        clock.mockReturnValue(record.expiresAtMs);
+        await invoke(deadlines()[0]);
+        await expect(Promise.race([refused.promise, decision])).resolves.toBeInstanceOf(Error);
+        expect(onError.mock.calls[0]?.[0]).toMatchObject({
+          code: code === "unavailable" ? "unavailable" : "overloaded",
+        });
+        expect(decisionSettled).not.toHaveBeenCalled();
+        expect(handoff).not.toHaveBeenCalled();
+        expect(onExpired).not.toHaveBeenCalled();
+        expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
+          0,
+        );
       } finally {
         releaseCapacity?.();
       }
       expect(deadlines()).toHaveLength(2);
       const retry = deadlines()[1];
       expect(retry?.delayMs).toBeGreaterThan(0);
-      fixture.clock.mockReturnValue(record.expiresAtMs + (retry?.delayMs ?? 0));
+      clock.mockReturnValue(record.expiresAtMs + (retry?.delayMs ?? 0));
       const retryFailure = createDeferredCore<unknown>();
-      fixture.onError.mockImplementationOnce((error) => retryFailure.resolve(error));
-      await fixture.invoke(retry);
-      await expect(Promise.race([fixture.decision, retryFailure.promise])).resolves.toBeNull();
-      await fixture.observation;
-      expect(fixture.handoff).toHaveBeenCalledExactlyOnceWith(null);
-      expect(fixture.onExpired).toHaveBeenCalledExactlyOnceWith(
+      onError.mockImplementationOnce((error) => retryFailure.resolve(error));
+      await invoke(retry);
+      await expect(Promise.race([decision, retryFailure.promise])).resolves.toBeNull();
+      await observation;
+      expect(handoff).toHaveBeenCalledExactlyOnceWith(null);
+      expect(onExpired).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ id: record.id, status: "expired" }),
         expect.objectContaining({ request: { command: "echo expiry" } }),
       );
-      expect(fixture.terminalEvents()).toHaveLength(1);
-      await fixture.expectStored({
-        status: "expired",
-        expiresAtMs: 2_000,
-        terminalReason: "timeout",
+      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
+        1,
+      );
+      expect(
+        await operatorApprovalStore.getOperatorApprovalDetailed({
+          id: record.id,
+          databaseOptions,
+          nowMs: record.createdAtMs,
+        }),
+      ).toMatchObject({
+        outcome: "found",
+        record: { status: "expired", expiresAtMs: 2_000, terminalReason: "timeout" },
       });
     },
   );
@@ -237,8 +252,11 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       const fixture = await prepareExpiry(testContext);
       const { manager, databaseOptions, record, clock, deadlines, invoke, refused, onError } =
         fixture;
-      fixture.refuseNext();
-      await fixture.expire();
+      vi.mocked(operatorApprovalStore.forceDenyOperatorApproval).mockRejectedValueOnce(
+        new SqliteWorkerError("synthetic pre-execution unavailable", "unavailable"),
+      );
+      clock.mockReturnValue(record.expiresAtMs);
+      await invoke(deadlines()[0]);
       await refused.promise;
       expect(deadlines()).toHaveLength(2);
       if (action === "retire") {
@@ -246,17 +264,30 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         expect(deadlines()[1]?.cancelled).toBe(true);
         await invoke(deadlines()[1]);
       } else {
-        await replaceDatabase(databaseOptions.path);
+        const original = await stat(databaseOptions.path);
+        await closeOpenClawStateDatabaseByPathAsync(databaseOptions.path);
+        const replacement = `${databaseOptions.path}.expiry-replacement`;
+        await copyFile(databaseOptions.path, replacement);
+        await rename(replacement, databaseOptions.path);
+        expect((await stat(databaseOptions.path)).ino).not.toBe(original.ino);
         const retryRefused = createDeferredCore<unknown>();
         onError.mockImplementationOnce((error) => retryRefused.resolve(error));
         clock.mockReturnValue(record.expiresAtMs + (deadlines()[1]?.delayMs ?? 0));
         await invoke(deadlines()[1]);
         await expect(retryRefused.promise).resolves.toBeInstanceOf(Error);
       }
-      fixture.expectUnsettled();
+      expect(fixture.decisionSettled).not.toHaveBeenCalled();
+      expect(fixture.onExpired).not.toHaveBeenCalled();
+      expect(fixture.handoff).not.toHaveBeenCalled();
       expect(record.resolvedAtMs).toBeUndefined();
       expect(deadlines()).toHaveLength(2);
-      await fixture.expectStored({ status: "pending", expiresAtMs: 2_000 });
+      expect(
+        await operatorApprovalStore.getOperatorApprovalDetailed({
+          id: record.id,
+          databaseOptions,
+          nowMs: record.createdAtMs,
+        }),
+      ).toMatchObject({ outcome: "found", record: { status: "pending", expiresAtMs: 2_000 } });
     },
   );
 
@@ -270,10 +301,11 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     "retains expiry custody for $operation (replacement: $replaced)",
     async ({ operation, replaced }, testContext) => {
       const fixture = await prepareExpiry(testContext);
-      const { manager, databaseOptions, record, clock, deadlines, refused } = fixture;
+      const { manager, databaseOptions, record, clock, invoke, deadlines, refused } = fixture;
       const releaseCapacity = holdWorkerInputCapacity();
       try {
-        await fixture.expire();
+        clock.mockReturnValue(record.expiresAtMs);
+        await invoke(deadlines()[0]);
         await expect(Promise.race([refused.promise, fixture.decision])).resolves.toBeInstanceOf(
           Error,
         );
@@ -282,7 +314,12 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
       expect(deadlines()).toHaveLength(2);
       if (replaced) {
-        await replaceDatabase(databaseOptions.path);
+        const original = await stat(databaseOptions.path);
+        await closeOpenClawStateDatabaseByPathAsync(databaseOptions.path);
+        const replacement = `${databaseOptions.path}.pending-replacement`;
+        await copyFile(databaseOptions.path, replacement);
+        await rename(replacement, databaseOptions.path);
+        expect((await stat(databaseOptions.path)).ino).not.toBe(original.ino);
       }
       // A wall-clock rollback leaves a legitimate same-owner verdict possible.
       clock.mockReturnValue(record.createdAtMs + 500);
@@ -311,12 +348,21 @@ describe("ExecApprovalManager timeout expiry publication", () => {
             })
           : operation === "resolve"
             ? manager.resolve(record.id, "allow-once")
-            : manager.forceDenyDetailed(record.id, "run-aborted", resolver, "cancelled");
+            : manager.forceDenyDetailed(
+                record.id,
+                "run-aborted",
+                { kind: "system", id: "fixture" },
+                "cancelled",
+              );
       const outcome = await transition.then(
         (value) => ({ ok: true, value }),
         (error: unknown) => ({ ok: false, error }),
       );
-      const stored = await fixture.read();
+      const stored = await operatorApprovalStore.getOperatorApprovalDetailed({
+        id: record.id,
+        databaseOptions,
+        nowMs: record.createdAtMs,
+      });
       if (replaced) {
         expect({
           accepted: outcome.ok,
@@ -332,14 +378,18 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         });
         expect(record.resolvedAtMs).toBeUndefined();
         expect(fixture.handoff).not.toHaveBeenCalled();
-        expect(fixture.terminalEvents()).toHaveLength(0);
+        expect(
+          fixture.onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal"),
+        ).toHaveLength(0);
       } else {
         expect(outcome.ok).toBe(true);
         const expectedDecision = operation === "cancel" ? null : "allow-once";
         await expect(fixture.decision).resolves.toBe(expectedDecision);
         await fixture.observation;
         expect(fixture.handoff).toHaveBeenCalledExactlyOnceWith(expectedDecision);
-        expect(fixture.terminalEvents()).toHaveLength(1);
+        expect(
+          fixture.onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal"),
+        ).toHaveLength(1);
         expect(deadlines()[1]?.cancelled).toBe(true);
         if (operation === "cancel") {
           expect(outcome).toMatchObject({ value: { outcome: "denied" } });
@@ -360,13 +410,17 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     "keeps the original expiry target when %s follows an ambient reroute",
     async (operation, testContext) => {
       const fixture = await prepareExpiry(testContext);
-      const { manager, databaseOptions, record, clock, refused } = fixture;
+      const { manager, databaseOptions, record, clock, invoke, deadlines, refused } = fixture;
       const originalPath = databaseOptions.path;
       const redirected = {
         ...databaseOptions,
         path: path.join(path.dirname(originalPath), "redirected.sqlite"),
       };
-      const original = await fixture.read();
+      const original = await operatorApprovalStore.getOperatorApprovalDetailed({
+        id: record.id,
+        databaseOptions,
+        nowMs: record.createdAtMs,
+      });
       if (original.outcome !== "found") {
         throw new Error("expected original pending row");
       }
@@ -375,19 +429,38 @@ describe("ExecApprovalManager timeout expiry publication", () => {
           approval: original.record,
           databaseOptions: redirected,
         });
-        fixture.refuseNext();
-        await fixture.expire();
+        vi.mocked(operatorApprovalStore.forceDenyOperatorApproval).mockRejectedValueOnce(
+          new SqliteWorkerError("synthetic definite refusal", "unavailable"),
+        );
+        clock.mockReturnValue(record.expiresAtMs);
+        await invoke(deadlines()[0]);
         await refused.promise;
         clock.mockReturnValue(record.createdAtMs + 500);
         databaseOptions.path = redirected.path;
         if (operation === "resolve") {
           await manager.resolve(record.id, "allow-once");
         } else {
-          await manager.forceDenyDetailed(record.id, "malformed-verdict", resolver);
+          await manager.forceDenyDetailed(record.id, "malformed-verdict", {
+            kind: "system",
+            id: "fixture",
+          });
         }
         databaseOptions.path = originalPath;
-        await fixture.expectStored({ status: operation === "resolve" ? "allowed" : "denied" });
-        await fixture.expectStored({ status: "pending" }, redirected);
+        const expectedStatus = operation === "resolve" ? "allowed" : "denied";
+        expect(
+          await operatorApprovalStore.getOperatorApprovalDetailed({
+            id: record.id,
+            databaseOptions,
+            nowMs: record.createdAtMs,
+          }),
+        ).toMatchObject({ outcome: "found", record: { status: expectedStatus } });
+        expect(
+          await operatorApprovalStore.getOperatorApprovalDetailed({
+            id: record.id,
+            databaseOptions: redirected,
+            nowMs: record.createdAtMs,
+          }),
+        ).toMatchObject({ outcome: "found", record: { status: "pending" } });
         await expect(fixture.decision).resolves.toBe(
           operation === "resolve" ? "allow-once" : "deny",
         );
@@ -404,7 +477,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     "does not replay an autonomous expiry after %s",
     async (failure, testContext) => {
       const fixture = await prepareExpiry(testContext);
-      const { deadlines, refused } = fixture;
+      const { record, databaseOptions, clock, invoke, deadlines, refused } = fixture;
       const forceDeny = operatorApprovalStore.forceDenyOperatorApproval;
       const realDeny = expectDefined(
         vi.mocked(forceDeny).getMockImplementation(),
@@ -431,7 +504,8 @@ describe("ExecApprovalManager timeout expiry publication", () => {
           new SqliteWorkerError("synthetic readback unavailable", "unavailable"),
         );
       }
-      await fixture.expire();
+      clock.mockReturnValue(record.expiresAtMs);
+      await invoke(deadlines()[0]);
       await expect(refused.promise).resolves.toBeInstanceOf(Error);
       expect(deadlines()).toHaveLength(1);
       expect(spy).toHaveBeenCalledTimes(1);
@@ -441,11 +515,24 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         expect(fixture.onExpired).toHaveBeenCalledTimes(1);
         expect(fixture.handoff).toHaveBeenCalledExactlyOnceWith(null);
       } else {
-        fixture.expectUnsettled();
+        expect(fixture.decisionSettled).not.toHaveBeenCalled();
+        expect(fixture.onExpired).not.toHaveBeenCalled();
+        expect(fixture.handoff).not.toHaveBeenCalled();
       }
-      await fixture.expectStored({
-        status:
-          failure === "outcome-unknown" || failure === "recovered-outcome" ? "expired" : "pending",
+      expect(
+        await operatorApprovalStore.getOperatorApprovalDetailed({
+          id: record.id,
+          databaseOptions,
+          nowMs: record.createdAtMs,
+        }),
+      ).toMatchObject({
+        outcome: "found",
+        record: {
+          status:
+            failure === "outcome-unknown" || failure === "recovered-outcome"
+              ? "expired"
+              : "pending",
+        },
       });
     },
   );

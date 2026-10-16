@@ -2,17 +2,15 @@
 // media refs, data URLs, response validation, and compression policy.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
-import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
-import type { ModelProviderConfig } from "../../config/types.models.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -36,23 +34,21 @@ import {
   resetModelGenerationFixtureState,
 } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   createContainerWorkspaceSandboxFsBridge,
   createHostSandboxFsBridge,
 } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
   createMinimaxImageConfig,
-  createImageToolForTest as createRequiredImageTool,
-  createImageWebMediaRuntime,
-  makeModelDefinition,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
   resolveImageModelConfigForTool,
   testing,
 } from "./image-tool.test-support.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 import { createPdfTool } from "./pdf-tool.js";
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
@@ -290,21 +286,22 @@ vi.mock("../minimax-vlm.js", async () => {
 });
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
-  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(profiles), "utf8");
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.writeFile(
+    path.join(agentDir, "auth-profiles.json"),
+    `${JSON.stringify(profiles, null, 2)}\n`,
+    "utf8",
+  );
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const makeAgentDir = () => tempDirs.make("openclaw-image-");
-const priorFetch = global.fetch;
-afterEach(() => {
-  vi.unstubAllEnvs();
-  global.fetch = priorFetch;
-  imageProviderHarness.reset();
-  testing.setProviderDepsForTest();
-});
-
-const inlinePng = `data:image/png;base64,${ONE_PIXEL_PNG_B64}`;
-const imageRequest = { prompt: "Describe the image.", path: inlinePng };
+async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
+  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+  try {
+    return await run(agentDir);
+  } finally {
+    await fs.rm(agentDir, { recursive: true, force: true });
+  }
+}
 
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
@@ -357,25 +354,51 @@ function readPngDimensions(buffer: Buffer): { width: number; height: number } {
   };
 }
 
-async function makeWorkspacePng() {
-  const workspaceDir = path.join(tempDirs.make("openclaw-workspace-image-"), "workspace");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  const imagePath = path.join(workspaceDir, "photo.png");
-  await writePng(imagePath);
-  return { workspaceDir, imagePath };
+async function withTempWorkspacePng(
+  cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
+  options?: { parentDir?: string },
+) {
+  const parentDir = options?.parentDir ?? os.tmpdir();
+  const workspaceParent = await fs.mkdtemp(path.join(parentDir, "openclaw-workspace-image-"));
+  try {
+    const workspaceDir = path.join(workspaceParent, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    await cb({ workspaceDir, imagePath });
+  } finally {
+    await fs.rm(workspaceParent, { recursive: true, force: true });
+  }
 }
 
-function registerImageToolEnvReset(keys: string[]) {
+function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string[]) {
   beforeEach(() => {
     for (const key of keys) {
       vi.stubEnv(key, "");
     }
   });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
 }
 
 function stubMinimaxOkFetch() {
+  minimaxUnderstandImageMock.mockReset();
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-  return stubMinimaxFetch({ status_code: 0, status_msg: "" });
+  minimaxUnderstandImageMock.mockResolvedValue("ok");
+  // Tests that fall back to the generic image runtime still hit a mocked
+  // global.fetch because media-understanding/image.ts is not behind the
+  // minimax-vlm module mock.
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content: "ok",
+      base_resp: { status_code: 0, status_msg: "" },
+    }),
+  );
+  global.fetch = withFetchPreconnect(fetch);
+  return minimaxUnderstandImageMock;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
@@ -391,7 +414,12 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
   } else {
     minimaxUnderstandImageMock.mockResolvedValue(content);
   }
-  const fetch = vi.fn(async () => Response.json({ content, base_resp: baseResp }));
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content,
+      base_resp: baseResp,
+    }),
+  );
   global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
@@ -427,33 +455,42 @@ const minimaxProvider = {
   },
 } satisfies MediaUnderstandingProvider;
 
-async function describeGenericImageWithModel(
-  params: ImageDescriptionRequest | ImagesDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const multiple = "images" in params;
-  const response = await global.fetch(
-    `https://example.invalid/media-${multiple ? "images" : "image"}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        provider: params.provider,
-        model: params.model,
-        prompt: params.prompt,
-        ...(multiple ? { imageCount: params.images.length } : { mime: params.mime }),
-      }),
-    },
-  );
+async function readMockResponseText(response: Response): Promise<string> {
   const payload = (await response.json()) as { content?: string };
-  return { text: payload.content ?? "", model: params.model };
+  return payload.content ?? "";
 }
 
-const imageRuntimeDeps = {
-  buildProviderRegistry: imageProviderHarness.buildProviderRegistry,
-  getMediaUnderstandingProvider: imageProviderHarness.getMediaUnderstandingProvider,
-  describeImageWithModel: describeGenericImageWithModel,
-  describeImagesWithModel: describeGenericImageWithModel,
-};
+async function describeGenericImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      mime: params.mime,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-images", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      imageCount: params.images.length,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
 
 const codexMediaProvider = {
   id: "codex",
@@ -463,14 +500,24 @@ const codexMediaProvider = {
 
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
-  options?: Pick<
-    NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>,
-    | "describeImageWithModel"
-    | "describeImagesWithModel"
-    | "loadImageWebMediaRuntime"
-    | "resolveImageCompressionPolicy"
-    | "resolveModelAsync"
-  > & { useDefaultResolveModelAsync?: boolean },
+  options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
+    loadImageWebMediaRuntime?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["loadImageWebMediaRuntime"];
+    resolveImageCompressionPolicy?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveImageCompressionPolicy"];
+    resolveModelAsync?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveModelAsync"];
+    useDefaultResolveModelAsync?: boolean;
+  },
 ) {
   imageProviderHarness.setProviders(providers);
   const defaultImageModels = new Map<string, string>([
@@ -486,9 +533,14 @@ function installImageUnderstandingProviderDeps(
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    ...imageRuntimeDeps,
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
     describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
-    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
@@ -510,108 +562,160 @@ function installImageUnderstandingProviderDeps(
   });
 }
 
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  installImageUnderstandingProviderDeps(providers);
+}
+
 function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
-  const unexpectedFallback = async () => {
-    throw new Error("Expected fast local image tests to use a registered image provider");
-  };
   installImageUnderstandingProviderDeps(providers, {
-    describeImageWithModel: unexpectedFallback,
-    describeImagesWithModel: unexpectedFallback,
+    describeImageWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    describeImagesWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
-    loadImageWebMediaRuntime: async () =>
-      createImageWebMediaRuntime(
-        async (mediaUrl, { localRoots = [], inboundRoots = [], readFile } = {}) => {
-          if (
-            localRoots !== "any" &&
-            !isInboundPathAllowed({
-              filePath: mediaUrl,
-              roots: [...(localRoots ?? []), ...(inboundRoots ?? [])],
-            })
-          ) {
-            throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
-          }
-          return {
-            buffer: readFile ? await readFile(mediaUrl) : await fs.readFile(mediaUrl),
-            contentType: "image/png",
-            kind: "image",
-            fileName: path.basename(mediaUrl),
-          };
-        },
-      ),
+    loadImageWebMediaRuntime: async () => ({
+      loadWebMedia: async (mediaUrl, options) => {
+        const localRoots =
+          options && typeof options !== "number" && "localRoots" in options
+            ? options.localRoots
+            : [];
+        const inboundRoots =
+          options && typeof options !== "number" && "inboundRoots" in options
+            ? options.inboundRoots
+            : [];
+        if (
+          localRoots !== "any" &&
+          !isInboundPathAllowed({
+            filePath: mediaUrl,
+            roots: [...(localRoots ?? []), ...(inboundRoots ?? [])],
+          })
+        ) {
+          throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
+        }
+        const readFile =
+          options && typeof options !== "number" && "readFile" in options
+            ? options.readFile
+            : undefined;
+        return {
+          buffer: readFile ? await readFile(mediaUrl) : await fs.readFile(mediaUrl),
+          contentType: "image/png",
+          kind: "image",
+          fileName: path.basename(mediaUrl),
+        };
+      },
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
+        return {
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        };
+      },
+    }),
   });
 }
 
-function makeConfig(
-  defaults: AgentDefaultsConfig,
-  providers?: Record<string, ModelProviderConfig>,
-): OpenClawConfig {
-  return { agents: { defaults }, ...(providers ? { models: { providers } } : {}) };
+function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
 }
 
-function modelProvider(
-  baseUrl: string,
-  models: ModelProviderConfig["models"],
-  overrides: Partial<ModelProviderConfig> = {},
-): ModelProviderConfig {
-  return { baseUrl, models, ...overrides };
-}
-
-function imageProvider(
-  id: string,
-  describeImage: MediaUnderstandingProvider["describeImage"],
-): MediaUnderstandingProvider {
-  return { id, capabilities: ["image"], describeImage };
-}
-
-function makeImageDescriptionSpy() {
-  return vi.fn(async (params: ImageDescriptionRequest) => ({ text: "ok", model: params.model }));
-}
-
-async function writePng(filePath: string) {
-  await fs.writeFile(filePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
-}
-
-async function expectImageToolExecOk(tool: ImageToolInstance, imagePath: string) {
+async function expectImageToolExecOk(
+  tool: {
+    execute: (toolCallId: string, input: { prompt: string; path: string }) => Promise<unknown>;
+  },
+  imagePath: string,
+) {
   const result = await tool.execute("t1", {
     prompt: "Describe the image.",
     path: imagePath,
   });
   expectToolText(result, "ok");
-  expect(result.details).toMatchObject({ text: "ok" });
+  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
 }
 
-function expectToolText(
-  result: Awaited<ReturnType<ImageToolInstance["execute"]>>,
-  text: string,
-): void {
-  const content = result.content;
+type ToolTextResult = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    image_url?: { url?: string };
+  }>;
+  details?: Record<string, unknown>;
+};
+
+function expectToolText(result: unknown, text: string): void {
+  const content = (result as ToolTextResult).content ?? [];
   expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
 }
 
-function firstImageRequest(
-  mock: ReturnType<typeof makeImageDescriptionSpy>,
-): ImageDescriptionRequest {
-  return expectDefined(mock.mock.calls[0]?.[0], "expected describeImage call");
+function firstImageRequest(mock: { mock: { calls: unknown[][] } }): ImageDescriptionRequest {
+  const request = mock.mock.calls.at(0)?.[0];
+  if (!request) {
+    throw new Error("expected describeImage call");
+  }
+  return request as ImageDescriptionRequest;
+}
+
+function fetchCallAt(mock: { mock: { calls: unknown[][] } }, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index + 1}`);
+  }
+  return call;
+}
+
+function requireImageTool<T>(tool: T | null | undefined): T {
+  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
+  if (!tool) {
+    throw new Error("expected image tool");
+  }
+  return tool;
+}
+
+function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
+  return requireImageTool(createImageTool(args));
 }
 
 type ImageToolInstance = ReturnType<typeof createRequiredImageTool>;
 
-async function makeSandboxState() {
-  const stateDir = tempDirs.make("openclaw-image-sandbox-");
+async function withTempSandboxState(
+  run: (ctx: { stateDir: string; agentDir: string; sandboxRoot: string }) => Promise<void>,
+) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-sandbox-"));
   const agentDir = path.join(stateDir, "agent");
   const sandboxRoot = path.join(stateDir, "sandbox");
   await fs.mkdir(agentDir, { recursive: true });
   await fs.mkdir(sandboxRoot, { recursive: true });
-  return { agentDir, sandboxRoot };
+  try {
+    await run({ stateDir, agentDir, sandboxRoot });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 }
 
-function makeMinimaxTool() {
-  return createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir: makeAgentDir() });
+async function withMinimaxImageToolFromTempAgentDir(
+  run: (tool: ImageToolInstance) => Promise<void>,
+) {
+  await withTempAgentDir(async (agentDir) => {
+    const cfg = createMinimaxImageConfig();
+    await run(createRequiredImageTool({ config: cfg, agentDir }));
+  });
 }
 
 describe("image tool implicit imageModel config", () => {
   type Profiles = AuthProfileStore["profiles"];
-  const openAiPrimaryCfg = makeConfig({ model: { primary: "openai/gpt-5.4" } });
+  const openAiPrimaryCfg = {
+    agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+  } satisfies OpenClawConfig;
   const codexImageModel = { primary: "codex/gpt-5.5" };
 
   const openAiOAuthProfile = (provider = "openai"): AuthProfileCredential => ({
@@ -626,7 +730,8 @@ describe("image tool implicit imageModel config", () => {
   const writeProfiles = (agentDir: string, profiles: Profiles) =>
     writeAuthProfiles(agentDir, makeAuthStore(profiles));
 
-  registerImageToolEnvReset([
+  const priorFetch = global.fetch;
+  registerImageToolEnvReset(priorFetch, [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_OAUTH_TOKEN",
@@ -646,7 +751,12 @@ describe("image tool implicit imageModel config", () => {
   ]);
 
   beforeEach(() => {
-    installImageUnderstandingProviderDeps([minimaxProvider]);
+    installImageUnderstandingProviderStubs(minimaxProvider);
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
   });
 
   it.each([
@@ -657,123 +767,157 @@ describe("image tool implicit imageModel config", () => {
   ])(
     "resolves implicit OpenAI image auth with $name",
     async ({ persisted, scoped, prepared, cli }) => {
-      const agentDir = makeAgentDir();
-      if (persisted) {
-        await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      }
-      if (persisted || cli) {
-        installImageUnderstandingProviderDeps([minimaxProvider, codexMediaProvider]);
-      }
-      if (cli) {
-        vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      }
-      expect(
-        resolveImageModelConfigForTool({
-          cfg: openAiPrimaryCfg,
-          agentDir,
-          authStore:
-            persisted || cli
-              ? scoped
-                ? makeAuthStore({})
-                : readMockRuntimeAuthProfileStore(agentDir)
-              : undefined,
-          preparedModelRuntime: prepared
-            ? ({ mediaCapabilityProviders: { mediaUnderstandingProviders: [] } } as never)
-            : undefined,
-        }),
-      ).toEqual(cli ? codexImageModel : null);
-      if (!persisted && !cli) {
-        expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
-      }
+      await withTempAgentDir(async (agentDir) => {
+        if (persisted) {
+          await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
+        }
+        if (persisted || cli) {
+          installImageUnderstandingProviderStubs(minimaxProvider, codexMediaProvider);
+        }
+        if (cli) {
+          vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
+        }
+        expect(
+          resolveImageModelConfigForTool({
+            cfg: openAiPrimaryCfg,
+            agentDir,
+            ...(persisted || cli
+              ? {
+                  authStore: scoped ? makeAuthStore({}) : readMockRuntimeAuthProfileStore(agentDir),
+                }
+              : {}),
+            ...(prepared
+              ? {
+                  preparedModelRuntime: {
+                    mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+                  } as never,
+                }
+              : {}),
+          }),
+        ).toEqual(cli ? codexImageModel : null);
+        if (!persisted && !cli) {
+          expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
+        }
+      });
     },
   );
 
   it("pairs minimax-portal primary with MiniMax-VL-01 and fallbacks", async () => {
-    const cfg = makeConfig({ model: { primary: "minimax-portal/MiniMax-M2.7" } });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.7" } } },
+    };
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-    const agentDir = makeAgentDir();
-    await writeProfiles(agentDir, {
-      "minimax-portal:default": openAiOAuthProfile("minimax-portal"),
-    });
+    await withTempAgentDir(async (agentDir) => {
+      await writeProfiles(agentDir, {
+        "minimax-portal:default": openAiOAuthProfile("minimax-portal"),
+      });
 
-    const actual = resolveImageModelConfigForTool({
-      cfg,
-      agentDir,
-      authStore: readMockRuntimeAuthProfileStore(agentDir),
+      const actual = resolveImageModelConfigForTool({
+        cfg,
+        agentDir,
+        authStore: readMockRuntimeAuthProfileStore(agentDir),
+      });
+      expect(actual).toEqual({
+        primary: "minimax-portal/MiniMax-VL-01",
+        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
+      });
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
-    expect(actual).toEqual({
-      primary: "minimax-portal/MiniMax-VL-01",
-      fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
-    });
-    expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
   });
 
   it("defers implicit image model discovery during hot-path tool registration", async () => {
-    const agentDir = makeAgentDir();
-    const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
-    const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
-    testing.setProviderDepsForTest({
-      ...imageRuntimeDeps,
-      resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
-      resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
-    });
-    const cfg = makeConfig({ model: { primary: "openai/gpt-5.4" } });
+    await withTempAgentDir(async (agentDir) => {
+      const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
+      const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
+      testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
+        resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
 
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      deferAutoModelResolution: true,
-    });
+      const tool = createImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
 
-    expect(typeof tool?.execute).toBe("function");
-    expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
-    expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
+      expect(typeof tool?.execute).toBe("function");
+      expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
+      expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("honors a per-call model override when no imageModel is configured", async () => {
-    const agentDir = makeAgentDir();
-    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-      text: `ok ${params.provider}/${params.model}`,
-      model: params.model,
-    }));
-    installFastLocalImageProviderStubs(imageProvider("opencode-go", describeImage));
-    const cfg = makeConfig({ model: { primary: "opencode-go/kimi-k2.6" } });
-    const tool = createRequiredImageTool({
-      config: cfg,
-      agentDir,
-      deferAutoModelResolution: true,
-    });
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: `ok ${params.provider}/${params.model}`,
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "opencode-go",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
+      };
+      const tool = createRequiredImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
 
-    const result = await tool.execute("t1", {
-      prompt: "Describe this image.",
-      path: inlinePng,
-      model: "opencode-go/mimo-v2.5",
-    });
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image.",
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        model: "opencode-go/mimo-v2.5",
+      });
 
-    expect(firstImageRequest(describeImage)).toMatchObject({
-      provider: "opencode-go",
-      model: "mimo-v2.5",
+      const request = firstImageRequest(describeImage);
+      expect(request.provider).toBe("opencode-go");
+      expect(request.model).toBe("mimo-v2.5");
+      expectToolText(result, "ok opencode-go/mimo-v2.5");
     });
-    expectToolText(result, "ok opencode-go/mimo-v2.5");
   });
 
   it("carries the scoped auth store into image provider execution", async () => {
-    const agentDir = makeAgentDir();
-    const describeImage = makeImageDescriptionSpy();
-    installImageUnderstandingProviderDeps([imageProvider("codex", describeImage)]);
-    const authProfileStore = makeAuthStore({
-      "openai:scoped": openAiOAuthProfile(),
-    });
-    const tool = createRequiredImageTool({
-      config: { agents: { defaults: { imageModel: { primary: "codex/gpt-5.5" } } } },
-      agentDir,
-      authProfileStore,
-    });
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "codex",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const authProfileStore = makeAuthStore({
+        "openai:scoped": openAiOAuthProfile(),
+      });
+      const tool = createRequiredImageTool({
+        config: { agents: { defaults: { imageModel: { primary: "codex/gpt-5.5" } } } },
+        agentDir,
+        authProfileStore,
+      });
 
-    await tool.execute("t1", { prompt: "Describe this image.", path: inlinePng });
+      await tool.execute("t1", {
+        prompt: "Describe this image.",
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
 
-    expect(firstImageRequest(describeImage).authStore).toBe(authProfileStore);
+      expect(firstImageRequest(describeImage).authStore).toBe(authProfileStore);
+    });
   });
 
   it.each([
@@ -781,54 +925,62 @@ describe("image tool implicit imageModel config", () => {
     { name: "prefers the configured CN alias", primary: false, cnCandidate: true, auto: true },
     { name: "retains the canonical fallback", primary: false, cnCandidate: false, auto: true },
   ])("routes MiniMax image models: $name", async ({ primary, cnCandidate, auto }) => {
-    const agentDir = makeAgentDir();
-    if (auto) {
-      const defaultImageModels = new Map<string, string>([
-        ["anthropic", "claude-opus-4-6"],
-        ["minimax", "MiniMax-VL-01"],
-        ["minimax-cn", "MiniMax-VL-01"],
-        ["openai", "gpt-5.4-mini"],
-      ]);
-      testing.setProviderDepsForTest({
-        ...imageRuntimeDeps,
-        resolveAutoMediaKeyProviders: ({ capability }) =>
-          capability === "image"
-            ? cnCandidate
-              ? ["openai", "anthropic", "minimax-cn", "minimax"]
-              : ["minimax"]
-            : [],
-        resolveDefaultMediaModel: ({ providerId, capability }) =>
-          capability === "image" && (cnCandidate || providerId === "minimax")
-            ? defaultImageModels.get(providerId.toLowerCase())
-            : undefined,
-      });
-    }
-    const cfg: OpenClawConfig = {
-      ...(primary
-        ? { agents: { defaults: { model: { primary: "minimax-cn/MiniMax-M2.5" } } } }
-        : {}),
-      models: {
-        mode: "merge",
-        providers: {
-          "minimax-cn": {
-            baseUrl: "https://api.minimaxi.com/anthropic",
-            apiKey: "${MINIMAX_API_KEY}",
-            api: "anthropic-messages",
-            models: cnCandidate ? [makeModelDefinition("MiniMax-M2.5")] : [],
+    await withTempAgentDir(async (agentDir) => {
+      if (auto) {
+        const defaultImageModels = new Map<string, string>([
+          ["anthropic", "claude-opus-4-6"],
+          ["minimax", "MiniMax-VL-01"],
+          ["minimax-cn", "MiniMax-VL-01"],
+          ["openai", "gpt-5.4-mini"],
+        ]);
+        testing.setProviderDepsForTest({
+          buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+            imageProviderHarness.buildProviderRegistry(overrides),
+          getMediaUnderstandingProvider: (
+            id: string,
+            registry: Map<string, MediaUnderstandingProvider>,
+          ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+          describeImageWithModel: describeGenericImageWithModel,
+          describeImagesWithModel: describeGenericImagesWithModel,
+          resolveAutoMediaKeyProviders: ({ capability }) =>
+            capability === "image"
+              ? cnCandidate
+                ? ["openai", "anthropic", "minimax-cn", "minimax"]
+                : ["minimax"]
+              : [],
+          resolveDefaultMediaModel: ({ providerId, capability }) =>
+            capability === "image" && (cnCandidate || providerId === "minimax")
+              ? defaultImageModels.get(providerId.toLowerCase())
+              : undefined,
+        });
+      }
+      const cfg: OpenClawConfig = {
+        ...(primary
+          ? { agents: { defaults: { model: { primary: "minimax-cn/MiniMax-M2.5" } } } }
+          : {}),
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: cnCandidate ? [makeModelDefinition("MiniMax-M2.5", ["text", "image"])] : [],
+            },
           },
         },
-      },
-    };
-    const authStore = {
-      version: 1,
-      profiles: {
-        ...(cnCandidate ? { mini: createApiKeyCredential("minimax-cn", "minimax-test") } : {}),
-        miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
-      },
-    } as const;
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          ...(cnCandidate ? { mini: createApiKeyCredential("minimax-cn", "minimax-test") } : {}),
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
 
-    expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
-      primary: `${cnCandidate ? "minimax-cn" : "minimax"}/MiniMax-VL-01`,
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: `${cnCandidate ? "minimax-cn" : "minimax"}/MiniMax-VL-01`,
+      });
     });
   });
 
@@ -836,32 +988,43 @@ describe("image tool implicit imageModel config", () => {
     { name: "capability timeout", modelTimeout: undefined, expected: 180_000 },
     { name: "matching model timeout", modelTimeout: 300, expected: 300_000 },
   ])("uses $name for provider calls", async ({ modelTimeout, expected }) => {
-    const { workspaceDir, imagePath } = await makeWorkspacePng();
-    const agentDir = makeAgentDir();
-    const describeImage = makeImageDescriptionSpy();
-    installFastLocalImageProviderStubs(imageProvider("ollama", describeImage));
-    const model = "gemma4:26b-a4b-it-q4_K_M";
-    const cfg = makeConfig({ imageModel: { primary: `ollama/${model}` } });
-    cfg.tools = {
-      media: {
-        image: { timeoutSeconds: 180 },
-        ...(modelTimeout === undefined
-          ? {}
-          : {
-              models: [
-                {
-                  provider: "ollama",
-                  model,
-                  timeoutSeconds: modelTimeout,
-                  capabilities: ["image"],
-                },
-              ],
-            }),
-      },
-    };
-    const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
-    await expectImageToolExecOk(tool, imagePath);
-    expect(firstImageRequest(describeImage).timeoutMs).toBe(expected);
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "ok",
+          model: params.model,
+        }));
+        installFastLocalImageProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const model = "gemma4:26b-a4b-it-q4_K_M";
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { imageModel: { primary: `ollama/${model}` } } },
+          tools: {
+            media: {
+              image: { timeoutSeconds: 180 },
+              ...(modelTimeout === undefined
+                ? {}
+                : {
+                    models: [
+                      {
+                        provider: "ollama",
+                        model,
+                        timeoutSeconds: modelTimeout,
+                        capabilities: ["image"],
+                      },
+                    ],
+                  }),
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+        await expectImageToolExecOk(tool, imagePath);
+        expect(firstImageRequest(describeImage).timeoutMs).toBe(expected);
+      });
+    });
   });
 
   it.each([
@@ -870,261 +1033,372 @@ describe("image tool implicit imageModel config", () => {
   ])(
     "pairs configured image model $provider/$model",
     async ({ provider, model, prefixed, checkTool }) => {
-      const agentDir = makeAgentDir();
-      const authStore = createAuthProfileStoreFixture({
-        [`${provider}:default`]: createApiKeyCredential(provider, "sk-test"),
-      });
-      await writeAuthProfiles(agentDir, authStore);
-      const cfg = makeConfig(
-        { model: { primary: `${provider}/text-1` } },
-        {
-          [provider]: modelProvider("https://example.com", [
-            makeModelDefinition(prefixed ? `${provider}/text-1` : "text-1", ["text"]),
-            makeModelDefinition(prefixed ? `${provider}/${model}` : model),
-          ]),
-        },
-      );
-      expect(
-        resolveImageModelConfigForTool({
-          cfg,
+      await withTempAgentDir(async (agentDir) => {
+        await writeAuthProfiles(
           agentDir,
-          authStore,
-        }),
-      ).toEqual({ primary: `${provider}/${model}` });
-      if (checkTool) {
-        // Direct factories retain their shipped directory-backed auth contract.
-        expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
-        expect(typeof createPdfTool({ config: cfg, agentDir })?.execute).toBe("function");
-      }
+          createAuthProfileStoreFixture({
+            [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+          }),
+        );
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: `${provider}/text-1` } } },
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://example.com",
+                models: [
+                  makeModelDefinition(prefixed ? `${provider}/text-1` : "text-1", ["text"]),
+                  makeModelDefinition(prefixed ? `${provider}/${model}` : model, ["text", "image"]),
+                ],
+              },
+            },
+          },
+        };
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: createAuthProfileStoreFixture({
+              [`${provider}:default`]: { type: "api_key", provider, key: "sk-test" },
+            }),
+          }),
+        ).toEqual({ primary: `${provider}/${model}` });
+        if (checkTool) {
+          // Direct factories retain their shipped directory-backed auth contract.
+          expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+          expect(typeof createPdfTool({ config: cfg, agentDir })?.execute).toBe("function");
+        }
+      });
     },
   );
 
   it("does not pair provider aliases through core normalization", async () => {
-    const agentDir = makeAgentDir();
-    await writeAuthProfiles(
-      agentDir,
-      createAuthProfileStoreFixture({
-        "amazon-bedrock:default": createApiKeyCredential("amazon-bedrock", "sk-test"),
-      }),
-    );
-    const cfg = makeConfig(
-      { model: { primary: "aws-bedrock/text-1" } },
-      {
-        "amazon-bedrock": modelProvider("https://example.com", [
-          makeModelDefinition("text-1", ["text"]),
-          makeModelDefinition("vision-1"),
-        ]),
-      },
-    );
-    expect(
-      resolveImageModelConfigForTool({
-        cfg,
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(
         agentDir,
-        authStore: readMockRuntimeAuthProfileStore(agentDir),
-      }),
-    ).toBeNull();
+        createAuthProfileStoreFixture({
+          "amazon-bedrock:default": createApiKeyCredential("amazon-bedrock", "sk-test"),
+        }),
+      );
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(
+        resolveImageModelConfigForTool({
+          cfg,
+          agentDir,
+          authStore: readMockRuntimeAuthProfileStore(agentDir),
+        }),
+      ).toBeNull();
+    });
   });
 
-  it.each([
-    { ref: "moondream", ambiguous: true },
-    { ref: "gpt-5.4-mini", ambiguous: false },
-  ])("resolves providerless image model $ref", ({ ref, ambiguous }) => {
-    const cfg = makeConfig(
-      { imageModel: { primary: ref } },
-      ambiguous
-        ? {
-            ollama: modelProvider("http://localhost:11434", [makeModelDefinition("moondream")]),
-            lmstudio: modelProvider("http://localhost:1234", [makeModelDefinition("moondream")]),
-          }
-        : undefined,
-    );
-    const resolve = () =>
-      resolveImageModelConfigForTool({
-        cfg,
-        agentDir: makeAgentDir(),
-        authStore: createAuthProfileStoreFixture({}),
-      });
-    if (ambiguous) {
-      expect(resolve).toThrow(/Ambiguous image model "moondream"/);
-    } else {
-      expect(resolve()).toEqual({ primary: "gpt-5.4-mini" });
-    }
+  it.each<{
+    name: string;
+    primary?: string;
+    imageModel: { primary: string; fallbacks?: string[] };
+    providers?: string[];
+    models?: string[];
+    expected: ReturnType<typeof resolveImageModelConfigForTool> | RegExp;
+  }>([
+    {
+      name: "ambiguous providerless model",
+      imageModel: { primary: "moondream" },
+      providers: ["ollama", "lmstudio"],
+      models: ["moondream"],
+      expected: /Ambiguous image model "moondream"/,
+    },
+    {
+      name: "unmatched providerless model on default provider path",
+      imageModel: { primary: "gpt-5.4-mini" },
+      expected: { primary: "gpt-5.4-mini" },
+    },
+  ])("resolves $name", async ({ primary, imageModel, providers, models, expected }) => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { ...(primary ? { model: { primary } } : {}), imageModel } },
+        ...(providers
+          ? {
+              models: {
+                providers: Object.fromEntries(
+                  providers.map((provider) => [
+                    provider,
+                    {
+                      baseUrl:
+                        provider === "ollama" ? "http://localhost:11434" : "http://localhost:1234",
+                      models: (models ?? []).map((model) =>
+                        makeModelDefinition(model, ["text", "image"]),
+                      ),
+                    },
+                  ]),
+                ),
+              },
+            }
+          : {}),
+      };
+      if (expected instanceof RegExp) {
+        expect(() =>
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: readMockRuntimeAuthProfileStore(agentDir),
+          }),
+        ).toThrow(expected);
+      } else {
+        expect(
+          resolveImageModelConfigForTool({
+            cfg,
+            agentDir,
+            authStore: readMockRuntimeAuthProfileStore(agentDir),
+          }),
+        ).toEqual(expected);
+      }
+    });
   });
 
   it("loads images directly for native-vision models without resolving an image model", async () => {
-    const agentDir = makeAgentDir();
-    const cfg = makeConfig(
-      {
-        model: { primary: "acme/vision-1" },
-        imageModel: { primary: "moondream" },
-        imageMaxDimensionPx: 32,
-      },
-      {
-        acme: modelProvider("https://example.com", [makeModelDefinition("vision-1")]),
-        ollama: modelProvider("http://localhost:11434", [makeModelDefinition("moondream")]),
-        lmstudio: modelProvider("http://localhost:1234", [makeModelDefinition("moondream")]),
-      },
-    );
-    const describeImageWithModel = vi.fn(async () => {
-      throw new Error("native image loading must not call a fallback model");
-    });
-    const describeImagesWithModel = vi.fn(async () => {
-      throw new Error("native image loading must not call a fallback model");
-    });
-    testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "acme/vision-1" },
+            imageModel: { primary: "moondream" },
+            imageMaxDimensionPx: 32,
+          },
+        },
+        models: {
+          providers: {
+            acme: {
+              baseUrl: "https://example.com",
+              models: [makeModelDefinition("vision-1", ["text", "image"])],
+            },
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const describeImageWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
+      });
+      const describeImagesWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
+      });
+      testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
 
-    const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
-    expect(tool).toMatchObject({
-      name: "view_image",
-      label: "View Image",
-      catalogMode: "direct-only",
-    });
-    expect(tool.description).toContain("private model context");
-    expect(tool.description).toContain("Does not display, attach, or send");
+      const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
+      expect(tool.name).toBe("view_image");
+      expect(tool.label).toBe("View Image");
+      expect(tool.catalogMode).toBe("direct-only");
+      expect(tool.description).toContain("private model context");
+      expect(tool.description).toContain("Does not display, attach, or send");
 
-    const result = await tool.execute("native-image", {
-      prompt: "Read the screenshot error.",
-      path: inlinePng,
-    });
-    const content = result.content;
+      const result = await tool.execute("native-image", {
+        prompt: "Read the screenshot error.",
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      const content = (
+        result as {
+          content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          details?: Record<string, unknown>;
+        }
+      ).content;
 
-    expect(content).toEqual([
-      {
-        type: "text",
-        text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
-      },
-      expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
-    ]);
-    expect(result.details).toMatchObject({
-      transport: "native",
-      media: { outbound: false },
+      expect(content).toEqual([
+        {
+          type: "text",
+          text: "Loaded 1 image into private model context for inspection; not displayed, attached, or sent to the user.",
+        },
+        expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
+      ]);
+      expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
+        transport: "native",
+        media: { outbound: false },
+      });
+      expect(describeImageWithModel).not.toHaveBeenCalled();
+      expect(describeImagesWithModel).not.toHaveBeenCalled();
     });
-    expect(describeImageWithModel).not.toHaveBeenCalled();
-    expect(describeImagesWithModel).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(
     "omits undecodable JPEGs (readable batch member: %s)",
     async (includeValid) => {
-      const agentDir = makeAgentDir();
-      const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
-      const corruptPath = path.join(agentDir, "truncated.jpg");
-      const validPath = path.join(agentDir, "valid.jpg");
-      await fs.writeFile(corruptPath, jpeg.subarray(0, 65536));
-      await fs.writeFile(validPath, jpeg);
-      const tool = createRequiredImageTool({
-        agentDir,
-        workspaceDir: agentDir,
-        modelHasVision: true,
-        config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
-      });
-      const result = await tool.execute("corrupt-image", {
-        paths: includeValid ? [corruptPath, validPath] : [corruptPath],
-      });
-      expect(result.content.filter((block) => block.type === "image")).toEqual(
-        includeValid
-          ? [{ type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" }]
-          : [],
-      );
-      expect(result.details).toMatchObject(includeValid ? { image: validPath } : { images: [] });
-      expect(result.content[0]).toMatchObject({
-        type: "text",
-        text: expect.stringMatching(includeValid ? /^Loaded 1 image\b/ : /^Loaded 0 images\b/),
-      });
-      expect(result.content).toContainEqual({
-        type: "text",
-        text: expect.stringMatching(/omitted.*decode/i),
+      await withTempAgentDir(async (agentDir) => {
+        const jpeg = await fs.readFile("test/fixtures/media/roof-camera-sky.jpg");
+        const corruptPath = path.join(agentDir, "truncated.jpg");
+        const validPath = path.join(agentDir, "valid.jpg");
+        await fs.writeFile(corruptPath, jpeg.subarray(0, 65536));
+        await fs.writeFile(validPath, jpeg);
+        const tool = createRequiredImageTool({
+          agentDir,
+          workspaceDir: agentDir,
+          modelHasVision: true,
+          config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
+        });
+        const result = await tool.execute("corrupt-image", {
+          paths: includeValid ? [corruptPath, validPath] : [corruptPath],
+        });
+        expect(result.content.filter((block) => block.type === "image")).toEqual(
+          includeValid
+            ? [{ type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" }]
+            : [],
+        );
+        expect(result.details).toMatchObject(includeValid ? { image: validPath } : { images: [] });
+        expect(result.content[0]).toMatchObject({
+          type: "text",
+          text: expect.stringMatching(includeValid ? /^Loaded 1 image\b/ : /^Loaded 0 images\b/),
+        });
+        expect(result.content).toContainEqual({
+          type: "text",
+          text: expect.stringMatching(/omitted.*decode/i),
+        });
       });
     },
   );
 
-  it("does not accept the legacy image argument", async () => {
-    const tool = makeMinimaxTool();
-    await expect(
-      tool.execute("legacy-image-arg", {
-        image: inlinePng,
-      }),
-    ).rejects.toThrow("path required");
-  });
+  it.each([{ name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } }])(
+    "does not accept the legacy $name argument",
+    async ({ input }) => {
+      await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+        await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
+      });
+    },
+  );
 
   it("preserves the unsupported image reference result contract", async () => {
-    const tool = makeMinimaxTool();
-    const result = await tool.execute("unsupported-image-reference", {
-      path: "ftp://example.test/image.png",
-    });
-
-    expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining("Unsupported image reference") }],
-      details: {
-        error: "unsupported_image_reference",
+    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+      const result = await tool.execute("unsupported-image-reference", {
         path: "ftp://example.test/image.png",
-      },
+      });
+
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("Unsupported image reference") }],
+        details: {
+          error: "unsupported_image_reference",
+          path: "ftp://example.test/image.png",
+        },
+      });
     });
   });
 
   it.each([undefined, true])(
     "enforces local image roots (workspaceOnly: %s)",
     async (workspaceOnly) => {
-      const { workspaceDir, imagePath } = await makeWorkspacePng();
-      const fetch = stubMinimaxOkFetch();
-      const agentDir = makeAgentDir();
-      const cfg = createMinimaxImageConfig();
-      const tool = createRequiredImageTool({
-        config: cfg,
-        agentDir,
-        ...(workspaceOnly === true ? { workspaceDir } : {}),
-        ...(workspaceOnly === undefined ? {} : { fsPolicy: { workspaceOnly } }),
+      await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+        const fetch = stubMinimaxOkFetch();
+        await withTempAgentDir(async (agentDir) => {
+          const cfg = createMinimaxImageConfig();
+          const tool = createRequiredImageTool({
+            config: cfg,
+            agentDir,
+            ...(workspaceOnly === true ? { workspaceDir } : {}),
+            ...(workspaceOnly === undefined ? {} : { fsPolicy: { workspaceOnly } }),
+          });
+          let deniedPath = imagePath;
+          if (workspaceOnly === true) {
+            await expectImageToolExecOk(tool, imagePath);
+            expect(fetch).toHaveBeenCalledTimes(1);
+            deniedPath = path.join(path.dirname(workspaceDir), "secret.png");
+            await fs.writeFile(deniedPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+          }
+          await expect(
+            tool.execute("denied", { prompt: "Describe.", path: deniedPath }),
+          ).rejects.toThrow(/not under an allowed directory/i);
+          if (workspaceOnly === undefined) {
+            const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+            await expectImageToolExecOk(withWorkspace, imagePath);
+            expect(fetch).toHaveBeenCalledTimes(1);
+          } else if (!workspaceOnly) {
+            expect(fetch).not.toHaveBeenCalled();
+          }
+        });
       });
-      let deniedPath = imagePath;
-      if (workspaceOnly === true) {
-        await expectImageToolExecOk(tool, imagePath);
-        expect(fetch).toHaveBeenCalledTimes(1);
-        deniedPath = path.join(path.dirname(workspaceDir), "secret.png");
-        await writePng(deniedPath);
-      }
-      await expect(
-        tool.execute("denied", { prompt: "Describe.", path: deniedPath }),
-      ).rejects.toThrow(/not under an allowed directory/i);
-      if (workspaceOnly === undefined) {
-        const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
-        await expectImageToolExecOk(withWorkspace, imagePath);
-        expect(fetch).toHaveBeenCalledTimes(1);
-      } else if (!workspaceOnly) {
-        expect(fetch).not.toHaveBeenCalled();
-      }
     },
   );
 
   it("allows current iMessage account attachments", async () => {
-    const agentDir = makeAgentDir();
-    const describeImage = makeImageDescriptionSpy();
-    installFastLocalImageProviderStubs(imageProvider("ollama", describeImage));
-    const attachmentRoot = tempDirs.make("openclaw-imessage-root-");
-    const imagePath = path.join(attachmentRoot, "photo.png");
-    await writePng(imagePath);
-    const cfg = makeConfig(
-      { imageModel: { primary: "ollama/moondream" } },
-      {
-        ollama: modelProvider("http://localhost:11434", [makeModelDefinition("moondream")]),
-      },
-    );
-    cfg.channels = { imessage: { accounts: { work: { attachmentRoots: [attachmentRoot] } } } };
-    const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
-    await expect(
-      withoutChannel.execute("t1", { prompt: "Describe.", path: imagePath }),
-    ).rejects.toThrow(/not under an allowed directory/i);
-    const withImessage = createRequiredImageTool({
-      config: cfg,
-      agentDir,
-      agentChannel: "imessage",
-      agentAccountId: "work",
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRootParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-imessage-root-"),
+      );
+      const attachmentRoot = attachmentRootParent;
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.mkdir(attachmentRoot, { recursive: true });
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { imageModel: { primary: "ollama/moondream" } } },
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [attachmentRoot],
+                },
+              },
+            },
+          },
+        };
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
+        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutChannel.execute("t1", { prompt: "Describe.", path: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRootParent, { recursive: true, force: true });
+      }
     });
-    await expectImageToolExecOk(withImessage, imagePath);
-    expect(describeImage).toHaveBeenCalledTimes(1);
   });
 
   it("passes web_fetch SSRF policy to remote image references", async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith("http://198.18.0.153/")) {
         return new Response(Buffer.from(ONE_PIXEL_PNG_B64, "base64"), {
@@ -1138,140 +1412,170 @@ describe("image tool implicit imageModel config", () => {
     global.fetch = withFetchPreconnect(fetch);
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
 
-    const agentDir = makeAgentDir();
-    const cfg: OpenClawConfig = {
-      ...createMinimaxImageConfig(),
-      tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
-    };
-    const tool = createRequiredImageTool({ config: cfg, agentDir });
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        ...createMinimaxImageConfig(),
+        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
 
-    await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
-    const [input, init] = expectDefined(fetch.mock.calls[0], "first fetch call");
-    expect(input).toBe("http://198.18.0.153/reference.png");
-    expect(typeof init).toBe("object");
+      await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      const [input, init] = fetchCallAt(fetch, 0);
+      expect(input).toBe("http://198.18.0.153/reference.png");
+      expect(typeof init).toBe("object");
+    });
   });
 
   it("sandboxes image paths like the read tool", async () => {
-    const { agentDir, sandboxRoot } = await makeSandboxState();
-    const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");
+      const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
 
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    const cfg = makeConfig({ model: { primary: "minimax/MiniMax-M2.7" } });
-    const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
-    await expect(tool.execute("t1", { path: "https://example.com/a.png" })).rejects.toThrow(
-      /Sandboxed view_image does not allow remote URLs/i,
-    );
+      await expect(tool.execute("t1", { path: "https://example.com/a.png" })).rejects.toThrow(
+        /Sandboxed view_image does not allow remote URLs/i,
+      );
 
-    await expect(tool.execute("t2", { path: "../escape.png" })).rejects.toThrow(
-      /escapes sandbox root/i,
-    );
+      await expect(tool.execute("t2", { path: "../escape.png" })).rejects.toThrow(
+        /escapes sandbox root/i,
+      );
+    });
   });
 
-  it("reads a mounted image from FILE:/workspace/img.png", async () => {
-    const { agentDir, sandboxRoot } = await makeSandboxState();
-    await writePng(path.join(sandboxRoot, "img.png"));
-    const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
-    stubMinimaxOkFetch();
-    const tool = createRequiredImageTool({
-      config: createMinimaxImageConfig(),
-      agentDir,
-      workspaceDir: sandboxRoot,
-      sandbox: { root: sandboxRoot, bridge },
-      fsPolicy: { workspaceOnly: true },
-    });
+  it.each(["FILE:/workspace/img.png"])("reads a mounted image from %s", async (image) => {
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.writeFile(
+        path.join(sandboxRoot, "img.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+      const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
+      stubMinimaxOkFetch();
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+        workspaceDir: sandboxRoot,
+        sandbox: { root: sandboxRoot, bridge },
+        fsPolicy: { workspaceOnly: true },
+      });
 
-    await expectImageToolExecOk(tool, "FILE:/workspace/img.png");
+      await expectImageToolExecOk(tool, image);
+    });
   });
 
   it("applies workspace-only policy to image paths in sandbox mode", async () => {
-    const { agentDir, sandboxRoot } = await makeSandboxState();
-    await writePng(path.join(agentDir, "secret.png"));
-    const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot: agentDir });
-    const bridge = sandbox.fsBridge;
-    if (!bridge) {
-      throw new Error("expected unsafe sandbox filesystem bridge");
-    }
-    const fetch = stubMinimaxOkFetch();
-    const imageTool = createRequiredImageTool({
-      config: createMinimaxImageConfig(),
-      agentDir,
-      workspaceDir: sandboxRoot,
-      sandbox: { root: sandboxRoot, bridge },
-      fsPolicy: { workspaceOnly: true },
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.writeFile(
+        path.join(agentDir, "secret.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+      const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot: agentDir });
+      const bridge = sandbox.fsBridge;
+      if (!bridge) {
+        throw new Error("expected unsafe sandbox filesystem bridge");
+      }
+      const fetch = stubMinimaxOkFetch();
+      const imageTool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+        workspaceDir: sandboxRoot,
+        sandbox: { root: sandboxRoot, bridge },
+        fsPolicy: { workspaceOnly: true },
+      });
+      await expect(
+        imageTool.execute("t1", {
+          prompt: "Describe the image.",
+          path: "/agent/secret.png",
+        }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(fetch).not.toHaveBeenCalled();
     });
-    await expect(
-      imageTool.execute("t1", {
-        prompt: "Describe the image.",
-        path: "/agent/secret.png",
-      }),
-    ).rejects.toThrow(/Path escapes sandbox root/i);
-    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("rewrites inbound absolute paths into sandbox media/inbound", async () => {
-    const { agentDir, sandboxRoot } = await makeSandboxState();
-    await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), {
-      recursive: true,
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(sandboxRoot, "media", "inbound", "photo.png"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      const fetch = stubMinimaxOkFetch();
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "minimax/MiniMax-M2.7" },
+            imageModel: { primary: "minimax/MiniMax-VL-01" },
+          },
+        },
+      };
+      const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
+      const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
+
+      const res = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        path: "@/Users/steipete/.openclaw/media/inbound/photo.png",
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
     });
-    await writePng(path.join(sandboxRoot, "media", "inbound", "photo.png"));
-
-    const fetch = stubMinimaxOkFetch();
-
-    const cfg = { agents: createMinimaxImageConfig().agents };
-    const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
-    const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
-
-    const res = await tool.execute("t1", {
-      prompt: "Describe the image.",
-      path: "@/Users/steipete/.openclaw/media/inbound/photo.png",
-    });
-
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
   });
 
   it("resolves a producer-staged bare upload handle", async () => {
-    const { agentDir, sandboxRoot } = await makeSandboxState();
-    const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
-    await fs.mkdir(path.dirname(path.join(sandboxRoot, stagedPath)), { recursive: true });
-    await writePng(path.join(sandboxRoot, stagedPath));
+    await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
+      await fs.mkdir(path.dirname(path.join(sandboxRoot, stagedPath)), { recursive: true });
+      await fs.writeFile(
+        path.join(sandboxRoot, stagedPath),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
 
-    const fetch = stubMinimaxOkFetch();
-    const sandbox = {
-      root: sandboxRoot,
-      bridge: createHostSandboxFsBridge(sandboxRoot),
-      stagedMediaPaths: new Map([["file_upload", stagedPath]]),
-    };
-    const tool = createRequiredImageTool({
-      config: createMinimaxImageConfig(),
-      agentDir,
-      sandbox,
+      const fetch = stubMinimaxOkFetch();
+      const sandbox = {
+        root: sandboxRoot,
+        bridge: createHostSandboxFsBridge(sandboxRoot),
+        stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+      };
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+        sandbox,
+      });
+
+      const res = await tool.execute("t1", { path: "file_upload" });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(res.details).toMatchObject({ rewrittenFrom: "file_upload" });
+
+      await fs.writeFile(
+        path.join(sandboxRoot, "file_upload"),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+      const direct = await tool.execute("t2", { path: "file_upload" });
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(direct.details).not.toHaveProperty("rewrittenFrom");
     });
-
-    const res = await tool.execute("t1", { path: "file_upload" });
-
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(res.details).toMatchObject({ rewrittenFrom: "file_upload" });
-
-    await writePng(path.join(sandboxRoot, "file_upload"));
-    const direct = await tool.execute("t2", { path: "file_upload" });
-
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(direct.details).not.toHaveProperty("rewrittenFrom");
   });
 });
 
-it.each([
-  {
-    dataUrl: "data:text/plain;base64,SGVsbG8=",
-    maxBytes: undefined,
-    error: /Unsupported data URL type/i,
-  },
-  { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
-])(
-  "image tool rejects invalid data URLs before decoding: $error",
-  ({ dataUrl, maxBytes, error }) => {
+describe("image tool data URL support", () => {
+  it.each([
+    {
+      dataUrl: "data:text/plain;base64,SGVsbG8=",
+      maxBytes: undefined,
+      error: /Unsupported data URL type/i,
+    },
+    { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
+  ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
     const bufferFromSpy = vi.spyOn(Buffer, "from");
     try {
       expect(() => testing.decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
@@ -1279,18 +1583,22 @@ it.each([
     } finally {
       bufferFromSpy.mockRestore();
     }
-  },
-);
+  });
+});
 
 describe("image tool MiniMax VLM routing", () => {
+  const priorFetch = global.fetch;
   let state: OpenClawTestState;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "minimax-vlm", applyEnv: false });
-    installImageUnderstandingProviderDeps([minimaxProvider]);
+    installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
   afterEach(async () => {
+    global.fetch = priorFetch;
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
     await state.cleanup();
   });
 
@@ -1312,26 +1620,40 @@ describe("image tool MiniMax VLM routing", () => {
       prompt: "Compare these images.",
       maxImages: "2",
       maxBytesMb: "1",
-      path: inlinePng,
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       paths: [
-        inlinePng,
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         `data:image/png;base64,${secondPngB64}`,
         `data:image/png;base64,${secondPngB64}`,
       ],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(deduped.details).toMatchObject({ images: [expect.any(Object), expect.any(Object)] });
+    const dedupedDetails = deduped.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(dedupedDetails?.images).toHaveLength(2);
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
-      path: inlinePng,
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       paths: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
       maxImages: 1,
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(tooMany.details).toMatchObject({ error: "too_many_images", count: 2, max: 1 });
+    const tooManyDetails = tooMany.details as
+      | {
+          error?: string;
+          count?: number;
+          max?: number;
+        }
+      | undefined;
+    expect(tooManyDetails?.error).toBe("too_many_images");
+    expect(tooManyDetails?.count).toBe(2);
+    expect(tooManyDetails?.max).toBe(1);
   });
 
   it("rejects invalid image cap values before loading images", async () => {
@@ -1340,7 +1662,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t1", {
         prompt: "Compare these images.",
-        path: inlinePng,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         maxImages: 1.5,
       }),
     ).rejects.toThrow("maxImages must be a positive integer");
@@ -1348,7 +1670,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t2", {
         prompt: "Compare these images.",
-        path: inlinePng,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         maxBytesMb: 0,
       }),
     ).rejects.toThrow("maxBytesMb must be greater than 0");
@@ -1377,7 +1699,10 @@ describe("image tool MiniMax VLM routing", () => {
     // Embedded tools inherit this registry scope before provider error classification.
     await expect(
       withPluginRuntimeGenerationScope(generation.preparedModelRuntime, () =>
-        tool.execute("t1", imageRequest),
+        tool.execute("t1", {
+          prompt: "Describe the image.",
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
       ),
     ).rejects.toThrow(/MiniMax VLM API error/i);
     expect(classifyFailoverReason).toHaveBeenCalledWith(
@@ -1390,80 +1715,130 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
-  function createAssistantMessage(overrides: Partial<AssistantMessage>) {
-    return makeAssistantMessageFixture({
+  function createAssistantMessage(
+    overrides: Partial<{
+      api: string;
+      provider: string;
+      model: string;
+      stopReason: string;
+      errorMessage: string;
+      content: unknown[];
+    }>,
+  ) {
+    return {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
       model: "gpt-5.4-mini",
       stopReason: "stop",
-      errorMessage: undefined,
-      content: [],
+      timestamp: Date.now(),
+      usage: makeZeroUsageSnapshot(),
+      content: [] as unknown[],
       ...overrides,
-    });
+    };
   }
 
-  it("surfaces provider errors from image-model responses", () => {
-    expect(() =>
-      testing.coerceImageAssistantText({
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        message: createAssistantMessage({ stopReason: "error", errorMessage: "boom" }),
-      }),
-    ).toThrow(/boom/i);
-  });
-
-  it("returns trimmed text from image-model responses", () => {
-    expect(
-      testing.coerceImageAssistantText({
+  it.each([
+    {
+      name: "surfaces provider errors from image-model responses",
+      message: createAssistantMessage({
+        stopReason: "error",
+        errorMessage: "boom",
+      }) as never,
+      expectedError: /boom/i,
+      expectedText: undefined,
+    },
+    {
+      name: "returns trimmed text from image-model responses",
+      message: createAssistantMessage({
+        api: "anthropic-messages",
         provider: "anthropic",
         model: "claude-opus-4-6",
-        message: createAssistantMessage({
-          api: "anthropic-messages",
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          content: [{ type: "text", text: "  hello  " }],
-        }),
-      }),
-    ).toBe("hello");
+        content: [{ type: "text", text: "  hello  " }],
+      }) as never,
+      expectedError: undefined,
+      expectedText: "hello",
+    },
+  ])("$name", ({ message, expectedError, expectedText }) => {
+    const coerce = () =>
+      testing.coerceImageAssistantText({
+        provider: expectedError ? "openai" : "anthropic",
+        model: expectedError ? "gpt-5.4-mini" : "claude-opus-4-6",
+        message,
+      });
+    if (expectedError) {
+      expect(coerce).toThrow(expectedError);
+    } else {
+      expect(coerce()).toBe(expectedText);
+    }
   });
 
-  it.each<[string, unknown, boolean, boolean, number]>([
-    ["reasoning_content", "reasoning_content", true, true, 0],
-    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, true, 0],
-    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, true, 0],
-    [
-      "oversized Responses JSON",
-      JSON.stringify({
+  it.each<{
+    name: string;
+    signature: unknown;
+    expected: boolean;
+    thinking?: string;
+    precedingBlocks?: number;
+    rejectText?: boolean;
+  }>([
+    {
+      name: "reasoning_content",
+      signature: "reasoning_content",
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "Responses JSON",
+      signature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "Responses object",
+      signature: { id: "rs_456", type: "reasoning.encrypted" },
+      expected: true,
+      rejectText: true,
+    },
+    {
+      name: "oversized Responses JSON",
+      signature: JSON.stringify({
         id: "rs_123",
         summary: [{ text: "x".repeat(2_100) }],
         type: "reasoning",
       }),
-      true,
-      false,
-      0,
-    ],
-    ["signature after bounded block scan", "reasoning_content", false, false, 50],
+      expected: true,
+    },
+    {
+      name: "signature after bounded block scan",
+      signature: "reasoning_content",
+      precedingBlocks: 50,
+      expected: false,
+    },
   ])(
-    "detects image reasoning-only responses: %s",
-    (_name, signature, expected, rejectText, precedingBlocks) => {
+    "detects image reasoning-only responses: $name",
+    ({
+      signature,
+      expected,
+      thinking = "  <think>private</think> maybe a cat  ",
+      precedingBlocks = 0,
+      rejectText,
+    }) => {
       const message = createAssistantMessage({
         content: [
           ...Array.from({ length: precedingBlocks }, () => ({
             type: "thinking",
             thinking: "untagged",
           })),
-          {
-            type: "thinking",
-            thinking: "  <think>private</think> maybe a cat  ",
-            thinkingSignature: signature,
-          },
+          { type: "thinking", thinking, thinkingSignature: signature },
         ],
-      } as never);
-      expect(testing.hasImageReasoningOnlyResponse(message)).toBe(expected);
+      });
+      expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(expected);
       if (rejectText) {
         expect(() =>
           testing.coerceImageAssistantText({
             provider: "openai",
             model: "gpt-5.4-mini",
-            message,
+            message: message as never,
           }),
         ).toThrow(/returned no text/i);
       }
@@ -1472,107 +1847,152 @@ describe("image tool response validation", () => {
 });
 
 describe("image compression policy", () => {
-  const cfgWithImageModelMetadata = makeConfig(
-    { imageQuality: "high" },
-    {
-      anthropic: modelProvider(
-        "https://api.anthropic.com",
-        [makeModelDefinition("claude-opus-4-6")],
-        {
-          api: "anthropic-messages",
-        },
-      ),
-      openai: modelProvider(
-        "https://api.openai.com/v1",
-        [
-          {
-            ...makeModelDefinition("gpt-5.5"),
-            mediaInput: { image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" } },
-          },
-        ],
-        { api: "openai-responses" },
-      ),
+  const cfgWithImageModelMetadata = {
+    agents: {
+      defaults: {
+        imageQuality: "high",
+      },
     },
-  );
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+              },
+            },
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+              },
+            },
+          ],
+        },
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
 
   beforeEach(() => {
-    installImageUnderstandingProviderDeps([]);
+    installImageUnderstandingProviderStubs();
   });
 
-  it("keeps image policy pinned to the prepared generation: static catalog", async () => {
-    const state = await createOpenClawTestState({ label: "image-model-generation" });
-    try {
-      const provider = "prepared-image-provider";
-      const model = "prepared-image-model";
-      const cfg = {} satisfies OpenClawConfig;
-      const generation = (
-        label: string,
-        staticImagePolicy: Parameters<typeof createModelGenerationFixture>[0]["staticImagePolicy"],
-        maxSidePx: number,
-      ) =>
-        createModelGenerationFixture({
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
+  });
+
+  it.each([{ label: "static catalog", runtimeAugment: false, staticMaxSidePx: undefined }])(
+    "keeps image policy pinned to the prepared generation: $label",
+    async ({ runtimeAugment, staticMaxSidePx }) => {
+      const state = await createOpenClawTestState({ label: "image-model-generation" });
+      try {
+        const provider = "prepared-image-provider";
+        const model = "prepared-image-model";
+        const cfg = {} satisfies OpenClawConfig;
+        const generationA = createModelGenerationFixture({
           agentDir: state.agentDir("prepared"),
           workspaceDir: state.workspaceDir,
           config: cfg,
-          label,
+          label: "image-a",
           provider,
           requestProvider: provider,
           modelId: model,
-          runtimeAugment: false,
-          staticImagePolicy,
-          runtimeImagePolicy: { maxSidePx },
-        });
-      const generationA = generation(
-        "image-a",
-        {
-          maxBytes: 1_000_000,
-          preferredSidePx: 1_280,
-          tokenMode: "detail",
-        },
-        1_440,
-      );
-      const generationB = generation(
-        "image-b",
-        {
-          maxBytes: 2_000_000,
-          preferredSidePx: 2_560,
-          tokenMode: "provider",
-        },
-        2_880,
-      );
-      installImageUnderstandingProviderDeps([], {
-        useDefaultResolveModelAsync: true,
-      });
-      publishCurrentModelGeneration(generationB);
-
-      // Compression deliberately omits agentDir: real resolution uses the default
-      // agent, not the distinct "prepared" agent stored in the snapshot.
-      await expect(
-        testing.resolveImageCompressionPolicy({
-          cfg,
-          imageModelConfig: { primary: `${provider}/${model}` },
-          imageCount: 1,
-          preparedModelRuntime: generationA.preparedModelRuntime,
-          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
-        }),
-      ).resolves.toEqual({
-        imageCount: 1,
-        models: [
-          {
-            maxSidePx: 1_440,
+          runtimeAugment,
+          staticImagePolicy: {
+            ...(staticMaxSidePx === undefined ? {} : { maxSidePx: staticMaxSidePx }),
             maxBytes: 1_000_000,
             preferredSidePx: 1_280,
             tokenMode: "detail",
           },
-        ],
-      });
-      expect(generationA.resolveDynamicModel).toHaveBeenCalledOnce();
-      expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-    } finally {
-      resetModelGenerationFixtureState();
-      await state.cleanup();
-    }
-  });
+          runtimeImagePolicy: { maxSidePx: 1_440 },
+        });
+        const generationB = createModelGenerationFixture({
+          agentDir: state.agentDir("prepared"),
+          workspaceDir: state.workspaceDir,
+          config: cfg,
+          label: "image-b",
+          provider,
+          requestProvider: provider,
+          modelId: model,
+          runtimeAugment,
+          staticImagePolicy: {
+            maxBytes: 2_000_000,
+            preferredSidePx: 2_560,
+            tokenMode: "provider",
+          },
+          runtimeImagePolicy: { maxSidePx: 2_880 },
+        });
+        installImageUnderstandingProviderDeps([], {
+          useDefaultResolveModelAsync: true,
+        });
+        publishCurrentModelGeneration(generationB);
+
+        // Compression deliberately omits agentDir: real resolution uses the default
+        // agent, not the distinct "prepared" agent stored in the snapshot.
+        await expect(
+          testing.resolveImageCompressionPolicy({
+            cfg,
+            imageModelConfig: { primary: `${provider}/${model}` },
+            imageCount: 1,
+            preparedModelRuntime: generationA.preparedModelRuntime,
+            workspaceDir: generationA.preparedModelRuntime.workspaceDir,
+          }),
+        ).resolves.toEqual({
+          imageCount: 1,
+          models: [
+            {
+              maxSidePx: 1_440,
+              maxBytes: 1_000_000,
+              preferredSidePx: 1_280,
+              tokenMode: "detail",
+            },
+          ],
+        });
+        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(
+          staticMaxSidePx === undefined ? 1 : 0,
+        );
+        expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+      } finally {
+        resetModelGenerationFixtureState();
+        await state.cleanup();
+      }
+    },
+  );
 
   it.each([
     { route: "override", supplied: "captured", expected: "captured", maxSidePx: 96 },
@@ -1584,30 +2004,34 @@ describe("image compression policy", () => {
       const state = await createOpenClawTestState({ label: "image-captured-planning" });
       try {
         const provider = "image-planning";
-        const cfg = makeConfig(
-          {
-            imageQuality: "high",
-            imageModel: {
-              primary: `${provider}/${route === "fallback" ? "unavailable" : "entry"}`,
-              ...(route === "fallback" ? { fallbacks: [`${provider}/entry`] } : {}),
+        const cfg = {
+          agents: {
+            defaults: {
+              imageQuality: "high",
+              imageModel: {
+                primary: `${provider}/${route === "fallback" ? "unavailable" : "entry"}`,
+                ...(route === "fallback" ? { fallbacks: [`${provider}/entry`] } : {}),
+              },
             },
           },
-          {
-            [provider]: modelProvider(
-              "https://image-planning.example.test/v1",
-              [
-                { id: "captured", side: 96 },
-                { id: "ambient", side: 192 },
-                { id: "unavailable", side: 256 },
-              ].map(({ id, side }) =>
-                Object.assign(makeModelDefinition(id), {
-                  mediaInput: { image: { maxSidePx: side, preferredSidePx: side } },
-                }),
-              ),
-              { api: "openai-completions" },
-            ),
+          models: {
+            providers: {
+              [provider]: {
+                api: "openai-completions",
+                baseUrl: "https://image-planning.example.test/v1",
+                models: [
+                  { id: "captured", side: 96 },
+                  { id: "ambient", side: 192 },
+                  { id: "unavailable", side: 256 },
+                ].map(({ id, side }) =>
+                  Object.assign(makeModelDefinition(id, ["text", "image"]), {
+                    mediaInput: { image: { maxSidePx: side, preferredSidePx: side } },
+                  }),
+                ),
+              },
+            },
           },
-        );
+        } satisfies OpenClawConfig;
         const generation = (modelId: string) => {
           const fixture = createModelGenerationFixture({
             agentDir: state.agentDir("image"),
@@ -1667,7 +2091,12 @@ describe("image compression policy", () => {
           config: cfg,
           agentDir: state.agentDir("image"),
           workspaceDir: state.workspaceDir,
-          preparedModelRuntime: supplied === "none" ? undefined : captured.preparedModelRuntime,
+          ...(supplied === "none"
+            ? {}
+            : {
+                preparedModelRuntime: (supplied === "captured" ? captured : ambient)
+                  .preparedModelRuntime,
+              }),
         });
         const source = createLargeColorBlockPng(256);
         const result = await withPluginRuntimeGenerationScope(ambient.preparedModelRuntime, () =>

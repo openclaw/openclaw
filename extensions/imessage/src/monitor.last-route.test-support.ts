@@ -1,41 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { IMessagePayload } from "./monitor/types.js";
 
 export const DEFAULT_SENDER = "+15550001111";
-const runInboundActual = runChannelInboundEvent;
-
-export function runInboundWithDispatch(
-  params: Parameters<typeof runChannelInboundEvent>[0],
-  dispatch: typeof dispatchReplyWithBufferedBlockDispatcher,
-  inspectDurable?: (durable: unknown) => void,
-) {
-  return runInboundActual({
-    ...params,
-    adapter: {
-      ...params.adapter,
-      resolveTurn: async (input, eventClass, preflight) => {
-        const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
-        if (!("route" in turn) || !("delivery" in turn)) {
-          throw new Error("expected assembled iMessage delivery turn");
-        }
-        inspectDurable?.(turn.delivery.durable);
-        const { route, ...resolvedTurn } = turn;
-        return {
-          ...resolvedTurn,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          storePath: resolveStorePath(turn.cfg.session?.store, { agentId: route.agentId }),
-          recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher: dispatch,
-        };
-      },
-    },
-  });
-}
 
 type ChatDbMessage = Required<
   Pick<IMessagePayload, "id" | "guid" | "sender" | "text" | "created_at">

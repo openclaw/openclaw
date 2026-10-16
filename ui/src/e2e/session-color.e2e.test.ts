@@ -26,7 +26,11 @@ const expectAttribute = (locator: Locator, name: string, value: string) =>
   expect.poll(() => locator.getAttribute(name)).toBe(value);
 const expectFocused = (locator: Locator) =>
   expect
-    .poll(() => locator.evaluateAll((elements) => elements.includes(document.activeElement!)))
+    .poll(() =>
+      locator.evaluateAll((elements) =>
+        elements.some((element) => element === document.activeElement),
+      ),
+    )
     .toBe(true);
 async function press(page: Page, ...keys: string[]) {
   for (const key of keys) {

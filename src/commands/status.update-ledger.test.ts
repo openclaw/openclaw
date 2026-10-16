@@ -92,7 +92,10 @@ const observed = (identity: { version: string; buildId?: string }, versionMatch:
   runningBuildId: identity.buildId,
   versionMatch,
 });
-const recovered = (identity: typeof previous): UpdateRunRecord["verification"] => ({
+const recovered = (identity: {
+  version: string;
+  buildId: string;
+}): UpdateRunRecord["verification"] => ({
   ...observed(identity, true),
   recovery: {
     serviceRestartSafe: true,
@@ -101,48 +104,170 @@ const recovered = (identity: typeof previous): UpdateRunRecord["verification"] =
     service: "healthy" as const,
   },
 });
-const intendedBuildUnverified = "the intended build for 2026.9.7 is unverified";
-const targetUnknown = "the update target is unknown";
-const retainedCandidate = {
-  before: oldPrevious,
-  after: candidate,
-  verification: { ...observed(oldPrevious, false), rollbackOutcome: failedRollback },
-};
-const rolledBack = { before: previous, after: previous, server: previous };
-type StatusCase = {
-  healthy?: boolean;
-  target?: UpdateRunRecord["target"];
-  before?: UpdateRunRecord["before"];
-  after?: UpdateRunRecord["after"];
-  verification?: UpdateRunRecord["verification"];
-  server?: { version: string | null; buildId?: string };
-};
 
 describe("status update ledger evidence", () => {
-  it.each<{ name: string; input: StatusCase; expected?: string | true }>`
-    name                                                                 | input                                                                                                                                                                | expected
-    ${"old healthy version after a failed swap"}                         | ${{ after: { version: "2026.9.6" }, verification: observed({ version: "2026.9.6" }, false), server: { version: "2026.9.6" } }}                                       | ${"Gateway is still serving 2026.9.6; the update to 2026.9.7 did not complete — run `openclaw update`."}
-    ${"unknown serving version"}                                         | ${{ server: { version: null } }}                                                                                                                                     | ${"Gateway serving version is unknown; the update to 2026.9.7 is unverified — run `openclaw update`."}
-    ${"after identity without an explicit target"}                       | ${{ target: {}, after: target, verification: observed({ version: "2026.9.6" }, false) }}                                                                             | ${true}
-    ${"rejected after identity without an independent target"}           | ${{ target: {}, after: { version: "2026.9.6" }, verification: observed({ version: "2026.9.6" }, false), server: { version: "2026.9.6" } }}                           | ${"Gateway is serving 2026.9.6; the update target is unknown — run `openclaw update`."}
-    ${"after identity with a different build from the rejected process"} | ${{ target: {}, after: candidate, verification: observed(previous, false), server: candidate }}                                                                      | ${true}
-    ${"matching recovery observation without a selected target"}         | ${{ target: {}, verification: observed(candidate, true), server: candidate }}                                                                                        | ${"Gateway is serving 2026.9.7; the update target is unknown — run `openclaw update`."}
-    ${"rejected build despite an explicit matching target version"}      | ${{ after: previous, verification: observed(previous, false), server: previous }}                                                                                    | ${"Gateway is still serving 2026.9.7 (build previous); the intended build for 2026.9.7 is unverified — run `openclaw update`."}
-    ${"same-version rollback with successful recovery verification"}     | ${{ ...rolledBack, verification: recovered(previous) }}                                                                                                              | ${intendedBuildUnverified}
-    ${"same-version rollback with a file restoration receipt"}           | ${{ ...rolledBack, verification: { ...observed(previous, true), rollbackOutcome: { status: "succeeded", reason: "Previous package and configuration restored" } } }} | ${intendedBuildUnverified}
-    ${"distinct target version after package rollback"}                  | ${{ before: oldPrevious, after: oldPrevious, verification: recovered(oldPrevious), server: candidate }}                                                              | ${true}
-    ${"retained candidate build mismatch after failed rollback"}         | ${{ ...retainedCandidate, server: { version: "2026.9.7", buildId: "other" } }}                                                                                       | ${"Gateway is still serving 2026.9.7 (build other); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`."}
-    ${"matching retained candidate build after failed rollback"}         | ${{ ...retainedCandidate, server: candidate }}                                                                                                                       | ${true}
-    ${"rejected candidate identity after failed rollback"}               | ${{ before: oldPrevious, after: rejected, verification: { ...observed(rejected, false), rollbackOutcome: failedRollback }, server: rejected }}                       | ${intendedBuildUnverified}
-    ${"rollback observation without an independent target"}              | ${{ target: {}, ...rolledBack, verification: recovered(previous) }}                                                                                                  | ${targetUnknown}
-    ${"matching version and build"}                                      | ${{ after: candidate, server: candidate }}                                                                                                                           | ${true}
-    ${"matching version with no exposed serving build"}                  | ${{ after: candidate }}                                                                                                                                              | ${true}
-    ${"unhealthy target version"}                                        | ${{ healthy: false }}                                                                                                                                                | ${undefined}
-  `(
+  it.each<{
+    name: string;
+    healthy?: boolean | null;
+    target?: UpdateRunRecord["target"];
+    before?: UpdateRunRecord["before"];
+    after?: UpdateRunRecord["after"];
+    verification?: UpdateRunRecord["verification"];
+    server?: { version: string | null; buildId?: string };
+    historical?: boolean;
+    detail?: string;
+  }>([
+    {
+      name: "old healthy version after a failed swap",
+      after: { version: "2026.9.6" },
+      verification: observed({ version: "2026.9.6" }, false),
+      server: { version: "2026.9.6" },
+      detail:
+        "Gateway is still serving 2026.9.6; the update to 2026.9.7 did not complete — run `openclaw update`.",
+    },
+    {
+      name: "unknown serving version",
+      server: { version: null },
+      detail:
+        "Gateway serving version is unknown; the update to 2026.9.7 is unverified — run `openclaw update`.",
+    },
+    {
+      name: "after identity without an explicit target",
+      target: {},
+      after: target,
+      verification: observed({ version: "2026.9.6" }, false),
+      historical: true,
+    },
+    {
+      name: "rejected after identity without an independent target",
+      target: {},
+      after: { version: "2026.9.6" },
+      verification: observed({ version: "2026.9.6" }, false),
+      server: { version: "2026.9.6" },
+      detail: "Gateway is serving 2026.9.6; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "after identity with a different build from the rejected process",
+      target: {},
+      after: candidate,
+      verification: observed(previous, false),
+      server: candidate,
+      historical: true,
+    },
+    {
+      name: "matching recovery observation without a selected target",
+      target: {},
+      verification: observed(candidate, true),
+      server: candidate,
+      detail: "Gateway is serving 2026.9.7; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "rejected build despite an explicit matching target version",
+      after: previous,
+      verification: observed(previous, false),
+      server: previous,
+      detail:
+        "Gateway is still serving 2026.9.7 (build previous); the intended build for 2026.9.7 is unverified — run `openclaw update`.",
+    },
+    {
+      name: "same-version rollback with successful recovery verification",
+      before: previous,
+      after: previous,
+      verification: recovered(previous),
+      server: previous,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "same-version rollback with a file restoration receipt",
+      before: previous,
+      after: previous,
+      verification: {
+        ...observed(previous, true),
+        rollbackOutcome: {
+          status: "succeeded",
+          reason: "Previous package and configuration restored",
+        },
+      },
+      server: previous,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "distinct target version after package rollback",
+      before: oldPrevious,
+      after: oldPrevious,
+      verification: recovered(oldPrevious),
+      server: candidate,
+      historical: true,
+    },
+    {
+      name: "retained candidate build mismatch after failed rollback",
+      before: oldPrevious,
+      after: candidate,
+      verification: {
+        ...observed(oldPrevious, false),
+        rollbackOutcome: failedRollback,
+      },
+      server: { version: "2026.9.7", buildId: "other" },
+      detail:
+        "Gateway is still serving 2026.9.7 (build other); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`.",
+    },
+    {
+      name: "matching retained candidate build after failed rollback",
+      before: oldPrevious,
+      after: candidate,
+      verification: {
+        ...observed(oldPrevious, false),
+        rollbackOutcome: failedRollback,
+      },
+      server: candidate,
+      historical: true,
+    },
+    {
+      name: "rejected candidate identity after failed rollback",
+      before: oldPrevious,
+      after: rejected,
+      verification: {
+        ...observed(rejected, false),
+        rollbackOutcome: failedRollback,
+      },
+      server: rejected,
+      detail: "the intended build for 2026.9.7 is unverified",
+    },
+    {
+      name: "rollback observation without an independent target",
+      target: {},
+      before: previous,
+      after: previous,
+      verification: recovered(previous),
+      server: previous,
+      detail: "the update target is unknown",
+    },
+    {
+      name: "matching version and build",
+      after: candidate,
+      server: candidate,
+      historical: true,
+    },
+    {
+      name: "matching version with no exposed serving build",
+      after: candidate,
+      historical: true,
+    },
+    {
+      name: "unhealthy target version",
+      healthy: false,
+    },
+  ])(
     "preserves the update verdict for $name",
     async ({
-      input: { healthy = true, target: runTarget, before, after, verification, server = target },
-      expected,
+      healthy = true,
+      target: runTarget,
+      before,
+      after,
+      verification,
+      server = target,
+      historical = false,
+      detail,
     }) => {
       const run = recordRun({
         status: "failed",
@@ -167,12 +292,12 @@ describe("status update ledger evidence", () => {
       });
       const saved = getUpdateRun(run.runId);
       const rows = await buildStatusUpdateRows(null, {
-        localGatewayHealthy: healthy,
+        localGatewayHealthy: healthy ?? undefined,
         gatewayServer: server,
       });
       expect(rows).toHaveLength(1);
       expect(rows[0]?.Item).toBe("Update run");
-      if (expected === true) {
+      if (historical) {
         expect(rows[0]?.Value).toBe(
           "Last update run failed (post-update-failed) — Gateway is serving 2026.9.7; run `openclaw update` to clear the record.",
         );
@@ -180,8 +305,8 @@ describe("status update ledger evidence", () => {
         expect(rows[0]?.Value).toContain(
           "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
         );
-        if (expected) {
-          expect(rows[0]?.Value).toContain(expected);
+        if (detail) {
+          expect(rows[0]?.Value).toContain(detail);
         }
       }
       expect(getUpdateRun(run.runId)).toEqual(saved);
@@ -193,36 +318,105 @@ describe("status update ledger evidence", () => {
     sha: "37ea9f110bad",
     buildId: "2026.9.4-37ea9f110bad",
   };
-  const newerServer = { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" };
-  const unknownTargetDetail =
-    "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.";
-  const unknownBuildDetail =
-    "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.";
-  it.each<{ name: string; input: StatusCase; history?: string; detail?: string }>`
-    name                                                                       | input                                                                                                                                     | history                                                                                                                                                                       | detail
-    ${"a newer Gateway after recovery matched the old serving version"}        | ${{}}                                                                                                                                     | ${"Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4."}                                            | ${undefined}
-    ${"a rebuilt Gateway after recovery matched the old serving build"}        | ${{ server: { version: "2026.9.4", buildId: "2026.9.4-rebuilt" } }}                                                                       | ${"Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.9.4 (build 2026.9.4-rebuilt); recorded serving identity was build 2026.9.4-37ea9f110bad."} | ${undefined}
-    ${"a Gateway already behind the installed package when the update failed"} | ${{ before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" }, verification: { versionMatch: false }, server: preflightStart }} | ${undefined}                                                                                                                                                                  | ${"Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`."}
-    ${"the Gateway still serving the starting build"}                          | ${{ server: preflightStart }}                                                                                                             | ${undefined}                                                                                                                                                                  | ${"Gateway is serving 2026.9.4; the update target is unknown — run `openclaw update`."}
-    ${"an unhealthy Gateway on a newer version"}                               | ${{ healthy: false }}                                                                                                                     | ${undefined}                                                                                                                                                                  | ${undefined}
-    ${"no recorded serving identity"}                                          | ${{ verification: { runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined } }}                                    | ${undefined}                                                                                                                                                                  | ${unknownTargetDetail}
-    ${"a recorded stopped Gateway"}                                            | ${{ verification: { serviceRunning: false } }}                                                                                            | ${undefined}                                                                                                                                                                  | ${unknownTargetDetail}
-    ${"an explicit SHA whose version was never read"}                          | ${{ target: { kind: "git", channel: "dev", sha: "fcdb9321abcd" } }}                                                                       | ${undefined}                                                                                                                                                                  | ${unknownTargetDetail}
-    ${"an explicit tag"}                                                       | ${{ target: { kind: "git", tag: "v2026.9.7" } }}                                                                                          | ${undefined}                                                                                                                                                                  | ${unknownTargetDetail}
-    ${"a recorded post-update SHA without a target version"}                   | ${{ after: { sha: "fcdb9321abcd" } }}                                                                                                     | ${undefined}                                                                                                                                                                  | ${unknownTargetDetail}
-    ${"a recorded post-update build without a target version"}                 | ${{ after: { buildId: "candidate" } }}                                                                                                    | ${undefined}                                                                                                                                                                  | ${unknownBuildDetail}
-    ${"a targetless rollback with no post-update identity"}                    | ${{ verification: { rollbackOutcome: failedRollback } }}                                                                                  | ${undefined}                                                                                                                                                                  | ${unknownBuildDetail}
-  `(
+  it.each<{
+    name: string;
+    healthy?: boolean;
+    runTarget?: UpdateRunRecord["target"];
+    before?: UpdateRunRecord["before"];
+    after?: UpdateRunRecord["after"];
+    verification?: UpdateRunRecord["verification"];
+    server: { version: string; buildId: string };
+    history?: string;
+    detail?: string;
+  }>([
+    {
+      name: "a newer Gateway after recovery matched the old serving version",
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      history:
+        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4.",
+    },
+    {
+      name: "a rebuilt Gateway after recovery matched the old serving build",
+      server: { version: "2026.9.4", buildId: "2026.9.4-rebuilt" },
+      history:
+        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.9.4 (build 2026.9.4-rebuilt); recorded serving identity was build 2026.9.4-37ea9f110bad.",
+    },
+    {
+      name: "a Gateway already behind the installed package when the update failed",
+      before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      verification: { versionMatch: false },
+      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      detail:
+        "Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "the Gateway still serving the starting build",
+      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
+      detail: "Gateway is serving 2026.9.4; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "an unhealthy Gateway on a newer version",
+      healthy: false,
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+    },
+    {
+      name: "no recorded serving identity",
+      verification: {
+        runningVersion: undefined,
+        runningBuildId: undefined,
+        versionMatch: undefined,
+      },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded stopped Gateway",
+      verification: { serviceRunning: false },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      // Git admission records the selected SHA before refusing its unreadable metadata.
+      name: "an explicit SHA whose version was never read",
+      runTarget: { kind: "git", channel: "dev", sha: "fcdb9321abcd" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "an explicit tag",
+      runTarget: { kind: "git", tag: "v2026.9.7" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded post-update SHA without a target version",
+      after: { sha: "fcdb9321abcd" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail: "Gateway is serving 2026.10.1; the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a recorded post-update build without a target version",
+      after: { buildId: "candidate" },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail:
+        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+    },
+    {
+      name: "a targetless rollback with no post-update identity",
+      verification: { rollbackOutcome: failedRollback },
+      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
+      detail:
+        "Gateway is serving 2026.10.1 (build 2026.10.1-3745fd3c29a4); the update target is unknown — run `openclaw update`.",
+    },
+  ])(
     "reports a preflight failure with $name",
     async ({
-      input: {
-        healthy = true,
-        target: runTarget = { kind: "git", channel: "dev" },
-        before = preflightStart,
-        after,
-        verification,
-        server = newerServer,
-      },
+      healthy = true,
+      runTarget = { kind: "git", channel: "dev" },
+      before = preflightStart,
+      after,
+      verification,
+      server,
       history,
       detail,
     }) => {
@@ -417,16 +611,86 @@ describe("update formatting", () => {
     expected?: string;
     contains?: string;
     excludes?: string;
-  }>`
-    name                                             | update                                                                                                                                                                                                                                                | expected                                                                                   | contains                                            | excludes
-    ${"stale built commit"}                          | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", builtSha: "def987654321" } }}                                                                                                                                                        | ${undefined}                                                                               | ${"stale build (running def98765, run pnpm build)"} | ${undefined}
-    ${"current built commit"}                        | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", builtSha: "abc123456789" } }}                                                                                                                                                        | ${undefined}                                                                               | ${undefined}                                        | ${"stale build"}
-    ${"git status with registry summary"}            | ${{ installKind: "git", git: { ...cleanGit, sha: "abc123456789", dirty: true, behind: 2 }, registry: { latestVersion: VERSION }, deps: { manager: "pnpm", status: "ok", lockfilePath: "pnpm-lock.yaml", markerPath: "node_modules/.modules.yaml" } }} | ${`Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`} | ${undefined}                                        | ${undefined}
-    ${"beta registry tag"}                           | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: VERSION, tag: "beta" } }}                                                                                                                                               | ${`Update: npm · up to date · npm beta ${VERSION}`}                                        | ${undefined}                                        | ${undefined}
-    ${"installed version ahead of extended-stable"}  | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: "1.0.0", tag: "extended-stable" } }}                                                                                                                                    | ${"Update: npm · ahead of extended-stable (1.0.0)"}                                        | ${undefined}                                        | ${undefined}
-    ${"structured extended-stable resolver failure"} | ${{ installKind: "git", packageManager: "pnpm", registry: { latestVersion: null, tag: "extended-stable", error: "unsupported_git_channel", reason: "unsupported_git_channel" } }}                                                                     | ${undefined}                                                                               | ${"extended-stable requires a package install"}     | ${undefined}
-    ${"package-manager registry error"}              | ${{ installKind: "package", packageManager: "npm", registry: { latestVersion: null, error: "offline" }, deps: { manager: "npm", status: "missing", lockfilePath: "package-lock.json", markerPath: "node_modules" } }}                                 | ${"Update: npm · npm latest unknown · deps missing"}                                       | ${undefined}                                        | ${undefined}
-  `("renders $name", ({ update, expected, contains, excludes }) => {
+  }>([
+    {
+      name: "stale built commit",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", builtSha: "def987654321" },
+      },
+      contains: "stale build (running def98765, run pnpm build)",
+    },
+    {
+      name: "current built commit",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", builtSha: "abc123456789" },
+      },
+      excludes: "stale build",
+    },
+    {
+      name: "git status with registry summary",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", dirty: true, behind: 2 },
+        registry: { latestVersion: VERSION },
+        deps: {
+          manager: "pnpm",
+          status: "ok",
+          lockfilePath: "pnpm-lock.yaml",
+          markerPath: "node_modules/.modules.yaml",
+        },
+      },
+      expected: `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+    },
+    {
+      name: "beta registry tag",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: VERSION, tag: "beta" },
+      },
+      expected: `Update: npm · up to date · npm beta ${VERSION}`,
+    },
+    {
+      name: "installed version ahead of extended-stable",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "1.0.0", tag: "extended-stable" },
+      },
+      expected: "Update: npm · ahead of extended-stable (1.0.0)",
+    },
+    {
+      name: "structured extended-stable resolver failure",
+      update: {
+        installKind: "git",
+        packageManager: "pnpm",
+        registry: {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel",
+        },
+      },
+      contains: "extended-stable requires a package install",
+    },
+    {
+      name: "package-manager registry error",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: null, error: "offline" },
+        deps: {
+          manager: "npm",
+          status: "missing",
+          lockfilePath: "package-lock.json",
+          markerPath: "node_modules",
+        },
+      },
+      expected: "Update: npm · npm latest unknown · deps missing",
+    },
+  ])("renders $name", ({ update, expected, contains, excludes }) => {
     const line = formatUpdateOneLiner(buildUpdate(update));
     if (expected !== undefined) {
       expect(line).toBe(expected);

@@ -334,7 +334,8 @@ describe("sessions_send across prepared runtime reload", () => {
         { agentId: "target", env: process.env },
         { recentLimit: 10, agentIds: ["target"] },
       ).recent.find(({ sessionKey }) => sessionKey === "agent:target:main");
-      expect(target?.entry).toMatchObject({ status: "done", lastRunError: undefined });
+      expect(target?.entry.status).toBe("done");
+      expect(target?.entry.lastRunError).toBeUndefined();
       expect(provider.calls).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "dispatch", model: "model-a" }),

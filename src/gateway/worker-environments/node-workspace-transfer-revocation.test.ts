@@ -423,7 +423,7 @@ it.each([
     for (const [parent, prefix] of [
       [root, ".workspace.workspace-transfer-"],
       [path.join(workspaceDir, directory), ".fs-safe-"],
-    ]) {
+    ] as const) {
       expect((await fs.readdir(parent)).filter((name) => name.startsWith(prefix))).toEqual([]);
     }
     if (revoke) {

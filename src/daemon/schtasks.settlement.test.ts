@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it as baseIt, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   GatewayProtocolRequestError,
   retainGatewayResponsePayload,
@@ -34,219 +34,181 @@ import {
   schtasksResponses,
 } from "./test-helpers/schtasks-fixtures.js";
 
-type TaskFixture = Parameters<Parameters<typeof withPreparedGatewayTask>[0]>[0];
-const it = baseIt.extend<TaskFixture & { taskFixture: TaskFixture }>({
-  taskFixture: async ({ task: _task }, use) => withPreparedGatewayTask(use),
-  env: async ({ taskFixture }, use) => use(taskFixture.env),
-  stdout: async ({ taskFixture }, use) => use(taskFixture.stdout),
-});
-const taskAction = (...actions: string[]) =>
-  schtasksCalls.some(([action]) => actions.includes(action));
-const taskKilled = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
-const taskName = "OpenClaw Gateway";
-const taskList = (alive: boolean, pid = 4242) =>
-  alive ? `"node.exe","${pid}","Console","1","1 K"` : "No tasks";
-const stopReply = () => ({ ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" });
-const settledResult = (ended = false) => ({
-  outcome: "completed",
-  taskSettlement: {
-    status: "settled",
-    taskName,
-    lastRunResult: "0",
-    ended,
-  },
-});
-type NativeProbe = NonNullable<ReturnType<typeof spawnSync.getMockImplementation>>;
-function mockNativeProbes(probe: NativeProbe, processes: NativeProbe) {
-  spawnSync.mockImplementation((exe, args, options) =>
-    (args?.includes("-EncodedCommand") ? probe : processes)(exe, args, options),
-  );
-}
-function probeResult(facts: unknown) {
-  return spawnSyncResult(JSON.stringify(facts));
-}
-function mockRuntime(options: {
-  list: (pid: number) => string;
-  probe?: NativeProbe;
-  kill?: (pid: number) => void;
-  other?: NativeProbe;
-  lease?: () => ReturnType<typeof readGatewayOwnerLease>;
-}) {
-  if (options.lease) {
-    readGatewayOwnerLease.mockImplementation(options.lease);
-  }
-  mockNativeProbes(
-    options.probe ?? (() => scheduledTaskProbeResult()),
-    (exe, args, nativeOptions) => {
-      if (exe.endsWith("tasklist.exe")) {
-        return spawnSyncResult(options.list(Number(args?.[1]?.split(" ").at(-1))));
-      }
-      if (exe.endsWith("taskkill.exe") && options.kill) {
-        options.kill(Number(args?.[args.indexOf("/PID") + 1]));
-        return spawnSyncResult("");
-      }
-      return options.other?.(exe, args, nativeOptions) ?? spawnSyncResult("No tasks");
-    },
-  );
-}
-function onTaskAction(onAction: (action: string) => void) {
-  const push = schtasksCalls.push.bind(schtasksCalls);
-  vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
-    calls.forEach(([action]) => onAction(action));
-    return push(...calls);
-  });
-}
-function mockGracefulStop(onStop: () => void) {
-  callGatewayCli.mockImplementation(async (options) => {
-    options.assertDispatchCurrent();
-    onStop();
-    return stopReply();
-  });
-}
-function mockOwnedTask() {
-  mockWindowsTaskkillSuccess();
-  readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
-}
-function expectNoNativeMutation() {
-  expect(taskKilled()).toBe(false);
-  expect(taskAction("/End", "/Run")).toBe(false);
-}
-const taskXml = (contents: string) => ({ ...SUCCESS_RESPONSE, stdout: `<Task>${contents}</Task>` });
-const taskFailure = (stderr: string, code = 1) => ({ code, stdout: "", stderr });
-const queryCall = ["/Query", "/TN", taskName, "/XML"];
-const changeCall = (enabled: boolean) => [
-  "/Change",
-  "/TN",
-  taskName,
-  enabled ? "/ENABLE" : "/DISABLE",
-];
-
 describe("Scheduled Task shutdown and SQLite handle release", () => {
-  beforeEach(() => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  });
-  it("refuses restart without an inspectable Gateway identity", async ({ env, stdout }) => {
-    delete env.OPENCLAW_GATEWAY_PORT;
-    await fs.rm(resolveTaskScriptPath(env));
-    const onMutation = vi.fn();
+  it("refuses restart without an inspectable Gateway identity", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      delete env.OPENCLAW_GATEWAY_PORT;
+      await fs.rm(resolveTaskScriptPath(env));
+      const onMutation = vi.fn();
 
-    await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
-      "Gateway identity unavailable",
-    );
-    expect(onMutation).not.toHaveBeenCalled();
-    expect(callGatewayCli).not.toHaveBeenCalled();
-    expectNoNativeMutation();
-  });
-
-  it.for(["still alive", "unverified"])(
-    "refuses lease-read recovery for a captured process that is %s",
-    async (state, { env, stdout }) => {
-      let attempted = false;
-      let reads = 0;
-      readGatewayOwnerLease.mockImplementation(() => {
-        const unavailable = state === "unverified" ? ++reads > 1 : attempted || taskAction("/End");
-        if (unavailable) {
-          throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
-        }
-        return state === "unverified"
-          ? { ...GATEWAY_OWNER, state: "unknown", startedAt: null }
-          : GATEWAY_OWNER;
-      });
-      if (state === "unverified") {
-        mockWindowsTaskkillSuccess();
-      } else {
-        mockRuntime({
-          list: () => taskList(true),
-          other: (exe) => {
-            attempted ||= exe.endsWith("taskkill.exe");
-            return spawnSyncResult("");
-          },
-        });
-      }
-      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
-        state === "unverified" ? "disk I/O error" : "state writer",
+      await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "Gateway identity unavailable",
       );
-      expect(taskAction("/Run")).toBe(false);
-      if (state === "unverified") {
-        expect(taskAction("/End")).toBe(false);
-        expect(taskKilled()).toBe(false);
-      }
+      expect(onMutation).not.toHaveBeenCalled();
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
+    });
+  });
+
+  it.each(["still alive", "unverified"])(
+    "refuses lease-read recovery for a captured process that is %s",
+    async (state) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let attempted = false;
+        let reads = 0;
+        readGatewayOwnerLease.mockImplementation(() => {
+          const unavailable =
+            state === "unverified"
+              ? ++reads > 1
+              : attempted || schtasksCalls.some(([action]) => action === "/End");
+          if (unavailable) {
+            throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
+          }
+          return state === "unverified"
+            ? { ...GATEWAY_OWNER, state: "unknown", startedAt: null }
+            : GATEWAY_OWNER;
+        });
+        if (state === "unverified") {
+          mockWindowsTaskkillSuccess();
+        } else {
+          spawnSync.mockImplementation((exe, args) => {
+            if (args?.includes("-EncodedCommand")) {
+              return scheduledTaskProbeResult();
+            }
+            attempted ||= exe.endsWith("taskkill.exe");
+            return spawnSyncResult(
+              exe.endsWith("tasklist.exe") ? '"node.exe","4242","Console","1","1 K"' : "",
+            );
+          });
+        }
+        await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+          state === "unverified" ? "disk I/O error" : "state writer",
+        );
+        expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(false);
+        if (state === "unverified") {
+          expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
+          expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+        }
+      });
     },
   );
 
-  it("stops pre-existing children without adopting a replacement", async ({ env, stdout }) => {
-    const killed = new Set<number>();
-    readWindowsProcessStartTimeSync.mockImplementation((pid) => (pid === 5151 ? 200 : 100));
-    mockRuntime({
-      lease: () => ({ ...GATEWAY_OWNER, state: killed.has(4242) ? "dead" : "live" }),
-      probe: () => scheduledTaskProbeResult(killed.has(4242) ? 3 : 4),
-      kill: (pid) => {
-        killed.add(pid);
-      },
-      list: (pid) => taskList(!killed.has(pid), pid),
-      other: () => {
-        const children = [
-          { ProcessId: 5151, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
-          {
-            ProcessId: 4242,
-            CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${formatWindowsTaskSupervisorChildArgument(305419896)}`,
-          },
-          ...(killed.has(4242)
-            ? [{ ProcessId: 6262, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
-            : []),
-        ].filter(({ ProcessId }) => !killed.has(ProcessId));
-        return probeResult(children);
-      },
-    });
-    inspectPortUsageMock.mockImplementation(async () => ({
-      port: 18789,
-      status: killed.has(5151) ? "free" : "busy",
-      hints: [],
-      listeners: killed.has(5151)
-        ? []
-        : [{ pid: 5151, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
-    }));
+  it.each([true])(
+    "stops pre-existing children without adopting a replacement (published owner=%s)",
+    async (publishedOwner) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        const killed = new Set<number>();
+        readGatewayOwnerLease.mockImplementation(() =>
+          publishedOwner
+            ? { ...GATEWAY_OWNER, state: killed.has(4242) ? "dead" : "live" }
+            : undefined,
+        );
+        readWindowsProcessStartTimeSync.mockImplementation((pid) => (pid === 5151 ? 200 : 100));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            return scheduledTaskProbeResult(killed.has(4242) ? 3 : 4);
+          }
+          if (exe.endsWith("taskkill.exe")) {
+            killed.add(Number(args?.[args.indexOf("/PID") + 1]));
+            return spawnSyncResult("");
+          }
+          if (exe.endsWith("tasklist.exe")) {
+            const pid = Number(args?.[1]?.split(" ").at(-1));
+            return spawnSyncResult(
+              killed.has(pid) ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`,
+            );
+          }
+          const children = [
+            { ProcessId: 5151, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
+            {
+              ProcessId: 4242,
+              CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} ${formatWindowsTaskSupervisorChildArgument(305419896)}`,
+            },
+            ...(killed.has(4242)
+              ? [{ ProcessId: 6262, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
+              : []),
+          ].filter(({ ProcessId }) => !killed.has(ProcessId));
+          return spawnSyncResult(JSON.stringify(children));
+        });
+        inspectPortUsageMock.mockImplementation(async () => ({
+          port: 18789,
+          status: killed.has(5151) ? "free" : "busy",
+          hints: [],
+          listeners: killed.has(5151)
+            ? []
+            : [{ pid: 5151, command: "node.exe", commandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
+        }));
 
-    await stopScheduledTask({ env, stdout });
+        await stopScheduledTask({ env, stdout });
 
-    expect([...killed]).toEqual([4242, 5151]);
-    expect(killed.has(6262)).toBe(false);
-    expect(taskAction("/End", "/Run")).toBe(false);
-  });
+        expect([...killed]).toEqual([4242, 5151]);
+        expect(killed.has(6262)).toBe(false);
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
+      });
+    },
+  );
 
-  it("preserves a reused legacy PID before native task termination", async ({ env, stdout }) => {
-    mockLingeringGatewayListener(4242);
-    readWindowsProcessStartTimeSync.mockReturnValueOnce(100).mockReturnValue(200);
-    mockRuntime({
-      list: () => taskList(true),
-      other: () => probeResult([{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]),
-    });
-    const warn = vi.fn();
-
-    await expect(restartScheduledTask({ env, stdout, warn })).rejects.toThrow(
-      "Gateway ownership changed; restart unverified",
-    );
-
-    expectNoNativeMutation();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
-  });
-
-  it.for([
-    ["stop", stopScheduledTask, 5252, 200],
-    ["restart with PID reuse", restartScheduledTask, 4242, 200],
-    ["restart with new task instance", restartScheduledTask, 4242, 100],
-  ] as const)(
-    "%s preserves a replacement between stop and cleanup",
-    async ([_name, control, pid, startedAt], { env, stdout }) => {
+  it("preserves a reused legacy PID before native task termination", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockLingeringGatewayListener(4242);
+      readWindowsProcessStartTimeSync.mockReturnValueOnce(100).mockReturnValue(200);
+      spawnSync.mockImplementation((exe, args) =>
+        args?.includes("-EncodedCommand")
+          ? scheduledTaskProbeResult()
+          : spawnSyncResult(
+              exe.endsWith("tasklist.exe")
+                ? '"node.exe","4242","Console","1","1 K"'
+                : JSON.stringify([
+                    { ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE },
+                  ]),
+            ),
+      );
       const warn = vi.fn();
-      mockOwnedTask();
-      mockLingeringGatewayListener(pid);
-      mockGracefulStop(() => {
-        readGatewayOwnerLease.mockReturnValue(undefined);
-        let replacementStarted = false;
-        mockRuntime({
-          list: () => {
-            if (!replacementStarted) {
+
+      await expect(restartScheduledTask({ env, stdout, warn })).rejects.toThrow(
+        "Gateway ownership changed; restart unverified",
+      );
+
+      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
+      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
+    });
+  });
+
+  it.each([
+    { name: "stop", control: stopScheduledTask, pid: 5252, startedAt: 200 },
+    { name: "restart with PID reuse", control: restartScheduledTask, pid: 4242, startedAt: 200 },
+    {
+      name: "restart with a new task instance",
+      control: restartScheduledTask,
+      pid: 4242,
+      startedAt: 100,
+    },
+  ])(
+    "$name preserves a replacement started between stop and cleanup",
+    async ({ control, pid, startedAt }) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        const warn = vi.fn();
+        readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
+        mockWindowsTaskkillSuccess();
+        mockLingeringGatewayListener(pid);
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          readGatewayOwnerLease.mockReturnValue(undefined);
+          let replacementStarted = false;
+          spawnSync.mockImplementation((exe, args) => {
+            if (args?.includes("-EncodedCommand")) {
+              return scheduledTaskProbeResult();
+            }
+            if (exe.endsWith("tasklist.exe") && !replacementStarted) {
               replacementStarted = true;
               readGatewayOwnerLease.mockReturnValue({
                 ...GATEWAY_OWNER,
@@ -255,84 +217,112 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
                 startedAt,
               });
               readWindowsProcessStartTimeSync.mockReturnValue(startedAt);
-              return "No tasks";
+              return spawnSyncResult("No tasks");
             }
-            return taskList(pid === GATEWAY_OWNER.pid);
-          },
+            return spawnSyncResult(
+              exe.endsWith("tasklist.exe") && replacementStarted && pid === GATEWAY_OWNER.pid
+                ? '"node.exe","4242","Console","1","1 K"'
+                : "No tasks",
+            );
+          });
+          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
         });
+
+        const operation = control({ env, stdout, warn });
+        if (control === restartScheduledTask) {
+          await expect(operation).rejects.toThrow("Gateway ownership changed; restart unverified");
+        } else {
+          await operation;
+        }
+
+        expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
       });
-
-      const operation = control({ env, stdout, warn });
-      if (control === restartScheduledTask) {
-        await expect(operation).rejects.toThrow("Gateway ownership changed; restart unverified");
-      } else {
-        await operation;
-      }
-
-      expectNoNativeMutation();
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
     },
   );
 
-  it("restart falls back promptly after a definitive stop rejection", async ({ env, stdout }) => {
-    mockRuntime({
-      lease: () => (taskKilled() ? undefined : GATEWAY_OWNER),
-      list: () => taskList(!taskKilled()),
-      kill: () => {},
-      other: () => spawnSyncResult("", 1),
-    });
-    callGatewayCli.mockImplementation(async (options) => {
-      options.assertDispatchCurrent();
-      const error = new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
-        message: "Host refused stop",
+  it.each([{ name: "restart", control: restartScheduledTask }])(
+    "$name falls back promptly after a definitive stop rejection",
+    async ({ control }) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        const ended = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
+        readGatewayOwnerLease.mockImplementation(() => (ended() ? undefined : GATEWAY_OWNER));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            return scheduledTaskProbeResult();
+          }
+          if (exe.toLowerCase().endsWith("tasklist.exe")) {
+            return spawnSyncResult(ended() ? "No tasks" : '"node.exe","4242","Console","1","1 K"');
+          }
+          return spawnSyncResult("", exe.endsWith("taskkill.exe") ? 0 : 1);
+        });
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          const error = new GatewayProtocolRequestError({
+            code: "UNAVAILABLE",
+            message: "Host refused stop",
+          });
+          retainGatewayResponsePayload(error, undefined);
+          throw error;
+        });
+        const started = Date.now();
+
+        await control({ env, stdout });
+
+        expect(ended()).toBe(true);
+        expect(Date.now() - started).toBeLessThan(15_000);
+        expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(
+          control === restartScheduledTask,
+        );
       });
-      retainGatewayResponsePayload(error, undefined);
-      throw error;
-    });
-    const started = Date.now();
+    },
+  );
 
-    await restartScheduledTask({ env, stdout });
-
-    expect(taskKilled()).toBe(true);
-    expect(Date.now() - started).toBeLessThan(15_000);
-    expect(taskAction("/Run")).toBe(true);
-  });
-
-  it("preserves a replacement owner when the captured PID exits during the RPC", async ({
-    env,
-    stdout,
-  }) => {
-    mockOwnedTask();
-    callGatewayCli.mockImplementation(async () => {
-      readGatewayOwnerLease.mockReturnValue({ ...GATEWAY_OWNER, owner: "replacement", pid: 5252 });
-      mockNativeProbes(
-        () => scheduledTaskProbeResult(),
-        () => spawnSyncResult("No tasks"),
+  it("preserves a replacement owner when the captured PID exits during the RPC", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockWindowsTaskkillSuccess();
+      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
+      callGatewayCli.mockImplementation(async () => {
+        readGatewayOwnerLease.mockReturnValue({
+          ...GATEWAY_OWNER,
+          owner: "replacement",
+          pid: 5252,
+        });
+        spawnSync.mockImplementation((_exe, args) =>
+          args?.includes("-EncodedCommand")
+            ? scheduledTaskProbeResult()
+            : spawnSyncResult("No tasks"),
+        );
+        throw new Error("connection closed");
+      });
+      const warn = vi.fn();
+      await expect(restartScheduledTask({ env, stdout, warn })).rejects.toThrow(
+        "Gateway ownership changed; restart unverified",
       );
-      throw new Error("connection closed");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
+      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
     });
-    const warn = vi.fn();
-    await expect(restartScheduledTask({ env, stdout, warn })).rejects.toThrow(
-      "Gateway ownership changed; restart unverified",
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
-    expect(taskAction("/End", "/Run")).toBe(false);
   });
 
-  it.for([
+  it.each([
     { name: "restart", control: restartScheduledTask },
     { name: "stop after lost reply", control: stopScheduledTask, lostReply: true },
-  ])(
-    "$name requests graceful exit before ending the task",
-    async ({ control, lostReply }, { env, stdout }) => {
-      mockOwnedTask();
+  ])("$name requests graceful exit before ending the task", async ({ control, lostReply }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockWindowsTaskkillSuccess();
+      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
       const onMutation = vi.fn();
       callGatewayCli.mockImplementation(async (options) => {
         if (lostReply) {
           options.assertDispatchCurrent();
         }
-        expect(taskAction("/End")).toBe(false);
+        expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
         readGatewayOwnerLease.mockReturnValue(undefined);
         spawnSync.mockImplementation((exe) =>
           spawnSyncResult(
@@ -358,54 +348,68 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           },
         }),
       );
-      expect(taskAction("/End")).toBe(false);
-      expect(taskKilled()).toBe(false);
-      expect(taskAction("/Run")).toBe(control === restartScheduledTask);
-    },
-  );
+      expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
+      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(
+        control === restartScheduledTask,
+      );
+    });
+  });
 
-  it.for([
-    ["graceful", true],
-    ["native", false],
-    ["native", true],
-  ] as const)(
-    "recovers SQLite sharing error after %s stop (exhausted=%s)",
-    async ([mode, exhausted], { env, stdout }) => {
-      mockWindowsTaskkillSuccess();
-      const warn = vi.fn();
-      let failed = false;
-      const failRead = () => {
-        failed = true;
-        throw Object.assign(new Error("disk I/O error"), {
-          errcode: 1546,
-          ...(exhausted ? {} : { code: "ERR_SQLITE_ERROR" }),
+  it.each([
+    { mode: "graceful", errcode: 1546, exhausted: true },
+    { mode: "native", errcode: 1546, exhausted: false },
+    { mode: "native", errcode: 1546, exhausted: true },
+  ])(
+    "recovers SQLite sharing error $errcode after $mode stop (exhausted=$exhausted)",
+    async ({ mode, errcode, exhausted }) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        mockWindowsTaskkillSuccess();
+        const warn = vi.fn();
+        let failed = false;
+        const failRead = () => {
+          failed = true;
+          throw Object.assign(new Error("disk I/O error"), {
+            errcode,
+            ...(exhausted ? {} : { code: "ERR_SQLITE_ERROR" }),
+          });
+        };
+        readGatewayOwnerLease.mockImplementation(() => {
+          const stopped = spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
+          if (stopped && (exhausted || !failed)) {
+            failRead();
+          }
+          return stopped ? undefined : GATEWAY_OWNER;
         });
-      };
-      readGatewayOwnerLease.mockImplementation(() => {
-        const stopped = taskKilled();
-        if (stopped && (exhausted || !failed)) {
-          failRead();
+        if (mode === "graceful") {
+          callGatewayCli.mockImplementation(async (options) => {
+            options.assertDispatchCurrent();
+            readGatewayOwnerLease.mockImplementation(failRead);
+            spawnSync.mockImplementation((exe, args) =>
+              args?.includes("-EncodedCommand")
+                ? scheduledTaskProbeResult()
+                : spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
+            );
+            return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+          });
         }
-        return stopped ? undefined : GATEWAY_OWNER;
-      });
-      if (mode === "graceful") {
-        mockGracefulStop(() => {
-          readGatewayOwnerLease.mockImplementation(failRead);
-          mockNativeProbes(
-            () => scheduledTaskProbeResult(),
-            (exe) => spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
-          );
+        await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual({
+          outcome: "completed",
+          ...(exhausted ? { restartRecovery: "sqlite-owner-read" } : {}),
+          taskSettlement: {
+            status: "settled",
+            taskName: "OpenClaw Gateway",
+            lastRunResult: "0",
+            ended: false,
+          },
         });
-      }
-      await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual({
-        ...settledResult(),
-        ...(exhausted ? { restartRecovery: "sqlite-owner-read" } : {}),
+        expect(failed).toBe(true);
+        if (exhausted) {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("SQLite"));
+        }
+        expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
       });
-      expect(failed).toBe(true);
-      if (exhausted) {
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("SQLite"));
-      }
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     },
   );
 });
@@ -413,114 +417,152 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
 const { stopRegisteredScheduledTask } = await import("./schtasks-control.js");
 
 describe("Scheduled Task settlement", () => {
-  beforeEach(() => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  });
-  it("preserves a node-host replacement published during End", async ({ env, stdout }) => {
-    env.OPENCLAW_SERVICE_KIND = "node";
-    env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
-    env.OPENCLAW_TASK_SCRIPT_NAME = "node.cmd";
-    const scriptPath = resolveTaskScriptPath(env);
-    const original =
-      "@echo off\r\nC:\\node-a.exe C:\\openclaw\\entry.js node run --host 127.0.0.1 --port 18789\r\n";
-    const replacement = original.replace("node-a.exe", "node-b.exe");
-    writeFileSync(scriptPath, original);
-    onTaskAction((action) => {
-      if (action === "/End") {
-        writeFileSync(scriptPath, replacement);
-      }
-    });
-    let killed = false;
-    spawnSync.mockImplementation((exe) => {
-      if (exe.endsWith("taskkill.exe")) {
-        killed = true;
-        return spawnSyncResult("");
-      }
-      if (exe.endsWith("tasklist.exe")) {
-        return spawnSyncResult(killed ? "No tasks" : '"node.exe","5151","Console","1","1 K"');
-      }
-      return spawnSyncResult(
-        JSON.stringify([{ ProcessId: 5151, CommandLine: replacement.split("\r\n")[1] }]),
-      );
-    });
-    await expect(
-      stopRegisteredScheduledTask({
-        env,
-        stdout,
-        beforeMutation: async () => {
-          if (readFileSync(scriptPath, "utf8") !== original) {
-            throw new Error("Original node definition changed");
-          }
-        },
-      }),
-    ).rejects.toThrow("Original node definition changed");
-    expect(killed).toBe(false);
-    expect(readFileSync(scriptPath, "utf8")).toBe(replacement);
-  });
-  it.for(["capture", "end"])(
-    "preserves a registration changed during native %s",
-    async (phase, { env, stdout }) => {
-      let changed = false;
-      let exited = false;
-      mockRuntime({
-        lease: () => (exited ? undefined : GATEWAY_OWNER),
-        list: () => taskList(!exited),
-        probe: () => {
-          if (phase === "capture") {
-            changed = true;
-          }
-          return scheduledTaskProbeResult(taskAction("/End") ? 3 : 4);
-        },
-      });
-      mockGracefulStop(() => {
-        exited = true;
-        if (phase === "end") {
-          changed = true;
+  it("preserves a node-host replacement published during End", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      env.OPENCLAW_TASK_SCRIPT_NAME = "node.cmd";
+      const scriptPath = resolveTaskScriptPath(env);
+      const original =
+        "@echo off\r\nC:\\node-a.exe C:\\openclaw\\entry.js node run --host 127.0.0.1 --port 18789\r\n";
+      const replacement = original.replace("node-a.exe", "node-b.exe");
+      writeFileSync(scriptPath, original);
+      const push = schtasksCalls.push.bind(schtasksCalls);
+      vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
+        if (calls.some(([action]) => action === "/End")) {
+          writeFileSync(scriptPath, replacement);
         }
+        return push(...calls);
       });
-      await expect(
-        stopRegisteredScheduledTask({
+      let killed = false;
+      spawnSync.mockImplementation((exe) => {
+        if (exe.endsWith("taskkill.exe")) {
+          killed = true;
+          return spawnSyncResult("");
+        }
+        if (exe.endsWith("tasklist.exe")) {
+          return spawnSyncResult(killed ? "No tasks" : '"node.exe","5151","Console","1","1 K"');
+        }
+        return spawnSyncResult(
+          JSON.stringify([{ ProcessId: 5151, CommandLine: replacement.split("\r\n")[1] }]),
+        );
+      });
+      let failure: unknown;
+      try {
+        await stopRegisteredScheduledTask({
           env,
           stdout,
+          assertCurrent: () => {},
           beforeMutation: async () => {
-            if (changed) {
-              throw new Error("Original registration changed");
+            if (readFileSync(scriptPath, "utf8") !== original) {
+              throw new Error("Original node definition changed");
             }
           },
-        }),
-      ).rejects.toThrow("Original registration changed");
-      expect(taskAction("/End", "/Run")).toBe(false);
-      if (phase === "capture") {
-        expect(callGatewayCli).not.toHaveBeenCalled();
+        });
+      } catch (error) {
+        failure = error;
       }
+      expect(killed).toBe(false);
+      expect(String(failure)).toContain("Original node definition changed");
+      expect(readFileSync(scriptPath, "utf8")).toBe(replacement);
+    });
+  });
+  it.each(["capture", "end"])(
+    "preserves a registration changed during native %s",
+    async (phase) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let changed = false;
+        let exited = false;
+        readGatewayOwnerLease.mockImplementation(() => (exited ? undefined : GATEWAY_OWNER));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            if (phase === "capture") {
+              changed = true;
+            }
+            return scheduledTaskProbeResult(
+              schtasksCalls.some(([action]) => action === "/End") ? 3 : 4,
+            );
+          }
+          return spawnSyncResult(
+            exe.endsWith("tasklist.exe") && !exited
+              ? '"node.exe","4242","Console","1","1 K"'
+              : "No tasks",
+          );
+        });
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          exited = true;
+          if (phase === "end") {
+            changed = true;
+          }
+          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+        });
+        await expect(
+          stopRegisteredScheduledTask({
+            env,
+            stdout,
+            beforeMutation: async () => {
+              if (changed) {
+                throw new Error("Original registration changed");
+              }
+            },
+          }),
+        ).rejects.toThrow("Original registration changed");
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
+        if (phase === "capture") {
+          expect(callGatewayCli).not.toHaveBeenCalled();
+        }
+      });
     },
   );
-  it.for([
-    ["Ready before result", false, true, true],
-    ["unsettled supervisor", true, false, true],
-    ["Running after End", true, false, false],
-  ] as const)(
-    "requires task settlement before Run: %s",
-    async ([_name, end, delayedResult, settles], { env, stdout }) => {
+  it.each([
+    {
+      name: "Ready before its result is recorded",
+      end: false,
+      delayedResult: true,
+      settles: true,
+    },
+    {
+      name: "an unsettled supervisor",
+      end: true,
+      delayedResult: false,
+      settles: true,
+    },
+    {
+      name: "a task that stays Running after End",
+      end: true,
+      delayedResult: false,
+      settles: false,
+    },
+  ])("requires task settlement before Run after $name", async ({ end, delayedResult, settles }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       let exited = false;
       let ready = false;
       const events: string[] = [];
-      onTaskAction((action) => {
-        if (action === "/End") {
-          events.push("end");
+      const push = schtasksCalls.push.bind(schtasksCalls);
+      vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
+        for (const [action] of calls) {
+          if (action === "/End") {
+            events.push("end");
+          }
+          if (action === "/Run") {
+            expect(ready).toBe(true);
+            events.push("run");
+          }
         }
-        if (action === "/Run") {
-          expect(ready).toBe(true);
-          events.push("run");
-        }
+        return push(...calls);
       });
-      mockRuntime({
-        lease: () => (exited ? undefined : GATEWAY_OWNER),
-        list: () => taskList(!exited),
-        kill: () => {
+      readGatewayOwnerLease.mockImplementation(() => (exited ? undefined : GATEWAY_OWNER));
+      spawnSync.mockImplementation((exe, args) => {
+        if (exe.endsWith("taskkill.exe")) {
           exited = true;
-        },
-        probe: () => {
+        }
+        if (args?.includes("-EncodedCommand")) {
           ready =
             settles &&
             exited &&
@@ -528,21 +570,30 @@ describe("Scheduled Task settlement", () => {
           if (ready) {
             events.push("ready");
           }
-          return probeResult({
-            state: events.includes("run") ? 4 : ready ? 3 : 4,
-            lastRunResult: events.includes("run")
-              ? 267009
-              : delayedResult && Date.now() < 500
-                ? undefined
-                : ready
-                  ? 0
-                  : 267009,
-            lastRunTime: "2026-09-27T00:00:00.0000000Z",
-          });
-        },
+          return spawnSyncResult(
+            JSON.stringify({
+              state: events.includes("run") ? 4 : ready ? 3 : 4,
+              lastRunResult: events.includes("run")
+                ? 267009
+                : delayedResult && Date.now() < 500
+                  ? undefined
+                  : ready
+                    ? 0
+                    : 267009,
+              lastRunTime: "2026-09-27T00:00:00.0000000Z",
+            }),
+          );
+        }
+        return spawnSyncResult(
+          exe.endsWith("tasklist.exe") && !exited
+            ? '"node.exe","4242","Console","1","1 K"'
+            : "No tasks",
+        );
       });
-      mockGracefulStop(() => {
+      callGatewayCli.mockImplementation(async (options) => {
+        options.assertDispatchCurrent();
         exited = true;
+        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
       });
 
       const operation = restartScheduledTask({ env, stdout });
@@ -557,211 +608,319 @@ describe("Scheduled Task settlement", () => {
       expect(events.indexOf("ready")).toBeLessThan(events.indexOf("run"));
       expect(Date.now()).toBeGreaterThanOrEqual(500);
       expect(events.includes("end")).toBe(end);
-      expect(taskKilled()).toBe(false);
-      expect(result).toEqual(settledResult(end));
-    },
-  );
-
-  it("settles Disabled tasks without overriding result or policy", async ({ env, stdout }) => {
-    mockOwnedTask();
-    mockGracefulStop(() => {
-      readGatewayOwnerLease.mockReturnValue(undefined);
-      mockNativeProbes(
-        () =>
-          probeResult({
-            state: 1,
-            enabled: false,
-            lastRunResult: 267009,
-            lastRunTime: "2026-09-27T00:00:00.0000000Z",
-          }),
-        () => spawnSyncResult("No tasks"),
-      );
-    });
-
-    await stopScheduledTask({ env, stdout });
-
-    expect(taskAction("/End", "/Run", "/Change")).toBe(false);
-    expect(stdout.read()?.toString()).toContain("Stopped Scheduled Task");
-  });
-
-  it("does not end a replacement task instance during native fallback", async ({ env, stdout }) => {
-    let originalAlive = true;
-    let replacementAlive = true;
-    onTaskAction((action) => {
-      if (action === "/End") {
-        originalAlive = false;
-        replacementAlive = false;
-      }
-    });
-    mockRuntime({
-      lease: () => (originalAlive ? GATEWAY_OWNER : undefined),
-      list: () => taskList(originalAlive),
-      probe: () =>
-        probeResult({
-          state: 4,
-          lastRunResult: 267009,
-          lastRunTime: originalAlive ? "original" : "replacement",
-        }),
-      kill: (pid) => {
-        originalAlive &&= pid !== 4242;
-      },
-    });
-
-    await expect(restartScheduledTask({ env, stdout })).rejects.toMatchObject({
-      message: "Gateway ownership changed; restart unverified.",
-      taskSettlement: {
-        status: "replaced",
-        taskName: "OpenClaw Gateway",
-        lastRunTime: "replacement",
-      },
-    });
-
-    expect(originalAlive).toBe(false);
-    expect(replacementAlive).toBe(true);
-    expect(taskAction("/End", "/Run")).toBe(false);
-  });
-
-  it.for(["end-unavailable", "stop", "no-owner"] as const)(
-    "handles %s settlement inspection without reporting a false restart",
-    async (failure, { env, stdout }) => {
-      let now = 0;
-      let exited = false;
-      let failedProbes = 0;
-      let prepared = false;
-      const noRun = failure === "stop" || failure === "no-owner";
-      const onMutation = vi.fn();
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      mockGracefulStop(() => {
-        exited = true;
-      });
-      onTaskAction((action) => {
-        if (failure === "end-unavailable" && action === "/End") {
-          schtasksResponses.push({ code: 1, stdout: "", stderr: "Access denied" });
-        }
-      });
-      mockRuntime({
-        lease: () => (exited || failure === "no-owner" ? undefined : GATEWAY_OWNER),
-        list: () => taskList(!exited && failure !== "no-owner"),
-        probe: (_exe, _args, options) => {
-          if (!prepared) {
-            prepared = true;
-            return scheduledTaskProbeResult(4);
-          }
-          if (failure === "end-unavailable" && exited && !taskAction("/End")) {
-            now += Math.min(
-              Number(options?.timeout),
-              GATEWAY_SERVICE_STOP_TIMEOUT_MS - 135_000 - now,
-            );
-            return scheduledTaskProbeResult(4);
-          }
-          if ((exited || failure === "no-owner") && !taskAction("/Run")) {
-            failedProbes++;
-            now += Number(options?.timeout);
-            return {
-              ...spawnSyncResult("", 1),
-              error: Object.assign(new Error("probe timed out"), { code: "ETIMEDOUT" }),
-            };
-          }
-          return scheduledTaskProbeResult(exited ? undefined : 4);
+      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      expect(result).toEqual({
+        outcome: "completed",
+        taskSettlement: {
+          status: "settled",
+          taskName: "OpenClaw Gateway",
+          lastRunResult: "0",
+          ended: end,
         },
       });
-      const control = failure === "stop" ? stopScheduledTask : restartScheduledTask;
-      const operation = control({ env, stdout, onMutation });
-      const error = await operation.catch((caughtError: unknown) => caughtError);
-      expect(error).toBeInstanceOf(Error);
-      const fact = {
-        status: "unavailable",
-        taskName: "OpenClaw Gateway",
-        ended: failure === "end-unavailable",
-      };
-      expect(error).toMatchObject(noRun ? { cause: fact } : { taskSettlement: fact });
-      expect(String(error)).toContain(noRun ? "stop unverified" : "restart unverified");
-      expect(failedProbes).toBeGreaterThan(1);
-      expect(now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
-      expect(stdout.read()?.toString() ?? "").not.toContain("Restarted Scheduled Task");
-      expect(taskAction("/Run")).toBe(!noRun);
-      if (!noRun) {
-        expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
-      } else {
-        expect(onMutation).not.toHaveBeenCalledWith({ mode: "schtasks-restart" });
-      }
-      expect(taskAction("/End")).toBe(failure === "end-unavailable");
-      expect(taskKilled()).toBe(false);
+    });
+  });
+
+  it("settles a Disabled update task without overriding its stale result or enabled policy", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockWindowsTaskkillSuccess();
+      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
+      callGatewayCli.mockImplementation(async (options) => {
+        options.assertDispatchCurrent();
+        readGatewayOwnerLease.mockReturnValue(undefined);
+        spawnSync.mockImplementation((_exe, args) =>
+          args?.includes("-EncodedCommand")
+            ? spawnSyncResult(
+                JSON.stringify({
+                  state: 1,
+                  enabled: false,
+                  lastRunResult: 267009,
+                  lastRunTime: "2026-09-27T00:00:00.0000000Z",
+                }),
+              )
+            : spawnSyncResult("No tasks"),
+        );
+        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+      });
+
+      await stopScheduledTask({ env, stdout });
+
+      expect(
+        schtasksCalls.some(
+          ([action]) => action === "/End" || action === "/Run" || action === "/Change",
+        ),
+      ).toBe(false);
+      expect(stdout.read()?.toString()).toContain("Stopped Scheduled Task");
+    });
+  });
+
+  it("does not end a replacement task instance during native fallback", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      let originalAlive = true;
+      let replacementAlive = true;
+      const push = schtasksCalls.push.bind(schtasksCalls);
+      vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
+        if (calls.some(([action]) => action === "/End")) {
+          originalAlive = false;
+          replacementAlive = false;
+        }
+        return push(...calls);
+      });
+      readGatewayOwnerLease.mockImplementation(() => (originalAlive ? GATEWAY_OWNER : undefined));
+      spawnSync.mockImplementation((exe, args) => {
+        if (args?.includes("-EncodedCommand")) {
+          return spawnSyncResult(
+            JSON.stringify({
+              state: 4,
+              lastRunResult: 267009,
+              lastRunTime: originalAlive ? "original" : "replacement",
+            }),
+          );
+        }
+        if (exe.endsWith("taskkill.exe") && args?.includes("4242")) {
+          originalAlive = false;
+        }
+        return spawnSyncResult(
+          exe.endsWith("tasklist.exe") && originalAlive
+            ? '"node.exe","4242","Console","1","1 K"'
+            : "No tasks",
+        );
+      });
+
+      await expect(restartScheduledTask({ env, stdout })).rejects.toMatchObject({
+        message: "Gateway ownership changed; restart unverified.",
+        taskSettlement: {
+          status: "replaced",
+          taskName: "OpenClaw Gateway",
+          lastRunTime: "replacement",
+        },
+      });
+
+      expect(originalAlive).toBe(false);
+      expect(replacementAlive).toBe(true);
+      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
+    });
+  });
+
+  it.each(["end-unavailable", "stop", "no-owner"] as const)(
+    "handles %s settlement inspection without reporting a false restart",
+    async (failure) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let now = 0;
+        let exited = false;
+        let failedProbes = 0;
+        let prepared = false;
+        const noRun = failure === "stop" || failure === "no-owner";
+        const onMutation = vi.fn();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        readGatewayOwnerLease.mockImplementation(() =>
+          exited || failure === "no-owner" ? undefined : GATEWAY_OWNER,
+        );
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          exited = true;
+          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+        });
+        const push = schtasksCalls.push.bind(schtasksCalls);
+        vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {
+          if (calls.some(([action]) => failure === "end-unavailable" && action === "/End")) {
+            schtasksResponses.push({ code: 1, stdout: "", stderr: "Access denied" });
+          }
+          return push(...calls);
+        });
+        spawnSync.mockImplementation((exe, args, options) => {
+          if (args?.includes("-EncodedCommand")) {
+            if (!prepared) {
+              prepared = true;
+              return scheduledTaskProbeResult(4);
+            }
+            if (
+              failure === "end-unavailable" &&
+              exited &&
+              !schtasksCalls.some(([action]) => action === "/End")
+            ) {
+              now += Math.min(
+                Number(options?.timeout),
+                GATEWAY_SERVICE_STOP_TIMEOUT_MS - 135_000 - now,
+              );
+              return scheduledTaskProbeResult(4);
+            }
+            if (
+              (exited || failure === "no-owner") &&
+              !schtasksCalls.some(([action]) => action === "/Run")
+            ) {
+              failedProbes++;
+              now += Number(options?.timeout);
+              return {
+                ...spawnSyncResult("", 1),
+                error: Object.assign(new Error("probe timed out"), { code: "ETIMEDOUT" }),
+              };
+            }
+            return scheduledTaskProbeResult(exited ? undefined : 4);
+          }
+          return spawnSyncResult(
+            exe.endsWith("tasklist.exe") && !exited && failure !== "no-owner"
+              ? '"node.exe","4242","Console","1","1 K"'
+              : "No tasks",
+          );
+        });
+        const control = failure === "stop" ? stopScheduledTask : restartScheduledTask;
+        const operation = control({ env, stdout, onMutation });
+        const error = await operation.catch((caughtError: unknown) => caughtError);
+        expect(error).toBeInstanceOf(Error);
+        const fact = {
+          status: "unavailable",
+          taskName: "OpenClaw Gateway",
+          ended: failure === "end-unavailable",
+        };
+        expect(error).toMatchObject(noRun ? { cause: fact } : { taskSettlement: fact });
+        expect(String(error)).toContain(noRun ? "stop unverified" : "restart unverified");
+        expect(failedProbes).toBeGreaterThan(1);
+        expect(now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+        expect(stdout.read()?.toString() ?? "").not.toContain("Restarted Scheduled Task");
+        expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(!noRun);
+        if (!noRun) {
+          expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
+        } else {
+          expect(onMutation).not.toHaveBeenCalledWith({ mode: "schtasks-restart" });
+        }
+        expect(schtasksCalls.some(([action]) => action === "/End")).toBe(
+          failure === "end-unavailable",
+        );
+        expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+      });
     },
   );
 });
 
 describe("Scheduled Task stop/restart cleanup", () => {
-  it.for([
-    ["default enabled", "<Settings><StartWhenAvailable>true</StartWhenAvailable></Settings>", true],
-    [
-      "disabled despite enabled trigger",
-      "<Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><Enabled>false</Enabled></Settings>",
-      false,
-    ],
-  ] as const)("suspends only an enabled task: %s", async ([_name, xml, enabled], { env }) => {
-    schtasksResponses.push(taskXml(xml), ...(enabled ? [{ ...SUCCESS_RESPONSE }] : []));
-    await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(enabled);
-    expect(schtasksCalls).toEqual([queryCall, ...(enabled ? [changeCall(false)] : [])]);
+  it("suspends a task whose Settings.Enabled value uses the default", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        {
+          ...SUCCESS_RESPONSE,
+          stdout: "<Task><Settings><StartWhenAvailable>true</StartWhenAvailable></Settings></Task>",
+        },
+        { ...SUCCESS_RESPONSE },
+      );
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(true);
+
+      expect(schtasksCalls).toEqual([
+        ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"],
+      ]);
+    });
   });
 
-  it.for([
-    [
-      "unconfirmed absence",
-      taskFailure("ERROR: The system cannot find the file specified."),
-      "schtasks XML query failed: ERROR: The system cannot find the file specified.",
-      true,
-    ],
-    [
-      "missing enabled state",
-      taskXml("<Triggers />"),
-      "schtasks XML query did not expose the task enabled state",
-      false,
-    ],
-  ] as const)("fails closed on %s", async ([_name, response, message, queryOnly], { env }) => {
-    schtasksResponses.push(response);
-    await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(message);
-    if (queryOnly) {
-      expect(schtasksCalls).toEqual([queryCall]);
+  it("preserves an already-disabled task", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({
+        ...SUCCESS_RESPONSE,
+        stdout:
+          "<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><Enabled>false</Enabled></Settings></Task>",
+      });
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+    });
+  });
+
+  it("fails closed when task absence cannot be confirmed", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({
+        code: 1,
+        stdout: "",
+        stderr: "ERROR: The system cannot find the file specified.",
+      });
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
+        "schtasks XML query failed: ERROR: The system cannot find the file specified.",
+      );
+
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
       expect(spawnSync).toHaveBeenCalledOnce();
-    }
+    });
   });
 
-  it("restores an enabled task after an ambiguous disable failure", async ({ env }) => {
-    schtasksResponses.push(
-      taskXml("<Settings><Enabled>true</Enabled></Settings>"),
-      taskFailure("schtasks timed out after 15000ms", 124),
-      { ...SUCCESS_RESPONSE },
-    );
+  it("fails closed when the task enabled state is missing", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({ ...SUCCESS_RESPONSE, stdout: "<Task><Triggers /></Task>" });
 
-    await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
-      "schtasks disable failed: schtasks timed out after 15000ms",
-    );
-
-    expect(schtasksCalls).toEqual([queryCall, changeCall(false), changeCall(true)]);
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
+        "schtasks XML query did not expose the task enabled state",
+      );
+    });
   });
 
-  it("preserves startup-folder fallback when the task is absent", async ({ env }) => {
-    const startupEntry = path.join(
-      expectDefined(env.APPDATA, "env.APPDATA test invariant"),
-      "Microsoft/Windows/Start Menu/Programs/Startup/OpenClaw Gateway.cmd",
-    );
-    await fs.mkdir(path.dirname(startupEntry), { recursive: true });
-    await fs.writeFile(startupEntry, "@echo off\r\n", "utf8");
-    schtasksResponses.push(taskFailure("FEHLER: Die angegebene Datei wurde nicht gefunden."));
-    spawnSync.mockReturnValueOnce(spawnSyncResult("-2147024894", 1));
+  it("restores an enabled task after an ambiguous disable failure", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        {
+          ...SUCCESS_RESPONSE,
+          stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+        },
+        { code: 124, stdout: "", stderr: "schtasks timed out after 15000ms" },
+        { ...SUCCESS_RESPONSE },
+      );
 
-    await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
+        "schtasks disable failed: schtasks timed out after 15000ms",
+      );
 
-    expect(schtasksCalls).toEqual([queryCall]);
-    expect(spawnSync).toHaveBeenCalledOnce();
+      expect(schtasksCalls).toEqual([
+        ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/ENABLE"],
+      ]);
+    });
   });
 
-  it("surfaces a failed task reenable", async ({ env }) => {
-    schtasksResponses.push(taskFailure("ERROR: Access is denied."));
+  it("leaves startup-folder fallback installs unchanged when the task is absent", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      const startupEntry = path.join(
+        expectDefined(env.APPDATA, "env.APPDATA test invariant"),
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
+        "OpenClaw Gateway.cmd",
+      );
+      await fs.mkdir(path.dirname(startupEntry), { recursive: true });
+      await fs.writeFile(startupEntry, "@echo off\r\n", "utf8");
+      schtasksResponses.push({
+        code: 1,
+        stdout: "",
+        stderr: "FEHLER: Die angegebene Datei wurde nicht gefunden.",
+      });
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [null, "-2147024894", ""],
+        stdout: "-2147024894",
+        stderr: "",
+        status: 1,
+        signal: null,
+      });
 
-    await expect(resumeScheduledTaskAutoStartAfterUpdate(env)).rejects.toThrow(
-      "schtasks enable failed: ERROR: Access is denied.",
-    );
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+      expect(spawnSync).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("surfaces a failed task reenable", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({ code: 1, stdout: "", stderr: "ERROR: Access is denied." });
+
+      await expect(resumeScheduledTaskAutoStartAfterUpdate(env)).rejects.toThrow(
+        "schtasks enable failed: ERROR: Access is denied.",
+      );
+    });
   });
 });
