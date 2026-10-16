@@ -23,6 +23,31 @@ function outputLine(customId: string, embedding: number[], padding?: string) {
   };
 }
 
+function trackedResponse(
+  chunkCount: number,
+  nextChunk: (index: number) => Uint8Array,
+  contentType = "application/jsonl",
+) {
+  const state = { sent: 0, canceled: false };
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (state.sent >= chunkCount) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(nextChunk(state.sent));
+        state.sent += 1;
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { status: 200, headers: { "Content-Type": contentType } },
+  );
+  return { response, state };
+}
+
 function batchFetch(options: { output?: Response; status?: () => Response }) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = fetchInputUrl(input);
@@ -476,23 +501,10 @@ describe("OpenAI embedding batch output", () => {
   it("bounds batch status success body via readProviderJsonResponse", async () => {
     const chunkSize = 1024 * 1024;
     const chunkCount = 20; // 20 MiB, well over 16 MiB cap
-    let readCount = 0;
-    let canceled = false;
-    const oversizedStatus = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= chunkCount) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(new Uint8Array(chunkSize));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
+    const oversizedStatus = trackedResponse(
+      chunkCount,
+      () => new Uint8Array(chunkSize),
+      "application/json",
     );
     let batchStatusCalled = false;
     const fetchImpl = batchFetch({
@@ -501,48 +513,32 @@ describe("OpenAI embedding batch output", () => {
           return new Response("unexpected request", { status: 500 });
         }
         batchStatusCalled = true;
-        return oversizedStatus;
+        return oversizedStatus.response;
       },
     });
 
     await expect(
       runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 60_000)),
     ).rejects.toThrow(/openai\.batch-status/);
-    expect(canceled).toBe(true);
-    expect(readCount).toBeLessThan(chunkCount);
+    expect(oversizedStatus.state.canceled).toBe(true);
+    expect(oversizedStatus.state.sent).toBeLessThan(chunkCount);
   });
 
   it("streams valid batch output files larger than the provider text cap", async () => {
     const outputLineCount = 18;
     const padding = "x".repeat(1024 * 1024);
     const requests = batchRequests(outputLineCount);
-    let outputLinesSent = 0;
-    const outputResponse = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (outputLinesSent >= outputLineCount) {
-            controller.close();
-            return;
-          }
-          const customId = String(outputLinesSent);
-          controller.enqueue(
-            jsonlEncoder.encode(
-              `${JSON.stringify(outputLine(customId, [outputLinesSent + 1], padding))}\n`,
-            ),
-          );
-          outputLinesSent += 1;
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/jsonl" } },
+    const output = trackedResponse(outputLineCount, (index) =>
+      jsonlEncoder.encode(`${JSON.stringify(outputLine(String(index), [index + 1], padding))}\n`),
     );
-    const fetchImpl = batchFetch({ output: outputResponse });
+    const fetchImpl = batchFetch({ output: output.response });
 
     const byCustomId = await runOpenAiEmbeddingBatches({
       ...singleRequestBatchParams(fetchImpl, 1000, 60_000),
       requests,
     });
 
-    expect(outputLinesSent).toBe(outputLineCount);
+    expect(output.state.sent).toBe(outputLineCount);
     expect([...byCustomId.entries()]).toEqual(
       requests.map((request, index) => [request.custom_id, [index + 1]]),
     );
@@ -550,37 +546,19 @@ describe("OpenAI embedding batch output", () => {
 
   it("stops reading batch output after all requested custom IDs are accounted for", async () => {
     const outputLineCount = 1024;
-    let outputLinesSent = 0;
-    let canceled = false;
-    const outputResponse = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (outputLinesSent >= outputLineCount) {
-            controller.close();
-            return;
-          }
-          const line =
-            outputLinesSent === 0
-              ? outputLine("0", [1])
-              : outputLine(`extra-${outputLinesSent}`, [outputLinesSent]);
-          controller.enqueue(jsonlEncoder.encode(`${JSON.stringify(line)}\n`));
-          outputLinesSent += 1;
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/jsonl" } },
-    );
-    const fetchImpl = batchFetch({ output: outputResponse });
+    const output = trackedResponse(outputLineCount, (index) => {
+      const line = index === 0 ? outputLine("0", [1]) : outputLine(`extra-${index}`, [index]);
+      return jsonlEncoder.encode(`${JSON.stringify(line)}\n`);
+    });
+    const fetchImpl = batchFetch({ output: output.response });
 
     const byCustomId = await runOpenAiEmbeddingBatches(
       singleRequestBatchParams(fetchImpl, 1_000, 60_000),
     );
 
     expect([...byCustomId.entries()]).toEqual([["0", [1]]]);
-    expect(canceled).toBe(true);
-    expect(outputLinesSent).toBeLessThan(outputLineCount);
+    expect(output.state.canceled).toBe(true);
+    expect(output.state.sent).toBeLessThan(outputLineCount);
   });
 
   it("bounds batch output file content without buffering the whole response", async () => {

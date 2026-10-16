@@ -90,15 +90,6 @@ function expectOpenAIPromptContribution(
   });
 }
 
-function mockCalls(mocked: unknown): unknown[][] {
-  return (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
-}
-
-function expectNoBeforePromptBuildHook(on: unknown): void {
-  const hasBeforePromptBuild = mockCalls(on).some((call) => call[0] === "before_prompt_build");
-  expect(hasBeforePromptBuild).toBe(false);
-}
-
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -313,7 +304,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "friendly" },
     });
 
-    expectNoBeforePromptBuildHook(on);
+    expect(on.mock.calls.some((call) => call[0] === "before_prompt_build")).toBe(false);
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     const sectionOverrides = { interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY };

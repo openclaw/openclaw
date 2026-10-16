@@ -30,10 +30,12 @@ const transcribe = (overrides: Partial<AudioTranscriptionRequest>) =>
 const isConfigured = openaiMediaUnderstandingProvider.isAudioConfigured!;
 const useAuth = (apiKey: string, mode: "api-key" | "oauth", source = "profile:openai:audio") =>
   authMocks.resolve.mockResolvedValue({ apiKey, mode, source });
-const formBody = (init: RequestInit | undefined) =>
-  expectDefined(init?.body, "transcription request body") as FormData;
+const makeConfig = (apiKey: string | undefined, baseUrl: string, profiles: string[]) => ({
+  auth: { order: { openai: profiles } },
+  models: { providers: { openai: { apiKey, baseUrl, models: [] } } },
+});
 function expectForm(init: RequestInit | undefined, fields: Record<string, string>) {
-  const body = formBody(init);
+  const body = expectDefined(init?.body, "transcription request body") as FormData;
   for (const [key, value] of Object.entries(fields)) {
     expect(body.get(key)).toBe(value);
   }
@@ -122,14 +124,10 @@ describe("provider-owned audio transcription", () => {
           import("openclaw/plugin-sdk/channel-test-helpers"),
           import("./index.js"),
         ]);
-        const cfg = {
-          auth: { order: { openai: ["openai:siwc", "openai:fixture-subscription"] } },
-          models: {
-            providers: {
-              openai: { apiKey, baseUrl: "https://api.openai.com/v1", models: [] },
-            },
-          },
-        };
+        const cfg = makeConfig(apiKey, "https://api.openai.com/v1", [
+          "openai:siwc",
+          "openai:fixture-subscription",
+        ]);
         const { registry } = createPluginRegistryFixture(cfg);
         const record = createPluginRecord({ id: "openai" });
         registry.registry.plugins.push(record);
@@ -211,14 +209,7 @@ describe("provider-owned audio transcription", () => {
     "keeps an authored API key ahead of OAuth with provider base %s",
     async (baseUrl, expectedUrl) => {
       useAuth("fixture-platform-key", "api-key", "models.json");
-      const cfg = {
-        auth: { order: { openai: ["openai:chatgpt", "openai:audio"] } },
-        models: {
-          providers: {
-            openai: { baseUrl, apiKey: "fixture-platform-key", models: [] },
-          },
-        },
-      };
+      const cfg = makeConfig("fixture-platform-key", baseUrl, ["openai:chatgpt", "openai:audio"]);
       const original = structuredClone(cfg);
       expect(await isConfigured({ cfg, baseUrl })).toBe(true);
       authMocks.resolve.mockClear();
@@ -355,14 +346,7 @@ describe("transcribeOpenAiAudio", () => {
     const form = seenInit?.body as FormData;
     expect(form).toBeInstanceOf(FormData);
     expectForm(seenInit, { model: "gpt-4o-transcribe", language: "en", prompt: "hello" });
-    const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    if (!file) {
-      throw new Error("expected OpenAI audio file");
-    }
-    expect(file.type).toBe("audio/wav");
-    if (file && "name" in file && typeof file.name === "string") {
-      expect(file.name).toBe("voice.wav");
-    }
+    expect(form.get("file")).toMatchObject({ type: "audio/wav", name: "voice.wav" });
   });
 
   it("throws when the provider response omits text", async () => {

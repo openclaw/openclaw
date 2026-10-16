@@ -24,11 +24,11 @@ const CODEX_PROVIDER_CONFIG = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } as const;
 const tokens = { access: "access-token", refresh: "refresh-token", expires: 1_700_000_000_000 };
-function authContext(
+function runDeviceCode(
   overrides: Partial<Omit<ProviderAuthContext, "prompter">> = {},
   prompter: Partial<ProviderAuthContext["prompter"]> = {},
 ) {
-  return {
+  const context = {
     isRemote: false,
     openUrl: vi.fn(async () => {}),
     prompter: {
@@ -41,6 +41,9 @@ function authContext(
     oauth: {},
     ...overrides,
   } as never;
+  return buildOpenAIProvider()
+    .auth?.find((method) => method.id === "device-code")
+    ?.run(context);
 }
 function catalogModel(
   id: string,
@@ -62,22 +65,16 @@ function catalogModel(
 }
 function resolveModel(
   modelId: string,
-  overrides: Partial<Omit<ProviderResolveDynamicModelContext, "modelRegistry">> & {
-    modelRegistry?: { find: (provider: string, id: string) => ProviderRuntimeModel | null };
-  } = {},
+  find: (provider: string, id: string) => ProviderRuntimeModel | null = () => null,
+  overrides: Partial<Omit<ProviderResolveDynamicModelContext, "modelRegistry">> = {},
 ) {
   return buildOpenAIProvider().resolveDynamicModel?.({
     provider: "openai",
     modelId,
     providerConfig: CODEX_PROVIDER_CONFIG,
-    modelRegistry: { find: () => null },
+    modelRegistry: { find },
     ...overrides,
   } as never);
-}
-function runDeviceCode(context: ProviderAuthContext) {
-  return buildOpenAIProvider()
-    .auth?.find((method) => method.id === "device-code")
-    ?.run(context);
 }
 
 describe("OpenAI provider Codex transport hooks", () => {
@@ -96,23 +93,18 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(provider.id).toBe("openai");
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
-    expect(provider.auth?.map((method) => method.id)).toEqual([
-      "oauth",
-      "device-code",
-      "siwc",
-      "api-key",
-    ]);
-    expect(provider.auth?.map((method) => method.wizard?.choiceId)).toEqual([
-      "openai",
-      "openai-device-code",
-      "openai-token-sharing",
-      "openai-api-key",
-    ]);
     expect(
-      provider.auth
-        .filter((method) => method.kind === "oauth" || method.kind === "device_code")
-        .map((method) => method.starterModel),
-    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL]);
+      provider.auth.map(({ id, wizard, kind, starterModel }) => [
+        id,
+        wizard?.choiceId,
+        kind === "oauth" || kind === "device_code" ? [starterModel] : [],
+      ]),
+    ).toEqual([
+      ["oauth", "openai", [OPENAI_CODEX_DEFAULT_MODEL]],
+      ["device-code", "openai-device-code", [OPENAI_CODEX_DEFAULT_MODEL]],
+      ["siwc", "openai-token-sharing", [OPENAI_DEFAULT_MODEL]],
+      ["api-key", "openai-api-key", []],
+    ]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
@@ -120,7 +112,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     const controller = new AbortController();
     loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce(tokens);
 
-    const result = await runDeviceCode(authContext({ signal: controller.signal }));
+    const result = await runDeviceCode({ signal: controller.signal });
 
     expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
@@ -147,15 +139,12 @@ describe("OpenAI provider Codex transport hooks", () => {
       const deviceCode = vi.fn(async () => {});
       const note = vi.fn(async (_message: string, _title?: string) => {});
       const openUrl = vi.fn(async () => {});
+      type LoginOptions = Parameters<
+        typeof import("./openai-chatgpt-device-code.js").loginOpenAICodexDeviceCode
+      >[0];
       loginOpenAICodexDeviceCodeMock.mockImplementationOnce(
-        async (params: {
-          onVerification: (prompt: {
-            verificationUrl: string;
-            userCode: string;
-            expiresInMs: number;
-          }) => Promise<void>;
-        }) => {
-          await params.onVerification({
+        async ({ onVerification }: LoginOptions) => {
+          await onVerification({
             verificationUrl: "https://auth.openai.com/codex/device",
             userCode: "ABCD-EFGH",
             expiresInMs: 15 * 60_000,
@@ -165,15 +154,11 @@ describe("OpenAI provider Codex transport hooks", () => {
       );
 
       await runDeviceCode(
-        authContext(
-          { isRemote: true, openUrl },
-          {
-            ...(surface === "structured" ? { deviceCode } : {}),
-            note,
-          },
-        ),
+        { isRemote: true, openUrl },
+        { ...(surface === "structured" ? { deviceCode } : {}), note },
       );
 
+      expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       if (surface === "note") {
         expect(note).toHaveBeenCalledOnce();
         const [message] = note.mock.calls[0]!;
@@ -181,7 +166,6 @@ describe("OpenAI provider Codex transport hooks", () => {
           "https://auth.openai.com/codex/device",
         ]);
         expect(message).toContain("\nCode: ABCD-EFGH\n");
-        expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
         return;
       }
       expect(deviceCode).toHaveBeenCalledWith({
@@ -190,7 +174,6 @@ describe("OpenAI provider Codex transport hooks", () => {
         expiresInMinutes: 15,
         message: "Enter this one-time code on the sign-in page.",
       });
-      expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       expect(note).not.toHaveBeenCalled();
     },
   );
@@ -212,20 +195,17 @@ describe("OpenAI provider Codex transport hooks", () => {
       // Remove each preferred template in turn, ending with no catalog metadata.
       for (let firstAvailable = 0; firstAvailable <= templateIds.length; firstAvailable++) {
         const available = templateIds.slice(firstAvailable);
-        const model = resolveModel(modelId, {
-          modelRegistry: {
-            find: (providerId: string, id: string) =>
-              providerId === "openai" && available.includes(id)
-                ? catalogModel(id, {
-                    name: `Template ${id}`,
-                    contextWindow: 8_192,
-                    contextTokens: 4_096,
-                    maxTokens: 1_024,
-                    headers: { "x-template": id },
-                  })
-                : null,
-          },
-        });
+        const model = resolveModel(modelId, (providerId, id) =>
+          providerId === "openai" && available.includes(id)
+            ? catalogModel(id, {
+                name: `Template ${id}`,
+                contextWindow: 8_192,
+                contextTokens: 4_096,
+                maxTokens: 1_024,
+                headers: { "x-template": id },
+              })
+            : null,
+        );
 
         expect(model).toMatchObject({
           ...CODEX_PROVIDER_CONFIG,
@@ -251,7 +231,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
     "resolves %s through the Codex Responses transport without live catalog metadata",
     (modelId) => {
-      const model = resolveModel(modelId, { authProfileMode: "oauth" });
+      const model = resolveModel(modelId, undefined, { authProfileMode: "oauth" });
 
       expect(model).toMatchObject({
         ...CODEX_PROVIDER_CONFIG,
@@ -267,26 +247,25 @@ describe("OpenAI provider Codex transport hooks", () => {
   );
 
   it("does not invent a bare GPT-5.6 alias for the Codex transport", () => {
-    expect(resolveModel("gpt-5.6", { authProfileMode: "oauth" })).toBeUndefined();
+    expect(resolveModel("gpt-5.6", undefined, { authProfileMode: "oauth" })).toBeUndefined();
   });
 
   it.each([
     { name: "fills a missing map", thinkingLevelMap: undefined, expectedOff: null },
     { name: "preserves explicit overrides", thinkingLevelMap: { off: "low" }, expectedOff: "low" },
   ])("$name on registry-backed GPT-5.6 models", ({ thinkingLevelMap, expectedOff }) => {
-    const model = resolveModel("gpt-5.6-luna", {
-      authProfileMode: "oauth",
-      modelRegistry: {
-        find: () =>
-          catalogModel("gpt-5.6-luna", {
-            name: "GPT-5.6 Luna",
-            input: ["text"],
-            cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-            contextWindow: 372_000,
-            ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-          }),
-      },
-    });
+    const model = resolveModel(
+      "gpt-5.6-luna",
+      () =>
+        catalogModel("gpt-5.6-luna", {
+          name: "GPT-5.6 Luna",
+          input: ["text"],
+          cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+          contextWindow: 372_000,
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+        }),
+      { authProfileMode: "oauth" },
+    );
 
     expect(model).toMatchObject({
       ...CODEX_PROVIDER_CONFIG,
@@ -296,11 +275,8 @@ describe("OpenAI provider Codex transport hooks", () => {
   });
 
   it("keeps default Codex-backed OpenAI catalog models on the Codex Responses transport", () => {
-    const model = resolveModel("gpt-5.5", {
+    const model = resolveModel("gpt-5.5", () => catalogModel("gpt-5.5"), {
       providerConfig: { api: "openai-chatgpt-responses" },
-      modelRegistry: {
-        find: () => catalogModel("gpt-5.5"),
-      },
     });
 
     expect(model).toMatchObject({
