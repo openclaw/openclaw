@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
@@ -981,6 +982,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",
   "src/system-agent/setup-inference-activate.test.ts",
+  "src/system-agent/setup-inference-provider-snapshot.test.ts",
   "src/system-agent/setup-inference-utility.test.ts",
   "src/system-agent/setup-inference-detect.lifecycle.test.ts",
   "src/wizard/setup.inference-recovery.integration.test.ts",

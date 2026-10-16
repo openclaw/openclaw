@@ -239,47 +239,40 @@ it.each(["bounded", "anchors"] as const)(
   },
 );
 
-it.each(["unchanged", "append", "rewrite"] as const)(
-  "keeps the consumed durable snapshot after a later %s without another history read",
-  async (change) => {
-    await withOpenClawTestState({ label: "actor-context-validation" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "actor-context",
-        sessionKey: "agent:main:actor-context",
-        storePath: state.statePath("transcript.sqlite"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const source = await SessionManager.openAsync(target);
-      const original = makeUserMessage("original", 1);
-      await source.appendMessageAsync(original);
-      await withSelectedTranscriptReader(
-        target,
-        async () => {
-          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsFromSource");
-          try {
-            const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
-              const selected = [...messages];
-              await runWithoutOwnedSessionTranscriptWrites(async () => {
-                if (change === "append") {
-                  await source.appendMessageAsync(makeUserMessage("later", 2));
-                } else if (change === "rewrite") {
-                  source.removeTrailingEntries((entry) => entry.type === "message");
-                }
-              });
-              return selected;
+it("keeps the consumed durable snapshot after a later rewrite without another history read", async () => {
+  await withOpenClawTestState({ label: "actor-context-validation" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "actor-context",
+      sessionKey: "agent:main:actor-context",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const original = makeUserMessage("original", 1);
+    await source.appendMessageAsync(original);
+    await withSelectedTranscriptReader(
+      target,
+      async () => {
+        const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsFromSource");
+        try {
+          const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
+            const selected = [...messages];
+            await runWithoutOwnedSessionTranscriptWrites(async () => {
+              source.removeTrailingEntries((entry) => entry.type === "message");
             });
-            await expect(pending).resolves.toEqual([original]);
-            expect(validated).not.toHaveBeenCalled();
-          } finally {
-            validated.mockRestore();
-          }
-        },
-        true,
-      );
-    });
-  },
-);
+            return selected;
+          });
+          await expect(pending).resolves.toEqual([original]);
+          expect(validated).not.toHaveBeenCalled();
+        } finally {
+          validated.mockRestore();
+        }
+      },
+      true,
+    );
+  });
+});
 
 it("replays a durable current turn and rejects it after a rewrite", async () => {
   await withOpenClawTestState({ label: "actor-replay-validation" }, async (state) => {

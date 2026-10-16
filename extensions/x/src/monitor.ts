@@ -4,6 +4,7 @@ import {
   createChannelIngressError,
   createChannelIngressMonitor,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -459,6 +460,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
               mention: post,
               visibleWorkSessions: guest ? undefined : sessions,
               senderTier: authorization.tier,

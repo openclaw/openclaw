@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
-import { ComposerPredictionController } from "./chat-composer-prediction.ts";
+import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
 import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -46,7 +47,7 @@ export function ChatComposer(props: ChatComposerInput) {
   const currentProps = new Proxy(props, {
     get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
   });
-  const prediction = new ComposerPredictionController(() => {
+  const prediction = createComposerPrediction(() => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
     if (!options || !client) {
@@ -76,7 +77,7 @@ export function ChatComposer(props: ChatComposerInput) {
         document.visibilityState !== "hidden",
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
-  }, requestUpdate);
+  });
   const questionPanel = createComposerQuestionPanel(() => currentProps, state);
   const context = createMemo(() => {
     revision();
@@ -90,17 +91,23 @@ export function ChatComposer(props: ChatComposerInput) {
     }
   });
   createEffect(
+    () => [context().mentionDirectory, context().emojiEnabled, context().draftKey] as const,
+    ([directory, emojiEnabled, draftKey], previous) => {
+      state.mentionMenu.syncDirectory(directory);
+      if (!emojiEnabled || draftKey !== previous?.[2]) {
+        state.emojiMenu.close();
+      }
+    },
+  );
+  createEffect(
     () => {
       context();
       return currentProps.composerPredictions;
     },
     () => untrack(() => prediction.sync()),
   );
-  const visibilityChanged = () => prediction.sync();
-  document.addEventListener("visibilitychange", visibilityChanged);
+  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
   onCleanup(() => {
-    document.removeEventListener("visibilitychange", visibilityChanged);
-    prediction.dispose();
     disposed = true;
     state.textareaRef?.();
     state.composerInputRef?.();

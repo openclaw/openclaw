@@ -50,6 +50,7 @@ type HeaderMenuProps = {
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -432,6 +433,7 @@ function ChatHeaderSessionMenuContent(
     <Menu
       id={menuId}
       lazy
+      prewarm={props.prewarm && !props.compact}
       class={`session-menu chat-header-session-menu${props.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${props.compact && compactView() === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
@@ -469,6 +471,7 @@ defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },

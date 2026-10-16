@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
@@ -155,6 +156,7 @@ async function assembleWithCapturedHookCtx(
 
 describe("prompt-build hook context input provenance", () => {
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
     const applyPolicy = vi.fn((names: string[] | undefined) => {
       order.push("policy");
@@ -180,6 +182,7 @@ describe("prompt-build hook context input provenance", () => {
       },
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";

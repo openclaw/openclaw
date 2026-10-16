@@ -1,10 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { buildMemoryStorageSchema } from "../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import { readSqliteSchemaCatalog as readNativeCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { listSqliteSchemaInputs } from "../../scripts/lib/sqlite-schema-inputs.mts";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../../src/daemon/runtime-pin-schema.js";
-import { readSqliteSchemaCatalog } from "../../src/infra/sqlite-schema-catalog.js";
-import { collectSqliteSchemaIssues } from "../../src/infra/sqlite-schema-contract.js";
+import {
+  collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
+} from "../../src/infra/sqlite-schema-contract.js";
 import { fingerprintSqliteSchemaCatalog } from "../../src/infra/sqlite-schema-fingerprint.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
@@ -33,7 +36,12 @@ describe("generated SQLite schema catalogs", () => {
       // Native per-object PRAGMAs are independent of the batched runtime reader.
       const nativeCatalog = readNativeCatalog(database);
       expect(generated).toEqual(nativeCatalog);
-      expect(readSqliteSchemaCatalog(database)).toEqual(generated);
+      expect(
+        createSqliteTableContractReader(database).readCatalog(
+          nativeCatalog.views.map((view) => view.name),
+          nativeCatalog.tables.map((table) => table.name),
+        ),
+      ).toEqual(generated);
       expect(fingerprintSqliteSchemaCatalog(nativeCatalog)).toBe(fingerprint?.fingerprint);
       expect(collectSqliteSchemaIssues(database, sql)).toEqual([]);
     } finally {
@@ -70,6 +78,30 @@ describe("generated SQLite schema catalogs", () => {
     // These are the expected-definition contracts, not fabricated historical stores.
     for (let version = 1; version <= OPENCLAW_AGENT_SCHEMA_VERSION; version += 1) {
       requireCatalog(getOpenClawAgentMigrationSchema(version), `agent v${version}`);
+    }
+  });
+
+  it.each([
+    ["DEFAULT", "DEFAULT 'memory'", "DEFAULT 'sessions'", "column-definition-drift"],
+    ["CHECK", "BETWEEN 1 AND 10", "BETWEEN 1 AND 9", "column-definition-drift"],
+    ["unique key", "id TEXT NOT NULL UNIQUE", "id TEXT NOT NULL", "column-definition-drift"],
+    ["index terms", "(path, source)", "(source, path)", "missing-or-drifted-index"],
+  ])("rejects memory %s drift using the generated fragment", (_name, from, to, code) => {
+    const schemaSql = buildMemoryStorageSchema({
+      table: "memory_index_chunks",
+      chunks: true,
+      legacy: false,
+      strict: true,
+      inlineRecallColumns: ["importance"],
+    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      database.exec(schemaSql.replace(from, to));
+      expect(collectSqliteSchemaIssues(database, schemaSql)).toContainEqual(
+        expect.objectContaining({ code }),
+      );
+    } finally {
+      database.close();
     }
   });
 

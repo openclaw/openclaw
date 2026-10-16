@@ -68,7 +68,7 @@ export async function resolveXWorkOrigin(
 }
 
 function originGuidance(origin: XWorkOrigin): string {
-  return `X origin: @${origin.authorHandle} ${origin.postUrl}\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:${JSON.stringify(origin.postUrl)}, accountId:${JSON.stringify(origin.accountId)}, message:"<approved reply>"}. If unanswered, remind once at the end of your final summary.`;
+  return `X origin: @${origin.authorHandle} ${origin.postUrl}\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:${JSON.stringify(origin.postUrl)}, accountId:${JSON.stringify(origin.accountId)}, message:"<approved reply>"}. When useful, attach inspected proof images or video natively with media:"<approved file or URL>" rather than a sign-in-only link; show the attachment with the caption for approval. If unanswered, remind once at the end of your final summary.`;
 }
 
 export function registerXWorkOriginGuidance(api: Pick<OpenClawPluginApi, "on" | "runtime">) {

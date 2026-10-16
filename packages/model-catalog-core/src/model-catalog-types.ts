@@ -233,6 +233,8 @@ export type ModelCatalogModel = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Total model parameters, including inactive experts. */
+  parameterCount?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;

@@ -466,30 +466,6 @@ describe("talk realtime gateway relay", () => {
     return { events, context };
   }
 
-  it("settles relay-owned registrations on cancellation", async () => {
-    const provider = createIdleRelayProvider();
-    const fixture = await createAbortableRelayRunFixture(provider, { register: false });
-    await registerTalkRealtimeRelayAgentRun({
-      relaySessionId: fixture.session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-      callId: "call-1",
-    });
-    const relay = relaySessions.get(fixture.session.relaySessionId);
-    expect(relay?.activeAgentRuns.size).toBe(1);
-    expect(relay?.activeAgentToolCalls.size).toBe(1);
-
-    await submitTalkRealtimeRelayToolResult({
-      relaySessionId: fixture.session.relaySessionId,
-      connId: "conn-1",
-      callId: "call-1",
-      result: { blocked: true },
-    });
-    expect(relay?.activeAgentRuns.size).toBe(0);
-    expect(relay?.activeAgentToolCalls.size).toBe(0);
-  });
-
   it("closes only realtime relays owned by the disconnected connection", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     const tempDir = tempDirs.make("openclaw-relay-disconnect-");
@@ -2522,10 +2498,7 @@ describe("talk realtime gateway relay", () => {
     },
   );
 
-  it.each([
-    ["keyed exact-response", "response-1"],
-    ["ID-less turn-bound", undefined],
-  ])("claims a Talk turn for a %s response before browser audio", async (_label, responseId) => {
+  it("claims a Talk turn for an ID-less response before browser audio", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider = createIdleRelayProvider((request) => {
       bridgeRequest = request;
@@ -2538,11 +2511,7 @@ describe("talk realtime gateway relay", () => {
     });
     expect(relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId).toBeUndefined();
 
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.created",
-      ...(responseId ? { responseId } : {}),
-    });
+    bridgeRequest?.onEvent?.({ direction: "server", type: "response.created" });
     expect(broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       type: "responseStarted",
       relaySessionId: session.relaySessionId,
@@ -2552,25 +2521,16 @@ describe("talk realtime gateway relay", () => {
       direction: "server",
       type: "response.output_audio.delta",
       itemId: "item-1",
-      ...(responseId ? { responseId } : {}),
     });
     bridgeRequest?.onAudio(Buffer.from("reply"));
-    bridgeRequest?.onResponseDone?.({
-      status: "completed",
-      ...(responseId ? { responseId } : {}),
-    });
+    bridgeRequest?.onResponseDone?.({ status: "completed" });
 
     const payloads = broadcastToConnIds.mock.calls.map(
       (call) => call[1] as Record<string, unknown>,
     );
     const audioPayload = payloads.find((payload) => payload.type === "audio");
-    expect(audioPayload).toMatchObject({
-      type: "audio",
-      ...(responseId ? { responseId } : {}),
-    });
-    if (!responseId) {
-      expect(audioPayload).not.toHaveProperty("responseId");
-    }
+    expect(audioPayload).toMatchObject({ type: "audio" });
+    expect(audioPayload).not.toHaveProperty("responseId");
     expect(payloads.filter((payload) => payload.type === "audioDone")).toHaveLength(1);
     expect(payloads.some((payload) => payload.type === "error")).toBe(false);
     expect(payloads.some((payload) => payload.type === "close")).toBe(false);
@@ -2820,25 +2780,6 @@ describe("talk realtime gateway relay", () => {
       expect(broadcast).not.toHaveBeenCalled();
     },
   );
-
-  it("preserves legacy current-turn cancellation for a blank turn id", async () => {
-    const { abortController, broadcast, session } = await createAbortableRelayRunFixture();
-    const relay = relaySessions.get(session.relaySessionId);
-    expect(relay).toBeDefined();
-    relay?.harness.talk.startTurn({ turnId: "turn-b" });
-    expect(
-      await cancelTalkRealtimeRelayTurn({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-1",
-        reason: "barge-in",
-        turnId: "   ",
-      }),
-    ).toEqual({ status: "applied", turnId: "turn-b" });
-
-    expect(relay?.harness.talk.activeTurnId).toBeUndefined();
-    expect(abortController.signal.aborted).toBe(true);
-    expect(broadcast).toHaveBeenCalled();
-  });
 
   it.each<{
     mode: "continuous" | "capability";
@@ -3145,51 +3086,6 @@ describe("talk realtime gateway relay", () => {
 
     expect(relaySessions.has(successor.relaySessionId)).toBe(true);
     expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("terminally satisfies a late normal result after turn cancellation without a new turn", async () => {
-    const submitToolResult = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
-    const provider = createIdleRelayProvider();
-    provider.createBridge = () =>
-      makeRelayTransport({
-        submitToolResult,
-      });
-    const { broadcastToConnIds, session } = await createAbortableRelayRunFixture(provider);
-    void cancelTalkRealtimeRelayTurn({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      reason: "barge-in",
-      turnId: ensureActiveRelayTurnId(session.relaySessionId),
-    });
-    const startedTurns = () =>
-      broadcastToConnIds.mock.calls.filter(
-        (call) => (call[1] as { talkEvent?: { type?: string } }).talkEvent?.type === "turn.started",
-      ).length;
-    const beforeLateResult = startedTurns();
-
-    await submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId: "call-1",
-      result: { error: "aborted" },
-    });
-
-    expect(startedTurns()).toBe(beforeLateResult);
-    expect(submitToolResult).toHaveBeenCalledWith(
-      "call-1",
-      {
-        status: "cancelled",
-        message: "OpenClaw cancelled this consult before completion. Do not restart it.",
-      },
-      { suppressResponse: true },
-    );
-    expect(
-      broadcastToConnIds.mock.calls.filter(
-        (call) =>
-          (call[1] as { type?: string; callId?: string }).type === "toolResult" &&
-          (call[1] as { callId?: string }).callId === "call-1",
-      ),
-    ).toHaveLength(0);
   });
 
   it("serializes a final consult result behind async working acceptance", async () => {

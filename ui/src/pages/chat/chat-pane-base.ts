@@ -25,7 +25,6 @@ import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import { I18nController } from "../../i18n/lib/lit-controller.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -47,7 +46,6 @@ import {
   SubscriptionsController,
   viewState,
 } from "../../lib/subscriptions-controller.ts";
-import { PollController } from "../../lit/poll-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -69,7 +67,6 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
@@ -85,7 +82,6 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export abstract class ChatPaneBase extends ControllerHost {
-  protected readonly i18nController = new I18nController(this);
   private readonly changedProperties = new Map<PropertyKey, unknown>();
   private completeUpdate: (() => void) | undefined;
   private commitPromise: Promise<boolean> | undefined;
@@ -154,6 +150,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   private readonly handleVisibilityChange = () => {
     // Progress watches follow visibility before the parked view resumes.
     this.progressCard.hostUpdate();
+    this.requestUpdate();
     if (document.visibilityState !== "hidden") {
       return;
     }
@@ -179,6 +176,24 @@ export abstract class ChatPaneBase extends ControllerHost {
     this.paneLifecycleRoot = this.closest("openclaw-app-shell") ?? this.element.parentElement;
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     super.connect();
+    this.chatState.addCleanup(
+      chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
+    );
+    this.activeChanged(this.active);
+    this.chatState.addCleanup(
+      this.context.overlays?.subscribe((snapshot) => {
+        if (this.state) {
+          this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
+        }
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
+    this.chatState.addCleanup(
+      this.context.runtimeConfig?.subscribe(() => {
+        this.refreshSwarmRoster();
+        this.requestUpdate();
+      }) ?? (() => {}),
+    );
     this.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
       this.synchronizeForegroundTranscript,
@@ -206,14 +221,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(
-    this,
-    60_000,
-    () => this.requestUpdate(),
-    true,
-    "visible",
-  );
   @viewState()
   mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
   @viewState() paneId = "single";
@@ -668,37 +675,11 @@ export abstract class ChatPaneBase extends ControllerHost {
 
   constructor(
     readonly element: HTMLElement,
-    protected context: ApplicationContext,
+    public context: ApplicationContext,
   ) {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
-      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
-      .watchStore(
-        () => this.context && chatInputOwnerForContext(this.context),
-        () => this.activeChanged(this.active),
-      )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) =>
-          overlays.subscribe((snapshot) => {
-            if (this.state) {
-              this.reconcileWaitingApprovalSnapshot(snapshot.approvalQueue);
-            }
-            notify();
-          }),
-      )
-      .watch(
-        () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) =>
-          runtimeConfig.subscribe(() => {
-            this.refreshSwarmRoster();
-            notify();
-          }),
-      )
-      .watchStore(() => this.context?.config)
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.plugins)
       .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) => {

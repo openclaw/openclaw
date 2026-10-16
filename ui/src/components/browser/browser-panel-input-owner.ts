@@ -45,10 +45,6 @@ type BrowserPanelInputState = {
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
-  readonly host: {
-    readonly renderRoot: HTMLElement | DocumentFragment;
-    readonly updateComplete: Promise<boolean>;
-  };
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
     "beginInspection" | "captureClient" | "epoch" | "isLive"
@@ -76,7 +72,8 @@ type BrowserPanelDrawingGesture = {
 };
 
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
-export class BrowserPanelInputController {
+export class BrowserPanelInputOwner {
+  elements: { stage?: HTMLElement; input?: HTMLTextAreaElement; overlay?: HTMLCanvasElement } = {};
   // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
   private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
@@ -105,7 +102,7 @@ export class BrowserPanelInputController {
     this.pendingText = null;
     this.compositionCurrent = null;
     this.touchScroll = null;
-    const input = this.host.host.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
+    const input = this.elements.input;
     if (input) {
       input.value = "";
       input.blur();
@@ -114,12 +111,8 @@ export class BrowserPanelInputController {
     this.inputGeneration += 1;
   }
 
-  private stageElement(): HTMLElement | null {
-    return this.host.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-  }
-
   private remotePoint(event: MouseEvent): { x: number; y: number } | null {
-    return browserPanelRemotePoint(this.stageElement(), event, this.host.view);
+    return browserPanelRemotePoint(this.elements.stage ?? null, event, this.host.view);
   }
 
   inspectHighlightRegion() {
@@ -136,9 +129,7 @@ export class BrowserPanelInputController {
       return;
     }
     // The empty input gives WebKit native Paste commands for the remote page.
-    this.host.host.renderRoot
-      .querySelector<HTMLElement>(".bp-input")
-      ?.focus({ preventScroll: true });
+    this.elements.input?.focus({ preventScroll: true });
     const point = this.remotePoint(event);
     const targetId = this.host.activeTargetId;
     const client = this.host.operations.captureClient();
@@ -430,7 +421,7 @@ export class BrowserPanelInputController {
     if (this.host.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
       return;
     }
-    const point = browserPanelNormalizedPoint(this.stageElement(), event);
+    const point = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
     if (!point) {
       return;
     }
@@ -465,7 +456,7 @@ export class BrowserPanelInputController {
       if (!gesture || event.pointerId !== gesture.pointerId) {
         return;
       }
-      const point = browserPanelNormalizedPoint(this.stageElement(), event);
+      const point = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
       if (point) {
         gesture.stroke.points.push(point);
         this.paintOverlay();
@@ -501,7 +492,7 @@ export class BrowserPanelInputController {
   private queueInspect(event: PointerEvent): void {
     const client = this.host.operations.captureClient();
     const point = this.remotePoint(event);
-    const stagePoint = browserPanelNormalizedPoint(this.stageElement(), event);
+    const stagePoint = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
     const targetId = this.host.activeTargetId;
     if (!client || !point || !stagePoint || !targetId || this.host.evaluateUnavailable) {
       return;
@@ -594,8 +585,8 @@ export class BrowserPanelInputController {
   /** Repaints the live stroke/highlight overlay; cheap, runs after render. */
   paintOverlay(): void {
     paintBrowserPanelOverlay(
-      this.host.host.renderRoot.querySelector<HTMLCanvasElement>(".bp-overlay"),
-      this.stageElement(),
+      this.elements.overlay ?? null,
+      this.elements.stage ?? null,
       this.host.strokes,
       this.host.mode === "inspect" ? this.inspectHighlightRegion() : null,
     );

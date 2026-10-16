@@ -62,11 +62,9 @@ type PreparedIMessageApprovalTarget = {
   to: string;
   accountId?: string;
 };
-type IMessageApprovalPromptBinding = {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-};
+type IMessageApprovalPromptBinding = NonNullable<
+  Parameters<typeof sendMessageIMessage>[2]["approvalPrompt"]
+>;
 type PendingIMessageApprovalEntry = {
   accountId?: string;
   to: string;

@@ -27,7 +27,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { isVllmQwenThinkingCompat } from "./model-compat-catalog.js";
+import { isVllmQwenThinkingCompat, modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -1193,6 +1193,11 @@ export function buildConfiguredModelCatalog(params: {
       );
       const api = model.api ?? accepted?.api ?? provider.api;
       const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
+      const parameterCount =
+        model.parameterCount ??
+        (accepted && modelTransportRoutesMatch(accepted, { api, baseUrl })
+          ? accepted.parameterCount
+          : undefined);
       const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
@@ -1203,15 +1208,8 @@ export function buildConfiguredModelCatalog(params: {
           ? model.contextTokens
           : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
-      const modelParams =
-        model?.params && typeof model.params === "object" ? model.params : undefined;
-      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       const reasoning =
-        typeof model?.reasoning === "boolean"
-          ? model.reasoning
-          : isVllmQwenThinkingCompat(providerId, compat)
-            ? true
-            : undefined;
+        model.reasoning ?? (isVllmQwenThinkingCompat(providerId, model.compat) ? true : undefined);
       catalog.push({
         provider: providerId,
         id,
@@ -1220,12 +1218,13 @@ export function buildConfiguredModelCatalog(params: {
         ...(baseUrl ? { baseUrl } : {}),
         contextWindow,
         contextTokens,
+        ...(parameterCount !== undefined ? { parameterCount } : {}),
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
         ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
         input,
-        ...(modelParams ? { params: modelParams } : {}),
-        compat,
+        ...(model.params ? { params: model.params } : {}),
+        compat: model.compat,
       });
     }
   }

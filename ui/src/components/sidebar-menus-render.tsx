@@ -434,9 +434,11 @@ export function renderSidebarSessionMenuForController(
                 if (hiddenUnreadRuns().length > 0) {
                   void host.sessionOrganizer.runBatchSessionAction(action, rows(), allUnread());
                 } else {
-                  void host.sessionOrganizer.patchSession(session(), {
-                    unread: !session().unread,
-                  });
+                  void host.sessionOrganizer.patchSession(
+                    session(),
+                    { unread: !session().unread },
+                    { sessionScope: true },
+                  );
                 }
                 break;
               case "rename":

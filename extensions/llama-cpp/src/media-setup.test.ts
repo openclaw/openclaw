@@ -7,6 +7,7 @@ import {
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -168,11 +169,11 @@ describe("registered local media setup transaction", () => {
         const initial = await ordinarySetup(ctx);
         expect(initial.defaultModel).toBeDefined();
         chatDefault = initial.defaultModel;
-        ctx.config = { ...ctx.config, ...initial.configPatch };
+        ctx.config = applyProviderAuthConfigPatch(ctx.config, initial.configPatch, initial);
         ctx.config.agents = { defaults: { model: { primary: initial.defaultModel } } };
       }
       const media = await setup(ctx);
-      ctx.config = { ...ctx.config, ...media.configPatch };
+      ctx.config = applyProviderAuthConfigPatch(ctx.config, media.configPatch, media);
       ctx.config.memory = { search: { provider: "local" } };
       const provider = ctx.config.models?.providers?.["llama-cpp"];
       const currentPreset = resolveLlamaCppPresetPath(provider?.localService);
@@ -240,7 +241,7 @@ describe("registered local media setup transaction", () => {
       expect(rewritten).not.toContain(customSection);
       expect(rewritten).toContain("threads = 2");
       expect(rewritten).toContain("[embeddinggemma-300m-qat-q8_0]");
-      ctx.config = { ...ctx.config, ...result.configPatch };
+      ctx.config = applyProviderAuthConfigPatch(ctx.config, result.configPatch, result);
       for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
         expect(rewritten).toContain(`[${recipe.id}]`);
         expect(rewritten).toContain(`mmproj = ${path.join(root, "projector.gguf")}`);

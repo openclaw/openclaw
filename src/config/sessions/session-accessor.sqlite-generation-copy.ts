@@ -236,9 +236,7 @@ export function copySqliteSessionGenerationRows(params: {
     readOpenClawAgentDatabaseIdentity(params.source).identity ===
     readOpenClawAgentDatabaseIdentity(params.destination).identity
   ) {
-    throw new Error(
-      "Transcript generation copy requires distinct source and destination databases.",
-    );
+    return;
   }
   assertSessionTranscriptHot(params.source.db, params.sessionId);
   assertSessionTranscriptHot(params.destination.db, params.sessionId);

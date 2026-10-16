@@ -15,6 +15,7 @@ import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type RuntimeAuthState = {
   generation: number;
+  apiKey: string;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;

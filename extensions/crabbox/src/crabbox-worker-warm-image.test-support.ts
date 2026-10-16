@@ -57,20 +57,22 @@ afterEach(async () => {
 
 type CommandRunner = NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>;
 export type CommandCall = { argv: string[]; options: Parameters<CommandRunner>[1] };
+type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
+
+export function jsonResult(value: unknown): SpawnResult {
+  return commandResult({ stdout: JSON.stringify(value) });
+}
 
 export function checkpointResult(
   checkpointId: string,
   leaseId: string,
   nativeState: "available" | "completed",
 ): SpawnResult {
-  return commandResult({
-    stdout: JSON.stringify({
-      id: checkpointId,
-      kind: "aws-ebs-snapshot",
-      leaseId,
-      workdir: "/workspace",
-      native: { imageId: "snap_test", state: nativeState },
-    }),
+  return jsonResult({
+    id: checkpointId,
+    kind: "aws-ebs-snapshot",
+    leaseId,
+    native: { state: nativeState },
   });
 }
 
@@ -100,61 +102,41 @@ export function createWarmProvider(
         return override;
       }
       if (argv[1] === "config") {
-        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+        return jsonResult({ aws: { instanceProfile: "" } });
       }
+      const lease = () => ({
+        id: argv[argv.indexOf("--id") + 1],
+        state: "running",
+        idleTimeout: "60m",
+        expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+      });
       if (argv[1] === "inspect" || argv[1] === "status") {
-        return commandResult({
-          stdout: JSON.stringify({
-            id: argv[argv.indexOf("--id") + 1],
-            state: "running",
-            ready: true,
-            providerMetadata: { instanceProfileAttached: false },
-            expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
-            idleTimeout: "60m",
-            labels: {
-              created_at: String(Math.floor(Date.now() / 1_000)),
-              ttl_secs: "14400",
-            },
-            maxLifetime: "4h",
-            leasePolicy: {
-              runtimeExtension: true,
-              maxTTLSeconds: 14400,
-              extension: "allow",
-            },
-          }),
+        return jsonResult({
+          ...lease(),
+          ready: true,
+          providerMetadata: { instanceProfileAttached: false },
         });
       }
       if (argv[1] === "heartbeat") {
-        return commandResult({
-          stdout: JSON.stringify({
-            id: argv[argv.indexOf("--id") + 1],
-            state: "running",
-            idleTimeout: "60m",
-            expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
-          }),
-        });
+        return jsonResult(lease());
       }
       if (argv[1] === "checkpoint" && argv[2] === "create") {
         return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "completed");
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({
-            localState: "metadata_available",
-            providerState: "available",
-            nextAction: "fork_or_delete",
-          }),
+        return jsonResult({
+          localState: "metadata_available",
+          providerState: "available",
+          nextAction: "fork_or_delete",
         });
       }
       if (argv[1] === "checkpoint" && argv[2] === "fork") {
-        return commandResult({
-          stdout: JSON.stringify({
-            checkpointId: argv[3],
-            leaseId: argv[argv.indexOf("--lease-id") + 1],
-            slug: argv[argv.indexOf("--slug") + 1],
-            provider: argv[argv.indexOf("--provider") + 1],
-            workdir: "/workspace",
-          }),
+        return jsonResult({
+          checkpointId: argv[3],
+          leaseId: argv[argv.indexOf("--lease-id") + 1],
+          slug: argv[argv.indexOf("--slug") + 1],
+          provider: argv[argv.indexOf("--provider") + 1],
+          workdir: "/workspace",
         });
       }
       return commandResult();
@@ -168,7 +150,7 @@ export async function provisionWarmProfile(
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
-  options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
+  options?: ProvisionOptions,
 ) {
   return provider.provision(profile, operationId, {
     assertCurrent: () => {},
@@ -193,7 +175,6 @@ export async function captureWarmImage(
 
 export const PROJECT_KEY = "a".repeat(64);
 export const BASE_COMMIT = "b".repeat(40);
-type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
 export function createProjectOptions(
   events: string[],
@@ -201,6 +182,8 @@ export function createProjectOptions(
   preparation?: NonNullable<NonNullable<ProvisionOptions["project"]>["preparation"]>,
 ) {
   let enrollmentStarted = false;
+  const signal = controller.signal;
+  const assertCurrent = () => signal.throwIfAborted();
   const observe = ({ argv }: CommandCall) => {
     if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
       events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
@@ -211,20 +194,19 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
-    assertCurrent: () => controller.signal.throwIfAborted(),
+    assertCurrent,
     nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
+      ...NODE_RUNTIME_IDENTITY,
       workerBundleSha256: createWorkerArchiveFixture().sha256,
     },
     project: {
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,
       ...(preparation ? { preparation } : {}),
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
+      signal,
+      assertCurrent,
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
+        await transport.runScript("project-checkout", signal);
         events.push("project-prepared");
         return { seedKey: PROJECT_KEY, cacheHit: false };
       }),
@@ -234,21 +216,20 @@ export function createProjectOptions(
       return {
         nodeBootstrap: createNodeBootstrapFixture(),
         workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
+        signal,
       };
     }),
     beginNodeEnrollment: vi.fn(async () => {
       events.push("enrollment-begun");
       enrollmentStarted = true;
       return {
-        mode: "connect" as const,
-        setupCode: "synthetic-setup-code",
+        ...nodeEnrollmentFixture(
+          "synthetic-setup-code",
+          "Project worker",
+          async () => "project-node",
+        ),
         setupId: "project-setup",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Project worker",
-        signal: controller.signal,
-        waitForDeviceId: async () => "project-node",
+        signal,
       };
     }),
   } satisfies ProvisionOptions;

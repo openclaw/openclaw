@@ -1,7 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { liveValue } from "./solid-dom.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { liveValue } from "./live-value.ts";
 
 it("keeps input selection when a controlled value is already current", () => {
   const [value, setValue] = createSignal("draft");

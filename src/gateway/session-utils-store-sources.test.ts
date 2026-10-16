@@ -46,10 +46,10 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
   },
 }));
 
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
 import {
   prepareGatewaySessionStoreReadSources,
   prepareGatewaySessionStoreReadSourcesAsync,
-  resolveGatewaySessionStoreReadSources,
 } from "./session-utils-store-sources.js";
 
 it.each([false, true])(

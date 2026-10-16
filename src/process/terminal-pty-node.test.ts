@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -27,22 +28,6 @@ afterEach(() => {
     handle.kill();
   }
 });
-
-// Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
-async function waitForPidsToExit(pids: number[], signal: AbortSignal): Promise<void> {
-  try {
-    while (pids.some(isPidAlive)) {
-      await delay(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY processes to exit: ${pids.join(", ")}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-}
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
   it.each(["before", "prepared", "after"] as const)(
@@ -237,7 +222,8 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       expect(backgroundPid).toBeGreaterThan(0);
       // The worker finishes only after the native shell onExit callback.
       expect(isPidAlive(shellPid!)).toBe(false);
-      await waitForPidsToExit([backgroundPid!], signal);
+      // Worker exit joins the shell's onExit, but session signaling does not join foreign descendants.
+      await waitForDead(backgroundPid!, signal);
       expect(isPidAlive(backgroundPid!)).toBe(false);
     } finally {
       child.kill("SIGKILL");

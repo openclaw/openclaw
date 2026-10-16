@@ -137,6 +137,9 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
+  let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
+  let abortSessionForYield: (() => void) | null = null;
+  let queueYieldInterruptForSession: (() => void) | null = null;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
@@ -222,7 +225,6 @@ async function runEmbeddedAttemptOwned(
     const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
     emitDiagnosticRunCompleted = emitCompleted;
     const corePluginToolStages = createStageTimingTracker(Date.now);
-    let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const executeCatalogTool = (
       toolParams: Parameters<ToolSearchCatalogToolExecutor>[0],
       surface: "Tool Search" | "Code Mode",
@@ -281,9 +283,6 @@ async function runEmbeddedAttemptOwned(
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
-    let abortSessionForYield: (() => void) | null = null;
-    let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
@@ -474,8 +473,8 @@ async function runEmbeddedAttemptOwned(
           : {}),
       };
     } finally {
-      // Retained review callbacks must lose the live transcript before cleanup awaits.
-      sessionResources.releaseReview();
+      // Retained tool callbacks must not keep the history after cleanup settles.
+      const releasedResources = sessionResources.takeForCleanup();
       // Transfer resources to the session cleanup owner before awaiting it. A
       // bounded timeout must not let outer early-exit cleanup dispose them twice.
       const sessionBundleRuntimes = { ...bundleRuntimes };
@@ -485,7 +484,7 @@ async function runEmbeddedAttemptOwned(
       await cleanupStep("embedded-session", () =>
         cleanupEmbeddedAttemptSessionPhase({
           attempt: params,
-          ...sessionResources.resources,
+          ...releasedResources,
           transcriptLifecycle: sessionLock.transcriptLifecycle,
           ...sessionBundleRuntimes,
           toolSearchCatalogRef,
@@ -531,6 +530,10 @@ async function runEmbeddedAttemptOwned(
         await cleanupStep("embedded-registered-resources", async () => {
           try {
             await releasePreparedTools?.(cleanupReason);
+            releasePreparedTools = undefined;
+            toolSearchCatalogExecutor = undefined;
+            abortSessionForYield = null;
+            queueYieldInterruptForSession = null;
           } catch {
             recordAgentCleanupFailure();
           }

@@ -76,6 +76,42 @@ experimental AOT compiler. Selecting `--compile-aot` with a Bun that lacks that
 capability stops with a diagnostic; it does not silently fall back to JIT or
 bytecode. An AOT artifact needs its own runtime and signing qualification.
 
+## Select embedded plugins
+
+By default, the builder embeds every plugin in the completed runtime build.
+Use one `--plugins` option with a comma-separated list of plugin manifest IDs to
+embed a selected set:
+
+```bash
+./standalone-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-selected --plugins "$EMBEDDED_PLUGIN_IDS"
+```
+
+Set `EMBEDDED_PLUGIN_IDS` to the comma-separated IDs for the complete embedded
+set, including required core plugins. The list is
+independent of `--bytecode` or `--compile-aot`. Duplicate IDs are collapsed;
+unknown IDs and empty list elements fail before the runtime snapshot is copied.
+IDs come from `openclaw.plugin.json`, which can differ from the source directory
+name. The selected plugins must already be present in `dist/extensions`; run
+`pnpm build` first.
+
+An omitted plugin must have an npm or ClawHub installation route in the existing
+official external catalogs. Unpublished core plugins must remain embedded; the
+error names the plugin to add. The repository's source-only dev/QA plugin class
+is exempt. If a selected plugin declares `requiresPlugins`, include each required
+plugin too; the builder reports a missing dependency instead of expanding the
+selection silently. Desktop packaging owns its curated list and passes it through
+this same option.
+
+Omitted plugins contribute no entrypoints, plugin assets, or sidecar metadata.
+Their exclusively owned chunks and dependencies are removed; dependencies needed
+by retained code stay. Discovery sees only the selected set as bundled. Official
+channel and provider catalogs keep offering omitted plugins for installation,
+and configuration references receive the normal `openclaw plugins install`
+guidance. On-demand installs use the normal plugin installer and configured state
+directory; they do not modify the executable or its sidecar. Cached help for the
+full build is discarded so help reflects the selected artifact. The package-manager
+runtime in `runtime/npm/` is retained regardless of the plugin selection.
+
 ## Read the manifest
 
 `manifest.json` describes the output for packaging and verification. Its version
@@ -91,6 +127,7 @@ bytecode. An AOT artifact needs its own runtime and signing qualification.
 | `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                       |
 | `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`. |
 | `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                  |
+| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`. The additive fields retain schema version `1`.                 |
 | `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                         |
 | `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                         |
 

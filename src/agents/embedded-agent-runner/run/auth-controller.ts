@@ -291,6 +291,7 @@ export function createEmbeddedRunAuthController(params: {
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
       state.runtimeAuthState = {
         ...activeRuntimeAuthState,
+        apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
       };
       if (preparedAuth.expiresAt) {
@@ -553,6 +554,7 @@ export function createEmbeddedRunAuthController(params: {
         params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
         state.runtimeAuthState = {
           generation: (state.runtimeAuthState?.generation ?? 0) + 1,
+          apiKey: preparedAuth.apiKey,
           sourceApiKey,
           authMode: apiKeyInfo.mode,
           profileId,

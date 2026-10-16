@@ -119,7 +119,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 >
                   {banner().busy ? (
                     <>
-                      <span class="btn__spinner" aria-hidden="true"></span>
+                      <span class="btn__spinner" aria-hidden="true" />
                       {banner().busyLabel ?? banner().actionLabel}
                     </>
                   ) : (
@@ -171,7 +171,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           tone: props.disabledReasonTone ?? ("danger" as const),
           icon: props.disabledReasonBusy ? (
             <>
-              <span class="btn__spinner" aria-hidden="true"></span>
+              <span class="btn__spinner" aria-hidden="true" />
             </>
           ) : (props.disabledReasonTone ?? "danger") === "danger" ? (
             <Icon name="alertTriangle" />
@@ -297,17 +297,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 <SkillMenu args={[context.state, context.skillMenuHost, context.requestUpdate]} />
               ) : undefined}
               <EmojiMenu
-                args={[
-                  context.state.emojiMenu,
-                  props.paneId,
-                  context.state.composerTextarea,
-                  context.requestUpdate,
-                ]}
+                args={[context.state.emojiMenu, props.paneId, context.state.composerTextarea]}
               />
               {context.menus.mentionMenuVisible ? (
-                <HumanMentionMenuView
-                  args={[context.state.mentionMenu, context.mentionMenuHost, context.requestUpdate]}
-                />
+                <HumanMentionMenuView args={[context.state.mentionMenu, context.mentionMenuHost]} />
               ) : undefined}
               <div class="agent-chat__composer-lede">
                 {props.sessionAdmitted === false ? undefined : (
@@ -316,11 +309,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       surface="thread"
                       prop:sessionKey={props.sessionKey}
                       prop:agentId={props.currentAgentId}
-                    ></openclaw-mcp-app-catalog>
+                    />
                     <openclaw-mcp-app-resources
                       prop:sessionKey={props.sessionKey}
                       prop:agentId={props.currentAgentId}
-                    ></openclaw-mcp-app-resources>
+                    />
                   </>
                 )}
                 <GoalComposerMode controller={context.goalComposer} />
@@ -367,7 +360,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     <openclaw-mcp-app-context-strip
                       prop:sessionKey={props.sessionKey}
                       prop:agentId={props.currentAgentId}
-                    ></openclaw-mcp-app-context-strip>
+                    />
                   </>
                 )}
                 <AttachmentPreview {...props} readRevision={context.attachmentReadRevision} />
@@ -397,7 +390,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                         playsinline
                         aria-label={t("chat.composer.cameraPreview")}
                         prop:srcObject={props.realtimeTalkVideoStream}
-                      ></video>
+                      />
                       {props.realtimeTalkCameraDevices &&
                       props.realtimeTalkCameraDevices.length >= 2 &&
                       props.onSwitchRealtimeCamera ? (
@@ -633,7 +626,6 @@ function ComposerTextarea(view: {
           return;
         }
         context.dismissPrediction();
-        const emojiWasOpen = context.state.emojiMenu.open;
         context.state.mentionMenu.close();
         context.state.emojiMenu.close();
         context.state.editRevision += 1;
@@ -643,9 +635,6 @@ function ComposerTextarea(view: {
           // SAFETY: The identity check above requires this scope's composer textarea.
           value: (event.target as HTMLTextAreaElement).value,
         };
-        if (emojiWasOpen) {
-          context.requestUpdate();
-        }
       }}
       onCompositionEnd={(event) => context.handleCompositionEnd(event)}
       onBlur={(event) => context.handleBlur(event)}
@@ -657,6 +646,6 @@ function ComposerTextarea(view: {
       aria-label={t("chat.composer.composerInput")}
       placeholder={context.dictation?.active ? "" : view.placeholder}
       rows="1"
-    ></textarea>
+    />
   );
 }
