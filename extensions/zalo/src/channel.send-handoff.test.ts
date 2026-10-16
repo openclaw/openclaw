@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it, vi } from "vitest";
-import { zaloMessageActions } from "./actions.js";
 import { zaloPlugin } from "./channel.js";
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
@@ -25,14 +24,6 @@ function requirePayloadSend() {
   return send;
 }
 
-function requireMessageActionSend() {
-  const send = zaloMessageActions.handleAction;
-  if (!send) {
-    throw new Error("Expected Zalo message action handler");
-  }
-  return send;
-}
-
 afterEach(() => {
   resolvePinnedHostnameWithPolicyMock.mockReset();
   vi.restoreAllMocks();
@@ -51,14 +42,15 @@ it.each([
       }),
   },
   {
-    route: "message action",
+    // Message-tool sends reach Zalo through this adapter too; a caption past Zalo's limit is
+    // sent as a bare photo followed by the text, and the photo is still re-checked first.
+    route: "long-caption payload",
     send: (assertDirectAdapterHandoff: () => void) =>
-      requireMessageActionSend()({
-        channel: "zalo",
-        action: "send",
-        params: { to: target, message: "caption", media: mediaUrl },
+      requirePayloadSend()({
         cfg,
-        accountId: "default",
+        to: target,
+        text: "",
+        payload: { mediaUrl, text: "word ".repeat(500) },
         assertDirectAdapterHandoff,
       }),
   },
