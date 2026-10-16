@@ -217,7 +217,8 @@ describe("update readiness generation", () => {
           versionMatch: true,
           readyz: true,
           settled: true,
-          channelsReady: true,
+          coreReady: true,
+          channelsReady: false,
         }),
         expect.anything(),
       );
@@ -330,6 +331,79 @@ describe("update readiness generation", () => {
           expect.objectContaining({ code: "generation-changed" }),
         );
       }
+    },
+  );
+
+  it.each([
+    {
+      healthzStatus: 503,
+      expectedDetail: "Gateway HTTP readiness unverified: healthz=503; readyz=200.",
+    },
+    {
+      healthzStatus: null,
+      expectedDetail: "Gateway HTTP readiness unverified: healthz=unavailable; readyz=200.",
+    },
+  ])(
+    "reports failed liveness without blaming a ready endpoint ($healthzStatus)",
+    async ({ healthzStatus, expectedDetail }) => {
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+        makeGatewayService({ status: "running", pid: 8000 }),
+      );
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.9.5", buildId: "candidate-build", bootId: "candidate-boot" },
+        }),
+      );
+      const gatewayPort = await listen((req, res) => {
+        if (req.url === "/healthz" && healthzStatus === null) {
+          res.destroy();
+          return;
+        }
+        res.writeHead(req.url === "/healthz" ? (healthzStatus ?? 200) : 200).end();
+      });
+      const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+      await expect(
+        verifyUpdatedGateway({
+          result,
+          opts: { json: true, run: { runId: "http-endpoint-failure", env: {} } },
+          serviceEnv: { HOME: "/synthetic-home" },
+          gatewayPort,
+          expectedVersion: "2026.9.5",
+          expectedBuildId: "candidate-build",
+          requireRunningService: true,
+          waitForStartup: false,
+        }),
+      ).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
+      expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+        "http-endpoint-failure",
+        expect.objectContaining({ readyz: true, coreReady: false, settled: false }),
+        expect.anything(),
+      );
+      expect(result.steps[0]).toMatchObject({
+        exitCode: 1,
+        failureFacts: expect.arrayContaining([
+          { check: "readyz", code: "readyz-unhealthy", message: expectedDetail },
+        ]),
+      });
+      expect(recordUpdateRunStep).toHaveBeenCalledWith(
+        "http-endpoint-failure",
+        expect.objectContaining({ detail: expect.stringContaining(expectedDetail) }),
+        expect.anything(),
+      );
+      expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).toContain(
+        expectedDetail,
+      );
+      const publicReport = await prepareUpdateFailureReport(
+        { attemptId: "http-endpoint-failure", result },
+        { env: {}, stateDir: "/fixture/state" },
+      );
+      expect(publicReport.body).toContain(expectedDetail);
     },
   );
 

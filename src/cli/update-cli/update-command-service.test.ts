@@ -76,7 +76,9 @@ const run = { runId: "00000000-0000-4000-8000-000000000001", env: {} };
 describe("maybeRestartService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.waitForGatewayHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+    mocks.waitForGatewayHttpReadiness
+      .mockReset()
+      .mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
     const healthy = {
       runtime: { status: "running", pid: 8000 },
       portUsage: {
@@ -215,7 +217,11 @@ describe("maybeRestartService", () => {
           controller.abort();
         }
         current = change !== "revoked";
-        return { healthz: 200, readyz: change === "initial-readyz-error" || rollback ? 503 : 200 };
+        return {
+          healthz: 200,
+          readyz: change === "initial-readyz-error" || rollback ? 503 : 200,
+          coreReady: change !== "initial-readyz-error" && !rollback,
+        };
       });
       const onVerified = vi.fn();
       const opts = {
@@ -723,7 +729,11 @@ describe("maybeRestartService", () => {
   ])(
     "requires HTTP readiness (readyz=$readyz, refresh=$refreshServiceEnv)",
     async ({ refreshServiceEnv, readyz, verified, buildId }) => {
-      mocks.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz });
+      mocks.waitForGatewayHttpReadiness.mockResolvedValue({
+        healthz: 200,
+        readyz,
+        coreReady: readyz === 200,
+      });
       const onVerified = vi.fn();
       const onVerificationFailure = vi.fn();
       const startedAtMs = Date.now();

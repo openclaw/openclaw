@@ -107,6 +107,7 @@ describe("update-cli child-owned deferred completion", () => {
           channelsReady: false,
           settled: false,
           readyz: false,
+          coreReady: false,
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         });
         expect(

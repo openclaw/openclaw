@@ -30,6 +30,77 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it.each([false, true])(
+    "keeps channel-only HTTP readiness factual (require channels: %s)",
+    async (requireChannelHealth) => {
+      requestReadinessProbe.mockImplementation(async ({ pathname }) => ({
+        statusCode: pathname === "/healthz" ? 200 : 503,
+        body: JSON.stringify({ ready: false, coreReady: true, failing: ["whatsapp"] }),
+      }));
+      const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      await expect(
+        waitForGatewayHttpReadiness({
+          attempts: 2,
+          deadlineAt: performance.now() + 1_000,
+          delayMs: 0,
+          port: 18789,
+          ...(requireChannelHealth ? {} : { requireChannelHealth: false }),
+        }),
+      ).resolves.toEqual({
+        healthz: 200,
+        readyz: 503,
+        coreReady: true,
+        failingChannels: ["whatsapp"],
+      });
+      expect(requestReadinessProbe).toHaveBeenCalledTimes(requireChannelHealth ? 4 : 2);
+    },
+  );
+
+  it.each([
+    { label: "legacy response", body: { ready: false, failing: ["whatsapp"] }, healthz: 200 },
+    {
+      label: "core failure",
+      body: { ready: false, coreReady: false, failing: ["state-database"] },
+      healthz: 200,
+    },
+    {
+      label: "unknown failure",
+      body: { ready: false, coreReady: true, failing: [] },
+      healthz: 200,
+    },
+    {
+      label: "malformed channels",
+      body: { ready: false, coreReady: true, failing: [1] },
+      healthz: 200,
+    },
+    {
+      label: "inconsistent status",
+      body: { ready: true, coreReady: true, failing: ["whatsapp"] },
+      healthz: 200,
+    },
+    {
+      label: "liveness failure",
+      body: { ready: false, coreReady: true, failing: ["whatsapp"] },
+      healthz: 503,
+    },
+    { label: "invalid JSON", body: "invalid", healthz: 200 },
+  ])("does not bypass $label for updates", async ({ body, healthz }) => {
+    requestReadinessProbe.mockImplementation(async ({ pathname }) => ({
+      statusCode: pathname === "/healthz" ? healthz : 503,
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    }));
+    const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+    await expect(
+      waitForGatewayHttpReadiness({
+        attempts: 1,
+        deadlineAt: performance.now() + 1_000,
+        delayMs: 0,
+        port: 18789,
+        requireChannelHealth: false,
+      }),
+    ).resolves.toMatchObject({ coreReady: false });
+  });
+
   it.each([true])(
     "keeps native inspection and health RPC within one supplied allowance (deadline=%s)",
     async (withDeadline) => {
@@ -100,8 +171,12 @@ describe("restart health", () => {
           delayMs: 0,
           port: address.port,
         }),
-      ).resolves.toEqual({ healthz: 200, readyz: 503 });
-      expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
+      ).resolves.toEqual({ healthz: 200, readyz: 503, coreReady: false });
+      expect(onObservation).toHaveBeenCalledExactlyOnceWith({
+        healthz: 200,
+        readyz: 503,
+        coreReady: false,
+      });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -137,7 +212,7 @@ describe("restart health", () => {
         delayMs: 0,
         port: 18789,
       }),
-    ).resolves.toEqual({ healthz: null, readyz: null });
+    ).resolves.toEqual({ healthz: null, readyz: null, coreReady: false });
     wallClockSpy.mockRestore();
     // The monotonic budget must hold near its configured deadline, not the
     // rewound wall-clock budget. This fails on the pre-fix Date.now() remaining

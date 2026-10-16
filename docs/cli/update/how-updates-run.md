@@ -681,7 +681,11 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 the normal 12-check health settle and a Gateway hello handshake matching the
-expected version and Git build identity, and requires HTTP 200 from `/readyz`.
+expected version and Git build identity, and requires HTTP liveness and core readiness.
+A detailed `/readyz` response with `coreReady: true` may retain HTTP `503` and
+`ready: false` for channel-only failures. Missing core proof or a core readiness
+failure still blocks verification; ordinary health checks retain the full
+channel readiness contract.
 Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
 Channel probe errors, timeouts, and stopped or suppressed channels become named

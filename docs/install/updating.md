@@ -584,6 +584,15 @@ failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
 
+Channel-only outages, including a logged-out account or failed provider probe,
+are reported as warnings after core activation is verified. The updater still
+checks the installed version/build, service and process identity, startup, and
+core readiness. A detailed `/readyz` response can report `coreReady: true` while
+retaining HTTP `503`, `ready: false`, and the failing channel names. Unknown or
+older `503` responses without that proof remain unverified. Update reports retain
+the actual channel and HTTP readiness facts; use `openclaw channels status --probe`
+to resolve the named channel warnings.
+
 Shell completion-cache refresh is best effort. If it times out and its process
 cleanup is verified, finalization records the failed cache phase and deadline
 warning while allowing the update to finish. Run `openclaw completion --write-state`

@@ -14,7 +14,8 @@ const probes = vi.hoisted(() => ({
   http: vi.fn(),
   inspect: vi.fn(),
 }));
-vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: probes.context,
   waitForGatewayHttpReadiness: probes.http,
 }));
@@ -24,11 +25,26 @@ vi.mock("../cli/daemon-cli/restart-health.js", () => ({
     a.runtime.pid === b.runtime.pid && a.gatewayBootId === b.gatewayBootId,
   waitForGatewayHealthyRestart: probes.wait,
 }));
-vi.mock("../config/paths.js", () => ({ resolveGatewayPort: () => 18789 }));
-vi.mock("../daemon/service.js", () => ({ resolveGatewayService: () => ({}) }));
-vi.mock("./openclaw-root.js", () => ({ resolveOpenClawPackageRoot: probes.root }));
-vi.mock("./package-json.js", () => ({ readPackageVersion: probes.version }));
-vi.mock("./update-git-runtime.js", () => ({ readBuiltGatewayBuildId: probes.build }));
+vi.mock("../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/paths.js")>()),
+  resolveGatewayPort: () => 18789,
+}));
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: () => ({}),
+}));
+vi.mock("./openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: probes.root,
+}));
+vi.mock("./package-json.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./package-json.js")>()),
+  readPackageVersion: probes.version,
+}));
+vi.mock("./update-git-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-git-runtime.js")>()),
+  readBuiltGatewayBuildId: probes.build,
+}));
 
 const { observeInterruptedUpdateGateway } = await import("./update-run-interruption-health.js");
 const candidate = { version: "1.0.0", buildId: "b1" };
@@ -59,10 +75,31 @@ beforeEach(() => {
   probes.build.mockReset().mockResolvedValue(candidate.buildId);
   probes.context.mockReset().mockResolvedValue({ auth: undefined, config: {} });
   probes.wait.mockReset().mockResolvedValue(healthy);
-  probes.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+  probes.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
   probes.inspect.mockReset().mockResolvedValue(healthy);
 });
 afterEach(() => vi.useRealTimers());
+
+it("settles core activation while retaining channel-only readiness warnings", async () => {
+  probes.http.mockResolvedValue({
+    healthz: 200,
+    readyz: 503,
+    coreReady: true,
+    failingChannels: ["whatsapp"],
+  });
+  probes.inspect.mockResolvedValue({
+    ...healthy,
+    channelProbeErrors: [{ id: "whatsapp", error: "logged out" }],
+  });
+  expect(await observe()).toMatchObject({
+    outcome: "settled",
+    channelWarnings: ["whatsapp"],
+    verification: { coreReady: true, readyz: false, channelsReady: false, settled: true },
+  });
+  expect(probes.wait).toHaveBeenCalledWith(
+    expect.objectContaining({ requireChannelHealth: false }),
+  );
+});
 
 function after<T>(ms: number, value: T): Promise<T> {
   return new Promise((resolve) => {
@@ -76,7 +113,9 @@ it("settles a managed candidate taking 25,431 ms across setup and reconciliation
   probes.root.mockImplementation(() => after(1_000, "/synthetic/root"));
   probes.context.mockImplementation(() => after(2_000, { config: {} }));
   probes.wait.mockImplementation(() => after(elapsedMs - 7_000, healthy));
-  probes.http.mockImplementation(() => after(2_000, { healthz: 200, readyz: 200 }));
+  probes.http.mockImplementation(() =>
+    after(2_000, { healthz: 200, readyz: 200, coreReady: true }),
+  );
   probes.inspect.mockImplementation(() => after(1_000, healthy));
   const result = observe();
   await vi.advanceTimersByTimeAsync(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS);
@@ -127,7 +166,9 @@ it("does not grant new HTTP or inspection budgets after a slow healthy settle", 
   probes.wait.mockImplementation(() =>
     after(INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS - 6_500, healthy),
   );
-  probes.http.mockImplementation(() => after(4_000, { healthz: 200, readyz: 200 }));
+  probes.http.mockImplementation(() =>
+    after(4_000, { healthz: 200, readyz: 200, coreReady: true }),
+  );
   probes.inspect.mockImplementation(() => after(4_000, healthy));
   let completed = false;
   const result = observe().then((value) => {
@@ -156,7 +197,7 @@ it.each(["wait", "http", "generation", "installed"])(
         waitOutcome: "build-id-mismatch",
       });
     } else if (change === "http") {
-      probes.http.mockResolvedValue({ healthz: 200, readyz: 503 });
+      probes.http.mockResolvedValue({ healthz: 200, readyz: 503, coreReady: false });
     } else if (change === "generation") {
       probes.inspect
         .mockResolvedValueOnce(healthy)

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { toPublicUpdateRun } from "../../../src/infra/update-run-record.js";
 import { UpdateRunRecordSchema as LedgerRecordSchema } from "../../../src/infra/update-run-schema.js";
 import {
   validateUpdateRunRecord,
@@ -39,6 +40,7 @@ const run = LedgerRecordSchema.parse({
     versionMatch: true,
     pluginErrors: [],
     channelsReady: true,
+    coreReady: true,
     noticeDelivered: true,
     doctorHint: "openclaw doctor",
   },
@@ -58,6 +60,55 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
+  it.each([true, false, undefined])(
+    "carries core readiness through public update results (coreReady=%s)",
+    (coreReady) => {
+      const record = toPublicUpdateRun(
+        LedgerRecordSchema.parse({
+          ...run,
+          status: coreReady === false ? "failed" : "succeeded",
+          verification: {
+            ...run.verification,
+            coreReady,
+            readyz: coreReady === undefined,
+            channelsReady: coreReady === undefined,
+            settled: true,
+          },
+        }),
+      );
+      if (coreReady === undefined) {
+        delete record.verification.coreReady;
+      }
+      expect(record.verification.coreReady).toBe(coreReady);
+      expect({
+        record: validateUpdateRunRecord(record),
+        get: validateUpdateRunsGetResult({ run: record }),
+        list: validateUpdateRunsListResult({ runs: [record] }),
+        status: validateUpdateStatusResult({
+          sentinel: null,
+          updateAvailable: null,
+          activeRun: record,
+          lastRun: record,
+        }),
+      }).toEqual({ record: true, get: true, list: true, status: true });
+    },
+  );
+
+  it("keeps core readiness boolean and verification fields closed", () => {
+    expect(
+      validateUpdateRunRecord({
+        ...run,
+        verification: { ...run.verification, coreReady: "true" },
+      }),
+    ).toBe(false);
+    expect(
+      validateUpdateRunRecord({
+        ...run,
+        verification: { ...run.verification, unexpectedReadiness: true },
+      }),
+    ).toBe(false);
+  });
+
   it("carries snapshot capacity evidence through the wire projection", () => {
     const evidence = {
       snapshotCapacity: {

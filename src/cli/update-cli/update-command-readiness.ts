@@ -109,7 +109,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       }
       const expectedVersion = params.expectedVersion ?? installedVersion;
       progress("readiness", `checking service and listener identity on port ${port}`);
-      const { health, readyz } = await observeUpdateGatewayReadiness({
+      const { health, coreReady } = await observeUpdateGatewayReadiness({
         serviceEnv: env,
         gatewayPort: port,
         expectedVersion: expectedVersion ?? undefined,
@@ -125,7 +125,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         assertCurrent,
         onProgress: progress,
       });
-      if (!health.healthy || !readyz) {
+      if (!health.healthy || !coreReady) {
         progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
@@ -335,7 +335,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       health = params.health ?? (await readHealth());
       retainChannelTimeouts(health);
       if (params.healthOnly) {
-        return { health, readyz: false, http: undefined, launchAgentRecovery };
+        return { health, readyz: false, coreReady: false, http: undefined, launchAgentRecovery };
       }
       const recoverHealth = params.recoverHealth;
       if (recoverHealth && !gatewayReadinessPending(health)) {
@@ -354,7 +354,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.activatedPluginErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
-        return { health, readyz: false, http: undefined, launchAgentRecovery };
+        return { health, readyz: false, coreReady: false, http: undefined, launchAgentRecovery };
       }
       params.onProgress?.("http", "checking Gateway HTTP healthz and readyz endpoints");
       const context = await deadline.read("HTTP check context", () =>
@@ -363,6 +363,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       http = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port: params.gatewayPort,
           attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
@@ -379,6 +380,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       );
       assertCurrent();
       const readyz = http.readyz === 200;
+      const coreReady = http.coreReady;
       if (
         health.healthy &&
         (!params.requireRunningService || health.runtime.status === "running")
@@ -411,7 +413,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.probeError = "Gateway process changed during final readiness verification.";
         }
       }
-      if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+      if (health.waitOutcome !== "generation-changed" && (!coreReady || remainingMs() === 0)) {
         health = {
           ...health,
           healthy: false,
@@ -419,12 +421,12 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
             ? {
                 waitOutcome: "timeout" as const,
                 elapsedMs: performance.now() - startedAtMs,
-                ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
+                ...(!coreReady ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
               }
             : {}),
         };
       }
-      return { health, readyz, http, launchAgentRecovery };
+      return { health, readyz, coreReady, http, launchAgentRecovery };
     });
     if (channelProbeTimeouts.size) {
       readiness.health.channelProbeTimeouts = Array.from(channelProbeTimeouts.values());
@@ -463,6 +465,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         probeError: interval ? health.probeError : error.message,
       },
       readyz: false,
+      coreReady: false,
       http,
       launchAgentRecovery,
     };

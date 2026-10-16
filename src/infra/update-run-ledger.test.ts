@@ -61,6 +61,80 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
+  it.each([
+    {
+      label: "channel-only failure",
+      coreReady: true,
+      readyz: false,
+      channelsReady: false,
+      confirmed: true,
+    },
+    {
+      label: "core failure",
+      coreReady: false,
+      readyz: true,
+      channelsReady: true,
+      confirmed: false,
+    },
+    {
+      label: "legacy channel failure",
+      coreReady: undefined,
+      readyz: false,
+      channelsReady: false,
+      confirmed: false,
+    },
+    {
+      label: "legacy readiness",
+      coreReady: undefined,
+      readyz: true,
+      channelsReady: true,
+      confirmed: true,
+    },
+  ])(
+    "persists $label without changing readiness facts",
+    ({ coreReady, readyz, channelsReady, confirmed }) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      recordUpdateRunVerification(
+        run.runId,
+        {
+          serviceRunning: true,
+          versionMatch: true,
+          settled: true,
+          pluginErrors: [],
+          coreReady,
+          readyz,
+          channelsReady,
+        },
+        options,
+      );
+      const saved = expectDefined(getUpdateRun(run.runId, options), "persisted update run");
+      expect(saved.confirmedAtMs !== null).toBe(confirmed);
+      expect(saved.verification).toMatchObject({ readyz, channelsReady });
+      expect(saved.verification.coreReady).toBe(coreReady);
+    },
+  );
+
+  it("does not lend an earlier core proof to a legacy readiness observation", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const observed = recordUpdateRunVerification(
+      run.runId,
+      {
+        serviceRunning: true,
+        versionMatch: true,
+        settled: true,
+        pluginErrors: [],
+        readyz: false,
+        channelsReady: false,
+      },
+      options,
+    );
+    expect(observed.confirmedAtMs).toBeNull();
+    expect(observed.verification.coreReady).toBeUndefined();
+  });
+
   it("persists and reports installed admission through the existing origin metadata", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli" }, options);

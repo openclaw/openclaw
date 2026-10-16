@@ -25,6 +25,7 @@ async function verifyObservation(
   vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
     health,
     readyz,
+    coreReady: readyz,
     http: undefined,
     launchAgentRecovery: null,
   });

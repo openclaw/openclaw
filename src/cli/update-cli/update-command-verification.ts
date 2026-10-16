@@ -103,6 +103,7 @@ export async function readFailedUpdateGatewayState(
     runningBuildId: undefined,
     versionMatch: undefined,
     readyz: false,
+    coreReady: false,
     settled: false,
     channelsReady: false,
   };
@@ -174,6 +175,7 @@ function updateGatewayHealthFacts(
   health: GatewayRestartSnapshot,
   port: number,
   readyz: boolean,
+  coreReady: boolean,
 ): NonNullable<UpdateRunResult["verification"]> {
   return {
     serviceRunning:
@@ -194,9 +196,14 @@ function updateGatewayHealthFacts(
       ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
       ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
     ],
-    channelsReady: health.healthy,
+    channelsReady:
+      readyz &&
+      !health.channelProbeErrors?.length &&
+      !health.channelProbeTimeouts?.length &&
+      !health.channelRuntimeWarnings?.length,
     settled: health.healthy,
     readyz,
+    coreReady,
   };
 }
 
@@ -216,16 +223,31 @@ export async function verifyUpdatedGateway(
 > {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
-  const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
-    ...params,
-    assertCurrent,
-    deadline: params.opts.run?.deadline ?? params.deadline,
-  });
-  const channelWarnings = [
+  const { health, readyz, coreReady, http, launchAgentRecovery } =
+    await observeUpdateGatewayReadiness({
+      ...params,
+      assertCurrent,
+      deadline: params.opts.run?.deadline ?? params.deadline,
+    });
+  const channelFailures = new Map<string, string>();
+  const channelsWithRpcWarnings = new Set<string>();
+  for (const { id, error } of [
     ...(health.channelProbeErrors ?? []),
     ...(health.channelProbeTimeouts ?? []),
     ...(health.channelRuntimeWarnings ?? []),
-  ].map(({ id, error }) =>
+  ]) {
+    if (!channelFailures.has(id)) {
+      channelFailures.set(id, error);
+    }
+    // RPC can name individual accounts; HTTP names only their parent channel.
+    channelsWithRpcWarnings.add(id.split("/")[0] ?? id);
+  }
+  for (const id of http?.failingChannels ?? []) {
+    if (!channelsWithRpcWarnings.has(id)) {
+      channelFailures.set(id, "channel readiness unavailable");
+    }
+  }
+  const channelWarnings = Array.from(channelFailures, ([id, error]) =>
     redactSupportDiagnosticLine(
       `Channel health warning (${id}: ${error}). Run openclaw channels status --probe or openclaw health --json to inspect it.`,
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
@@ -241,11 +263,16 @@ export async function verifyUpdatedGateway(
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   assertCurrent();
   if (params.purpose === "recovery") {
-    params.result.verification = updateGatewayHealthFacts(health, params.gatewayPort, readyz);
+    params.result.verification = updateGatewayHealthFacts(
+      health,
+      params.gatewayPort,
+      readyz,
+      coreReady,
+    );
   } else if (proofOptions.run) {
     recordUpdateRunVerification(
       proofOptions.run.runId,
-      updateGatewayHealthFacts(health, params.gatewayPort, readyz),
+      updateGatewayHealthFacts(health, params.gatewayPort, readyz, coreReady),
       { env: proofOptions.run.env },
     );
   }
@@ -253,7 +280,7 @@ export async function verifyUpdatedGateway(
   if (
     params.purpose !== "package-replacement" &&
     serviceDefinitionRefusal &&
-    (!health.healthy || !serviceRunning || !readyz)
+    (!health.healthy || !serviceRunning || !coreReady)
   ) {
     return {
       ok: false,
@@ -312,7 +339,7 @@ export async function verifyUpdatedGateway(
       }
     }
   };
-  if (health.healthy && serviceRunning && readyz) {
+  if (health.healthy && serviceRunning && coreReady) {
     const pluginFailures = new Map<string, string>();
     for (const failure of health.activatedPluginErrors ?? []) {
       pluginFailures.set(failure.id, failure.error);
@@ -370,14 +397,17 @@ export async function verifyUpdatedGateway(
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
     };
   }
-  const httpFailed = http !== undefined && !readyz;
+  const httpFailure =
+    http !== undefined && !coreReady
+      ? `Gateway HTTP readiness unverified: healthz=${http.healthz ?? "unavailable"}; readyz=${http.readyz ?? "unavailable"}.`
+      : undefined;
   const diagnosticLines: [string, ...string[]] = [
     params.purpose === "package-replacement"
       ? "Package update installed; Gateway readiness remains unverified with --no-restart. Its replacement restart may still be starting."
       : params.purpose === "recovery"
         ? "Gateway recovery check did not verify serving health."
         : "Gateway did not become healthy after restart.",
-    ...(httpFailed ? ["Gateway /readyz did not return HTTP 200."] : []),
+    ...(httpFailure ? [httpFailure] : []),
     ...(health.healthy && params.requireRunningService
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
@@ -399,7 +429,7 @@ export async function verifyUpdatedGateway(
       ? "build-id-mismatch"
       : health.activatedPluginErrors?.length
         ? "plugin-errors"
-        : httpFailed
+        : httpFailure
           ? "readyz-unhealthy"
           : !serviceRunning
             ? "service-not-running"
@@ -417,11 +447,11 @@ export async function verifyUpdatedGateway(
       });
     }
   }
-  if (httpFailed) {
+  if (httpFailure) {
     facts.push({
       check: "readyz",
       code: "readyz-unhealthy",
-      message: `Gateway readiness endpoint returned HTTP ${http.readyz ?? "unavailable"}; expected HTTP 200.`,
+      message: httpFailure,
     });
   }
   if (!serviceRunning) {
@@ -447,7 +477,7 @@ export async function verifyUpdatedGateway(
     params.purpose === "package-replacement"
       ? undefined
       : normalizeUpdateFailureFacts(facts, params.serviceEnv),
-    httpFailed ? "Gateway /readyz did not return HTTP 200." : reason,
+    httpFailure ?? reason,
     params.purpose === "package-replacement" ? diagnosticLines.join("\n") : undefined,
   );
   if (params.opts.json) {
@@ -465,7 +495,7 @@ export async function verifyUpdatedGateway(
     !health.activatedPluginErrors?.length,
     !health.channelProbeErrors?.length,
     health.healthy,
-    readyz,
+    coreReady,
   ].filter(Boolean).length;
   return { ok: params.purpose === "package-replacement", score, summary: reason };
 }

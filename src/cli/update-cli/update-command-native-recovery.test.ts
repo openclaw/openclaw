@@ -208,6 +208,7 @@ it("retains the live update run while recovering a failed update before reportin
             staleGatewayPids: [],
           },
           readyz: true,
+          coreReady: true,
           http: undefined,
           launchAgentRecovery: null,
         };
@@ -264,6 +265,7 @@ it("retains the live update run while recovering a failed update before reportin
         channelsReady: true,
         settled: true,
         readyz: true,
+        coreReady: true,
         recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
       });
       expect(

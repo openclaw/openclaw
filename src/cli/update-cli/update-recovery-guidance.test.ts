@@ -253,7 +253,8 @@ describe("update recovery reporting", () => {
           gatewayVersion: "2026.9.6",
         },
         readyz: healthy,
-        http: { healthz: 200, readyz: healthy ? 200 : 503 },
+        coreReady: healthy,
+        http: { healthz: 200, readyz: healthy ? 200 : 503, coreReady: healthy },
         launchAgentRecovery: null,
       });
       await verifyUpdatedGateway({

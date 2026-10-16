@@ -252,6 +252,7 @@ export const UpdateRunRecordSchema = closedObject({
     versionMatch: Type.Optional(Type.Boolean()),
     pluginErrors: Type.Optional(Type.Array(text, { maxItems: 32 })),
     channelsReady: Type.Optional(Type.Boolean()),
+    coreReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
     noticeDelivered: Type.Optional(Type.Boolean()),

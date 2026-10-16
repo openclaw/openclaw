@@ -182,6 +182,7 @@ describe("gateway probe endpoints", () => {
   it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
+      coreReady: false,
       failing: ["gateway-draining"],
       uptimeMs: 1_000,
     });
@@ -405,6 +406,7 @@ describe("gateway probe endpoints", () => {
   it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
+      coreReady: true,
       failing: ["discord", "telegram"],
       uptimeMs: 8_000,
     });
@@ -433,6 +435,7 @@ describe("gateway probe endpoints", () => {
           statusCode: 503,
           body: {
             ready: false,
+            coreReady: true,
             failing: ["discord", "telegram"],
             uptimeMs: 8_000,
           },
@@ -451,6 +454,7 @@ describe("gateway probe endpoints", () => {
           statusCode: 503,
           body: {
             ready: false,
+            coreReady: true,
             failing: ["discord", "telegram"],
             uptimeMs: 8_000,
           },
@@ -462,6 +466,7 @@ describe("gateway probe endpoints", () => {
   it("hides readiness details when trusted-proxy auth violates browser origin policy", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
+      coreReady: true,
       failing: ["discord", "telegram"],
       uptimeMs: 8_000,
     });
@@ -522,13 +527,38 @@ describe("gateway probe endpoints", () => {
 
     await withGatewayServer({
       prefix: "probe-throws",
-      resolvedAuth: AUTH_NONE,
+      resolvedAuth: AUTH_TOKEN,
       overrides: { getReadiness },
       run: async (server) => {
-        const { res, getBody } = await sendRequest(server, { path: "/ready" });
+        const detailedBody = {
+          ready: false,
+          coreReady: false,
+          failing: ["internal"],
+          uptimeMs: 0,
+        };
+        for (const { name, request, expected } of [
+          { name: "local", request: { path: "/readyz" }, expected: detailedBody },
+          {
+            name: "authenticated remote",
+            request: {
+              path: "/readyz",
+              remoteAddress: "10.0.0.8",
+              host: "gateway.test",
+              authorization: "Bearer test-token",
+            },
+            expected: detailedBody,
+          },
+          {
+            name: "unauthenticated remote",
+            request: { path: "/readyz", remoteAddress: "10.0.0.8", host: "gateway.test" },
+            expected: { ready: false },
+          },
+        ]) {
+          const { res, getBody } = await sendRequest(server, request);
 
-        expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toEqual({ ready: false, failing: ["internal"], uptimeMs: 0 });
+          expect.soft(res.statusCode, name).toBe(503);
+          expect.soft(JSON.parse(getBody()), name).toEqual(expected);
+        }
       },
     });
   });
@@ -642,6 +672,7 @@ describe("gateway probe endpoints", () => {
         expect(readiness.res.statusCode).toBe(503);
         expect(JSON.parse(readiness.getBody())).toMatchObject({
           ready: false,
+          coreReady: true,
           failing: ["whatsapp"],
         });
 
@@ -749,6 +780,7 @@ describe("gateway probe endpoints", () => {
     const shouldEnforcePluginGatewayAuth = vi.fn(() => true);
     const getReadiness = vi.fn(() => ({
       ready: true,
+      coreReady: true,
       failing: [],
       uptimeMs: 123,
     }));
@@ -773,7 +805,12 @@ describe("gateway probe endpoints", () => {
           if (path.startsWith("/health")) {
             expect(body, path).toEqual({ ok: true, status: "live" });
           } else if (path.startsWith("/ready")) {
-            expect(body, path).toEqual({ ready: true, failing: [], uptimeMs: 123 });
+            expect(body, path).toEqual({
+              ready: true,
+              coreReady: true,
+              failing: [],
+              uptimeMs: 123,
+            });
           } else {
             expect(body, path).toMatchObject({
               ok: true,

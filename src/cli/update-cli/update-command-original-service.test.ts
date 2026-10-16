@@ -216,7 +216,7 @@ beforeEach(async () => {
   mocks.running = true;
   mocks.windows = false;
   mocks.capability.mockResolvedValue(true);
-  mocks.readiness.mockResolvedValue({ readyz: 200 });
+  mocks.readiness.mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
   mocks.nativeRestart.mockImplementation(async (params) => {
     params.assertCurrent();
     expect(params.preserveDefinition).toBe(true);

@@ -6,6 +6,7 @@ import {
   GatewayRestartDeadlineError,
 } from "../cli/daemon-cli/restart-health-deadline.js";
 import {
+  getGatewayChannelWarningIds,
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
@@ -161,6 +162,7 @@ export async function waitForImmutableGateway(params: {
         expectedVersion: version,
         expectedBuildId: buildId,
         requirePluginHealth: true,
+        requireChannelHealth: false,
       };
       waited = await waitForGatewayHealthyRestart({
         ...probe,
@@ -174,6 +176,7 @@ export async function waitForImmutableGateway(params: {
       }
       const http = await deadline.read("readiness:http", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port,
           attempts: 1,
@@ -250,14 +253,19 @@ export async function waitForImmutableGateway(params: {
         !isSameGatewayRestartGeneration(waited, after) ||
         after.gatewayVersion !== version ||
         after.gatewayBuildId !== buildId ||
-        http.healthz !== 200 ||
-        http.readyz !== 200
+        !http.coreReady
       ) {
         return result("unverified");
       }
       assertImmutableServiceProcessCurrent(current);
       assertCurrent();
       observed = current;
+      const channelWarnings = getGatewayChannelWarningIds(after, http);
+      if (channelWarnings.length) {
+        params.onReceipt?.(
+          `readiness-channel-warning: ${channelWarnings.join(", ")}. Run openclaw channels status --probe.`,
+        );
+      }
       return {
         ...result("verified"),
         verification: {

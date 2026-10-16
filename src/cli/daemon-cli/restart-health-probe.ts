@@ -86,7 +86,29 @@ export type GatewayReachability = {
 type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
+  coreReady: boolean;
+  failingChannels?: string[];
 };
+
+export function getGatewayChannelWarningIds(
+  health: Partial<
+    Pick<
+      GatewayReachability,
+      "channelProbeErrors" | "channelProbeTimeouts" | "channelRuntimeWarnings"
+    >
+  >,
+  http: GatewayHttpReadiness,
+): string[] {
+  return Array.from(
+    new Set([
+      ...(http.failingChannels ?? []),
+      ...(health.channelProbeErrors ?? []).map(({ id }) => id),
+      ...(health.channelProbeTimeouts ?? []).map(({ id }) => id),
+      ...(health.channelRuntimeWarnings ?? []).map(({ id }) => id),
+    ]),
+    formatGatewayRestartProbeError,
+  );
+}
 
 /** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */
 export async function waitForGatewayHttpReadiness(params: {
@@ -98,32 +120,59 @@ export async function waitForGatewayHttpReadiness(params: {
   probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
+  /** Updates may accept owner-proven core readiness while retaining channel failures. */
+  requireChannelHealth?: boolean;
   onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
   params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
-  let latest: GatewayHttpReadiness = { healthz: null, readyz: null };
+  let latest: GatewayHttpReadiness = { healthz: null, readyz: null, coreReady: false };
   for (let attempt = 0; attempt < params.attempts; attempt += 1) {
     params.signal?.throwIfAborted();
     const remainingMs = params.deadlineAt - performance.now();
     if (remainingMs <= 0) {
       return latest;
     }
-    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
-      const result = await probe.requestHttp({
+    const probeStatus = async (pathname: "/healthz" | "/readyz") =>
+      probe.requestHttp({
         host: "127.0.0.1",
         pathname,
         port: params.port,
         timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
         ...(params.signal ? { signal: params.signal } : {}),
       });
-      return result?.statusCode ?? null;
-    };
-    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
+    const [healthResponse, readyResponse] = await Promise.all([
+      probeStatus("/healthz"),
+      probeStatus("/readyz"),
+    ]);
     params.signal?.throwIfAborted();
-    latest = { healthz, readyz };
+    const healthz = healthResponse?.statusCode ?? null;
+    const readyz = readyResponse?.statusCode ?? null;
+    let failingChannels: string[] | undefined;
+    if (readyz === 503 && readyResponse) {
+      try {
+        const details = asOptionalRecord(JSON.parse(readyResponse.body));
+        if (
+          details?.ready === false &&
+          details.coreReady === true &&
+          Array.isArray(details.failing) &&
+          details.failing.length > 0 &&
+          details.failing.every((id: unknown) => typeof id === "string" && id.trim())
+        ) {
+          failingChannels = details.failing.map(formatGatewayRestartProbeError);
+        }
+      } catch {
+        // Older or unavailable detail responses cannot prove core readiness.
+      }
+    }
+    latest = {
+      healthz,
+      readyz,
+      coreReady: healthz === 200 && (readyz === 200 || failingChannels !== undefined),
+      ...(failingChannels ? { failingChannels } : {}),
+    };
     params.onObservation?.(latest);
-    if (healthz === 200 && readyz === 200) {
+    if (latest.coreReady && (params.requireChannelHealth === false || readyz === 200)) {
       return latest;
     }
     if (attempt + 1 < params.attempts) {

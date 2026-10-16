@@ -428,6 +428,7 @@ describe("update plugin lifecycle lease boundaries", () => {
               expectedVersion: params.expectedVersion,
             },
             readyz: true,
+            coreReady: true,
             http: undefined,
             launchAgentRecovery: null,
           };

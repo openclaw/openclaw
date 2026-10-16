@@ -144,11 +144,15 @@ function readySnapshot(
   uptimeMs = FIVE_MIN_MS,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { ready: true, failing: [], uptimeMs, ...extra };
+  return { ready: true, coreReady: true, failing: [], uptimeMs, ...extra };
 }
 
-function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<string, unknown> {
-  return { ready: false, failing, uptimeMs };
+function failingSnapshot(
+  failing: string[],
+  uptimeMs = FIVE_MIN_MS,
+  coreReady = true,
+): Record<string, unknown> {
+  return { ready: false, coreReady, failing, uptimeMs };
 }
 
 describe("createReadinessChecker", () => {
@@ -159,7 +163,7 @@ describe("createReadinessChecker", () => {
         getStartupPending: () => startupPending,
         cacheTtlMs: 1_000,
       });
-      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
+      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"], FIVE_MIN_MS, false));
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
       startupPending = false;
@@ -176,7 +180,7 @@ describe("createReadinessChecker", () => {
         cacheTtlMs: 1_000,
       });
 
-      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
+      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"], FIVE_MIN_MS, false));
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
       gatewayDraining = false;
@@ -196,7 +200,7 @@ describe("createReadinessChecker", () => {
 
       stateDatabase.failure = new Error("newer shared-state schema");
       expect(readiness()).toEqual({
-        ...failingSnapshot(["state-database"]),
+        ...failingSnapshot(["state-database"], FIVE_MIN_MS, false),
         stateDatabase: { reason: "newer shared-state schema" },
       });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
@@ -230,7 +234,7 @@ describe("createReadinessChecker", () => {
         reason: "Waiting for admitted work before restoring the previous plugin runtime.",
       };
       expect(readiness()).toEqual({
-        ...failingSnapshot(["plugin-reload"]),
+        ...failingSnapshot(["plugin-reload"], FIVE_MIN_MS, false),
         pluginReload,
       });
       pluginReload = {
@@ -239,7 +243,7 @@ describe("createReadinessChecker", () => {
         reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
       };
       expect(readiness()).toEqual({
-        ...failingSnapshot(["plugin-reload"]),
+        ...failingSnapshot(["plugin-reload"], FIVE_MIN_MS, false),
         pluginReload,
       });
 
@@ -282,13 +286,13 @@ describe("createReadinessChecker", () => {
 
         refusals = [pending];
         expect(readiness()).toEqual({
-          ...failingSnapshot(["agent-database:main"]),
+          ...failingSnapshot(["agent-database:main"], FIVE_MIN_MS, false),
           agentDatabases: [pending],
         });
 
         refusals = [refusal];
         expect(readiness()).toEqual({
-          ...failingSnapshot(["agent-database:main"]),
+          ...failingSnapshot(["agent-database:main"], FIVE_MIN_MS, false),
           agentDatabases: [refusal],
         });
 

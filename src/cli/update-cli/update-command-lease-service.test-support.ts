@@ -117,7 +117,7 @@ async function mockRepairManagedService(
   vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
   vi.spyOn(restartHealth, "waitForGatewayHttpReadiness").mockImplementation(async () => {
     const running = (await readRuntime(process.env)).status === "running";
-    return { healthz: running ? 200 : null, readyz: running ? 200 : null };
+    return { healthz: running ? 200 : null, readyz: running ? 200 : null, coreReady: running };
   });
   return { serviceState, stop, restart };
 }

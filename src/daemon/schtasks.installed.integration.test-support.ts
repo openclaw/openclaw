@@ -164,7 +164,7 @@ export async function runInstalledLifecycle(
         observations[phase] = { ...value, elapsedMs: performance.now() - started };
       },
     });
-    assert.deepEqual(readiness, { healthz: 200, readyz: 200 });
+    assert.deepEqual(readiness, { healthz: 200, readyz: 200, coreReady: true });
     await recordProgress(`${phase}:ready`);
   };
   const doctor = async (task: Task, expectedExit = 1) =>

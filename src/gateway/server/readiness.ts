@@ -14,6 +14,8 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 type ReadinessResult = {
   ready: boolean;
+  /** Core admission is independent of external channel availability. */
+  coreReady: boolean;
   failing: string[];
   suppressed?: string[];
   uptimeMs: number;
@@ -117,16 +119,17 @@ export function createReadinessChecker(
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
-      return { ready: false, failing: [startup.pendingReason], uptimeMs };
+      return { ready: false, coreReady: false, failing: [startup.pendingReason], uptimeMs };
     }
     if (startup.status === "draining") {
-      return { ready: false, failing: ["gateway-draining"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: ["state-database"],
         stateDatabase: { reason: stateDatabaseFailure.message },
         uptimeMs,
@@ -136,6 +139,7 @@ export function createReadinessChecker(
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
@@ -143,7 +147,7 @@ export function createReadinessChecker(
     const pluginReload = deps.getPluginReloadStatus?.();
     if (pluginReload) {
       cachedState = null;
-      return { ready: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+      return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
     }
     if (
       cachedState &&
@@ -153,7 +157,7 @@ export function createReadinessChecker(
       return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return { ready: true, failing: [], uptimeMs };
+      return { ready: true, coreReady: true, failing: [], uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
@@ -194,6 +198,7 @@ export function createReadinessChecker(
     cachedAt = now;
     cachedState = {
       ready: failing.length === 0,
+      coreReady: true,
       failing,
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };

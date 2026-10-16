@@ -123,7 +123,7 @@ beforeEach(() => {
   mocks.inspect.mockReset().mockImplementation(async () => serviceObservation());
   mocks.current.mockReset();
   mocks.runtime.mockReset().mockResolvedValue({ status: "running", pid: 8000 });
-  mocks.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+  mocks.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
   inspectPortUsage.mockResolvedValue({
     status: "busy",
     port: 18789,
@@ -135,6 +135,30 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   restoreRestartHealthMocks();
+});
+
+it("verifies immutable activation with a channel-only readiness warning", async () => {
+  mocks.http.mockResolvedValue({
+    healthz: 200,
+    readyz: 503,
+    coreReady: true,
+    failingChannels: ["whatsapp"],
+  });
+  callGateway.mockImplementation(
+    health({ health: { channels: { whatsapp: { probe: { ok: false, error: "logged out" } } } } }),
+  );
+  const onReceipt = vi.fn();
+  const result = await waitForImmutableGateway({
+    descriptor,
+    generation,
+    timeoutMs: 120_000,
+    assertCurrent: () => {},
+    onReceipt,
+  });
+  expect(result.outcome).toBe("verified");
+  expect(onReceipt).toHaveBeenCalledWith(
+    expect.stringContaining("readiness-channel-warning: whatsapp"),
+  );
 });
 
 it("verifies the preserved service's explicit port instead of the config default", async () => {
@@ -242,7 +266,11 @@ it.each(["process", "boot", "definition", "readiness", "physical-generation"])(
           ...(change === "physical-generation" ? { generationPath: "/synthetic/foreign" } : {}),
         }));
       }
-      return { healthz: 200, readyz: change === "readiness" ? 503 : 200 };
+      return {
+        healthz: 200,
+        readyz: change === "readiness" ? 503 : 200,
+        coreReady: change !== "readiness",
+      };
     });
     const result = await observe();
     expect(result.outcome).toBe("unverified");
@@ -255,7 +283,7 @@ it("propagates revoked activation authority after asynchronous readiness", async
   const revoked = new Error("activation custody revoked");
   mocks.http.mockImplementation(async () => {
     current = false;
-    return { healthz: 200, readyz: 200 };
+    return { healthz: 200, readyz: 200, coreReady: true };
   });
   await expect(
     observe(() => {

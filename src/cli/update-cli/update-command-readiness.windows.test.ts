@@ -97,7 +97,7 @@ beforeEach(() => {
   vi.setSystemTime(startedAt);
   native.runtime.mockReset().mockResolvedValue(serviceRuntime);
   native.reachable.mockReset().mockResolvedValue(unreachable);
-  native.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+  native.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
   native.command.mockReset().mockImplementation(async (argv: string[]) => {
     const executable = argv[0];
     if (!executable) {
@@ -260,7 +260,9 @@ describe("managed Windows update after the startup canary", () => {
     });
     type HttpParams = Parameters<typeof native.http>[0];
     let notify!: (params: HttpParams) => void;
-    let release: ((result: { healthz: number; readyz: number }) => void) | undefined;
+    let release:
+      | ((result: { healthz: number; readyz: number; coreReady: boolean }) => void)
+      | undefined;
     const entered = new Promise<HttpParams>((resolve) => {
       notify = resolve;
     });
@@ -274,7 +276,7 @@ describe("managed Windows update after the startup canary", () => {
     try {
       const http = await awaitProbe(entered, pending);
       await vi.advanceTimersByTimeAsync(30_000);
-      http.onObservation?.({ healthz: 200, readyz: 503 });
+      http.onObservation?.({ healthz: 200, readyz: 503, coreReady: false });
       const waiting = f.wait()!;
       expect(waiting.status).toBe("in_progress");
       expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
@@ -286,7 +288,7 @@ describe("managed Windows update after the startup canary", () => {
       expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
     } finally {
       abort.abort(new Error("fixture completed"));
-      release?.({ healthz: 200, readyz: 200 });
+      release?.({ healthz: 200, readyz: 200, coreReady: true });
       await Promise.allSettled([pending]);
     }
   });

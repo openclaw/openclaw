@@ -397,6 +397,7 @@ export function installDeferredCompletionFixture() {
           staleGatewayPids: [],
         },
         readyz: false,
+        coreReady: false,
         http: undefined,
         launchAgentRecovery: null,
       };

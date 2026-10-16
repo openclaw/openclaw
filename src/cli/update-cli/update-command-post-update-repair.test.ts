@@ -182,7 +182,11 @@ describe("post-activation failure settlement without inference", () => {
       fingerprint: "fixture",
       refreshDefinition: false,
     });
-    mocks.readyz.mockImplementation(async () => ({ readyz: mocks.healthy ? 200 : 503 }));
+    mocks.readyz.mockImplementation(async () => ({
+      healthz: mocks.healthy ? 200 : 503,
+      readyz: mocks.healthy ? 200 : 503,
+      coreReady: mocks.healthy,
+    }));
     mocks.rollback.mockImplementation(async ({ result, rollbackBlockedReason }) => ({
       result: { ...result, reason: rollbackBlockedReason ?? "source-rollback-failed" },
       rolledBack: false,

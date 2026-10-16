@@ -251,7 +251,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
-  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
+  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200, coreReady: true }),
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: async (params: { result: unknown }) => ({

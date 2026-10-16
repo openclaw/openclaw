@@ -125,6 +125,12 @@ keeps the agent unavailable and records its reason and repair hint in readiness.
 
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
 
+Detailed readiness responses include `coreReady`, which excludes channel availability
+but still requires startup, drain, state and agent database admission, and plugin
+replacement checks to pass. Software updates may complete with a channel warning
+when `coreReady` is true. The HTTP status and `ready` value still include channel
+health, so traffic admission and ordinary health checks remain strict.
+
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.

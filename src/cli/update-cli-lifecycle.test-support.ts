@@ -302,7 +302,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         ],
       }),
     );
-    httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
+    httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
 
     stateSchemaVersions.mockImplementation(
       async ({ stateDir, env }: { stateDir: string; env?: NodeJS.ProcessEnv }) => [

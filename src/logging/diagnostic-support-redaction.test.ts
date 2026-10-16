@@ -202,6 +202,10 @@ describe("diagnostic support redaction", () => {
       "[redacted-diagnostic]",
     ],
     ["private-customer startup failed", "[redacted-diagnostic]"],
+    [
+      "Gateway HTTP readiness unverified: healthz=503; readyz=200. private-customer-text",
+      "[redacted-diagnostic]",
+    ],
   ])("publishes only closed repair facts (%s)", (message, expected) => {
     expect(redactPublicSupportDiagnosticLine(message, { env: {}, stateDir: tempDir })).toBe(
       expected,

@@ -103,7 +103,8 @@ vi.mock("../infra/update-git-runtime.js", () => ({
   readBuiltGatewayBuildId: async () => observation.installedBuild,
 }));
 
-vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health-probe.js")>()),
   resolveGatewayRestartProbeContext: observation.context,
   waitForGatewayHttpReadiness: observation.http,
 }));
@@ -137,7 +138,7 @@ beforeEach(() => {
   observation.driver = "dead";
   observation.previousDriver = "dead";
   observation.context.mockReset().mockResolvedValue({ config: { gateway: { port: 18789 } } });
-  observation.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
+  observation.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200, coreReady: true });
   observation.inspect.mockReset().mockImplementation(async () => health());
   observation.settle.mockReset().mockImplementation(async () => health());
   vi.spyOn(console, "warn").mockImplementation(() => {});

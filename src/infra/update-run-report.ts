@@ -120,7 +120,9 @@ export function resolveUpdateRunVerifiedServingVersion(
   const { recovery } = verification;
   return recovery?.serviceRestartSafe && recovery.service === "healthy"
     ? recovery.version
-    : verification.versionMatch && verification.readyz && verification.settled
+    : verification.versionMatch &&
+        (verification.coreReady ?? verification.readyz) &&
+        verification.settled
       ? verification.runningVersion
       : undefined;
 }
@@ -432,6 +434,7 @@ export function renderUpdateRunReport(
         ? "channels ready"
         : "channels not ready",
     facts.readyz === undefined ? undefined : facts.readyz ? "HTTP ready" : "HTTP not ready",
+    facts.coreReady === undefined ? undefined : facts.coreReady ? "core ready" : "core not ready",
     facts.pluginErrors?.length
       ? `${facts.pluginErrors.length} plugin activation error(s)`
       : undefined,

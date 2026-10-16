@@ -527,6 +527,9 @@ export function redactPublicSupportDiagnosticLine(
   if (
     /^Gateway readiness endpoint returned HTTP (?:[1-5]\d{2}|unavailable); expected HTTP 200\.$/u.test(
       line,
+    ) ||
+    /^Gateway HTTP readiness unverified: healthz=(?:[1-5]\d{2}|unavailable); readyz=(?:[1-5]\d{2}|unavailable)\.$/u.test(
+      line,
     )
   ) {
     return line;
