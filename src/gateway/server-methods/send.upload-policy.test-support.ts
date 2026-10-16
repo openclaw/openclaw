@@ -17,17 +17,17 @@ import {
   firstRespondCall,
 } from "./send.test-helpers.js";
 import {
-  type createMessageMethodPluginFixtures,
-  type createMessageMethodTestDriver,
+  type MessageMethodDriver,
+  type MessageMethodPlugins,
   makeContext,
 } from "./send.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type UploadPolicyTestHarness = Pick<
-  ReturnType<typeof createMessageMethodTestDriver>,
+  MessageMethodDriver,
   "runSendWithClient" | "runMessageActionRequest"
 > &
-  Pick<ReturnType<typeof createMessageMethodPluginFixtures>, "registerMessageActionPlugin"> & {
+  Pick<MessageMethodPlugins, "registerMessageActionPlugin"> & {
     mocks: {
       deliverOutboundPayloads: Mock<typeof deliverOutboundPayloads>;
       dispatchChannelMessageAction: Mock<typeof dispatchChannelMessageAction>;
@@ -72,10 +72,7 @@ export function registerSendUploadPolicyTests({
         getRuntimeConfig: () => ({ gateway: { uploads: { enabled: true } } }),
         getCommittedRuntimeConfig: () => ({ gateway: { uploads: { enabled } } }),
       } as GatewayRequestContext;
-      const plugin = registerMessageActionPlugin({
-        id: "slack",
-        registrySuffix: "client-upload-policy",
-      });
+      const plugin = registerMessageActionPlugin({ id: "slack" });
       const invoke = async (
         options: {
           trusted?: boolean;
@@ -96,7 +93,7 @@ export function registerSendUploadPolicyTests({
           channel: "slack",
           agentId: "main",
           ...(options.trusted ? { sessionKey } : {}),
-          idempotencyKey: options.idempotencyKey ?? "client-upload-policy",
+          idempotencyKey: options.idempotencyKey ?? "upload",
         };
         const params =
           method === "send"
@@ -179,7 +176,6 @@ export function registerSendUploadPolicyTests({
         };
         await fixture.mockAdapter(accepted, false);
         const first = fixture.invoke({ viaRouter: true });
-        let restoreReplay: (() => void) | undefined;
         try {
           await Promise.race([entered.promise, first]);
           expect(acceptedSend).toHaveBeenCalledTimes(1);
@@ -190,121 +186,85 @@ export function registerSendUploadPolicyTests({
           const files = await fs.readdir(fixture.outboundDir);
           const replayReached = createDeferred();
           const readDedupe = fixture.context.dedupe.get.bind(fixture.context.dedupe);
-          const observeReplay = vi
-            .spyOn(fixture.context.dedupe, "get")
-            .mockImplementation((key) => {
-              if (key.endsWith(":client-upload-policy")) {
-                replayReached.resolve();
-              }
-              return readDedupe(key);
-            });
-          restoreReplay = () => observeReplay.mockRestore();
+          using _ = vi.spyOn(fixture.context.dedupe, "get").mockImplementation((key) => {
+            if (key.endsWith(":upload")) {
+              replayReached.resolve();
+            }
+            return readDedupe(key);
+          });
           fixture.setEnabled(false);
           const retry = fixture.invoke({ viaRouter: true });
-          await Promise.race([
-            replayReached.promise,
-            retry.then((response) => {
-              expect(response[0]).toBe(true);
-              expect(response[3]).toMatchObject({ cached: true });
-            }),
-          ]);
+          await Promise.race([replayReached.promise, retry]);
           release.resolve();
           const [initial, replay] = await Promise.all([first, retry]);
           expect(initial[0]).toBe(true);
           expect(replay.slice(0, 3)).toEqual(initial.slice(0, 3));
           expect(replay[3]).toMatchObject({ cached: true });
-          restoreReplay();
-          restoreReplay = undefined;
-          const fresh = { viaRouter: true, idempotencyKey: "fresh-upload-key" };
+          const fresh = { viaRouter: true, idempotencyKey: "fresh" };
           expectUploadsDisabled(await fixture.invoke(fresh));
-          expect(fixture.dedupeKeys("fresh-upload-key")).toEqual([]);
+          expect(fixture.dedupeKeys("fresh")).toEqual([]);
           expect(await fs.readdir(fixture.outboundDir)).toEqual(files);
           expect(acceptedSend).toHaveBeenCalledTimes(1);
           defaultAccountId = "secondary";
           fixture.setEnabled(true);
           expect((await fixture.invoke(fresh))[0]).toBe(true);
-          expect(fixture.dedupeKeys("fresh-upload-key")).toEqual([
+          expect(fixture.dedupeKeys("fresh")).toEqual([
             expect.stringContaining('["slack","secondary"]'),
           ]);
           expect(acceptedSend).toHaveBeenCalledTimes(2);
         } finally {
-          restoreReplay?.();
           release.resolve();
           await first;
         }
       },
     );
 
-    it("checks disabled upload policy after media directory preparation", async () => {
-      const fixture = uploadFixture();
-      const prepared = createDeferred();
-      const release = createDeferred();
-      let preparing = false;
-      const originalMkdir = fs.mkdir;
-      // This await belongs to saveMediaBuffer on both the original and repaired paths.
-      // Native fs-safe publication need not call the JavaScript fs.open implementation.
-      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-        const result = await originalMkdir(...args);
-        if (!preparing && args[0] === fixture.outboundDir) {
-          preparing = true;
-          prepared.resolve();
-          await release.promise;
-        }
-        return result;
-      });
-      mockDeliverySuccess("upload-accepted");
-      const request = fixture.invoke();
-      try {
-        await Promise.race([prepared.promise, request]);
-        expect(preparing).toBe(true);
-        fixture.setEnabled(false);
-        release.resolve();
-        const response = await request;
-        expect(response[0]).toBe(false);
-        expectUploadsDisabled(response);
-        expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-        expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-        expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
-      } finally {
-        release.resolve();
-        try {
-          await request;
-        } finally {
-          mkdirSpy.mockRestore();
-        }
-      }
-    });
-
-    it.each([
-      { boundary: "dispatch", trusted: false, reference: false },
-      { boundary: "handoff", trusted: false, reference: false },
-      { boundary: "handoff", trusted: true, reference: false },
-      { boundary: "handoff", trusted: false, reference: true },
-    ] as const)(
-      "retains ingress classification at $boundary (trusted: $trusted, reference: $reference)",
-      async ({ boundary, trusted, reference }) => {
+    it.each(["directory", "dispatch", "handoff", "trusted runtime", "hosted reference"] as const)(
+      "retains ingress classification at %s",
+      async (stage) => {
+        const trusted = stage === "trusted runtime",
+          reference = stage === "hosted reference";
         const fixture = uploadFixture();
         const entered = createDeferred();
         const release = createDeferred();
         const platformSend = vi.fn();
         let prepared = false;
-        const send = async (params: AdapterHandoff) => {
-          if (method === "message.action") {
-            expect(params.params).not.toHaveProperty("buffer");
-          }
-          if (boundary === "handoff") {
-            await params.onPlatformSendDispatch?.();
-          }
+        const pause = async () => {
           prepared = true;
           entered.resolve();
           await release.promise;
-          if (boundary === "dispatch") {
-            await params.onPlatformSendDispatch?.();
-          }
-          assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-          platformSend();
         };
-        await fixture.mockAdapter(send);
+        const originalMkdir = fs.mkdir;
+        // saveMediaBuffer yields here even when native fs-safe publication bypasses fs.open.
+        using _ =
+          stage === "directory"
+            ? vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+                const result = await originalMkdir(...args);
+                if (!prepared && args[0] === fixture.outboundDir) {
+                  await pause();
+                }
+                return result;
+              })
+            : undefined;
+        if (stage === "directory") {
+          mockDeliverySuccess("upload-accepted");
+        } else {
+          await fixture.mockAdapter(async (params) => {
+            if (method === "message.action") {
+              expect(params.params).not.toHaveProperty("buffer");
+            }
+            if (stage !== "dispatch") {
+              await params.onPlatformSendDispatch?.();
+            }
+            await pause();
+            if (stage === "dispatch") {
+              await params.onPlatformSendDispatch?.();
+            } else {
+              assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+            }
+            platformSend();
+          });
+        }
         const request = fixture.invoke({
           trusted,
           ...(reference ? { mediaUrl: "https://example.com/already-hosted.png" } : {}),
@@ -312,7 +272,7 @@ export function registerSendUploadPolicyTests({
         try {
           await Promise.race([entered.promise, request]);
           expect(prepared).toBe(true);
-          if (!reference) {
+          if (stage !== "directory" && !reference) {
             const files = await fs.readdir(fixture.outboundDir);
             expect(files).toHaveLength(1);
             await expect(
@@ -327,6 +287,11 @@ export function registerSendUploadPolicyTests({
           expect(platformSend).toHaveBeenCalledTimes(allowed ? 1 : 0);
           if (!allowed) {
             expectUploadsDisabled(response);
+          }
+          if (stage === "directory") {
+            expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+            expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+            expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
           }
         } finally {
           release.resolve();

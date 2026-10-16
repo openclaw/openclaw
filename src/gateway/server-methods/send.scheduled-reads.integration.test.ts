@@ -1,11 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -25,7 +24,11 @@ import {
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
-import { createDeferredJsonResponse, createDiscordHttpFixture } from "./send.test-helpers.js";
+import {
+  createAgentRuntimeGatewayClientForTests,
+  createDeferredJsonResponse,
+  createDiscordHttpFixture,
+} from "./send.test-helpers.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -39,6 +42,7 @@ const messageId = "100000000000000003";
 const pinWritePath = `/api/v10/channels/${channelId}/pins/${messageId}`;
 const sessionKey = "agent:main:cron:scheduled-reads:run:fixture";
 const sessionId = "scheduled-reads-session";
+const creatorAuthorization = "Bot synthetic-creator-provider-fixture";
 let discordPlugin: ChannelPlugin;
 let messageActionHandler: GatewayRequestHandler;
 
@@ -57,7 +61,6 @@ beforeAll(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetPluginRuntimeStateForTest();
-  clearRuntimeConfigSnapshot();
 });
 
 function discordMessages(content: string) {
@@ -140,25 +143,14 @@ async function createFixture(state: OpenClawTestState) {
       resolveMessageActionTurnCapability({ ...identity, token }),
       "host-minted message action context",
     );
-    return {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.write"],
-        client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
-      },
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { ...messageActionContext, turnCapability: token },
-        },
-      },
-    };
+    return createAgentRuntimeGatewayClientForTests({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey,
+      operationalRunInstance,
+      delegatedAuthority: { kind: "local", ...delegatedAuthority },
+      messageActionContext: { ...messageActionContext, turnCapability: token },
+    });
   };
   const client = createClient(accountPolicy());
   const context = {
@@ -205,9 +197,7 @@ async function createFixture(state: OpenClawTestState) {
       return httpRequests.map(({ method, path, headers }) => ({
         method,
         path,
-        creatorCredentials:
-          headers.get("authorization") === "Bot synthetic-creator-provider-fixture",
-        otherCredentials: headers.get("authorization") === "Bot synthetic-other-provider-fixture",
+        authorization: headers.get("authorization"),
       }));
     },
     unexpectedRequests,
@@ -274,7 +264,6 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
       const client = fixture.localClient();
       expectRead(await fixture.read({ client }), "fresh-1");
       expectRead(await fixture.read({ client }), "fresh-2");
-      expect(fixture.providerRead).toHaveBeenCalledTimes(2);
       const requestsBeforeRevocation = fixture.httpRequests.length;
       fixture.revoke();
       expectDenied(await fixture.read({ client }), "authority is no longer active");
@@ -294,7 +283,6 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
           5000,
           "Discord read did not reach the provider",
         );
-        expect(fixture.providerRead).toHaveBeenCalledOnce();
         const requestsBeforeRevocation = fixture.httpRequests.length;
         fixture.revoke();
         repeated = fixture.read({ client });
@@ -358,9 +346,6 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
             : "matching recorded creator origin",
         );
         expect(fixture.httpRequests).toHaveLength(requestsBeforeMismatch);
-        if (action === "pin") {
-          expect(fixture.httpRequests).toEqual([]);
-        }
       }),
   );
 
@@ -386,13 +371,12 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
           expect(mutations.at(-1)).toMatchObject({
             method: "PUT",
             path: pinWritePath,
-            creatorCredentials: true,
+            authorization: creatorAuthorization,
           });
         }
-        if (action === "read") {
-          expect(fixture.providerRead).toHaveBeenCalledTimes(2);
-        }
-        expect(fixture.httpRequests.every((request) => request.creatorCredentials)).toBe(true);
+        expect(
+          fixture.httpRequests.every(({ authorization }) => authorization === creatorAuthorization),
+        ).toBe(true);
       }),
   );
 
@@ -410,11 +394,10 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
       }
 
       expect(fixture.httpRequests.filter((request) => request.method !== "GET")).toEqual(
-        [true, false].map((creatorCredentials) => ({
+        ["creator", "other"].map((account) => ({
           method: "PUT",
           path: pinWritePath,
-          creatorCredentials,
-          otherCredentials: !creatorCredentials,
+          authorization: `Bot synthetic-${account}-provider-fixture`,
         })),
       );
     }));

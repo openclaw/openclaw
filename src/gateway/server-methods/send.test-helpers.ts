@@ -1,8 +1,4 @@
 import { vi } from "vitest";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
@@ -15,7 +11,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function messageActionClientForTests(
   sessionKey: string,
@@ -49,10 +45,8 @@ export function resolveAgentIdFromSessionKeyForTests(params: {
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string) {
-  const parts = sessionKey.split(":");
-  const provider = parts[2],
-    peerKind = parts[3],
-    peerId = parts.slice(4).join(":");
+  const [provider, peerKind, ...peer] = sessionKey.split(":").slice(2);
+  const peerId = peer.join(":");
   const currentChatType: "direct" | "group" | "channel" | undefined =
     peerKind === "direct" || peerKind === "dm"
       ? "direct"
@@ -86,17 +80,18 @@ export function createMessageActionClientForTests(
   if (client !== undefined || !sessionKey || !agentId) {
     return client;
   }
+  const context = messageActionContextFromSessionKeyForTests(sessionKey);
   return messageActionClientForTests(sessionKey, {
     agentId,
     messageActionContext: {
-      ...messageActionContextFromSessionKeyForTests(sessionKey),
+      ...context,
       sessionId: typeof params.sessionId === "string" ? params.sessionId : undefined,
       requesterAccountId:
         typeof params.requesterAccountId === "string" ? params.requesterAccountId : undefined,
       requesterSenderId:
         typeof params.requesterSenderId === "string" ? params.requesterSenderId : undefined,
       toolContext: {
-        ...messageActionContextFromSessionKeyForTests(sessionKey).toolContext,
+        ...context.toolContext,
         ...(params.toolContext && typeof params.toolContext === "object" ? params.toolContext : {}),
       },
     },
@@ -107,8 +102,8 @@ export function directCliClientForTests() {
   return {
     connect: {
       client: {
-        id: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        id: "cli",
+        mode: "cli",
       },
     },
   };
@@ -152,6 +147,26 @@ export function createTelegramSourceSendRequest(
   };
 }
 
+export function createAgentRuntimeGatewayClientForTests<T extends AgentRuntimeIdentity>(
+  identity: T,
+) {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      role: "operator",
+      scopes: ["operator.write"],
+      client: {
+        id: "cli",
+        version: "test",
+        platform: "test",
+        mode: "cli",
+      },
+    },
+    internal: { agentRuntimeIdentity: identity },
+  } satisfies GatewayClient;
+}
+
 export function createMessageActionTurnClientForTests(params: {
   sessionKey: string;
   runId: string;
@@ -174,31 +189,15 @@ export function createMessageActionTurnClientForTests(params: {
       getRuntimeConfig: () => ({}),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     } as GatewayRequestContext,
-    client: {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.write"],
-        client: {
-          id: GATEWAY_CLIENT_NAMES.CLI,
-          version: "test",
-          platform: "test",
-          mode: GATEWAY_CLIENT_MODES.CLI,
-        },
+    client: createAgentRuntimeGatewayClientForTests({
+      ...messageActionClientForTests(params.sessionKey).internal.agentRuntimeIdentity,
+      operationalRunInstance,
+      delegatedAuthority: { kind: "local", ...delegatedAuthority },
+      messageActionContext: {
+        ...messageActionContextFromSessionKeyForTests(params.sessionKey),
+        turnCapability,
       },
-      internal: {
-        agentRuntimeIdentity: {
-          ...messageActionClientForTests(params.sessionKey).internal.agentRuntimeIdentity,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local" as const, ...delegatedAuthority },
-          messageActionContext: {
-            ...messageActionContextFromSessionKeyForTests(params.sessionKey),
-            turnCapability,
-          },
-        },
-      },
-    },
+    }),
     close: () => {
       revokeMessageActionTurnCapability(turnCapability);
       releaseAgentRunDelegatedAuthority(delegatedAuthority);
@@ -230,6 +229,8 @@ export function createDeferredJsonResponse(value: unknown) {
   };
 }
 
+type DiscordHttpRequest = Pick<Request, "method" | "headers"> & { path: string };
+
 export function createDiscordHttpFixture({
   channelId,
   guildId,
@@ -237,23 +238,15 @@ export function createDiscordHttpFixture({
 }: {
   channelId: string;
   guildId: string;
-  handle: (request: {
-    method: string;
-    path: string;
-    headers: Headers;
-    init?: RequestInit;
-  }) => Promise<Response | undefined>;
+  handle: (request: DiscordHttpRequest & { init?: RequestInit }) => Promise<Response | undefined>;
 }) {
-  const httpRequests: Array<{ method: string; path: string; headers: Headers }> = [];
+  const httpRequests: DiscordHttpRequest[] = [];
   const unexpectedRequests: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>(async (input, init) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-      const headers = new Headers(
-        init?.headers ?? (input instanceof Request ? input.headers : undefined),
-      );
+      const { url: rawUrl, method, headers } = new Request(input, init);
+      const url = new URL(rawUrl);
       const request = { method, path: url.pathname, headers };
       httpRequests.push(request);
       if (url.origin === "https://discord.com") {

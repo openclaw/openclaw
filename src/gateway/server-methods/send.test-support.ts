@@ -9,6 +9,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   createMessageActionClientForTests,
+  createTelegramSourceSendRequest,
   messageActionClientForTests,
 } from "./send.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -95,16 +96,10 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
     return runMessageActionRequest(
       {
-        channel: "telegram",
-        action: "send",
-        params: {
-          to: "chat-123",
-          message: params.message,
-        },
+        ...createTelegramSourceSendRequest("chat-123", params.message, params.idempotencyKey),
+        toolContext: undefined,
         sessionKey,
         sessionId: params.sessionId,
-        agentId: "main",
-        idempotencyKey: params.idempotencyKey,
       },
       messageActionClientForTests(sessionKey, {
         messageActionContext: {
@@ -185,3 +180,6 @@ export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Moc
 
   return { registerMessageThreadAddressingPlugin, registerMessageActionPlugin };
 }
+
+export type MessageMethodDriver = ReturnType<typeof createMessageMethodTestDriver>;
+export type MessageMethodPlugins = ReturnType<typeof createMessageMethodPluginFixtures>;

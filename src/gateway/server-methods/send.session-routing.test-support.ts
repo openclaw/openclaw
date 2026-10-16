@@ -1,34 +1,21 @@
-import { beforeAll, expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { getChannelPlugin } from "../../channels/plugins/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import * as sessions from "../../config/sessions/session-accessor.js";
 import { mirrorDeliveredPayloads } from "../../infra/outbound/deliver-transcript.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import type {
-  ensureOutboundSessionEntry,
-  resolveOutboundSessionRoute,
-} from "../../infra/outbound/outbound-session.js";
+import type * as Outbound from "../../infra/outbound/outbound-session.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { firstRespondCall } from "./send.test-helpers.js";
-import type {
-  createMessageMethodPluginFixtures,
-  createMessageMethodTestDriver,
-} from "./send.test-support.js";
+import type { MessageMethodDriver, MessageMethodPlugins } from "./send.test-support.js";
 
-type SessionRoutingTestHarness = Pick<ReturnType<typeof createMessageMethodTestDriver>, "runSend"> &
-  Pick<
-    ReturnType<typeof createMessageMethodPluginFixtures>,
-    "registerMessageThreadAddressingPlugin"
-  > & {
+type SessionRoutingTestHarness = Pick<MessageMethodDriver, "runSend"> &
+  Pick<MessageMethodPlugins, "registerMessageThreadAddressingPlugin"> & {
     mocks: {
       deliverOutboundPayloads: Mock<typeof deliverOutboundPayloads>;
-      ensureOutboundSessionEntry: Mock<typeof ensureOutboundSessionEntry>;
-      resolveOutboundSessionRoute: Mock<typeof resolveOutboundSessionRoute>;
+      ensureOutboundSessionEntry: Mock<typeof Outbound.ensureOutboundSessionEntry>;
+      resolveOutboundSessionRoute: Mock<typeof Outbound.resolveOutboundSessionRoute>;
       getChannelPlugin: Mock<typeof getChannelPlugin>;
     };
     mockDeliverySuccess: (messageId: string) => void;
@@ -40,13 +27,6 @@ export function registerSendSessionRoutingTests({
   mockDeliverySuccess,
   registerMessageThreadAddressingPlugin,
 }: SessionRoutingTestHarness): void {
-  let persistRoute: typeof ensureOutboundSessionEntry;
-  beforeAll(async () => {
-    ({ ensureOutboundSessionEntry: persistRoute } = await vi.importActual<
-      typeof import("../../infra/outbound/outbound-session.js")
-    >("../../infra/outbound/outbound-session.js"));
-  });
-
   function slackRoute(id = "c1", threadId?: string) {
     const baseSessionKey = `agent:main:slack:channel:${id}`;
     return {
@@ -76,9 +56,11 @@ export function registerSendSessionRoutingTests({
     async (existing) =>
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
-        const mirror = main;
         mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(slackRoute());
-        mocks.ensureOutboundSessionEntry.mockImplementationOnce(persistRoute);
+        const { ensureOutboundSessionEntry } = await vi.importActual<typeof Outbound>(
+          "../../infra/outbound/outbound-session.js",
+        );
+        mocks.ensureOutboundSessionEntry.mockImplementationOnce(ensureOutboundSessionEntry);
         mocks.deliverOutboundPayloads.mockImplementationOnce(async (delivery) => {
           const result = { channel: "slack" as const, messageId: "first-contact" };
           await delivery.onDeliveryResult?.(result);
@@ -92,30 +74,30 @@ export function registerSendSessionRoutingTests({
           context: { channel: "telegram", to: "saved-room", accountId: "saved-bot" },
         });
         if (existing) {
-          await replaceSessionEntry(
-            { sessionKey: mirror },
+          await sessions.replaceSessionEntry(
+            { sessionKey: main },
             { sessionId: "existing-mirror", updatedAt: 1, delivery: savedDelivery },
           );
         } else {
-          expect(loadSessionEntry({ sessionKey: mirror })).toBeUndefined();
+          expect(sessions.loadSessionEntry({ sessionKey: main })).toBeUndefined();
         }
-        const { respond } = await send({ sessionKey: mirror });
+        const { respond } = await send({ sessionKey: main });
         expect(firstRespondCall(respond)[0]).toBe(true);
-        const entry = loadSessionEntry({ sessionKey: mirror });
+        const entry = sessions.loadSessionEntry({ sessionKey: main });
         expect(entry?.sessionId).toEqual(existing ? "existing-mirror" : expect.any(String));
         if (existing) {
           expect(entry?.delivery).toEqual(savedDelivery);
         } else {
           expect(entry?.delivery?.kind).not.toBe("external");
         }
-        expect(loadSessionEntry({ sessionKey: slack })?.delivery).toMatchObject({
+        expect(sessions.loadSessionEntry({ sessionKey: slack })?.delivery).toMatchObject({
           kind: "external",
           context: { channel: "slack", to: "channel:C1" },
         });
         expect(
-          await loadTranscriptEvents({
+          await sessions.loadTranscriptEvents({
             agentId: "main",
-            sessionKey: mirror,
+            sessionKey: main,
             sessionId: entry!.sessionId,
           }),
         ).toContainEqual(

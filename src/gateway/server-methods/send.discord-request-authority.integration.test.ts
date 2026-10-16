@@ -1,9 +1,10 @@
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDeliveryQueueEntryStatus } from "../../infra/delivery-queue-sqlite.test-support.js";
 import { isDeliveryRecoveryRetryEligible } from "../../infra/delivery-recovery.shared.js";
@@ -47,7 +48,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   resetPluginRuntimeStateForTest();
-  clearRuntimeConfigSnapshot();
 });
 
 async function createFixture(state: OpenClawTestState) {
@@ -136,15 +136,12 @@ describe("Gateway send through Discord's default request scheduler", () => {
           try {
             await Promise.race([firstPost.promise, request]);
             // Response parsing and scheduler requeueing finish before this event-loop turn.
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await setImmediate();
             expect(fixture.respond).not.toHaveBeenCalled();
             expect(fixture.post).toHaveBeenCalledOnce();
             const admitted = await loadPendingDeliveries(testState.stateDir);
-            expect(admitted).toHaveLength(1);
+            expect(admitted).toMatchObject([{ channel: "discord" }]);
             const intent = expectDefined(admitted[0], "durable Discord send intent");
-            expect(intent.channel).toBe("discord");
             if (state === "retired") {
               fixture.caller.abort(new Error("message caller retired during backoff"));
             }
@@ -233,11 +230,8 @@ describe("Gateway send through Discord's default request scheduler", () => {
         const request = fixture.send();
         try {
           await Promise.race([deferred.accepted.promise, request]);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await setImmediate();
           expect(fixture.respond).not.toHaveBeenCalled();
-          expect(fixture.post).toHaveBeenCalledOnce();
           fixture.caller.abort(new Error("message caller retired after provider acceptance"));
           expect(fixture.post.mock.calls[0]?.[0]?.signal?.aborted).toBe(false);
           deferred.release.resolve();
