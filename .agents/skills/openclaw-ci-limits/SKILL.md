@@ -124,6 +124,12 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## First Checks
 
+Current-target `checks-ui-e2e` rows omit native mobile/macOS app trees through
+the Git owner's blobless sparse checkout. Preserve Linux/shared app resources,
+docs, and all Node workspace inputs. Frozen targets and historical/base readers
+retain full checkouts. Keep lazy materialization inside the authenticated,
+deadline-bounded checkout owner; qualify new exclusions before adding them.
+
 Before changing CI, collect current pressure:
 
 ```bash

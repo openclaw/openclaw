@@ -50,11 +50,24 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     setup_action = source / ".github/actions/setup-node-env/action.yml"
     setup_action.parent.mkdir(parents=True)
     setup_action.write_text("name: fixture\n")
+    if mode.startswith("ui-"):
+        for name in ("apps/ios/fixture.swift", "apps/linux/ui/index.html",
+                     "apps/shared/resources/fixture.json", "docs/reference/templates/fixture.md",
+                     "ui/src/fixture.ts", "extensions/fixture/package.json"):
+            file = source / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(f"fixture: {name}\n")
     checked(git, "add", ".", cwd=source)
     checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
             "commit", "-m", "fixture", cwd=source)
     revision = checked(git, "rev-parse", "HEAD", cwd=source)
     historical_revision = revision
+    if mode == "ui-harness":
+        setup_action.write_text("name: candidate\n")
+        checked(git, "add", ".", cwd=source)
+        checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-m", "candidate harness", cwd=source)
+        revision = checked(git, "rev-parse", "HEAD", cwd=source)
     if mode.startswith("qa-") and mode not in ("qa-main", "qa-main-no-dotgit", "qa-mismatch", "qa-foreign-origin"):
         checked(git, "checkout", "-b", "release/2026.9.1", cwd=source)
         (source / "payload.txt").write_text("release candidate outside main\n")
@@ -311,6 +324,45 @@ elif phase == "redirect":
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 
+        if mode.startswith("ui-"):
+            env["GIT_CONFIG_GLOBAL"] = str(home / ".gitconfig")
+            policy.write_text('''import ci_git_owner as owner
+import os, sys
+from pathlib import Path
+remote, token, phase = sys.argv[3:]
+owner.kind, owner.reset = "linux-node", True
+owner.workspace, owner.remote = os.getcwd(), remote
+owner.checkout_environment = owner.git_auth_environment(remote, token)
+try:
+    owner.checkout()
+finally:
+    owner.checkout_environment.clear()
+Path.cwd().parent.joinpath("checkout-complete").touch()
+''')
+            sparse = mode != "ui-full"
+            env.update(CHECKOUT_SHA=revision, WORKFLOW_SHA=historical_revision,
+                       CHECKOUT_UI_SOURCE_ONLY="true" if sparse else "false")
+            result = owned(mode)
+            assert result.returncode == 0, result.stderr
+            assert checked(git, "rev-parse", "HEAD", cwd=workspace) == revision
+            assert (workspace / "apps/ios/fixture.swift").exists() == (not sparse)
+            for name in ("apps/linux/ui/index.html", "apps/shared/resources/fixture.json",
+                         "docs/reference/templates/fixture.md", "ui/src/fixture.ts",
+                         "extensions/fixture/package.json", "payload.txt"):
+                assert (workspace / name).read_bytes() == (source / name).read_bytes()
+            assert (workspace / ".ci-harness/.github/actions/setup-node-env/action.yml").read_text() == "name: fixture\n"
+            excluded_blob = checked(git, "rev-parse", "HEAD:apps/ios/fixture.swift", cwd=source)
+            missing = checked(git, "rev-list", "--objects", "--missing=print", "HEAD", cwd=workspace)
+            assert (f"?{excluded_blob}" in missing) == sparse, "excluded blobs were transferred"
+            assert checked(git, "status", "--porcelain", cwd=workspace) == ""
+            config = (workspace / ".git/config").read_text()
+            assert not post_checkout_requests
+            assert requests and all(item["authenticated"] for item in requests)
+            assert token not in config and encoded not in config and "extraheader" not in config.lower()
+            print(json.dumps({"mode": mode, "sparse": sparse, "sourceAndHarnessVerified": True,
+                              "credentialPersisted": False, "postCheckoutRequests": 0}))
+            raise SystemExit(0)
+
         if mode in ("historical", "base"):
             env["GIT_CONFIG_GLOBAL"] = str(home / ".gitconfig")
             policy.write_text('''import ci_git_owner as owner
@@ -339,6 +391,7 @@ else:
     owner.run_git(os.getcwd(), "worktree", "remove", reader)
 ''')
             env.update(CHECKOUT_SHA=revision, WORKFLOW_SHA=revision,
+                       CHECKOUT_UI_SOURCE_ONLY="true",
                        CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]) if mode == "historical" else "[]",
                        CHECKOUT_BASE_SHA=historical_revision if mode == "base" else "")
             result = owned(mode)

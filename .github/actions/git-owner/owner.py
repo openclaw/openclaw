@@ -566,10 +566,20 @@ def checkout():
     # Fetch full reader objects with the authenticated checkout, before its
     # credential scope ends and test workers create historical worktrees.
     refs.extend(prerequisites)
+    sparse_ui = (kind == "linux-node" and os.environ.get("CHECKOUT_UI_SOURCE_ONLY") == "true"
+                 and not base and not prerequisites)
+    if sparse_ui:
+        # UI/browser tests retain Linux/shared assets and the complete Node workspace.
+        # Exclude only native mobile/Mac trees before fetching their blobs.
+        run_git(workspace, "sparse-checkout", "set", "--no-cone", "/*",
+                "!/apps/.i18n/", "!/apps/android/", "!/apps/ios/", "!/apps/macos/",
+                "!/apps/macos-mlx-tts/", "!/apps/swabble/")
     fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
+          blobless=sparse_ui,
           retry_codes=(124, 137) if kind == "skills" else ())
     run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
-            sha if kind in ("linux-node", "android") else target)
+            sha if kind in ("linux-node", "android") else target,
+            timeout=fetch_timeout_seconds if sparse_ui else None)
     if kind == "android":
         if not os.access(os.path.join(workspace, "apps/android/gradlew"), os.X_OK):
             raise GitFailure(1)

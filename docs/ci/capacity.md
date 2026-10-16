@@ -251,6 +251,13 @@ private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
 
+Current-target UI E2E jobs use a blobless sparse checkout that omits only the
+mobile and macOS app trees. Linux/shared app resources, docs, and the complete
+Node workspace remain available. Frozen or unclassified targets retain full
+checkouts, as do jobs with historical reader or comparison-base prerequisites.
+Sparse materialization retains checkout-scoped authentication and the fetch
+deadline; it must finish before credentials expire.
+
 A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17
 seconds after restoring a 30 MiB archive. Peak process RSS fell from
