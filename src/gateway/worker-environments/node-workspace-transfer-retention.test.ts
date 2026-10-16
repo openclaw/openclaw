@@ -32,38 +32,87 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
 
-function createRuntimeWorkspaceActions(
-  options: Omit<ActionsOptions, "runWorkspaceCommand" | "supportsNativeQuiescence">,
-  runtime: NodeWorkerWorkspaceRuntime,
-  gatewayUrl: string,
-  gatewayNamespace: string,
-) {
-  const { environmentId, sessionId, ownerEpoch } = options;
-  return createNodeWorkerWorkspaceActions({
-    ...options,
-    supportsNativeQuiescence: async () => process.platform === "linux",
-    runWorkspaceCommand: (command) =>
-      runtime.exec(
-        {
-          ...command,
-          ...(process.platform === "linux" &&
-          !command.quiescence &&
-          !command.process &&
-          !command.transfer &&
-          !command.seed &&
-          !command.legacyQuiescence
-            ? { nativeProcessOwner: true as const }
-            : {}),
-          argv: [...command.argv],
-          gatewayNamespace,
-          environmentId,
-          sessionId,
-          generation: ownerEpoch,
-        },
-        command.signal,
-        { url: gatewayUrl },
-      ),
-  });
+async function runtimeFixture(root: string, scope: string, credentialExpiry?: () => number) {
+  const owner = new AbortController();
+  const environmentId = `${scope}-worker`;
+  const sessionId = `${scope}-session`;
+  const ownerEpoch = 1;
+  const createService = () =>
+    createNodeWorkspaceTransferService({
+      getOwner: () => transferOwner(sessionId, ownerEpoch, credentialExpiry?.()),
+      temporaryRoot: path.join(root, "transfers"),
+    });
+  let service = createService();
+  let server = await startNodeWorkspaceTransferTestServer(service);
+  const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
+  const createActions = (restoredWorkspace?: ActionsOptions["restoredWorkspace"]) =>
+    createNodeWorkerWorkspaceActions({
+      environmentId,
+      sessionId,
+      ownerEpoch,
+      ownerSignal: owner.signal,
+      isOwnerCurrent: () => !owner.signal.aborted,
+      workspaceTransfer: service,
+      restoredWorkspace,
+      supportsNativeQuiescence: async () => process.platform === "linux",
+      runWorkspaceCommand: (command) =>
+        runtime.exec(
+          {
+            ...command,
+            ...(process.platform === "linux" &&
+            !command.quiescence &&
+            !command.process &&
+            !command.transfer &&
+            !command.seed &&
+            !command.legacyQuiescence
+              ? { nativeProcessOwner: true as const }
+              : {}),
+            argv: [...command.argv],
+            gatewayNamespace: `gateway-${scope}-test`,
+            environmentId,
+            sessionId,
+            generation: ownerEpoch,
+          },
+          command.signal,
+          { url: server.gatewayUrl },
+        ),
+    });
+  const stop = async () => {
+    await service.closeAll();
+    await server.close();
+  };
+  return {
+    owner,
+    sessionId,
+    ownerEpoch,
+    createActions,
+    async restart() {
+      await stop();
+      service = createService();
+      server = await startNodeWorkspaceTransferTestServer(service);
+    },
+    async close() {
+      owner.abort();
+      await stop();
+    },
+  };
+}
+
+function reconciliationJournal(onCommit: (ref: string) => void) {
+  let pending: WorkerWorkspaceReconciliationJournal | undefined;
+  return {
+    load: async () => pending,
+    begin: async (next: WorkerWorkspaceReconciliationJournal) => {
+      pending = next;
+    },
+    commit: async (ref: string) => {
+      onCommit(ref);
+      pending = undefined;
+    },
+    abort: async () => {
+      pending = undefined;
+    },
+  };
 }
 
 it.each([
@@ -109,29 +158,9 @@ it.each([
       ]);
     }
     const ownership = await createStagedInputOwnershipFixture(localPath);
-    const owner = new AbortController();
-    const environmentId = "input-worker";
-    const sessionId = "input-session";
-    const ownerEpoch = 1;
-    const service = createNodeWorkspaceTransferService({
-      getOwner: () => transferOwner(sessionId, ownerEpoch, Date.now() + 60_000),
-      temporaryRoot: path.join(root, "transfers"),
-    });
-    const server = await startNodeWorkspaceTransferTestServer(service);
-    const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
-    const actions = createRuntimeWorkspaceActions(
-      {
-        environmentId,
-        ownerEpoch,
-        sessionId,
-        ownerSignal: owner.signal,
-        isOwnerCurrent: () => !owner.signal.aborted,
-        workspaceTransfer: service,
-      },
-      runtime,
-      server.gatewayUrl,
-      "gateway-input-test",
-    );
+    const fixture = await runtimeFixture(root, "input", () => Date.now() + 60_000);
+    const { owner, sessionId, ownerEpoch } = fixture;
+    const actions = fixture.createActions();
     let initiatingTurnCurrent = true;
     try {
       const synced = await actions.syncWorkspace({
@@ -179,7 +208,9 @@ it.each([
         await fs.writeFile(path.join(remote, ordinaryOutput), "ordinary project output\n");
       }
       let baseManifestRef = synced.manifestRef;
-      let pending: WorkerWorkspaceReconciliationJournal | undefined;
+      const journal = reconciliationJournal((ref) => {
+        baseManifestRef = ref;
+      });
       const reconcile = async (claimId: string) => {
         const ref = workerWorkspaceResultRef(claimId);
         let recorded: string | undefined;
@@ -191,19 +222,7 @@ it.each([
             source: {
               kind: "local",
               path: localPath,
-              journal: {
-                load: async () => pending,
-                begin: async (next) => {
-                  pending = next;
-                },
-                commit: async (accepted) => {
-                  baseManifestRef = accepted;
-                  pending = undefined;
-                },
-                abort: async () => {
-                  pending = undefined;
-                },
-              },
+              journal,
               stagedResult: {
                 ref,
                 record: (value) => {
@@ -373,7 +392,7 @@ it.each([
             .resolves.toBe(`worker collision bytes: ${relative}\n`);
         }
         expect.soft(baseManifestRef).toBe(acceptedBeforeCollision);
-        expect.soft(pending).toBeUndefined();
+        expect.soft(await journal.load()).toBeUndefined();
         if (collisionError !== undefined) {
           await deleteStagedWorkerWorkspaceResult({
             root: localPath,
@@ -383,9 +402,7 @@ it.each([
         await fs.rm(path.join(remote, collision), { recursive: true });
       }
     } finally {
-      owner.abort();
-      await service.closeAll();
-      await server.close();
+      await fixture.close();
     }
   },
 );
@@ -403,35 +420,8 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   await requireGit(localPath, ["add", "."]);
   await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
   const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
-  const owner = new AbortController();
-  const environmentId = "restart-worker";
-  const sessionId = "restart-session";
-  const ownerEpoch = 1;
-  const createService = () =>
-    createNodeWorkspaceTransferService({
-      getOwner: () => transferOwner(sessionId, ownerEpoch),
-      temporaryRoot: path.join(root, "transfers"),
-    });
-  let service = createService();
-  let server = await startNodeWorkspaceTransferTestServer(service);
-  const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
-  const createActions = (
-    restoredWorkspace?: Parameters<typeof createNodeWorkerWorkspaceActions>[0]["restoredWorkspace"],
-  ) =>
-    createRuntimeWorkspaceActions(
-      {
-        environmentId,
-        ownerEpoch,
-        sessionId,
-        ownerSignal: owner.signal,
-        isOwnerCurrent: () => !owner.signal.aborted,
-        workspaceTransfer: service,
-        restoredWorkspace,
-      },
-      runtime,
-      server.gatewayUrl,
-      "gateway-restart-test",
-    );
+  const fixture = await runtimeFixture(root, "restart");
+  const { owner, sessionId, ownerEpoch, createActions } = fixture;
   try {
     const actions = createActions();
     const synced = await actions.syncWorkspace({
@@ -469,10 +459,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     await fs.writeFile(path.join(localPath, "project.txt"), "Gateway project edit\n");
     await fs.writeFile(path.join(remote, "project.txt"), "worker project edit\n");
     await fs.writeFile(path.join(remote, "result.txt"), "worker result\n");
-    await service.closeAll();
-    await server.close();
-    service = createService();
-    server = await startNodeWorkspaceTransferTestServer(service);
+    await fixture.restart();
     const restored = createActions({
       source: { kind: "local", path: localPath },
       manifestRef: synced.manifestRef,
@@ -480,27 +467,17 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     });
     await restored.validateRestoredWorkspace();
 
-    let pending: WorkerWorkspaceReconciliationJournal | undefined;
     let accepted: string | undefined;
+    const journal = reconciliationJournal((ref) => {
+      accepted = ref;
+    });
     const request = {
       remoteWorkspaceDir: remote,
       baseManifestRef: synced.manifestRef,
       source: {
         kind: "local" as const,
         path: localPath,
-        journal: {
-          load: async () => pending,
-          begin: async (next: WorkerWorkspaceReconciliationJournal) => {
-            pending = next;
-          },
-          commit: async (ref: string) => {
-            accepted = ref;
-            pending = undefined;
-          },
-          abort: async () => {
-            pending = undefined;
-          },
-        },
+        journal,
         stagedResult: { ref: workerWorkspaceResultRef("restored-workspace"), record: () => {} },
       },
     };
@@ -541,8 +518,6 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       "Node workspace transfer context is unavailable",
     );
   } finally {
-    owner.abort();
-    await service.closeAll();
-    await server.close();
+    await fixture.close();
   }
 });

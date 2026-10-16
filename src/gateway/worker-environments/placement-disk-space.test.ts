@@ -6,6 +6,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import { activePlacement as makeActivePlacement } from "./placement-suite.test-support.js";
 import type { WorkerTunnelRequest, WorkerWorkspaceCommand } from "./tunnel-contract.js";
 
 const MIB = 1024 * 1024;
@@ -14,29 +15,17 @@ const GIB = 1024 * MIB;
 function activePlacement(
   overrides: Partial<Extract<WorkerSessionPlacementRecord, { state: "active" }>> = {},
 ): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: "session-disk",
-    sessionKey: "agent:main:session-disk",
-    agentId: "main",
-    state: "active",
-    executionMode: "worker-turn",
+  return makeActivePlacement("session-disk", {
     environmentId: "environment-disk",
     generation: 3,
     activeOwnerEpoch: 7,
     workspaceBaseManifestRef: "manifest-disk",
     remoteWorkspaceDir: "/workspace/session-disk",
-    workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
     createdAtMs: 10,
     updatedAtMs: 20,
     stateChangedAtMs: 15,
     ...overrides,
-  };
+  });
 }
 
 function result(availableBytes: number, totalBytes: number): SpawnResult {
@@ -54,7 +43,8 @@ function result(availableBytes: number, totalBytes: number): SpawnResult {
 }
 
 function createHarness(
-  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
+  runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult> = async () =>
+    result(6 * GIB, 10 * GIB),
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
   let runnerStatus: "available" | "offline" = "available";
@@ -95,6 +85,11 @@ function createHarness(
     warn,
     prepareMaintenancePlacements,
     releaseInventory,
+    async sweep(ms = 0) {
+      nowMs += ms;
+      await monitor.sweep();
+    },
+    snapshot: () => monitor.read(placement),
     get placement() {
       return placement;
     },
@@ -171,27 +166,23 @@ describe("active worker placement disk-space monitoring", () => {
     await harness.monitor.sweep();
     expect(harness.monitor.nextSweepAtMs()).toBe(1_000 + 15 * 60_000);
     for (let minute = 0; minute < 14; minute += 1) {
-      harness.advanceTime(60_000);
-      await harness.monitor.sweep();
+      await harness.sweep(60_000);
     }
     expect(runWorkspaceCommand).toHaveBeenCalledTimes(1);
     expect(harness.prepareMaintenancePlacements).toHaveBeenCalledTimes(1);
 
-    harness.advanceTime(60_000);
-    await harness.monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledTimes(2);
-
-    harness.setPlacement(activePlacement({ updatedAtMs: 30 }));
-    await harness.monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledTimes(3);
-
-    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
-    await harness.monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledTimes(4);
-
-    harness.advanceTime(24 * 60 * 60_000);
-    await harness.monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledTimes(5);
+    for (const [index, step] of [
+      { ms: 60_000 },
+      { placement: activePlacement({ updatedAtMs: 30 }) },
+      { placement: activePlacement({ generation: 4, activeOwnerEpoch: 8 }) },
+      { ms: 24 * 60 * 60_000 },
+    ].entries()) {
+      if (step.placement) {
+        harness.setPlacement(step.placement);
+      }
+      await harness.sweep(step.ms);
+      expect(runWorkspaceCommand).toHaveBeenCalledTimes(index + 2);
+    }
   });
 
   it("samples an idle active placement and emits only projected status transitions", async () => {
@@ -205,7 +196,7 @@ describe("active worker placement disk-space monitoring", () => {
     const unsubscribe = onSessionLifecycleEvent((event) => events.push(event));
     try {
       await harness.monitor.sweep();
-      expect(harness.monitor.read(harness.placement)).toEqual({
+      expect(harness.snapshot()).toEqual({
         status: "ok",
         availableBytes,
         totalBytes: 10 * GIB,
@@ -226,31 +217,24 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.monitor.version()).toBe(1);
       expect(events).toEqual([]);
 
-      availableBytes = 400 * MIB;
-      harness.advanceTime(15 * 60_000);
-      await harness.monitor.sweep();
-      expect(harness.monitor.read(harness.placement)?.status).toBe("warning");
-      expect(events).toEqual([
-        { reason: "worker-disk-space", sessionKey: "agent:main:session-disk", agentId: "main" },
-      ]);
-      expect(harness.monitor.version()).toBe(2);
-
-      availableBytes = 300 * MIB;
-      harness.advanceTime(15 * 60_000);
-      await harness.monitor.sweep();
-      expect(harness.monitor.read(harness.placement)?.availableBytes).toBe(300 * MIB);
-      expect(events).toHaveLength(1);
-      expect(harness.monitor.version()).toBe(3);
-
-      await harness.monitor.sweep();
-      expect(harness.monitor.version()).toBe(3);
-
-      availableBytes = 6 * GIB;
-      harness.advanceTime(15 * 60_000);
-      await harness.monitor.sweep();
-      expect(harness.monitor.read(harness.placement)?.status).toBe("ok");
-      expect(events).toHaveLength(2);
-      expect(harness.monitor.version()).toBe(4);
+      for (const [bytes, ms, status, version, eventCount] of [
+        [400 * MIB, 15 * 60_000, "warning", 2, 1],
+        [300 * MIB, 15 * 60_000, "warning", 3, 1],
+        [300 * MIB, 0, "warning", 3, 1],
+        [6 * GIB, 15 * 60_000, "ok", 4, 2],
+      ] as const) {
+        availableBytes = bytes;
+        await harness.sweep(ms);
+        expect(harness.snapshot()).toMatchObject({ status, availableBytes });
+        expect(harness.monitor.version()).toBe(version);
+        expect(events).toEqual(
+          Array.from({ length: eventCount }, () => ({
+            reason: "worker-disk-space",
+            sessionKey: "agent:main:session-disk",
+            agentId: "main",
+          })),
+        );
+      }
     } finally {
       unsubscribe();
     }
@@ -272,7 +256,7 @@ describe("active worker placement disk-space monitoring", () => {
   });
 
   it("advances the projection fence when an observation loses its active placement", async () => {
-    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    const harness = createHarness();
 
     await harness.monitor.sweep();
     expect(harness.monitor.version()).toBe(1);
@@ -289,23 +273,22 @@ describe("active worker placement disk-space monitoring", () => {
   });
 
   it("probes and warns once per stale worker build binding", async () => {
-    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    const harness = createHarness();
     harness.startTunnel.mockRejectedValue(new StaleWorkerBuildError());
 
-    await harness.monitor.sweep();
-    expect(harness.monitor.nextSweepAtMs()).toBe(Infinity);
-    await harness.monitor.sweep();
-    await harness.monitor.sweep();
-
-    expect(harness.warn).toHaveBeenCalledTimes(1);
-    expect(harness.startTunnel).toHaveBeenCalledTimes(1);
-
-    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
-    await harness.monitor.sweep();
-    await harness.monitor.sweep();
-
-    expect(harness.warn).toHaveBeenCalledTimes(2);
-    expect(harness.startTunnel).toHaveBeenCalledTimes(2);
+    for (const binding of [1, 2]) {
+      if (binding === 2) {
+        harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
+      }
+      await harness.sweep();
+      expect(harness.monitor.nextSweepAtMs()).toBe(Infinity);
+      await harness.sweep();
+      if (binding === 1) {
+        await harness.sweep();
+      }
+      expect(harness.warn).toHaveBeenCalledTimes(binding);
+      expect(harness.startTunnel).toHaveBeenCalledTimes(binding);
+    }
   });
 
   it.each(["worker-turn", "remote-exec"] as const)(
@@ -366,7 +349,7 @@ describe("active worker placement disk-space monitoring", () => {
   });
 
   it("parks an empty inventory until a placement receipt and retains receipts during reads", async () => {
-    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    const harness = createHarness();
     harness.setPlacement({ ...activePlacement(), state: "draining" });
     await harness.monitor.sweep();
     harness.advanceTime(24 * 60 * 60_000);
