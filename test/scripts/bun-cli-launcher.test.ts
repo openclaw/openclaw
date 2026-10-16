@@ -13,7 +13,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const lifecycle = vi.hoisted(() => ({
   resolveBinDir: vi.fn<() => string>(),
-  probeNode: vi.fn<() => { bunVersion: string | null } | null>(),
+  probeNode:
+    vi.fn<
+      typeof import("../../scripts/preinstall-package-manager-warning.mjs").probePackageCliNodeRuntime
+    >(),
 }));
 
 vi.mock(import("../../scripts/lib/bun-cli-launcher.mjs"), async (importOriginal) => ({
@@ -254,7 +257,11 @@ it.each(["relative/bun", "/runtime\0next"])("rejects unstable launcher paths: %j
 describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle", () => {
   beforeEach(() => {
     lifecycle.resolveBinDir.mockReset();
-    lifecycle.probeNode.mockReset().mockReturnValue({ bunVersion: "1.4.3" });
+    lifecycle.probeNode.mockReset().mockReturnValue({
+      version: "24.22.0",
+      execPath: "/runtime/bun",
+      bunVersion: "1.4.3",
+    });
   });
 
   it("finishes only its existing global link and refreshes it after a Bun update", () => {
@@ -312,7 +319,11 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
   ])("leaves the Node-shebang bin untouched for %s", (_scenario, options) => {
     const target = fixture("", "entryPath", true);
     if (options.persistentNode) {
-      lifecycle.probeNode.mockReturnValue({ bunVersion: null });
+      lifecycle.probeNode.mockReturnValue({
+        version: "24.22.0",
+        execPath: "/runtime/node",
+        bunVersion: null,
+      });
     }
     if (options.windows) {
       vi.stubGlobal("process", { platform: "win32" });

@@ -51,6 +51,7 @@ vi.mock("node:sqlite", async (importOriginal) => ({
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: mocks.captureContext,
 }));
+// mock-isolation: Exercise ordering with a synthetic worker context and no real state database.
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.executeWorker,
   runOpenClawStateWorkerOperation: async (

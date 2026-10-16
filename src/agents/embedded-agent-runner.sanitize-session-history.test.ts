@@ -24,6 +24,7 @@ vi.mock("./embedded-agent-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
+// mock-isolation: Use synthetic provider hooks without loading runtime plugin registries.
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const clearProviderRuntimePluginCacheForTest = vi.fn();
   return {

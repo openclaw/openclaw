@@ -78,7 +78,7 @@ it.each(["SIGTERM", "SIGKILL"])("retains POSIX %s failures", async (failedSignal
   const { child } = createSyntheticChild();
   const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
   const childError = Object.assign(new Error("child signal denied"), { code: "EACCES" });
-  const failWith = (error: Error, signal: NodeJS.Signals | number | undefined) => {
+  const failWith = (error: Error, signal: Parameters<typeof process.kill>[1]): true => {
     if (signal === failedSignal) {
       throw error;
     }

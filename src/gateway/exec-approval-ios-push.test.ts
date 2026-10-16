@@ -124,6 +124,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   loadOrCreateProcessDeviceIdentityAsync: () => ({ deviceId: "gateway-device-1" }),
 }));
 
+// mock-isolation: Exercise approval routing with synthetic APNs registrations and no network delivery.
 vi.mock("../infra/push-apns.js", () => ({
   loadApnsRegistrations: mocks.registrations,
   resolveApnsAuthConfigFromEnv: mocks.directAuth,

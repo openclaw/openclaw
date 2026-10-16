@@ -58,6 +58,7 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   }) satisfies typeof import("../infra/device-pairing-worker.js").withCurrentDevicePairingSnapshot,
 }));
 
+// mock-isolation: Control subscription snapshots and send settlement without network delivery.
 vi.mock("../infra/push-web.js", () => ({
   withBoundWebPushSubscriptions: (async (stateDir, prepare) => {
     try {

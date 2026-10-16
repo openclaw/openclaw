@@ -26,6 +26,7 @@ import {
   loadDeliveryQueueEntry,
   seedDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.test-support.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -57,6 +58,7 @@ import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-jour
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   clearOpenClawStateDatabaseOpenFailure,
@@ -70,6 +72,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   prepareOpenClawStateDatabaseSchema,
   runWithOpenClawStateBusyTimeout,
+  runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -102,6 +105,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
     },
   };
 });
+
+type StateDbTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "diagnostic_events" | "schema_meta" | "skill_usage"
+>;
 
 const stateDbTempDirs: string[] = [];
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
@@ -3140,6 +3148,52 @@ describe("openclaw state database", () => {
       firstRows: [{ event_key: "first" }],
       secondRows: [{ event_key: "second" }],
     });
+  });
+
+  it("uses savepoints for nested write transaction rollback", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+
+    runOpenClawStateWriteTransaction((database) => {
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("diagnostic_events").values({
+          scope: "transaction-test",
+          event_key: "outer",
+          payload_json: "{}",
+          created_at: 1,
+        }),
+      );
+      expect(() =>
+        runOpenClawStateWriteTransaction((inner) => {
+          const innerDb = getNodeSqliteKysely<StateDbTestDatabase>(inner.db);
+          executeSqliteQuerySync(
+            inner.db,
+            innerDb.insertInto("diagnostic_events").values({
+              scope: "transaction-test",
+              event_key: "inner",
+              payload_json: "{}",
+              created_at: 2,
+            }),
+          );
+          throw new Error("rollback nested");
+        }, options),
+      ).toThrow("rollback nested");
+    }, options);
+
+    const database = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .selectFrom("diagnostic_events")
+          .select("event_key")
+          .where("scope", "=", "transaction-test")
+          .orderBy("event_key"),
+      ).rows.map((row) => row.event_key),
+    ).toEqual(["outer"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

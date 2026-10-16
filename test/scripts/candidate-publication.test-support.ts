@@ -210,6 +210,9 @@ export function candidatePublicationFixture(
     );
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
+    // Fresh qualification has no reused evidence or shared candidate artifact.
+    candidateBinding: undefined,
+    evidenceReuse: undefined,
     ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
     targetRef: q,
@@ -217,8 +220,6 @@ export function candidatePublicationFixture(
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
-  delete manifest.candidateBinding;
-  delete manifest.evidenceReuse;
   Object.assign(
     manifest.validationInputs,
     Object.fromEntries(

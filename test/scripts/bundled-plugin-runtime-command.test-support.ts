@@ -208,7 +208,7 @@ async function observeRuntimeCommandTimeout(params: {
   // Freeze the parent's policy clock, not subprocess startup, I/O, readiness or cleanup.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    commandResult = runtimeSmoke
+    const command = runtimeSmoke
       .runCommand(process.execPath, params.args, {
         detached: params.runDetached,
         timeoutMs: params.timeoutMs,
@@ -217,13 +217,14 @@ async function observeRuntimeCommandTimeout(params: {
       .finally(() => {
         settled = true;
       });
+    commandResult = command;
     const spawned = spawnSpy.mock.results[0];
     if (spawned?.type !== "return" || !spawned.value.pid) {
       throw new Error("runtime command did not expose its spawned child");
     }
     child = spawned.value;
     closed = childClosed(child);
-    const descendants = await withinTest(params.ready(child, commandResult), params.signal);
+    const descendants = await withinTest(params.ready(child, command), params.signal);
     const assertRunning = () => {
       for (const pid of [child!.pid!, ...descendants]) {
         expect(pidIsAlive(pid)).toBe(true);
@@ -234,7 +235,7 @@ async function observeRuntimeCommandTimeout(params: {
     await vi.advanceTimersByTimeAsync(params.timeoutMs - 1);
     assertRunning();
     await vi.advanceTimersByTimeAsync(1);
-    const error = await withinTest(commandResult, params.signal);
+    const error = await withinTest(command, params.signal);
     if (!(error instanceof Error)) {
       throw new Error("expected runtime command to time out");
     }

@@ -39,7 +39,7 @@ function expectAbsent(container: Element, ...selectors: string[]) {
   }
 }
 
-async function chooseFocused(container: Element, value: string) {
+async function chooseFocused(container: HTMLElement, value: string) {
   const trigger = getElement(container, ".picker-select__trigger", HTMLButtonElement);
   trigger.focus();
   await choosePickerValue(container, value);

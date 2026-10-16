@@ -8,6 +8,7 @@ import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-run
 
 const mocks = vi.hoisted(() => ({ createRequire: vi.fn(), runtimeUrl: vi.fn() }));
 vi.mock("node:module", () => ({ createRequire: mocks.createRequire }));
+// mock-isolation: Resolve synthetic package paths without loading the host's worker bootstrap.
 vi.mock("./runtime-worker-url.js", () => ({ resolveRuntimeWorkerUrl: mocks.runtimeUrl }));
 
 let root: string;

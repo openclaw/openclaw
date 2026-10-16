@@ -8,11 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
-import {
-  awaitGateBeforeSettlement,
-  withinTest,
-  withTestTimeout,
-} from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -384,7 +380,9 @@ it("ordinary readers observe no lease while a real peer initializes the schema",
   expectSingleLink([]);
 });
 
-it("recovers the same inode when its first writer crashes before schema initialization", async () => {
+it("recovers the same inode when its first writer crashes before schema initialization", async ({
+  signal,
+}) => {
   const script = `
       const sync = fs.fsyncSync;
       fs.fsyncSync = (descriptor) => {
@@ -405,7 +403,7 @@ it("recovers the same inode when its first writer crashes before schema initiali
   expect(before).toMatchObject({ size: 0, nlink: 1 });
   expect(store.read(root)).toEqual({ kind: "absent" });
   writer.child.kill("SIGKILL");
-  await withTestTimeout(writer.closed, 5_000, "fixture did not close after SIGKILL");
+  await withinTest(writer.closed, signal);
   publish("recovered");
   expect(fs.statSync(databasePath).ino).toBe(before.ino);
   expect(readOwners()).toEqual(["recovered"]);
