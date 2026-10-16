@@ -79,9 +79,14 @@ const getRuntimeConfig = vi.hoisted(() =>
 const cronRunRecordsOverride = vi.hoisted(() =>
   vi.fn<
     (
-      ...args: Parameters<typeof import("../../cron/store/read-only.js").readCronRunRecords>
+      ...args: Parameters<
+        typeof import("../../cron/store/read-only.js").readCronRunHistoryCandidates
+      >
     ) => Promise<CronRunRecord[]> | undefined
   >(),
+);
+const cronRunDetailsOverride = vi.hoisted(() =>
+  vi.fn<() => Promise<CronRunRecord[]> | undefined>(),
 );
 const resolveCronDeliveryPreview = vi.hoisted(() =>
   vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
@@ -100,8 +105,20 @@ vi.mock("../../cron/store/read-only.js", async () => {
   );
   return {
     ...actual,
-    readCronRunRecords: (...args: Parameters<typeof actual.readCronRunRecords>) =>
-      cronRunRecordsOverride(...args) ?? actual.readCronRunRecords(...args),
+    readCronRunHistoryCandidates: async (
+      ...args: Parameters<typeof actual.readCronRunHistoryCandidates>
+    ) => {
+      const records = cronRunRecordsOverride(...args);
+      return records ? { records: await records } : actual.readCronRunHistoryCandidates(...args);
+    },
+    readCronRunHistoryRecords: async (
+      ...args: Parameters<typeof actual.readCronRunHistoryRecords>
+    ) => {
+      const records = cronRunDetailsOverride() ?? cronRunRecordsOverride(args[0]);
+      return records
+        ? (await records).filter((record) => args[1].includes(record.id))
+        : actual.readCronRunHistoryRecords(...args);
+    },
   };
 });
 
@@ -379,6 +396,7 @@ describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronRunRecordsOverride.mockReset();
+    cronRunDetailsOverride.mockReset();
     resolveCronDeliveryPreview
       .mockReset()
       .mockResolvedValue({ label: "not requested", detail: "not requested" });
@@ -2371,15 +2389,34 @@ describe("cron method validation", () => {
     });
   });
 
-  it.each(["job", "all"] as const)(
-    "withholds %s history when client authority closes during the worker read",
-    async (scope) => {
+  it.each([
+    { scope: "job", phase: "candidate" },
+    { scope: "all", phase: "candidate" },
+    { scope: "job", phase: "detail" },
+    { scope: "all", phase: "detail" },
+  ] as const)(
+    "withholds $scope history when client authority closes during the $phase read",
+    async ({ scope, phase }) => {
       const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
       const respond = vi.fn();
       let current = true;
+      const records: CronRunRecord[] = [
+        {
+          id: "retained-run",
+          jobId: "cron-1",
+          agentId: "ops",
+          createdAt: 1,
+          status: "succeeded",
+          detail: { kind: "cron-run", storeKey: cronStoreKey(context.cronStorePath), status: "ok" },
+        },
+      ];
       cronRunRecordsOverride.mockImplementation(async () => {
+        current = phase !== "candidate";
+        return records;
+      });
+      cronRunDetailsOverride.mockImplementation(async () => {
         current = false;
-        return [];
+        return records;
       });
 
       await expect(
@@ -2393,26 +2430,45 @@ describe("cron method validation", () => {
     },
   );
 
-  it("rechecks the scoped job after reading history in the worker", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    cronRunRecordsOverride.mockImplementation(async () => {
-      context.cron.getJob.mockReturnValue(undefined);
-      return [];
-    });
+  it.each(["candidate", "detail"] as const)(
+    "rechecks the scoped job after reading history %s",
+    async (phase) => {
+      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+      const records: CronRunRecord[] = [
+        {
+          id: "retained-run",
+          jobId: "cron-1",
+          agentId: "ops",
+          createdAt: 1,
+          status: "succeeded",
+          detail: { kind: "cron-run", storeKey: cronStoreKey(context.cronStorePath), status: "ok" },
+        },
+      ];
+      cronRunRecordsOverride.mockImplementation(async () => {
+        if (phase === "candidate") {
+          context.cron.getJob.mockReturnValue(undefined);
+        }
+        return records;
+      });
+      cronRunDetailsOverride.mockImplementation(async () => {
+        context.cron.getJob.mockReturnValue(undefined);
+        return records;
+      });
 
-    const { respond } = await invokeCron(
-      "cron.runs",
-      { id: "cron-1" },
-      {
-        context,
-        client: callerClient("ops"),
-      },
-    );
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found",
-    });
-  });
+      const { respond } = await invokeCron(
+        "cron.runs",
+        { id: "cron-1" },
+        {
+          context,
+          client: callerClient("ops"),
+        },
+      );
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "Automation not found",
+      });
+    },
+  );
 
   it("does not widen a whitespace-only cron.runs selector to all history", async () => {
     const context = createCronContext();
