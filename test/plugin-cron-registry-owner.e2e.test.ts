@@ -361,12 +361,17 @@ describe("plugin cron registry ownership e2e", () => {
             [provider]: {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
+              // Cron admission needs explicit key auth before the provider runtime loads.
+              auth: route === "cron" ? "api-key" : undefined,
+              apiKey: route === "cron" ? TEST_API_KEY : undefined,
               request: { allowPrivateNetwork: true },
               models: [model("unavailable")],
             },
             [fallbackProvider]: {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
+              auth: route === "cron" ? "api-key" : undefined,
+              apiKey: route === "cron" ? TEST_API_KEY : undefined,
               request: { allowPrivateNetwork: true },
               models: [model("available")],
             },
