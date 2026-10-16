@@ -11,7 +11,6 @@ export function createCodexAppServerMessageWriter(options: {
     message: RpcRequest | RpcResponse,
     onError?: (error: Error) => void,
     beforeWrite?: () => void,
-    onWriteResult?: (error?: Error | null) => void,
   ): void => {
     if (options.isClosed()) {
       return;
@@ -35,7 +34,6 @@ export function createCodexAppServerMessageWriter(options: {
       options.onNativeExecution();
     }
     child.stdin.write(`${frame}\n`, (error?: Error | null) => {
-      onWriteResult?.(error);
       if (error) {
         embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
         onError?.(error);

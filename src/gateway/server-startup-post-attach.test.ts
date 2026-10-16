@@ -672,35 +672,53 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(publishedGatewayLifetimeSidecars.has(recoverySidecar)).toBe(false);
   });
 
-  it("gates main-session recovery behind post-ready work", async () => {
-    const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
-    let waitForStart: (() => Promise<void>) | undefined;
-    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
-      (params: { waitForStart?: () => Promise<void> }) => {
-        waitForStart = params.waitForStart;
-        return { stop: vi.fn(async () => {}) };
-      },
-    );
+  it.each([false, true])(
+    "gates main-session recovery behind subagent restoration (failure: %s)",
+    async (failRestoration) => {
+      const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
+      const restorationStarted = createDeferred();
+      const restorationReady = createDeferred();
+      hoisted.activateSubagentRegistry.mockImplementationOnce(async () => {
+        restorationStarted.resolve();
+        await restorationReady.promise;
+        if (failRestoration) {
+          throw new Error("restoration failed");
+        }
+      });
+      let waitForStart: (() => Promise<void>) | undefined;
+      hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        (params: { waitForStart?: () => Promise<void> }) => {
+          waitForStart = params.waitForStart;
+          return { stop: vi.fn(async () => {}) };
+        },
+      );
 
-    await startGatewayPostAttachRuntime({
-      ...createPostAttachParams(),
-      waitForPostReadyWork: () => postReadyWork,
-    });
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams(),
+        waitForPostReadyWork: () => postReadyWork,
+      });
 
-    await waitForGatewayTestState(() => {
-      expect(waitForStart).toEqual(expect.any(Function));
-    });
-    let released = false;
-    const waiting = waitForStart?.().then(() => {
-      released = true;
-    });
-    await Promise.resolve();
-    expect(released).toBe(false);
+      await waitForGatewayTestState(() => {
+        expect(waitForStart).toEqual(expect.any(Function));
+      });
+      let released = false;
+      const waiting = waitForStart?.().then(() => {
+        released = true;
+      });
+      await Promise.resolve();
+      expect(released).toBe(false);
 
-    releasePostReadyWork();
-    await waiting;
-    expect(released).toBe(true);
-  });
+      try {
+        releasePostReadyWork();
+        await restorationStarted.promise;
+        expect(released).toBe(false);
+      } finally {
+        restorationReady.resolve();
+      }
+      await waiting;
+      expect(released).toBe(true);
+    },
+  );
 
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };

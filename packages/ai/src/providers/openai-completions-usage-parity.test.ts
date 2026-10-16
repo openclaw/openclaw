@@ -42,15 +42,28 @@ type UsageScenario = {
   failureAfterTerminal?: boolean;
 };
 
+function wireUsage(
+  prompt_tokens: number,
+  completion_tokens: number,
+  details: Record<string, unknown> = {},
+) {
+  return {
+    prompt_tokens,
+    completion_tokens,
+    total_tokens: prompt_tokens + completion_tokens,
+    ...details,
+  };
+}
+
 const scenarios: UsageScenario[] = [
   {
     name: "transport failure after terminal accounting",
     package: true,
     failureAfterTerminal: true,
-    usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 },
+    usage: wireUsage(20, 3),
     expectedUsage: { usageReport: { state: "available" }, input: 20, output: 3, totalTokens: 23 },
   },
-  ...[undefined, { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 }].map((usage) => ({
+  ...[undefined, wireUsage(20, 3)].map((usage) => ({
     name: usage ? "interruption after provisional usage" : "interruption before usage",
     package: true,
     interrupted: true,
@@ -76,7 +89,7 @@ const scenarios: UsageScenario[] = [
   {
     name: "explicit coherent zero usage",
     package: true,
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: wireUsage(0, 0),
     expectedUsage: {
       totalTokens: 0,
       usageReport: { state: "available" },
@@ -87,13 +100,10 @@ const scenarios: UsageScenario[] = [
   {
     name: "documented reasoning tokens and cache buckets",
     package: true,
-    usage: {
-      prompt_tokens: 100,
-      completion_tokens: 20,
-      total_tokens: 120,
+    usage: wireUsage(100, 20, {
       prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 10 },
       completion_tokens_details: { reasoning_tokens: 7 },
-    },
+    }),
     expectedUsage: {
       input: 65,
       output: 20,
@@ -108,12 +118,9 @@ const scenarios: UsageScenario[] = [
   },
   {
     name: "compatible nested cache-creation tokens",
-    usage: {
-      prompt_tokens: 100,
-      completion_tokens: 20,
-      total_tokens: 120,
+    usage: wireUsage(100, 20, {
       prompt_tokens_details: { cached_tokens: 25, cache_creation_input_tokens: 10 },
-    },
+    }),
     expectedUsage: { input: 65, output: 20, cacheRead: 25, cacheWrite: 10, totalTokens: 120 },
     expectedCost: 0.00011625,
   },
@@ -138,12 +145,9 @@ const scenarios: UsageScenario[] = [
   ].map(({ name, prompt, cached, written, cost }) => ({
     name,
     cost: tieredCost,
-    usage: {
-      prompt_tokens: prompt,
-      completion_tokens: 20,
-      total_tokens: prompt + 20,
+    usage: wireUsage(prompt, 20, {
       prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: written },
-    },
+    }),
     expectedUsage: {
       input: prompt - cached - written,
       output: 20,
@@ -156,13 +160,7 @@ const scenarios: UsageScenario[] = [
   ...[0, 0.0009].map((billedCost) => ({
     name: `provider-billed ${billedCost} overrides tier estimate`,
     cost: tieredCost,
-    usage: {
-      prompt_tokens: 101,
-      completion_tokens: 20,
-      total_tokens: 121,
-      prompt_tokens_details: { cached_tokens: 76 },
-      cost: billedCost,
-    },
+    usage: wireUsage(101, 20, { prompt_tokens_details: { cached_tokens: 76 }, cost: billedCost }),
     expectedUsage: {
       input: 25,
       output: 20,
@@ -175,22 +173,12 @@ const scenarios: UsageScenario[] = [
   })),
   {
     name: "explicit zero reasoning tokens",
-    usage: {
-      prompt_tokens: 10,
-      completion_tokens: 5,
-      total_tokens: 15,
-      completion_tokens_details: { reasoning_tokens: 0 },
-    },
+    usage: wireUsage(10, 5, { completion_tokens_details: { reasoning_tokens: 0 } }),
     expectedUsage: { input: 10, output: 5, reasoningTokens: 0, totalTokens: 15 },
   },
   {
     name: "compatible prompt-cache-hit fallback",
-    usage: {
-      prompt_tokens: 100,
-      prompt_cache_hit_tokens: 25,
-      completion_tokens: 20,
-      total_tokens: 120,
-    },
+    usage: wireUsage(100, 20, { prompt_cache_hit_tokens: 25 }),
     expectedUsage: { input: 75, output: 20, cacheRead: 25, cacheWrite: 0, totalTokens: 120 },
     expectedCost: 0.00012125,
   },
@@ -212,12 +200,7 @@ const scenarios: UsageScenario[] = [
     return {
       name,
       package: true,
-      usage: {
-        prompt_tokens: 100,
-        completion_tokens: 20,
-        total_tokens: 120,
-        ...cacheUsage,
-      },
+      usage: wireUsage(100, 20, cacheUsage),
       expectedUsage: {
         input: 100 - cached,
         cacheRead: cached,
@@ -230,13 +213,7 @@ const scenarios: UsageScenario[] = [
   }),
   {
     name: "invalid provider cost and cached-token overflow",
-    usage: {
-      prompt_tokens: 2,
-      completion_tokens: 5,
-      total_tokens: 7,
-      prompt_tokens_details: { cached_tokens: 4 },
-      cost: -1,
-    },
+    usage: wireUsage(2, 5, { prompt_tokens_details: { cached_tokens: 4 }, cost: -1 }),
     expectedUsage: {
       input: 0,
       output: 5,
@@ -250,13 +227,10 @@ const scenarios: UsageScenario[] = [
   {
     name: "provider-compatible usage nested in a choice",
     package: true,
-    usage: {
-      prompt_tokens: 20,
-      completion_tokens: 10,
-      total_tokens: 30,
+    usage: wireUsage(20, 10, {
       prompt_tokens_details: { cached_tokens: 5 },
       completion_tokens_details: { reasoning_tokens: 3 },
-    },
+    }),
     expectedUsage: { input: 15, output: 10, cacheRead: 5, reasoningTokens: 3, totalTokens: 30 },
     inChoice: true,
   },
@@ -342,7 +316,7 @@ it.each([
   { name: "custom endpoint with usage enabled", supportsUsageInStreaming: true, warns: 0 },
   {
     name: "custom endpoint reporting usage",
-    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    usage: wireUsage(10, 5),
     warns: 0,
   },
   { name: "local endpoint with usage disabled", endpointClass: "local", warns: 0 },

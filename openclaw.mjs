@@ -20,12 +20,15 @@ import {
   isNativeHookRelayInvocation,
   recoverNodeRuntime,
   runRespawnedChild,
+  watchCliRespawnParent,
 } from "./node-runtime-recovery.mjs";
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
 } from "./node-version.mjs";
+
+watchCliRespawnParent();
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||

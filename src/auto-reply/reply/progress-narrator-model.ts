@@ -1,5 +1,7 @@
-import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
-import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
+import {
+  prepareUtilityCompletionForAgent,
+  runUtilityCompletion,
+} from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { compactProgressText } from "../../shared/text-truncate.js";
@@ -62,7 +64,7 @@ export async function generateNarrationWithUtilityModel(params: {
     : controller.signal;
   try {
     signal.throwIfAborted();
-    const result = await runIsolatedCompletion({
+    const result = await runUtilityCompletion({
       ...params.prepared,
       purpose: "progress-narration",
       config: params.cfg,

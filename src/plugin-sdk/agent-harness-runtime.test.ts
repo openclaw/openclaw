@@ -22,6 +22,7 @@ import {
   type AgentHarnessV2,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
+  type HarnessContextEngine,
 } from "./agent-harness-runtime.js";
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
@@ -61,6 +62,12 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("exposes optional compaction progress without requiring it from legacy engines", () => {
+    type CompactParams = Parameters<HarnessContextEngine["compact"]>[0];
+    expectTypeOf<CompactParams["onProgress"]>().toEqualTypeOf<(() => void) | undefined>();
+    expectTypeOf<Omit<CompactParams, "onProgress">>().toMatchTypeOf<CompactParams>();
+  });
+
   it("exposes structured input through one frozen named runtime surface", () => {
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
     expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([

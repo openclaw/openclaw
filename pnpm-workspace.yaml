@@ -129,10 +129,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-  # lit-analyzer imports the classic compiler without declaring it; match its analyzer dependency.
-  "lit-analyzer@2.0.3":
-    dependencies:
-      typescript: 5.9.3
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch

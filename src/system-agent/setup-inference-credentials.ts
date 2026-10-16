@@ -6,7 +6,6 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
-import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -45,6 +44,7 @@ import {
 } from "./setup-inference-core.js";
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
 import {
+  mergeSavedSetupInferenceConfig,
   prepareSetupModelRuntime,
   projectSetupInferenceConfig,
   withCodexHomeScope,
@@ -342,7 +342,9 @@ export async function stageSavedAuthCandidate(
     const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
-      ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
+      ? validateConfigObjectRaw(
+          mergeSavedSetupInferenceConfig(ctx.cfg, JSON.parse(saved.configJson)),
+        )
       : undefined;
     if (storedConfig && !storedConfig.ok) {
       return {

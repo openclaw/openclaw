@@ -3,9 +3,11 @@ import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
+import { agentPortProvider } from "./agent-port.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import {
   DatabasePortDataError,
+  type DatabasePortPluginOwners,
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
@@ -17,6 +19,7 @@ import { workboardPortProvider } from "./workboard-port.js";
 export const databasePortProviders: readonly DatabasePortProvider[] = [
   workboardPortProvider,
   statePortProvider,
+  agentPortProvider,
   logbookPortProvider,
   teamReportsPortProvider,
 ];
@@ -47,10 +50,12 @@ export async function withDatabasePortConnection<T>(
   config: OpenClawConfig,
   run: (client: Client) => Promise<T>,
 ): Promise<T> {
-  const { resolveDatabaseEngineInput } = await import("./config.js");
-  const input = await resolveDatabaseEngineInput(config);
+  const { resolveDatabaseEngineSelection } = await import("./config.js");
+  const input = (await resolveDatabaseEngineSelection(config)).postgres;
   if (!input) {
-    throw new Error("PostgreSQL requires database.engine=postgres and a resolvable connection.");
+    throw new Error(
+      "PostgreSQL requires an effective postgres family and a resolvable connection.",
+    );
   }
   const { Client } = await import("pg");
   const client = new Client({ connectionString: input.connection });
@@ -81,6 +86,7 @@ export function withDatabasePortPostgres<T>(
   config: OpenClawConfig,
   anchor: { namespace: string; storeId: string },
   run: (client: Client, descriptor: PortDescriptor) => Promise<T>,
+  pluginOwners?: DatabasePortPluginOwners,
 ): Promise<T> {
   return withDatabasePortConnection(config, async (client) => {
     const rows = await client
@@ -102,6 +108,12 @@ export function withDatabasePortPostgres<T>(
       throw new DatabasePortDataError("PostgreSQL anchor does not match its store metadata");
     }
     const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
-    return run(client, await loadDatabasePortDescriptor(row.store, config, Number(row.version)));
+    return run(
+      client,
+      await loadDatabasePortDescriptor(row.store, config, {
+        version: Number(row.version),
+        pluginOwners,
+      }),
+    );
   });
 }

@@ -129,7 +129,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           if (snapshot.progressCard !== undefined) {
             const target = this.resolveChatReadTarget();
             if (target) {
-              this.progressCard.hydrate(target, snapshot.progressCard);
+              this.progressCards.hydrate(target, snapshot.progressCard);
             }
           }
           // Release the history response before Lit queues the cached transcript render.

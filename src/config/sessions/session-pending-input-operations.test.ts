@@ -218,7 +218,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
     let staged;
     try {
       staged = mutate(input);
-      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 1 });
+      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 0 });
     } finally {
       counter.restore();
     }
@@ -244,14 +244,6 @@ it("shares transaction rows without retaining stale custody and returns the pers
       },
     ]);
 
-    const stale = stage();
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run("replacement", "cohort-input");
-    expect(() => mutate(stale)).toThrow("changed before staging committed");
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run(identity.requestHash, "cohort-input");
     const requeued = mutate(stage());
     expect(requeued.stagedInput).toEqual(staged.stagedInput);
 

@@ -53,6 +53,17 @@ function startSpool(
   });
 }
 
+async function withSpool(
+  spool: ReturnType<typeof startSpool>,
+  run: (spool: ReturnType<typeof startSpool>) => Promise<void>,
+): Promise<void> {
+  try {
+    await run(spool);
+  } finally {
+    await spool.stop();
+  }
+}
+
 async function withQueue<T>(fn: (queue: NextcloudTalkIngressQueue) => Promise<T>): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-ingress-"));
   const stateDir = await fs.realpath(created);
@@ -145,13 +156,10 @@ describe("Nextcloud Talk durable ingress", () => {
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies NextcloudTalkIngressQueue;
       const deliver = vi.fn();
-      const spool = startSpool(failingQueue, deliver);
-      try {
+      await withSpool(startSpool(failingQueue, deliver), async (spool) => {
         await expect(spool.receive(createRawEvent())).rejects.toBe(appendError);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -283,30 +291,29 @@ describe("Nextcloud Talk durable ingress", () => {
   it("stores the exact raw envelope in the room lane", async () => {
     await withQueue(async (queue) => {
       const rawEvent = createRawEvent({ messageId: "msg-raw", roomToken: "test-room-token" });
-      const spool = startSpool(queue, async (_message, lifecycle) => {
-        lifecycle.onDeferred();
-      });
-      try {
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({
-            id: "msg-raw",
-            laneKey: "room:test-room-token",
-            payload: expect.objectContaining({ rawEvent }),
-          }),
-        ]);
-      } finally {
-        await spool.stop();
-      }
+      await withSpool(
+        startSpool(queue, async (_message, lifecycle) => {
+          lifecycle.onDeferred();
+        }),
+        async (spool) => {
+          await spool.receive(rawEvent);
+          await spool.waitForIdle();
+          expect(await queue.listClaims()).toEqual([
+            expect.objectContaining({
+              id: "msg-raw",
+              laneKey: "room:test-room-token",
+              payload: expect.objectContaining({ rawEvent }),
+            }),
+          ]);
+        },
+      );
     });
   });
 
   it("continues delivering ordinary Create Note text messages", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async () => {});
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(
           spool.receive(
             createRawEvent({
@@ -326,9 +333,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
           expect.any(Object),
         );
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -339,8 +344,7 @@ describe("Nextcloud Talk durable ingress", () => {
         lifecycle.onAdoptionFinalizing();
         adopt = lifecycle.onAdopted;
       });
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         const rawEvent = createRawEvent({ messageId: "msg-finalizing" });
         await spool.receive(rawEvent);
         await spool.waitForIdle();
@@ -353,9 +357,7 @@ describe("Nextcloud Talk durable ingress", () => {
         await spool.receive(rawEvent);
         await spool.waitForIdle();
         expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -365,8 +367,7 @@ describe("Nextcloud Talk durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
         await spool.waitForIdle();
         await expect(spool.receive(body)).resolves.toBe("accepted");
@@ -380,9 +381,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
           expect.any(Object),
         );
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -430,8 +429,7 @@ describe("Nextcloud Talk durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         lifecycle.onDeferred();
       });
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
         await spool.waitForIdle();
         expect(await queue.listClaims()).toEqual([
@@ -461,9 +459,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
           expect.any(Object),
         );
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -471,8 +467,7 @@ describe("Nextcloud Talk durable ingress", () => {
     await withQueue(async (queue) => {
       const { body } = createSignedFileSharedActivityRequest({ fileSize: 1_234_567 });
       const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
         await spool.waitForIdle();
         expect(deliver).toHaveBeenCalledWith(
@@ -481,9 +476,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
           expect.any(Object),
         );
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -493,8 +486,7 @@ describe("Nextcloud Talk durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         lifecycle.onDeferred();
       });
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
         await spool.waitForIdle();
         expect(await queue.listClaims()).toEqual([
@@ -523,9 +515,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
           expect.any(Object),
         );
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -540,8 +530,7 @@ describe("Nextcloud Talk durable ingress", () => {
       });
       const body = JSON.stringify(payload);
       const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
         await spool.waitForIdle();
         await expect(spool.receive(body)).resolves.toBe("accepted");
@@ -556,9 +545,7 @@ describe("Nextcloud Talk durable ingress", () => {
           expect.any(Object),
         );
         expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("attachment");
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -569,14 +556,11 @@ describe("Nextcloud Talk durable ingress", () => {
       payload.object.id = "4246";
       payload.object.content = "{not-json";
       const deliver = vi.fn();
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -594,17 +578,14 @@ describe("Nextcloud Talk durable ingress", () => {
       });
       const deliver = vi.fn();
       const log = vi.fn();
-      const spool = startSpool(queue, deliver, log);
-      try {
+      await withSpool(startSpool(queue, deliver, log), async (spool) => {
         await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
         expect(log).toHaveBeenCalledWith(
           "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
         );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -621,14 +602,11 @@ describe("Nextcloud Talk durable ingress", () => {
         parameters: { object: { type: "deck-card", id: "redacted" } },
       });
       const deliver = vi.fn();
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -636,8 +614,7 @@ describe("Nextcloud Talk durable ingress", () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
       const log = vi.fn();
-      const spool = startSpool(queue, deliver, log);
-      try {
+      await withSpool(startSpool(queue, deliver, log), async (spool) => {
         const fileShare = JSON.stringify({
           type: "Create",
           actor: { type: "Person", id: "alice", name: "Alice" },
@@ -656,9 +633,7 @@ describe("Nextcloud Talk durable ingress", () => {
         );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 });

@@ -546,14 +546,13 @@ describe("createEmbeddedRunCompactionRuntime", () => {
 
   it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
     const fixture = await createRuntime();
-    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+    const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
       await import("../agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
-      await import("../agent-bundle-mcp-manager-api.js");
+    const { setSessionMcpRuntimeScheduler } = await import("../agent-bundle-mcp-manager-api.js");
     const scheduler = createTestGatewayScheduler();
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     const create = (sessionId: string) =>
       getOrCreateSessionMcpRuntime({
         sessionId,

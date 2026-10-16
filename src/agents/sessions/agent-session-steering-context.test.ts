@@ -5,10 +5,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import {
-  readRuntimePromptImageOrder,
-  readRuntimePromptMediaFacts,
-} from "../../media/media-facts.js";
+import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -583,7 +580,7 @@ describe("AgentSession quoted steering context", () => {
           }
           if (media) {
             expect(readRuntimePromptMediaFacts(messages[index]!)).toMatchObject(media);
-            expect(readRuntimePromptImageOrder(messages[index]!)).toEqual([
+            expect(readRuntimePromptMediaFacts(messages[index]!)).toHaveProperty("imageOrder", [
               "offloaded",
               "offloaded",
             ]);

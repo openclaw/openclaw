@@ -935,7 +935,7 @@ await new Promise(()=>{});export default {};`,
 
       const result = await runExtensionBatchPlan(
         resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["codex"] }),
-        { runGroup, vitestArgs },
+        { runGroup, vitestArgs, env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" } },
       );
 
       expect(result).toBe(0);
@@ -973,7 +973,7 @@ await new Promise(()=>{});export default {};`,
 
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
-      { runGroup },
+      { runGroup, env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" } },
     );
 
     expect(result).toBe(1);
@@ -987,7 +987,11 @@ await new Promise(()=>{});export default {};`,
 
       const result = await runExtensionBatchPlan(
         resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
-        { runGroup, vitestArgs: [vitestArg] },
+        {
+          runGroup,
+          vitestArgs: [vitestArg],
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" },
+        },
       );
 
       expect(result).toBe(0);

@@ -1,6 +1,9 @@
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 // Session-owned virtualizer lifecycle for chat transcripts.
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../../../lib/reactive/solid-controller-host.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
@@ -41,7 +44,7 @@ export class ChatTranscriptController implements SolidController {
       const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
-        this.host,
+        () => this.host.requestUpdate(),
         initialOffset,
         (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
         this.callbacks,

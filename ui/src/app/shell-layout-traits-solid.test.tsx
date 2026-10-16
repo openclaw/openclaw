@@ -3,7 +3,7 @@ import { Show, createEffect, createSignal, flush, onSettled } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { SettingsPage, SettingsPageHeader } from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { renderModelProvidersPageShell } from "../pages/model-providers/view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";

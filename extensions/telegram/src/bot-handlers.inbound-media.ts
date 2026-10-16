@@ -17,6 +17,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
@@ -103,7 +104,6 @@ export function createTelegramInboundMedia({
     RegisterTelegramHandlerParams,
     | "accountId"
     | "ownerAgentId"
-    | "telegramDeps"
     | "bot"
     | "opts"
     | "runtime"
@@ -117,7 +117,6 @@ export function createTelegramInboundMedia({
   const {
     accountId,
     ownerAgentId,
-    telegramDeps,
     bot,
     opts,
     runtime,
@@ -196,12 +195,9 @@ export function createTelegramInboundMedia({
       threadSpec.id !== undefined &&
       requireMentionInBotThreads !== undefined
     ) {
-      const topicScope = telegramDeps.resolveStorePath(
-        authorization.authorizationCfg.session?.store,
-        {
-          agentId: ownerAgentId,
-        },
-      );
+      const topicScope = resolveStorePath(authorization.authorizationCfg.session?.store, {
+        agentId: ownerAgentId,
+      });
       ({ creatorUserId } = await resolveTelegramForumTopicMetadata({
         msg,
         threadId: threadSpec.id,

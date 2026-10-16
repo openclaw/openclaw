@@ -11,6 +11,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -450,6 +451,11 @@ if (args[0] === "-C" && args[2] === "rev-parse") {
 }
 if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }
 const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || "{}"))).get(args.join("\u0000"));
+// Fingerprinting reads actual install index/object facts; routing decisions remain stubbed.
+if (!response && ["ls-files", "cat-file"].includes(args[0])) {
+  const result = require("node:child_process").spawnSync("git", args, { env: { ...process.env, PATH: ${JSON.stringify(process.env.PATH ?? "")} }, stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 if (!response) process.exit(1);
 if (response.stdout) process.stdout.write(response.stdout); if (response.stderr) process.stderr.write(response.stderr);
 process.exit(response.status ?? 0);`;
@@ -726,26 +732,8 @@ function expectMirrorDirectories(syncRoot: string, repository: string, allocatio
   if (allocation) {
     expect(path.basename(allocation)).toBe(`openclaw-crabbox-sync-${id}`);
   }
-  const cursorName = "openclaw-crabbox-sync-discovery";
-  const cursor = path.join(syncRoot, cursorName);
-  if (existsSync(cursor)) {
-    expect(readdirSync(cursor)).toEqual(["position.json"]);
-    const identity = (directory: string) => {
-      const stat = lstatSync(directory, { bigint: true });
-      return { dev: String(stat.dev), ino: String(stat.ino) };
-    };
-    expect(JSON.parse(readFileSync(path.join(cursor, "position.json"), "utf8"))).toMatchObject({
-      version: 1,
-      rootIdentity: identity(syncRoot),
-      cursorIdentity: identity(cursor),
-    });
-  }
   expect(readdirSync(syncRoot).toSorted()).toEqual(
-    [
-      "mirrors",
-      ...(allocation ? [path.basename(allocation)] : []),
-      ...(existsSync(cursor) ? [cursorName] : []),
-    ].toSorted(),
+    ["mirrors", ...(allocation ? [path.basename(allocation)] : [])].toSorted(),
   );
   return { key, id };
 }
@@ -1621,6 +1609,18 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).not.toMatch(/git (?:reset|clean|restore|commit) /u);
   expect(remoteCommand).not.toContain("remote-testbox-sync");
   expect(remoteCommand).not.toContain("; &&");
+}
+
+function copyDependencyFingerprint(directory: string) {
+  // The CLI runs outside the bundled wrapper and keeps its canonical relative import.
+  for (const file of [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    "scripts/lib/pnpm-lockfile-documents.mjs",
+  ]) {
+    const destination = path.join(directory, file);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(repoRoot, file), destination);
+  }
 }
 
 function copyRealWrapper(destination: string) {
@@ -4592,9 +4592,12 @@ process.on("exit", () => {
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
     ["aws", false, "reuse"],
+    ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
     ["blacksmith-testbox", false, "reuse"],
+    ["blacksmith-testbox", false, "unchanged"],
+    ["blacksmith-testbox", false, "unrelated-staging"],
     ["blacksmith-testbox", false, "captured-base"],
     ["blacksmith-testbox", false, "graph"],
     ["blacksmith-testbox", false, "frozen"],
@@ -4605,6 +4608,8 @@ process.on("exit", () => {
     "transports verified source and dependencies (provider=%s, shallow=%s, scenario=%s)",
     (provider, shallow, scenario) => {
       const root = makeTempDir(tempDirs, "openclaw-changed-gate-real-git-");
+      const installsDependencies =
+        scenario === "graph" || scenario === "frozen" || scenario.startsWith("lifecycle");
       const origin = path.join(root, "origin");
       const producer = path.join(root, "producer");
       const capturedBundle = path.join(root, "captured.bundle");
@@ -4671,7 +4676,16 @@ process.on("exit", () => {
       };
       mkdirSync(path.join(origin, "scripts"), { recursive: true });
       git(origin, ["init", "-q", "-b", "main"]);
-      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n*.ignored\n!reincluded.ignored\n");
+      copyDependencyFingerprint(origin);
+      writeFileSync(
+        path.join(origin, "package.json"),
+        '{"name":"transport-fixture","private":true}\n',
+      );
+      writeFileSync(
+        path.join(origin, ".gitignore"),
+        ".tmp/\n*.ignored\n!reincluded.ignored\n" +
+          (installsDependencies ? "" : "/pnpm-lock.yaml\n"),
+      );
       writeFileSync(path.join(origin, ".gitattributes"), "* text=auto eol=lf\n");
       writeFileSync(
         path.join(origin, ".crabbox.yaml"),
@@ -4698,6 +4712,9 @@ process.on("exit", () => {
       writeFileSync(path.join(origin, hiddenPath), hiddenBytes);
       for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
         writeFileSync(path.join(origin, file), "base\n");
+      }
+      if (scenario === "reuse" || scenario === "unchanged") {
+        chmodSync(path.join(origin, "mode.sh"), 0o755);
       }
       writeFileSync(path.join(origin, "tracked.ignored"), "tracked ignored base\n");
       writeFileSync(path.join(origin, "reincluded.ignored"), "reincluded base\n");
@@ -4757,6 +4774,14 @@ process.on("exit", () => {
           `?${hiddenObject}`,
         );
       }
+      if (!installsDependencies) {
+        // Admission needs a readable lock, while these source-only cases must not install.
+        // The ignored fixture seed stays outside the capsule; graph cases carry their real lock.
+        writeFileSync(
+          path.join(producer, "pnpm-lock.yaml"),
+          "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+        );
+      }
       expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
       const alias = provider === "aws" && scenario !== "arbitrary" ? "origin/release/fixture" : "";
       if (alias) {
@@ -4784,6 +4809,18 @@ process.on("exit", () => {
       const scriptBody = '#!/usr/bin/env bash\nexec "$@"\n';
       const scriptInput = path.join(root, "input.sh");
       writeFileSync(scriptInput, scriptBody);
+      const completionProbe =
+        scenario === "unrelated-staging" ? path.join(root, "staging-probe.cjs") : undefined;
+      const stagingScans = path.join(root, "staging-scans");
+      if (completionProbe) {
+        mkdirSync(path.join(root, "sync"), { recursive: true });
+        writeFileSync(
+          completionProbe,
+          `const fs=require('node:fs');const original=fs.opendirSync;
+fs.opendirSync=function(directory,...args){if(fs.realpathSync(directory)===${JSON.stringify(realpathSync(path.join(root, "sync")))})fs.appendFileSync(${JSON.stringify(stagingScans)},'scan\\n');return original.call(this,directory,...args);};
+require('node:module').syncBuiltinESMExports();`,
+        );
+      }
       const runSender = (
         mode: "direct" | "shell" | "script" | "stdin" = "direct",
         delegatedArgs?: string[],
@@ -4801,7 +4838,13 @@ process.on("exit", () => {
           [fixtureWrapper, ...(delegatedArgs ?? ["run", "--provider", provider, ...payload])],
           {
             cwd: producer,
-            env,
+            env: completionProbe
+              ? {
+                  ...env,
+                  NODE_OPTIONS:
+                    `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(completionProbe)}`.trim(),
+                }
+              : env,
             encoding: "utf8",
             input: mode === "stdin" ? scriptBody : undefined,
             timeout: 10_000,
@@ -4933,6 +4976,14 @@ process.on("exit", () => {
         }
         return { receiver, result };
       };
+      if (scenario === "unrelated-staging") {
+        runSender();
+        expect(
+          existsSync(stagingScans),
+          "normal completion must not inspect unrelated staging",
+        ).toBe(false);
+        return;
+      }
       if (scenario === "captured-base") {
         const sharedBase = git(producer, ["rev-parse", base + "^"]);
         git(producer, ["update-ref", "refs/remotes/origin/main", sharedBase]);
@@ -4958,11 +5009,29 @@ process.on("exit", () => {
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
         return;
       }
-      if (scenario === "reuse") {
+      if (scenario === "reuse" || scenario === "unchanged") {
+        expect(git(producer, ["ls-files", "--stage", "--", "mode.sh"])).toMatch(/^100755 /u);
         const sent = runSender();
         const first = receive("reused", sent.remoteCommand, sent.bundle);
         expect(first.result.status, failureDetail(first.result)).toBe(0);
         expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+        const capturedMode = git(first.receiver, ["ls-tree", "HEAD", "--", "mode.sh"]);
+        expect(capturedMode).toMatch(/^100755 blob /u);
+        const retained =
+          scenario === "unchanged"
+            ? ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
+                file,
+                stat: lstatSync(path.join(first.receiver, file)),
+              }))
+            : [];
+        if (scenario === "unchanged") {
+          // Keep the old inode allocated so recreation cannot pass through inode reuse.
+          linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
+          writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
+          chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
+          rmSync(path.join(first.receiver, "raw-crlf.txt"));
+          symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
+        }
         // The old private Git owner is removed during promotion. A second import
         // must work without origin and leave no alternate pointing at that owner.
         const reused = receive(
@@ -4976,10 +5045,29 @@ process.on("exit", () => {
         expect(git(reused.receiver, ["rev-parse", "origin/main"])).toBe(base);
         expect(git(reused.receiver, ["rev-parse", "HEAD^"])).toBe(base);
         expect(existsSync(path.join(reused.receiver, ".git/objects/info/alternates"))).toBe(false);
+        expect(git(reused.receiver, ["ls-tree", "HEAD", "--", "mode.sh"])).toBe(capturedMode);
+        for (const { file, stat } of retained) {
+          const current = lstatSync(path.join(reused.receiver, file));
+          expect({ dev: current.dev, ino: current.ino, mtimeMs: current.mtimeMs }, file).toEqual({
+            dev: stat.dev,
+            ino: stat.ino,
+            mtimeMs: stat.mtimeMs,
+          });
+        }
+        for (const file of ["owner.txt", "raw-crlf.txt"]) {
+          expect(lstatSync(path.join(reused.receiver, file)).isFile()).toBe(true);
+          expect(readFileSync(path.join(reused.receiver, file))).toEqual(
+            readFileSync(path.join(producer, file)),
+          );
+        }
+        expect(lstatSync(path.join(reused.receiver, "mode.sh")).mode & 0o100).toBe(0o100);
+        expect(readFileSync(path.join(deletionReferent, "canary.txt"), "utf8")).toBe(
+          "private referent\n",
+        );
         git(reused.receiver, ["fsck", "--connectivity-only", "--no-dangling"]);
         return;
       }
-      if (scenario !== "transport" && scenario !== "arbitrary") {
+      if (installsDependencies) {
         const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
         const ownerPath = path.join(repoRoot, installOwner);
         // Baseline uses the same action-owned recipe before its pure extraction.
@@ -5105,16 +5193,16 @@ process.on("exit", () => {
           const mutation =
             scenario === "lifecycle-staged-extra"
               ? [
-                  'const fs = require("node:fs");',
-                  'const { execFileSync } = require("node:child_process");',
+                  'import fs from "node:fs";',
+                  'import { execFileSync } from "node:child_process";',
                   'fs.writeFileSync("lifecycle-extra.mjs", "export const lifecycleExtra = true;\\n");',
                   'execFileSync("git", ["add", "--", "lifecycle-extra.mjs"]);',
                   'fs.writeFileSync(".capsule-proof/lifecycle", "staged-extra");',
                 ]
               : scenario === "lifecycle-base-ref"
                 ? [
-                    'const fs = require("node:fs");',
-                    'const { execFileSync } = require("node:child_process");',
+                    'import fs from "node:fs";',
+                    'import { execFileSync } from "node:child_process";',
                     'const git = (args) => execFileSync("git", args, { encoding: "utf8" });',
                     'const before = git(["rev-parse", "refs/remotes/origin/main"]).trim();',
                     'const head = git(["rev-parse", "HEAD"]).trim();',
@@ -5125,19 +5213,32 @@ process.on("exit", () => {
                     'fs.writeFileSync(".capsule-proof/lifecycle", JSON.stringify({ before, head, after, indexBefore, indexAfter }));',
                   ]
                 : [
-                    'const fs = require("node:fs");',
+                    'import fs from "node:fs";',
                     'fs.writeFileSync(".capsule-proof/lifecycle", "ran");',
                     'fs.writeFileSync("owner.txt", "lifecycle source drift\\n");',
                   ];
           writeFileSync(
-            path.join(producer, "scripts/capsule-lifecycle.cjs"),
+            path.join(producer, "scripts/postinstall-bundled-plugins.mjs"),
             mutation.join("\n") + "\n",
           );
+          // Exercise the audited hook owner, preserving the selected source/index/ref mutation.
+          for (const file of [
+            "check-install-dependency-ownership.mjs",
+            "preinstall-package-manager-warning.mjs",
+            "prepare-git-hooks.mjs",
+          ]) {
+            writeFileSync(path.join(producer, "scripts", file), "");
+          }
           writeFileSync(
             path.join(producer, "package.json"),
             JSON.stringify({
               ...rootManifest,
-              scripts: { postinstall: "node scripts/capsule-lifecycle.cjs" },
+              scripts: {
+                "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+                preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+                postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+                prepare: "node scripts/prepare-git-hooks.mjs",
+              },
             }),
           );
         }
@@ -6596,14 +6697,38 @@ cp.spawnSync = (command, args, options) => {
         return result.stdout.trim();
       };
       git("init", "-q", "-b", "main");
+      copyDependencyFingerprint(producer);
+      writeFileSync(
+        path.join(producer, "package.json"),
+        '{"name":"artifact-fixture","private":true}\n',
+      );
+      writeFileSync(
+        path.join(producer, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      );
       writeFileSync(path.join(producer, ".gitignore"), ".tmp/\n.crabbox\n");
       writeFileSync(path.join(producer, "fixture.txt"), "source fixture\n");
-      git("add", ".gitignore", "fixture.txt");
+      git(
+        "add",
+        ".gitignore",
+        "fixture.txt",
+        "package.json",
+        "pnpm-lock.yaml",
+        ".github",
+        "scripts",
+      );
       git("commit", "-qm", "fixture");
       git("remote", "add", "origin", producer);
       git("update-ref", "refs/remotes/origin/main", "HEAD");
       if (mode === "sparse") {
-        git("sparse-checkout", "set", "--no-cone", "/fixture.txt");
+        git(
+          "sparse-checkout",
+          "set",
+          "--no-cone",
+          "/fixture.txt",
+          "/.github/actions/setup-node-env/dependency-fingerprint.mjs",
+          "/scripts/lib/pnpm-lockfile-documents.mjs",
+        );
       }
       const capturePath = ".crabbox/captures/tbx_fixture-20260904T190427Z.tar.gz";
       const runPath = ".crabbox/runs/run_fixture/proof/nested.json";

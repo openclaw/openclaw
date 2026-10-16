@@ -1,5 +1,6 @@
 import { ChildProcess, type SpawnOptions } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { runRespawnedChild } from "../../node-runtime-recovery.mjs";
 
 const spawn = vi.hoisted(() =>
@@ -62,7 +63,7 @@ it.each([
     // full service budget; legacy parent compatibility stays with the Gateway.
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       "node",
-      ["child.mjs"],
+      ["--import", CLI_PARENT_BOUND_PRELOAD, "child.mjs"],
       expect.objectContaining({
         env: {
           OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",

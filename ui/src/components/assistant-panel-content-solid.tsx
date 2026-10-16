@@ -1,9 +1,9 @@
 import { createEffect, createMemo, onSettled, untrack } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { useSolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   buildHomeWorkContext,
   subscribeChatWorkContext,

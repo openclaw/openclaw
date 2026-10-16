@@ -146,7 +146,10 @@ function FilterDropdown<T extends string>(props: {
         id={`cron-runs-filter-${props.id}`}
         label={`${props.title} ${accessibleSummary()}`}
         class="cron-filter-dropdown__details"
-        triggerClass={`btn btn--sm cron-filter-dropdown__trigger${props.selected.length > 0 ? " active" : ""}`}
+        triggerClass={[
+          "btn btn--sm cron-filter-dropdown__trigger",
+          { active: props.selected.length > 0 },
+        ]}
         triggerAttributes={{ title: props.title }}
         trigger={
           <>

@@ -15,10 +15,12 @@ import {
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
@@ -39,6 +41,7 @@ export function serveWorkerTasks<Output>(
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
     idleGc?: false;
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
@@ -55,11 +58,14 @@ export function serveOwnedWorkerTasks<Output>(
     retireOnError?: boolean;
     /** Guest runtimes own their heap budget and lifetime across task boundaries. */
     idleGc?: false;
+    /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
   let databaseAdmissionPort: MessagePort | undefined;
+  let databaseAdmissionDeadlineAtMs: number | undefined;
   let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
   let closeMemorySamples: (() => void) | undefined;
   const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
@@ -86,7 +92,14 @@ export function serveOwnedWorkerTasks<Output>(
       : run();
   };
   serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
-    (input, channel, control) => runWithTaskContext(() => handler(input, channel, control)),
+    (input, channel, control) =>
+      withSqliteDatabaseAdmissionWait(
+        {
+          deadlineAtMs: databaseAdmissionDeadlineAtMs,
+          assertActive: () => control.throwIfCancelled(),
+        },
+        () => runWithTaskContext(() => handler(input, channel, control)),
+      ),
     {
       ...options,
       closeResource: (key) =>
@@ -124,11 +137,12 @@ export function serveOwnedWorkerTasks<Output>(
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {

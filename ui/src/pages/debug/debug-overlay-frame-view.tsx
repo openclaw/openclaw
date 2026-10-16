@@ -28,7 +28,7 @@ export function DebugOverlayFrame(props: {
           return;
         }
         layout = createDebugOverlayLayout(element);
-        layout.update(untrack(mode));
+        layout.update(mode());
       })
       .catch((error: unknown) =>
         console.error("System busyness position controls could not load. Reload to retry.", error),

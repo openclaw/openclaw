@@ -76,15 +76,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const {
       context,
       activity,
-      rawText,
       text,
-      attachments,
       advertisedMedia,
       rawBody,
       quoteInfo,
       from,
-      conversation,
-      attachmentTypes,
       htmlSummary,
       conversationId,
       conversationMessageId,
@@ -96,18 +92,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
       .filter(Boolean)
       .join("\n");
-    log.info("received message", {
-      rawTextLength: rawText.length,
-      textLength: text.length,
-      attachments: attachments.length,
-      attachmentTypes,
-      from: from?.id,
-      conversation: conversation?.id,
-    });
-    if (htmlSummary) {
-      log.debug?.("html attachment summary", htmlSummary);
-    }
-
     if (!from?.id) {
       log.debug?.("skipping message without from.id");
       return;
@@ -187,12 +171,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (!poll) {
           log.debug?.("poll vote ignored (poll not found)", {
             pollId: pollVote.pollId,
-          });
-        } else {
-          log.info("recorded poll vote", {
-            pollId: pollVote.pollId,
-            voter: senderId,
-            selections: pollVote.selections,
           });
         }
       } catch (err) {

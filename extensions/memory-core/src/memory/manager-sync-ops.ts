@@ -26,6 +26,10 @@ import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import {
+  publishPostgresMemoryStage,
+  withPostgresMemoryReindex,
+} from "./manager-postgres-reindex.js";
+import {
   resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
@@ -561,7 +565,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     return true;
   }
 
-  private async runInPlaceReindex(progress?: MemorySyncProgressState): Promise<void> {
+  private async runInPlaceReindex(
+    progress?: MemorySyncProgressState,
+    postgresStage?: MemoryIndexDatabase,
+  ): Promise<void> {
+    if (this.publishedDatabase.admission?.engine === "postgres" && !postgresStage) {
+      return withPostgresMemoryReindex(this.publishedDatabase, (stage) =>
+        this.runInPlaceReindex(progress, stage),
+      );
+    }
     // Build outside the shared agent DB, then publish only memory-owned tables
     // in one short transaction so failed rebuilds leave the current index usable.
     const dbPath = resolveUserPath(this.settings.store.databasePath);
@@ -573,12 +585,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(undefined, true);
     let shadowCleanup: MemoryIndexDatabase | undefined;
     try {
-      await cleanupAgedMemoryReindexTempFiles(dbPath);
+      if (!postgresStage) {
+        await cleanupAgedMemoryReindexTempFiles(dbPath);
+      }
       const originalRevision = this.database.facts.revision;
-      const shadow = await MemoryIndexDatabase.openShadow(
-        tempDbPath,
-        this.settings.store.vector.enabled,
-      );
+      const shadow =
+        postgresStage ??
+        (await MemoryIndexDatabase.openShadow(tempDbPath, this.settings.store.vector.enabled));
       shadowCleanup = shadow;
       shadow.vector.enabled = this.vector.enabled;
       shadow.vector.extensionPath = this.vector.extensionPath;
@@ -649,6 +662,24 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
         await withMemoryIndexGeneration(dbPath, "write", async () => {
+          if (postgresStage) {
+            await publishPostgresMemoryStage(
+              this.publishedDatabase,
+              postgresStage,
+              originalRevision,
+              rebuilt.vectorIndexComplete,
+              () => {
+                if (
+                  this.closed ||
+                  this.publishedDatabase !== originalDatabase ||
+                  !originalDatabase.isOpen
+                ) {
+                  throw new Error("Memory publication owner changed before reindex publication");
+                }
+              },
+            );
+            return;
+          }
           await this.publishedDatabase.publishShadow(
             {
               sourcePath: tempDbPath,
@@ -695,7 +726,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       throw err;
     } finally {
       try {
-        if (shadowCleanup?.shadowReleased) {
+        if (!postgresStage && shadowCleanup?.shadowReleased) {
           shadowCleanup.assertShadowPath();
           await removeMemoryDatabaseFiles(tempDbPath);
         }

@@ -1,4 +1,7 @@
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
 type DockLayoutHost = Pick<SolidControllerHost, "addController" | "requestUpdate"> & {

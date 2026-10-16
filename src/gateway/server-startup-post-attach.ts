@@ -562,6 +562,7 @@ export async function startGatewayPostAttachRuntime(
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
+  const subagentRecoverySettled = createDeferredCore();
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
@@ -848,7 +849,9 @@ export async function startGatewayPostAttachRuntime(
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                waitForStart: params.waitForPostReadyWork,
+                // Requester continuations need the restored cohort's Gateway binding
+                // and operator authority before their first recovery attempt.
+                waitForStart: () => subagentRecoverySettled.promise,
                 gatewayRuntime: params.recoveryRuntime,
               });
             }
@@ -923,6 +926,7 @@ export async function startGatewayPostAttachRuntime(
             | undefined,
         isClosing: params.isClosing,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        onSubagentRecoverySettled: subagentRecoverySettled.resolve,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,
@@ -935,7 +939,8 @@ export async function startGatewayPostAttachRuntime(
     })
     .catch((err: unknown) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
-    });
+    })
+    .finally(subagentRecoverySettled.resolve);
 
   if (params.sidecarStartup !== "defer") {
     await sidecarsPromise;

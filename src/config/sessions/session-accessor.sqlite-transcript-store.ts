@@ -50,6 +50,10 @@ import {
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  appendSessionActorContextStats,
+  rewriteSessionActorContextStats,
+} from "./session-actor-context-metadata.js";
+import {
   readSessionActorTransactionState,
   writableSessionActorMap,
   writableSessionActorNavigation,
@@ -76,8 +80,8 @@ import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
-  readTranscriptStorageEncoding,
   transcriptEventJsonSql,
+  transcriptSerializedBytes,
 } from "./transcript-payload.js";
 
 /** Inserts exact transcript rows without mutating the forward-only projection. */
@@ -198,7 +202,7 @@ export function appendTranscriptEventInTransaction(
       const eventJson =
         options.eventJson ??
         withoutSqliteDatabaseWriteScope(database.db, () => JSON.stringify(persistedEvent));
-      const utf8Bytes = Buffer.byteLength(eventJson) + 1;
+      const serializedBytes = transcriptSerializedBytes(database.db, eventJson);
       let projectionNeedsRebuild = false;
       preserveSessionEntryCacheAcrossWrite(database, () => {
         insertEvent({
@@ -215,7 +219,7 @@ export function appendTranscriptEventInTransaction(
           actor.transcript.payloads = writableSessionActorMap(actor.transcript.payloads);
           actor.transcript.payloads.set(seq, {
             event: stored,
-            serializedBytes: utf8Bytes,
+            serializedBytes,
           });
           actor.transcript.navigation = writableSessionActorNavigation(actor.transcript.navigation);
           const navigation = isRecord(stored) ? projectTranscriptNavigationFields(stored) : {};
@@ -232,6 +236,15 @@ export function appendTranscriptEventInTransaction(
           eventId: identity?.eventId ?? null,
           createdAt,
         });
+        if (actor) {
+          appendSessionActorContextStats(
+            actor,
+            seq,
+            persistedEvent,
+            serializedBytes,
+            projectionNeedsRebuild,
+          );
+        }
       });
       if (projectionNeedsRebuild) {
         withoutSqliteDatabaseWriteScope(database.db, () => options.onProjectionReconcileNeeded?.());
@@ -300,13 +313,7 @@ export function appendTranscriptEventInTransaction(
       }
       cursor.rowTranscript = projectionNeedsRebuild
         ? undefined
-        : projectSessionRowTranscriptFields(
-            persistedEvent,
-            readTranscriptStorageEncoding(database.db) === "UTF-8"
-              ? utf8Bytes
-              : Buffer.byteLength(eventJson, "utf16le") + 1,
-            seq,
-          );
+        : projectSessionRowTranscriptFields(persistedEvent, serializedBytes, seq);
       if (options.touchMutation !== false) {
         preserveSessionEntryCacheAcrossWrite(database, () => {
           touchTranscriptMutationInTransaction(
@@ -622,6 +629,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
             throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
           }
         }
+        rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);
         // Correlation and identical prompt captures preserve admitted input; other
         // payload rewrites still invalidate admissions and cursors.
         const generation = admissionUnchanged
@@ -649,7 +657,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           rows: rewrites.map((row) => ({
             rawSeq: row.seq,
             event: JSON.parse(row.eventJson),
-            serializedBytes: Buffer.byteLength(row.eventJson, "utf8") + 1,
+            serializedBytes: transcriptSerializedBytes(database.db, row.eventJson),
           })),
         },
         run,

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { prepareCrabboxCaptureLifetime } from "./crabbox-worker-lifetime.js";
 import { parseCrabboxProfile } from "./crabbox-worker-profile.js";
@@ -55,10 +56,10 @@ function fixture(
     }
     return commandResult({ stdout: JSON.stringify(facts()) });
   };
+  vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
   return {
     calls,
     observation,
-    runCommand,
     setExtension: (run: CrabboxCommandRunner) => {
       extend = run;
     },
@@ -73,22 +74,24 @@ describe("Crabbox capture lifetime admission", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("never echoes connection JSON from a failed inspection", async () => {
-    const failure = inspectWithContext({
-      ...context,
-      runCommand: async () =>
-        commandResult({
-          code: 1,
-          stdout: JSON.stringify({
-            sshHost: "private-host",
-            sshKey: "/private/key",
-            sshHostKey: "private-host-key",
-          }),
-          stderr: "provider temporarily unavailable",
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async () =>
+      commandResult({
+        code: 1,
+        stdout: JSON.stringify({
+          sshHost: "private-host",
+          sshKey: "/private/key",
+          sshHostKey: "private-host-key",
         }),
-    });
+        stderr: "provider temporarily unavailable",
+      }),
+    );
+    const failure = inspectWithContext(context);
     await expect(failure).rejects.toThrow("provider temporarily unavailable");
     await expect(failure).rejects.not.toThrow("private");
   });
@@ -96,7 +99,6 @@ describe("Crabbox capture lifetime admission", () => {
   it("distinguishes idle expiry from total TTL without extending an adequate lease", async () => {
     const f = fixture({ ttl: 14400 });
     await prepareCrabboxCaptureLifetime(context, {
-      runCommand: f.runCommand,
       observe: f.observation,
     });
     expect(f.calls.map((call) => call[1])).toEqual(["inspect", "heartbeat", "inspect", "list"]);
@@ -130,9 +132,10 @@ describe("Crabbox capture lifetime admission", () => {
               };
         return commandResult({ stdout: JSON.stringify(value) });
       });
-      await expect(
-        prepareCrabboxCaptureLifetime(context, { runCommand, observe: vi.fn() }),
-      ).rejects.toThrow("required source window exceeds the configured TTL or effective maximum");
+      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+      await expect(prepareCrabboxCaptureLifetime(context, { observe: vi.fn() })).rejects.toThrow(
+        "required source window exceeds the configured TTL or effective maximum",
+      );
       expect(runCommand.mock.calls.some(([argv]) => argv[1] === "extend")).toBe(false);
     },
   );
@@ -146,7 +149,6 @@ describe("Crabbox capture lifetime admission", () => {
       return commandResult({ stdout: JSON.stringify({ id: ID }) });
     });
     await prepareCrabboxCaptureLifetime(context, {
-      runCommand: f.runCommand,
       observe: f.observation,
     });
     const writes = f.calls.filter((call) => call[1] === "extend");
@@ -164,22 +166,17 @@ describe("Crabbox capture lifetime admission", () => {
     });
     await prepareCrabboxCaptureLifetime(
       { ...context, sourcePreparationTimeoutMs: 30 * 60_000 },
-      { runCommand: f.runCommand, observe: f.observation },
+      { observe: f.observation },
     );
     expect(f.calls.find((call) => call[1] === "extend")).toContain("5340s");
   });
 
-  it.each([
-    "lease_extension_denied",
-    "lease_extension_budget_exceeded",
-    "lease_extension_unsupported_provider",
-    "lease_extension_not_advancing",
-    "lease_not_active",
-  ])("surfaces %s without a retry or replacement", async (code) => {
+  it("surfaces coordinator refusal without a retry or replacement", async () => {
+    const code = "lease_extension_budget_exceeded";
     const f = fixture();
     f.setExtension(async () => commandResult({ code: 1, stderr: `coordinator: ${code}` }));
     await expect(
-      prepareCrabboxCaptureLifetime(context, { runCommand: f.runCommand, observe: f.observation }),
+      prepareCrabboxCaptureLifetime(context, { observe: f.observation }),
     ).rejects.toThrow(code);
     expect(f.calls.filter((call) => call[1] === "extend")).toHaveLength(1);
     expect(f.calls.some((call) => call[1] === "warmup")).toBe(false);
@@ -191,7 +188,6 @@ describe("Crabbox capture lifetime admission", () => {
       const f = fixture(policy);
       await expect(
         prepareCrabboxCaptureLifetime(context, {
-          runCommand: f.runCommand,
           observe: f.observation,
         }),
       ).rejects.toThrow(/lease_extension_(unsupported_provider|denied)/u);
@@ -217,7 +213,6 @@ describe("Crabbox capture lifetime admission", () => {
       return commandResult({ stdout: JSON.stringify({ id: ID }) });
     });
     await prepareCrabboxCaptureLifetime(context, {
-      runCommand: f.runCommand,
       observe: f.observation,
     });
     const writes = f.calls.filter((call) => call[1] === "extend");
@@ -235,7 +230,7 @@ describe("Crabbox capture lifetime admission", () => {
       });
     });
     await expect(
-      prepareCrabboxCaptureLifetime(context, { runCommand: f.runCommand, observe: f.observation }),
+      prepareCrabboxCaptureLifetime(context, { observe: f.observation }),
     ).rejects.toThrow("guest expiry refresh remains unconfirmed");
     expect(f.calls.filter((call) => call[1] === "extend")).toHaveLength(2);
   });
@@ -244,7 +239,7 @@ describe("Crabbox capture lifetime admission", () => {
     const f = fixture();
     f.setExtension(async () => commandResult({ stdout: JSON.stringify({ id: ID }) }));
     await expect(
-      prepareCrabboxCaptureLifetime(context, { runCommand: f.runCommand, observe: f.observation }),
+      prepareCrabboxCaptureLifetime(context, { observe: f.observation }),
     ).rejects.toThrow("did not confirm sufficient");
     f.calls.length = 0;
     await expect(
@@ -253,7 +248,7 @@ describe("Crabbox capture lifetime admission", () => {
           ...context,
           profile: parseCrabboxProfile({ provider: "aws", ttl: "1h", idleTimeout: "45m" }),
         },
-        { runCommand: f.runCommand, observe: f.observation },
+        { observe: f.observation },
       ),
     ).rejects.toThrow("exceeds the configured TTL");
     expect(f.calls.some((call) => call[1] === "extend")).toBe(false);

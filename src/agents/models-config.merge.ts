@@ -190,6 +190,11 @@ export function mergeProviderModels(
       configuredRoute,
       configuredCompat: explicitModel.compat,
     });
+    const parameterCount =
+      explicitModel.parameterCount ??
+      (modelTransportRoutesMatch(catalogRoute, configuredRoute)
+        ? implicitModel.parameterCount
+        : undefined);
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
       : modelTransportRoutesMatch(catalogRoute, configuredRoute)
@@ -201,6 +206,7 @@ export function mergeProviderModels(
       baseUrl: _baseUrl,
       headers: _headers,
       maxTokensSource: _maxTokensSource,
+      parameterCount: _parameterCount,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -214,6 +220,7 @@ export function mergeProviderModels(
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
+      parameterCount === undefined ? {} : { parameterCount },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },

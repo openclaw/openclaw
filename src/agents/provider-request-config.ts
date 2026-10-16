@@ -9,6 +9,10 @@ import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
   type ProviderRequestTransport,
@@ -371,7 +375,7 @@ export function applyPreparedRuntimeAuthToModel<
     | undefined,
 ): T {
   if (!preparedAuth?.baseUrl && !preparedAuth?.request) {
-    return model;
+    return attachProviderAuthAuthority(model, getProviderAuthAuthority(preparedAuth));
   }
   const providerHeaders = preparedAuth.request?.auth
     ? Object.fromEntries(
@@ -394,7 +398,10 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  return inheritModelProviderRequestRouteFacts(model, next);
+  return attachProviderAuthAuthority(
+    inheritModelProviderRequestRouteFacts(model, next),
+    getProviderAuthAuthority(preparedAuth),
+  );
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {

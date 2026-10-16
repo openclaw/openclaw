@@ -1,4 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import type { SessionState } from "../sessions/session-capability.ts";
 import {
   nextDraftRevision,
   readDraftRevisionState,
@@ -14,11 +15,7 @@ import {
   notifyStoredChatOutboxChanges,
   type ChatComposerScope,
 } from "./outbox-store.ts";
-type StoredComposerRetirementTarget = {
-  key: string;
-  agentId?: string;
-  retireBeforeRevision: number;
-};
+type StoredComposerRetirementTarget = SessionState["deletedSessions"][number];
 
 type StoredComposerRetirement = {
   scope: StoredChatOutboxScope;

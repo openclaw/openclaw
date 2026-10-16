@@ -14,9 +14,9 @@ import {
   type SessionProgressCardRefreshAction,
 } from "./session-progress-card.ts";
 import {
-  useComposerProgressDisclosure,
+  createComposerProgressDisclosure,
   type ComposerProgressDisclosureContext,
-} from "./session-progress-disclosure-controller.ts";
+} from "./session-progress-disclosure-binding.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
 
@@ -230,7 +230,7 @@ function cardPresentation(props: CardProps) {
 
 function ComposerCard(props: CardProps) {
   const view = cardPresentation(props);
-  const disclosure = useComposerProgressDisclosure(() => [
+  const disclosure = createComposerProgressDisclosure(() => [
     props.composerDisclosureContext?.sessionIdentity ?? props.card.sessionKey,
     !props.collapseComposerByDefault,
     props.composerDisclosureContext,
@@ -238,12 +238,14 @@ function ComposerCard(props: CardProps) {
   const bodyScroll = useScrollState();
   return (
     <details
-      ref={disclosure}
+      ref={disclosure.details}
+      onClick={disclosure.onClick}
       class={`session-progress-card session-progress-card--composer ${props.placement === "details" ? "session-progress-card--details" : ""}`}
       data-progress-card-placement={props.placement}
       data-complete={String(view().complete)}
     >
       <summary
+        ref={disclosure.summary}
         class="session-progress-card__summary"
         aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
       >
@@ -312,7 +314,7 @@ function ComposerCard(props: CardProps) {
         </Show>
       </summary>
       <div
-        ref={bodyScroll}
+        ref={[bodyScroll, disclosure.body]}
         class="session-progress-card__body"
         role="region"
         aria-label={view().countLabel}

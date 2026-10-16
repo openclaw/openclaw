@@ -1,8 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createHostedOutboundMediaStore,
   type HostedOutboundMediaChunkRecord,
@@ -122,26 +119,11 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined) {
-    await store.delete(id);
-    res.statusCode = 410;
-    res.end("Expired");
-    return true;
-  }
-
+  const now = Date.now();
   const metadata = await store.readMetadata(id, now);
   if (!metadata || metadata.routePath !== routePath) {
     res.statusCode = 404;
     res.end("Not Found");
-    return true;
-  }
-
-  const expiresAt = asDateTimestampMs(metadata.expiresAt);
-  if (expiresAt === undefined || expiresAt <= now) {
-    await store.delete(id);
-    res.statusCode = 410;
-    res.end("Expired");
     return true;
   }
 

@@ -5,6 +5,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
+import { memorySchemaSource } from "./memory-schema-catalog.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
@@ -477,13 +478,23 @@ export function ensureMemoryIndexSchema(params: {
   const migrateStrict = params.db.isTransaction
     ? migrateSqliteSchemaToStrictInTransaction
     : migrateSqliteSchemaToStrict;
+  const includeEmbeddingCache = params.cacheEnabled || tableExists(params.db, embeddingCacheTable);
   migrateStrict(
     params.db,
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
-      includeEmbeddingCache: params.cacheEnabled || tableExists(params.db, embeddingCacheTable),
+      includeEmbeddingCache,
     }),
-    { databaseLabel: "memory index" },
+    {
+      databaseLabel: "memory index",
+      expectedSchema: memorySchemaSource(
+        buildMemoryIndexStrictSchema({
+          embeddingCacheTable: MEMORY_EMBEDDING_CACHE_TABLE,
+          includeEmbeddingCache,
+        }),
+        embeddingCacheTable,
+      ),
+    },
   );
 
   let ftsAvailable = false;

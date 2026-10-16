@@ -270,15 +270,39 @@ export function searchSessionTranscriptsReadOnlySync(
               "window.session_key",
               search.fullText.identity(textIndex).as("fts_rowid"),
               ranking.value.as("rank"),
-            ])
-            .orderBy(order)
-            .limit(limit + 1);
+            ]);
+          const selectedHits =
+            params.order === "recent"
+              ? candidates.orderBy(order).limit(limit + 1)
+              : db
+                  .with(
+                    (cte) => cte("scores").materialized(),
+                    () => candidates,
+                  )
+                  .selectFrom("scores")
+                  .crossJoin("session_transcript_fts")
+                  .where((eb) =>
+                    eb(search.fullText!.identity(textIndex), "=", eb.ref("scores.fts_rowid")),
+                  )
+                  // Keep every tie at the cutoff before reading metadata for the final ordering.
+                  .where("scores.rank", "in", (eb) =>
+                    eb
+                      .selectFrom("scores")
+                      .select("rank")
+                      .orderBy("rank", ranking.order)
+                      .limit(limit + 1),
+                  )
+                  .select(["scores.session_key", "scores.fts_rowid", "scores.rank"])
+                  .orderBy("scores.rank", ranking.order)
+                  .orderBy("session_transcript_fts.timestamp", "desc")
+                  .orderBy("session_transcript_fts.message_id", "asc")
+                  .limit(limit + 1);
           const rows = executeSqliteQuerySync(
             database.db,
             db
               .with(
                 (cte) => cte("hits").materialized(),
-                () => candidates,
+                () => selectedHits,
               )
               .selectFrom("hits")
               .crossJoin("session_transcript_fts")

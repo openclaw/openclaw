@@ -22,6 +22,7 @@ import {
   readPostgresSchema,
   verifyPostgresSchema,
 } from "./postgres-schema.js";
+import { admitStoreSearchExtension } from "./search-extension.js";
 import { bindStoreSearch } from "./search.js";
 import type { DatabaseEngineInput } from "./types.js";
 
@@ -162,7 +163,17 @@ export const databaseEngineAdapters: {
 };
 
 /** @experimental Select the admitted engine once and bind its declared search indexes. */
-export function admitStoreSearch(store: SearchStore, schema: SearchSchema) {
+export function admitStoreSearch(
+  store: SearchStore,
+  schema: SearchSchema,
+  options?: { extension: string },
+) {
+  if (options) {
+    if ("databasePath" in store) {
+      throw new Error("Search extension admission requires the owner's connection");
+    }
+    return admitStoreSearchExtension(store, options.extension, schema);
+  }
   const postgres =
     "databasePath" in store ? store.input !== undefined : isPostgresSqlConnection(store);
   return databaseEngineAdapters[postgres ? "postgres" : "sqlite"].search(store, schema);

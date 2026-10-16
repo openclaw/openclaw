@@ -362,9 +362,6 @@ describe("TwitchClientManager", () => {
         ["chat"],
       );
       expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        "Using RefreshingAuthProvider for testbot (automatic token refresh enabled)",
-      );
     });
 
     it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
@@ -384,10 +381,8 @@ describe("TwitchClientManager", () => {
       } as unknown as TwitchAccountConfig;
 
       await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
-        "Missing Twitch client ID",
+        "Missing Twitch client ID for account testbot",
       );
-
-      expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
     });
 
     it.each([
@@ -555,7 +550,7 @@ describe("TwitchClientManager", () => {
       ]);
     });
 
-    it("should log and return a formatted send failure", async () => {
+    it("should return a formatted send failure", async () => {
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
 
       await expect(
@@ -564,7 +559,6 @@ describe("TwitchClientManager", () => {
         ok: false,
         error: "Rate limited",
       });
-      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
     });
 
     it("should create client if not already connected", async () => {
@@ -617,9 +611,6 @@ describe("TwitchClientManager", () => {
       expect(capturedMessage?.isOwner).toBe(true);
       expect(capturedMessage?.message).toBe(messageText);
       expect(capturedMessage?.channel).toBe("#testchannel");
-      expect(mockLogger.debug).toHaveBeenCalledWith(
-        `twitch inbound: channel=#testchannel from=twitch:moduser len=${messageText.length}`,
-      );
       expect(
         vi
           .mocked(expectDefined(mockLogger.debug, "Twitch debug logger"))

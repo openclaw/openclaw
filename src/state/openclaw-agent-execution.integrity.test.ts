@@ -358,7 +358,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(fs.readFileSync(pathname)).toEqual(bytes);
-  expect(fs.readdirSync(external)).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
+  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
   const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   try {
     expect(

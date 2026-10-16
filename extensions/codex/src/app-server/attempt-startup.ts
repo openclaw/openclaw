@@ -52,13 +52,11 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import type { CodexBindingAuthority, CodexAppServerBindingStore } from "./session-binding.js";
-import { observeAcquire } from "./shared-client-lifecycle.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   createIsolatedCodexAppServerClient,
   readCodexAppServerClientDesktopGenerationFingerprint,
   releaseLeasedSharedCodexAppServerClient,
-  type CodexAppServerAcquireObservation,
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -140,13 +138,11 @@ export async function startCodexAttemptThread(params: {
   const startupStartedAt = performance.now();
   let stage = "configuration";
   let stageStartedAt = startupStartedAt;
-  let acquireBoundary: CodexAppServerAcquireObservation["boundary"] | undefined;
   let startupIdentity: Pick<EmbeddedRunAttemptParams, "runId" | "sessionId"> | undefined;
   let startupAttemptNumber = 0;
   const enterStartupStage = (nextStage: string) => {
     stage = nextStage;
     stageStartedAt = performance.now();
-    acquireBoundary = undefined;
   };
   const startupAbandonController = new AbortController();
   // Set during abort dispatch, before either retirement below runs, when the
@@ -172,7 +168,6 @@ export async function startCodexAttemptThread(params: {
             stageElapsedMs: Math.max(0, Math.round(now - stageStartedAt)),
             elapsedMs: Math.max(0, Math.round(now - startupStartedAt)),
             timeoutMs: params.startupTimeoutMs,
-            acquireBoundary,
             clientInstanceId: client?.getInstanceId(),
             clientPendingRequestMethods: client?.getPendingRequestMethods() ?? [],
           });
@@ -234,12 +229,6 @@ export async function startCodexAttemptThread(params: {
             enterStartupStage("client-acquire");
             startupClient = await params.attemptClientFactory({
               ...params.clientOptions,
-              onAcquireObservation: (observation) => {
-                if (stage === "client-acquire") {
-                  acquireBoundary = observation.boundary;
-                }
-                observeAcquire(params.clientOptions, observation);
-              },
               // Process startup retains its synchronous admission contract. Ordinary
               // native requests use the retained worker authority at wire admission.
               assertCurrent: () => {

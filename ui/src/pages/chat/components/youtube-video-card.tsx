@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } fr
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { YouTubeVideo } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import "./youtube-video-card.css";
 
 type YouTubeVideoProps = { video?: YouTubeVideo; videoTitle: string; enabled: boolean };

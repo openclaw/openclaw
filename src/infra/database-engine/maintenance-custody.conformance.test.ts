@@ -23,6 +23,7 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -46,7 +47,8 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
     await client.connect();
     env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("maintenance-postgres-") };
     installDatabaseEngineSelection({
-      input: { connection: connection!, schemaPrefix: "maintenance_conformance" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "maintenance_conformance" },
     });
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(
@@ -189,7 +191,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
 
 it("preserves the SQLite maintenance inspection statements byte for byte", () => {
   resetDatabaseEngineSelectionForTest();
-  installDatabaseEngineSelection({ input: undefined });
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
   const env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("maintenance-sqlite-") };
   runOpenClawStateWriteTransaction(() => {}, { env });
   const pathname = resolveOpenClawStateSqlitePath(env);

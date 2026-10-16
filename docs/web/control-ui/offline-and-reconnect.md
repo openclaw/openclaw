@@ -112,8 +112,10 @@ Production builds prepare a generic offline shell and the critical Chat and New
 Session interface files, plus the signed-out fallback, through the service worker.
 Static asset preparation can use the browser’s existing same-origin proxy sign-in;
 only integrity-matched build bytes with cacheable responses are admitted. After preparation
-completes, a browser that explicitly reports itself offline can reload those
-routes from the current build cache. Interrupted preparation resumes on the
+completes, a failed navigation to a built-in app route can use the cached shell,
+including when the browser still reports itself online. Network navigation waits
+up to 10 seconds before falling back; HTTP authentication responses are not replaced.
+Interrupted preparation resumes on the
 existing startup/resume checks when the browser returns online, reusing verified
 downloads instead of starting over. Preparation is bounded so a stalled download
 cannot hold a UI update indefinitely. The existing warm-reload credential and
@@ -122,7 +124,9 @@ Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker keeps only the current build's assets.
+contacting the Gateway. The service worker keeps the current complete build and
+one complete previous generation, so older open documents can still load their
+cached chunks. An incomplete replacement does not discard the last complete shell.
 After an update, open tabs reload automatically unless unsaved-work protection
 blocks recovery; then save or discard the protected work and use the **Reload**
 banner. Uploaded profile avatars use private browser caching only when the URL
@@ -132,10 +136,11 @@ Content-addressed plugin interface assets stay in the private browser HTTP cache
 across grant renewal; requests reaching the Gateway still require current plugin
 authorization, and plugin data remains subject to per-call RPC authorization.
 
-Online navigations still go directly to the network so reverse-proxy HTTP
-authentication dialogs work normally. If the browser reports itself online
-despite a broken connection, navigation keeps that network behavior. An open
-tab remains the most reliable way to keep working through intermittent service.
+Navigations try the network first. API, download, and standalone
+authentication paths do not receive the offline shell. Plugin catalog detail
+links under `/plugins/` remain network-dependent because that namespace also
+hosts plugin HTTP endpoints. An open tab remains the
+most reliable way to keep working through intermittent service.
 Unvisited views and uncached external resources may still need a connection.
 
 ## Gateway updates and suspended tabs
@@ -154,9 +159,13 @@ do not clear site data while drafts or queued messages still need recovery.
 If a view or stylesheet download fails during a network interruption, the open
 page keeps checking reachability with a backoff capped at 15 seconds. Coming
 back online or returning to the tab wakes that check early. Once the document
-is reachable, the UI reloads to recover failed browser module downloads; it
-does not retry those imports inside the same document. Unsaved-work protection
-still applies, and the manual **Reload** action remains available.
+is reachable, a cold route retries its import without replacing the page. The
+previous page stays visible while the route is pending. A persistent import
+failure can still require a guarded reload because browsers can retain failed
+module downloads. Failed Vite CSS preloads also require guarded recovery to avoid
+opening a view without its styles. Optional font and theme stylesheet failures do not trigger
+document recovery. Unsaved-work protection still applies, and the manual
+**Reload** action remains available.
 
 During startup, slow app downloads keep the **Control UI is still loading**
 notice without interrupting the download. After the document finishes loading,
@@ -164,6 +173,8 @@ the app gets another 12 seconds to render before recovery starts. If the
 Gateway is unreachable, startup recovery keeps probing with a backoff capped
 at 15 seconds. It allows up to three automatic recovery navigations; if fresh
 pages still cannot start, use **Try again** or the troubleshooting guide.
+Network failures and **Try again** preserve service-worker registrations and
+their offline caches.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its

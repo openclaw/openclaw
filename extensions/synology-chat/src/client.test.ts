@@ -5,10 +5,11 @@ import { PassThrough } from "node:stream";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { resolveLegacyWebhookNameToChatUserId, sendHostedFileUrl, sendMessage } from "./client.js";
 import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
-// Mock http and https modules before importing the client
+// Vitest hoists transport mocks before the static client import.
 vi.mock("node:https", async () => {
   const actual = await vi.importActual<typeof import("node:https")>("node:https");
   const httpsRequest = vi.fn();
@@ -31,9 +32,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
-let sendMessage: typeof import("./client.js").sendMessage;
-let sendHostedFileUrl: typeof import("./client.js").sendHostedFileUrl;
-let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
 
 type RequestCallback = (res: IncomingMessage) => void;
 type MockRequestHandler = (
@@ -118,11 +116,6 @@ function mockRequestErrorOnce(error: Error) {
 }
 
 function installFakeTimerHarness() {
-  beforeAll(async () => {
-    ({ sendMessage, sendHostedFileUrl, resolveLegacyWebhookNameToChatUserId } =
-      await import("./client.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -477,10 +470,6 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
   const baseUrl2 =
     "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test-2%22";
 
-  beforeAll(async () => {
-    ({ resolveLegacyWebhookNameToChatUserId } = await import("./client.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -560,6 +549,24 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
 
 describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
   installFakeTimerHarness();
+
+  it("preserves the user_list transport error warning", async () => {
+    const warns: string[] = [];
+    vi.mocked(https.get).mockImplementationOnce(() => {
+      const req = createMockRequestEmitter();
+      process.nextTick(() => req.emit("error", new Error("lookup unavailable")));
+      return req;
+    });
+
+    const userId = await resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: "https://lookup-error-nas.example.com/webapi/entry.cgi?method=chatbot",
+      mutableWebhookUsername: "anyone",
+      log: { warn: (...args) => warns.push(args.map(String).join(" ")) },
+    });
+
+    expect(userId).toBeUndefined();
+    expect(warns).toEqual(["fetchChatUsers: HTTP error — lookup unavailable"]);
+  });
 
   it("filters malformed user entries while keeping valid ones", async () => {
     mockUserListResponse([

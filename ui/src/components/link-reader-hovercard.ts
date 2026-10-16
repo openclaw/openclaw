@@ -1,5 +1,5 @@
 import { onCleanup } from "solid-js";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { HovercardOwner } from "./link-reader-hovercard-owner.ts";
 import type {
   HovercardProperties,

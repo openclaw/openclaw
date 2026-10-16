@@ -99,14 +99,13 @@ export function createSettingsStatus<T>(
       setState("pending");
     }
     void currentClient.request<T>(options.method, {}, { signal: controller.signal }).then(
-      (status) =>
-        untrack(() => {
-          if (isCurrent()) {
-            setResult({ status, isCurrent: isConnectionCurrent });
-            setState("complete");
-            options.onStatus?.(status);
-          }
-        }),
+      (status) => {
+        if (isCurrent()) {
+          setResult({ status, isCurrent: isConnectionCurrent });
+          setState("complete");
+          options.onStatus?.(status);
+        }
+      },
       (failure: unknown) => {
         if (isCurrent()) {
           setResult(undefined);

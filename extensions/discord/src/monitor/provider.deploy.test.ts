@@ -25,11 +25,7 @@ function createRestMock(): RestMock {
   };
 }
 
-function runDeploy(params: {
-  rest: RestMock;
-  deployCommands: (rest: RestMock) => Promise<void>;
-  shouldLogVerbose?: boolean;
-}) {
+function runDeploy(params: { rest: RestMock; deployCommands: (rest: RestMock) => Promise<void> }) {
   const log = vi.fn<(message: string) => void>();
   const error = vi.fn<(message: string) => void>();
   const client = {
@@ -41,9 +37,6 @@ function runDeploy(params: {
     runtime: { log, error } as unknown as RuntimeEnv,
     enabled: true,
     accountId: "default",
-    startupStartedAt: Date.now(),
-    shouldLogVerbose: () => params.shouldLogVerbose ?? false,
-    isVerbose: () => false,
   });
   return { log, error, client };
 }
@@ -64,7 +57,6 @@ describe("discord slash-command deploy REST logging", () => {
     let deployFinished = false;
     const { log, error } = runDeploy({
       rest,
-      shouldLogVerbose: true,
       deployCommands: async (wrapped) => {
         await wrapped.get("/applications/app-1/commands");
         // Concurrent non-deploy traffic (voice-state probe) during the deploy
@@ -78,8 +70,6 @@ describe("discord slash-command deploy REST logging", () => {
 
     await vi.waitFor(() => expect(deployFinished).toBe(true));
     const logged = joinedCalls(log);
-    expect(logged).toContain("native-slash-command-deploy-rest:get:start");
-    expect(logged).toContain("path=/applications/app-1/commands");
     expect(logged).not.toContain("voice-states");
     expect(logged).not.toContain("slash command deploy failed");
     expect(joinedCalls(error)).not.toContain("voice-states");
@@ -95,7 +85,6 @@ describe("discord slash-command deploy REST logging", () => {
     rest.post.mockRejectedValue(deployError);
     const { log, error, client } = runDeploy({
       rest,
-      shouldLogVerbose: false,
       deployCommands: async (wrapped) => {
         await wrapped.post("/applications/app-1/commands", {
           body: [{ name: "skill" }],
@@ -110,7 +99,6 @@ describe("discord slash-command deploy REST logging", () => {
       .filter((message) => message.includes("slash command deploy failed"));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("(message send/receive unaffected)");
-    // Per-request rest:error lines are verbose-only diagnostics.
     expect(error).not.toHaveBeenCalled();
   });
 });

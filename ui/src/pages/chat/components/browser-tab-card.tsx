@@ -24,7 +24,7 @@ import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-e
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { browserTabTweet } from "./browser-tab-tweet.ts";
 import "../../../styles/session-menu.css";
 import "./browser-tab-card.css";

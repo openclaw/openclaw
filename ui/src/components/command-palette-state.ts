@@ -12,7 +12,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
-  HumanMentionMenu,
+  createHumanMentionMenu,
   type HumanMentionMenuHost,
 } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
@@ -98,7 +98,8 @@ export class CommandPaletteState {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
-  private readonly mentionMenu = new HumanMentionMenu();
+  private readonly mentionMenu = createHumanMentionMenu();
+  private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
   private composing = false;
   private readonly mentionHost: HumanMentionMenuHost = {
@@ -231,8 +232,12 @@ export class CommandPaletteState {
   openPalette(input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) {
     const returnFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A fresh menu is closed; first open can run while Solid mounts the bridge.
+    if (this.hasOpened) {
+      this.mentionMenu.close();
+    }
+    this.hasOpened = true;
     this.open = true;
-    this.mentionMenu.close();
     this.draft.open();
     this.onDraftInitialized();
     this.composing = false;
@@ -345,7 +350,7 @@ export class CommandPaletteState {
       input.value.slice(0, input.selectionStart).lastIndexOf("@") === input.mentionTrigger
     ) {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
-      this.mentionMenu.update(element, this.notifyMentionChange, "trigger");
+      this.mentionMenu.update(element, "trigger");
     }
     if (input.imageFiles?.length) {
       this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
@@ -586,7 +591,6 @@ export class CommandPaletteState {
     }
     this.mentionMenu.update(
       input,
-      this.notifyMentionChange,
       !event
         ? "selection"
         : event.inputType === "insertText" && event.data?.includes("@") === true
@@ -596,7 +600,6 @@ export class CommandPaletteState {
   }
 
   readProps(): CommandPaletteProps {
-    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
     const models = this.modelReader.snapshot;
     return {
       basePath: this.context?.basePath ?? "",

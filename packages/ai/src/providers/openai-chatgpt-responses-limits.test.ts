@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { Context, Model } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -34,12 +34,15 @@ afterEach(() => {
   closeOpenAICodexWebSocketSessions();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   resetOpenAICodexWebSocketStateForTest();
   configureAiTransportHost({});
 });
 
 describe("OpenAI ChatGPT Responses resource limits", () => {
-  it("bounds non-OK response bodies before formatting API errors", async () => {
+  it("bounds non-OK response bodies without awaiting cancellation before formatting API errors", async () => {
+    vi.useFakeTimers();
+    const cancellation = Promise.withResolvers<void>();
     const byteLimit = 16 * 1024;
     const totalChunks = 32;
     const prefix = "usage limit ";
@@ -59,6 +62,7 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
       },
       cancel() {
         canceled = true;
+        return cancellation.promise;
       },
     });
     const fetchMock = vi
@@ -66,22 +70,36 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
       .mockResolvedValueOnce(new Response(overflowing, { status: 400, statusText: "Bad Request" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await streamOpenAICodexResponses(model, context, {
+    let result: AssistantMessage | undefined;
+    const pending = streamOpenAICodexResponses(model, context, {
       apiKey: createJwt({
         "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
       }),
       transport: "sse",
-    }).result();
+    })
+      .result()
+      .then((message) => {
+        result = message;
+      });
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("usage limit");
-    expect(result.errorMessage).not.toContain("�");
-    expect(result.errorMessage).not.toContain("tail");
-    expect(result.errorMessage?.length).toBeLessThanOrEqual(byteLimit);
-    expect(canceled).toBe(true);
-    expect(pullCount).toBeGreaterThanOrEqual(1);
-    expect(pullCount).toBeLessThanOrEqual(3);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toBeDefined();
+      expect(result?.stopReason).toBe("error");
+      expect(result?.errorMessage).toContain("usage limit");
+      expect(result?.errorMessage).not.toContain("�");
+      expect(result?.errorMessage).not.toContain("tail");
+      expect(result?.errorMessage?.length).toBeLessThanOrEqual(byteLimit);
+      expect(canceled).toBe(true);
+      expect(overflowing.locked).toBe(false);
+      expect(pullCount).toBeGreaterThanOrEqual(1);
+      expect(pullCount).toBeLessThanOrEqual(3);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      // Drain the fixture even on the baseline, whose outcome still awaits cancellation.
+      cancellation.resolve();
+      await pending;
+    }
   });
 
   it.each([1, 320])("accepts over 16 MiB with %i complete frames per read", async (batchSize) => {

@@ -9,6 +9,7 @@ import {
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import { createConfigIO } from "../config/io.factory.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
@@ -227,21 +228,32 @@ export function captureUpdateRecoveryBaseline(params: {
       configPaths.add(declare(file.sourcePath, "file"));
       configPaths.add(declare(file.canonicalPath, "file"));
     }
+    const collect = async () => {
+      const plugins = await preparePluginDoctorMigrationBackupResources({
+        config: snapshot.sourceConfig,
+        env,
+        stateDir,
+        warnings,
+        requireLocalResources: true,
+        ...(snapshot.sourceConfig.database?.engine === "postgres"
+          ? {
+              manifestRegistry: (
+                await resolveConfigWidePluginMetadataSnapshotAsync({
+                  config: snapshot.sourceConfig,
+                  env,
+                  stateDir,
+                })
+              ).manifestRegistry,
+            }
+          : {}),
+      });
+      plugins.assertCurrent();
+      return plugins.resources;
+    };
     const collectResources = () =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          const plugins = await preparePluginDoctorMigrationBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-            stateDir,
-            warnings,
-            requireLocalResources: true,
-          });
-          plugins.assertCurrent();
-          return plugins.resources;
-        },
-        { env },
-      );
+      snapshot.sourceConfig.database?.engine === "postgres"
+        ? collect()
+        : withOpenClawStateDatabaseReadSnapshot(collect, { env });
     const declared = await collectResources();
     assertCurrent();
     for (const resource of declared) {
@@ -482,10 +494,12 @@ export function captureUpdateRecoveryBaseline(params: {
       assertCurrent();
       const generations =
         params.acquisition?.mode === "maintenance-owner" &&
+        !databases.databases.some((entry) => entry.engine === "postgres") &&
         maintenanceOwnerMayReadGenerationsInProcess(sharedStatePath, databasePaths)
           ? readUpdateDatabaseGenerations([...databasePaths])
           : await readUpdateDatabaseGenerationsIsolated([...databasePaths], {
               env,
+              pluginOwners: databases.pluginOwners,
               signal: params.signal,
               timeoutMs: params.timeoutMs,
               acquisition: params.acquisition,

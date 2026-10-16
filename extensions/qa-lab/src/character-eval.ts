@@ -27,10 +27,7 @@ const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 
-export type QaCharacterModelOptions = {
-  thinkingDefault?: QaThinkingLevel;
-  fastMode?: boolean;
-};
+export type QaCharacterModelOptions = (typeof DEFAULT_JUDGE_MODEL_OPTIONS)[string];
 
 type QaCharacterEvalRun = {
   model: string;

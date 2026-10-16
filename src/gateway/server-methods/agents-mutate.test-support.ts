@@ -5,6 +5,9 @@ import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
+
+export { expectRecordFields };
 
 type MockIdentity = {
   name?: string;
@@ -252,17 +255,6 @@ export function makeFileStat(params?: {
     ino: params?.ino ?? 1,
     nlink: params?.nlink ?? 1,
   } as unknown as import("node:fs").Stats;
-}
-
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {

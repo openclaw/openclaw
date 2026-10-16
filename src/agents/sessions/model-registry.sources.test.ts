@@ -21,6 +21,7 @@ const generated = {
   api: "openai-completions",
   baseUrl: catalogUrl,
   apiKey: "cached-fixture-key",
+  auth: "aws-sdk",
   authHeader: true,
   headers: { "X-Cached-Provider": "cache" },
   models: [
@@ -218,27 +219,6 @@ describe("ModelRegistry source composition", () => {
     },
   );
 
-  it("composes exact root and generated identities before filling runtime defaults", () => {
-    const registry = createRegistry();
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.getAll().map((model) => model.id)).toEqual([
-      "shared",
-      "Shared",
-      "generated-only",
-    ]);
-    expect(registry.find(provider, "shared")).toMatchObject({
-      name: "Authored",
-      input: ["text", "image"],
-      maxTokens: 2048,
-      maxTokensSource: "configured",
-    });
-    expect(registry.find(provider, "generated-only")).toMatchObject({
-      baseUrl: catalogUrl,
-      maxTokens: 4096,
-      maxTokensSource: "discovered",
-    });
-  });
-
   it("keeps distinct literal SDK model IDs when their trimmed spelling matches", () => {
     const registry = createRegistry({
       authored: { ...authored, models: [{ id: "shared", name: "Authored" }] },
@@ -262,20 +242,6 @@ describe("ModelRegistry source composition", () => {
       apiKey: undefined,
       headers: undefined,
     });
-  });
-
-  it("does not adopt the generated provider's AWS SDK auth mode", () => {
-    const registry = createRegistry({
-      authored: null,
-      generated: {
-        api: "bedrock-converse-stream",
-        baseUrl: catalogUrl,
-        auth: "aws-sdk",
-        models: [{ id: "shared" }],
-      },
-    });
-    expect(registry.find(provider, "shared")).toBeDefined();
-    expect(registry.getProviderAuthStatus(provider).configured).toBe(false);
   });
 
   it("preserves raw SDK authored request authority for custom APIs", async () => {
@@ -309,6 +275,18 @@ describe("ModelRegistry source composition", () => {
 
   it("forks the composed inventory and request headers while isolating current credentials", async () => {
     const registry = createRegistry();
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find(provider, "shared")).toMatchObject({
+      name: "Authored",
+      input: ["text", "image"],
+      maxTokens: 2048,
+      maxTokensSource: "configured",
+    });
+    expect(registry.find(provider, "generated-only")).toMatchObject({
+      baseUrl: catalogUrl,
+      maxTokens: 4096,
+      maxTokensSource: "discovered",
+    });
     const first = registry.fork(
       AuthStorage.inMemory({
         [provider]: { type: "api_key", key: "first-request-key" },

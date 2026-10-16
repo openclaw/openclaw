@@ -37,7 +37,7 @@ export type {
   SessionCapabilityStore,
 } from "./subagent-session-store.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 type SubagentControlScope = "children" | "none";
 
 type PersistedSubagentToolPolicyEnvelope = {

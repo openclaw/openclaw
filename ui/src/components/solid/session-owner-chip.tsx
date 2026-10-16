@@ -7,7 +7,7 @@ import {
   type SessionCreatedActor,
   type SessionOwnerOption,
 } from "../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ParticipantAvatar } from "./viewer-facepile.tsx";
 
 export type SessionOwnerChipProps = {

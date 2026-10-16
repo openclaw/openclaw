@@ -113,7 +113,8 @@ export type DecisionOutcome =
 export interface DecisionProviderV1 {
   readonly id: string;
   readonly contractVersion: 1;
-  /** Prepared local credential availability only; must not perform I/O. */
+  /** Prepared local credential availability only; must not perform I/O.
+   * Omission leaves readiness unconfirmed without blocking evaluation. */
   isReady?(): boolean;
   evaluate(
     batch: DecisionBatch,

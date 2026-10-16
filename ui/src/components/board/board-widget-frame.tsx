@@ -57,7 +57,7 @@ function resolveBoardFrameFailureMessage(
 
 type FrameRefresh = (name: string) => Promise<void>;
 
-type BoardWidgetFrameLifecycleHost = {
+type BoardWidgetFrameOwnerHost = {
   active: () => boolean;
   loadingCovered?: () => boolean;
   bridgeEnabled?: () => boolean;
@@ -68,7 +68,6 @@ type BoardWidgetFrameLifecycleHost = {
   reportContentHeight: (name: string, height: number) => void;
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
-  root: () => ParentNode;
   widget: () => BoardWidget | undefined;
 };
 
@@ -143,8 +142,9 @@ class BoardWidgetTicketRefresh {
   }
 }
 
-export class BoardWidgetFrameLifecycle {
+export class BoardWidgetFrameOwner {
   error = "";
+  private frame?: HTMLIFrameElement;
   private waiting = false;
   private renderStalled = false;
 
@@ -164,7 +164,7 @@ export class BoardWidgetFrameLifecycle {
     () => this.host.active() && !documentHidden() && this.gatewayAvailable(),
   );
 
-  constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
+  constructor(private readonly host: BoardWidgetFrameOwnerHost) {}
 
   get presentationReady(): boolean {
     return this.contentVisible || this.waiting || this.renderStalled || Boolean(this.error);
@@ -207,8 +207,8 @@ export class BoardWidgetFrameLifecycle {
       this.connect();
       this.sandboxHost?.setActive(this.gatewayAvailable());
       // The inner document may have finished loading while this tab was hidden.
-      const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-      if (frame) {
+      const frame = this.frame;
+      if (frame?.isConnected) {
         this.postBoardHostState(frame);
       }
     } else {
@@ -277,6 +277,7 @@ export class BoardWidgetFrameLifecycle {
         when={Boolean(view().sandboxSrc)}
         fallback={
           <iframe
+            ref={(frame) => (this.frame = frame)}
             class="board-widget__frame"
             allow="fullscreen"
             sandbox="allow-scripts"
@@ -286,7 +287,7 @@ export class BoardWidgetFrameLifecycle {
             src={view().src}
             onError={() => this.refreshFailedFrame(current())}
             onLoad={(event) => {
-              this.notifyBoardHost(event);
+              this.postBoardHostState(event.currentTarget);
               this.verifyAuthorization(event, current());
             }}
           />
@@ -321,6 +322,7 @@ export class BoardWidgetFrameLifecycle {
             </Switch>
           </Show>
           <iframe
+            ref={(frame) => (this.frame = frame)}
             class="board-widget__frame"
             allow="fullscreen"
             style={{ opacity: view().visible ? undefined : 0 }}
@@ -349,7 +351,7 @@ export class BoardWidgetFrameLifecycle {
                 ? this.sandboxHost.handleFrameError()
                 : this.refreshFailedFrame(current())
             }
-            onLoad={(event) => this.notifyBoardHost(event)}
+            onLoad={(event) => this.postBoardHostState(event.currentTarget)}
           />
         </div>
       </Show>
@@ -472,13 +474,6 @@ export class BoardWidgetFrameLifecycle {
       });
   }
 
-  private notifyBoardHost(event: Event): void {
-    const frame = event.currentTarget;
-    if (frame instanceof HTMLIFrameElement) {
-      this.postBoardHostState(frame);
-    }
-  }
-
   private postBoardHostState(frame: HTMLIFrameElement): void {
     this.boardHostNonce = generateUUID();
     this.keyboardHostNonce = this.sandboxOrigin ? generateUUID() : "";
@@ -556,7 +551,8 @@ export class BoardWidgetFrameLifecycle {
               this.host.active() &&
               this.host.connected() &&
               this.gatewayAvailable() &&
-              frame === this.host.root().querySelector(".board-widget__frame") &&
+              frame === this.frame &&
+              frame.isConnected &&
               current?.name === widget.name &&
               current.revision === widget.revision &&
               current.viewGeneration === widget.viewGeneration &&
@@ -615,7 +611,7 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private updateSandboxHost(): void {
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+    const frame = this.frame;
     const widget = this.host.widget();
     if (
       !frame?.isConnected ||
@@ -643,8 +639,8 @@ export class BoardWidgetFrameLifecycle {
     if (!this.host.connected()) {
       return;
     }
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-    if (!frame || event.source !== frame.contentWindow) {
+    const frame = this.frame;
+    if (!frame?.isConnected || event.source !== frame.contentWindow) {
       return;
     }
     const widget = this.host.widget();

@@ -15,6 +15,11 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  assertAllowedCompletionModel,
+  resolvePluginLlmPolicy,
+} from "../plugins/runtime/runtime-model-policy.js";
+import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
@@ -70,6 +75,11 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
+  // Registration supplies consumer identity; request fields cannot select another plugin's policy.
+  const pluginPolicy = resolvePluginLlmPolicy(config, consumerId);
+  // The public Decision contract takes the operation's owning agent explicitly.
+  // This runtime is consumer-bound, not agent-bound; applying LLM override policy
+  // here would reject owner-agent calls. Omission still selects the global role.
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
     return skipped({ status: "unavailable", reason: "disabled" });
@@ -119,6 +129,12 @@ export async function evaluateDecisionInRegistry(
         new Error("Decision evaluation requires its current Gateway binding."),
     });
     modelExecution = bindOperatorModelExecution(capturedOperator.authority, model);
+    // A configured role is not a caller model override; only all-completion policy applies.
+    assertAllowedCompletionModel({
+      resolvedModelRef: modelKey(model.provider, model.model),
+      pluginPolicyId: consumerId,
+      pluginPolicy,
+    });
     const modelSignal = modelExecution
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;

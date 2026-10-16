@@ -1,8 +1,13 @@
 // Migrates OpenClaw-owned SQLite tables to canonical STRICT schemas.
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import {
+  readGeneratedSqliteCatalog,
+  readGeneratedSqliteFingerprint,
+} from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import type { SqliteSchemaCatalog, SqliteSchemaSource } from "./sqlite-schema-catalog-types.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -53,6 +58,8 @@ type TableRowidModel = {
 export type SqliteStrictMigrationOptions = {
   busyTimeoutMs?: number;
   databaseLabel?: string;
+  /** The caller owns object creation; an already-STRICT fragment needs no DDL replay. */
+  expectedSchema?: SqliteSchemaSource;
 };
 
 export type SqliteStrictMigrationResult = {
@@ -101,16 +108,24 @@ function readTableRowidModel(
     return { alias: null, storage: "without-rowid" };
   }
   const columns = readTableColumns(db, tableName);
-  const primaryKeyColumns = columns.filter((column) => Number(column.pk ?? 0) > 0);
   const primaryKeyIndex = db
     .prepare(`SELECT 1 AS found FROM pragma_index_list(?) WHERE origin = 'pk' LIMIT 1`)
     .get(tableName);
+  return resolveTableRowidModel(tableName, columns, Boolean(primaryKeyIndex));
+}
+
+function resolveTableRowidModel(
+  tableName: string,
+  columns: readonly TableColumnRow[],
+  hasPrimaryKeyIndex: boolean,
+): TableRowidModel {
+  const primaryKeyColumns = columns.filter((column) => Number(column.pk ?? 0) > 0);
   const primaryKeyType = primaryKeyColumns[0]?.type;
   if (
     primaryKeyColumns.length === 1 &&
     typeof primaryKeyType === "string" &&
     primaryKeyType.toUpperCase() === "INTEGER" &&
-    !primaryKeyIndex
+    !hasPrimaryKeyIndex
   ) {
     return { alias: null, storage: "integer-primary-key" };
   }
@@ -126,6 +141,32 @@ function readTableRowidModel(
     );
   }
   return { alias, storage: "implicit" };
+}
+
+function canonicalStrictTablesFromCatalog(catalog: SqliteSchemaCatalog): CanonicalStrictTable[] {
+  return catalog.tables
+    .map((table) => {
+      if (table.sql === null) {
+        throw new Error(`Canonical SQLite table ${table.name} has no CREATE statement`);
+      }
+      const rowidModel: TableRowidModel =
+        table.withoutRowid === 1
+          ? { alias: null, storage: "without-rowid" }
+          : resolveTableRowidModel(
+              table.name,
+              table.columns,
+              table.indexes.some((index) => index.origin === "pk"),
+            );
+      return {
+        columns: table.columns.filter((column) => column.hidden === 0).map((column) => column.name),
+        createSql: table.sql,
+        name: table.name,
+        rowidAlias: rowidModel.alias,
+        rowidStorage: rowidModel.storage,
+        usesAutoincrement: /\bAUTOINCREMENT\b/iu.test(table.sql),
+      };
+    })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
 function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
@@ -298,18 +339,54 @@ export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T):
 export function migrateSqliteSchemaToStrictInTransaction(
   db: DatabaseSync,
   schemaSql: string,
-  options: Pick<SqliteStrictMigrationOptions, "databaseLabel"> = {},
+  options: Pick<SqliteStrictMigrationOptions, "databaseLabel" | "expectedSchema"> = {},
 ): SqliteStrictMigrationResult {
   if (!db.isTransaction) {
     throw new Error("SQLite STRICT schema migration requires an active transaction");
   }
-  const canonicalTables = readCanonicalStrictTables(schemaSql);
-  db.exec(schemaSql);
-  const currentTableRows = new Map(
-    readMainTableList(db)
-      .filter((row) => row.type === "table")
-      .map((row) => [row.name, row]),
-  );
+  const expectedSchema = options.expectedSchema ?? schemaSql;
+  const descriptor =
+    typeof expectedSchema === "string" ? readGeneratedSqliteFingerprint(expectedSchema) : undefined;
+  const expectedTableNames =
+    descriptor?.tableNames ??
+    (typeof expectedSchema === "string"
+      ? undefined
+      : expectedSchema.tables.map((table) => table.name));
+  const readCurrentTables = () =>
+    new Map(
+      readMainTableList(db)
+        .filter((row) => row.type === "table")
+        .map((row) => [row.name, row]),
+    );
+  let currentTableRows =
+    options.expectedSchema !== undefined && expectedTableNames
+      ? readCurrentTables()
+      : new Map<string, TableListRow & { name: string }>();
+  if (
+    options.expectedSchema !== undefined &&
+    expectedTableNames?.every((name) => Number(currentTableRows.get(name)?.strict ?? 0) === 1)
+  ) {
+    return { migratedTables: [] };
+  }
+  const catalog =
+    typeof expectedSchema === "string"
+      ? descriptor && readGeneratedSqliteCatalog(expectedSchema)
+      : expectedSchema;
+  const generatedStrictSchema = catalog?.tables.every((table) => table.strict === 1);
+  // Custom public SQL and schemas containing virtual tables retain the native
+  // discovery path. Generated STRICT fragments need no scratch database.
+  const canonicalTables =
+    catalog && generatedStrictSchema
+      ? canonicalStrictTablesFromCatalog(catalog)
+      : readCanonicalStrictTables(schemaSql);
+  if (
+    options.expectedSchema === undefined ||
+    !generatedStrictSchema ||
+    canonicalTables.some((table) => !currentTableRows.has(table.name))
+  ) {
+    db.exec(schemaSql);
+    currentTableRows = readCurrentTables();
+  }
   const tablesToMigrate = canonicalTables.filter(
     (table) => Number(currentTableRows.get(table.name)?.strict ?? 0) !== 1,
   );

@@ -50,6 +50,7 @@ import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-e
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
+import { updatePreflightTeamReportsEntrypoint } from "../../src/infra/database-engine/update-preflight.runtime.test-support.ts";
 import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-runtime.test-support.ts";
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
@@ -383,6 +384,7 @@ export const vitestWorkerBuildEntries = {
     qaGatewayCleanupRuntimeEntrypoint,
     logbookSqliteBackendEntrypoint,
     teamReportsSqliteBackendEntrypoint,
+    updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
     stateLeaseProcessExitRuntimeEntrypoint,

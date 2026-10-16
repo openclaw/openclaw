@@ -190,6 +190,7 @@ export async function attachAuthenticatedGatewayConnect(
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
   });

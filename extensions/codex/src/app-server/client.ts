@@ -22,7 +22,6 @@ import {
   buildCodexAppServerInitializeParams,
   assertSupportedCodexAppServerVersion,
   buildCodexAppServerRuntimeIdentity,
-  createCodexInitializeDiagnostics,
 } from "./client-initialize.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import { parseCodexAppServerMessage } from "./client-message-decoder.js";
@@ -58,7 +57,6 @@ import {
   CodexAppServerLocalRequestCancellationError,
 } from "./rpc-error.js";
 import { CodexServerRequests, type CodexServerRequestHandler } from "./server-requests.js";
-import { getCodexAppServerRegisteredTransportIdentity } from "./transport-process-registration.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import {
@@ -168,8 +166,6 @@ export class CodexAppServerClient {
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
   private initialized = false;
-  private readonly initializeDiagnostics = createCodexInitializeDiagnostics();
-  private initializeObservation: ReturnType<typeof this.initializeDiagnostics.begin> | undefined;
   private modelCatalogRevision = 0;
   private closed = false;
   private transportExited = false;
@@ -271,38 +267,22 @@ export class CodexAppServerClient {
     if (this.initialized) {
       return;
     }
-    const observation = this.initializeDiagnostics.begin();
-    this.initializeObservation = observation;
-    let succeeded = false;
-    try {
-      // The handshake identifies the exact app-server process we will keep using,
-      // which matters when callers override the binary or app-server args.
-      const response = await this.request(
-        "initialize",
-        buildCodexAppServerInitializeParams(),
-      ).catch(async (error: unknown) => {
+    // The handshake identifies the exact app-server process we will keep using,
+    // which matters when callers override the binary or app-server args.
+    const response = await this.request("initialize", buildCodexAppServerInitializeParams()).catch(
+      async (error: unknown) => {
         if (this.closed && this.child.startupFailure) {
           await closeCodexAppServerTransportAndWait(this.child, { drainStdio: true });
           throw this.child.startupFailure.error ?? error;
         }
         throw error;
-      });
-      this.child.startupFailure?.complete();
-      observation.boundary("version-validation");
-      const serverVersion = assertSupportedCodexAppServerVersion(response);
-      this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, serverVersion);
-      observation.boundary("initialized-notification");
-      this.notify("initialized");
-      this.initialized = true;
-      observation.boundary("ready");
-      succeeded = true;
-    } finally {
-      observation.finish(succeeded);
-    }
-  }
-
-  getInitializeDiagnostic(beforeClientClose = false) {
-    return this.initializeDiagnostics.snapshot(this.closed, beforeClientClose);
+      },
+    );
+    this.child.startupFailure?.complete();
+    const serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, serverVersion);
+    this.notify("initialized");
+    this.initialized = true;
   }
 
   /** Outstanding methods across this physical client, including peer turns; never arguments. */
@@ -341,10 +321,6 @@ export class CodexAppServerClient {
   /** Returns the local transport PID for scoped child-process cleanup, when available. */
   getTransportPid(): number | undefined {
     return this.child.pid;
-  }
-
-  getRegisteredTransportIdentity() {
-    return getCodexAppServerRegisteredTransportIdentity(this.child);
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -454,13 +430,8 @@ export class CodexAppServerClient {
       this.modelCatalogRevision += 1;
     }
     const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
-    const initialize =
-      method === "initialize"
-        ? this.initializeObservation?.attempt(overloadAttemptOrdinal)
-        : undefined;
     const attempt: CodexClientRequestAttempt = createCodexRequestAttempt({
       method,
-      observe: initialize?.observe,
       ...(method === "thread/list"
         ? { diagnosticIdentity: { clientInstanceId: this.instanceId, rpcId: id } }
         : {}),
@@ -505,7 +476,6 @@ export class CodexAppServerClient {
           message,
           (error) => attempt.failLocal(error),
           () => attempt.markWritten(),
-          initialize?.writeResult,
         );
       },
     );
@@ -688,7 +658,6 @@ export class CodexAppServerClient {
     if (this.closed) {
       return false;
     }
-    this.initializeDiagnostics.closing();
     this.closed = true;
     closeCodexCatalogClientSource(this);
     this.closeError = error;

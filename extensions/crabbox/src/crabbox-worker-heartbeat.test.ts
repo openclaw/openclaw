@@ -1,3 +1,4 @@
+import { syncBuiltinESMExports } from "node:module";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -21,6 +22,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
     cleanup();
   }),
 );

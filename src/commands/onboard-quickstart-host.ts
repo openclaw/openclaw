@@ -61,12 +61,12 @@ export async function runQuickstartForegroundGateway(params: {
           prompter: createQuickstartNotePrompter(runtime),
           suppressTokenOutput: params.suppressTokenOutput,
           ...(params.agentId ? { agentId: params.agentId } : {}),
-        }).catch(() => ({ handedOff: false })),
+        }).catch(() => false),
       ]);
-      if (!handoff) {
+      if (handoff === null) {
         return;
       }
-      if (!handoff.handedOff) {
+      if (!handoff) {
         runtime.log(t("wizard.guided.quickstartBrowserUnavailable"));
       }
     } else {

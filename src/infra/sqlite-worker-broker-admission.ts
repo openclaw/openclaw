@@ -70,6 +70,19 @@ export function reserveSqliteWorkerClient(
   return reserved;
 }
 
+export function findReusableSqliteWorkerClient(
+  stores: Iterable<StoreClient>,
+  databasePath: string,
+): StoreClient | undefined {
+  // A published client proves physical identity admission finished; initialized alone does not.
+  for (const client of stores) {
+    if (!client.sealed && client.isAvailable() && client.actor.pathReferences.has(databasePath)) {
+      return client;
+    }
+  }
+  return undefined;
+}
+
 export async function reclaimSqliteWorkerClient(
   options: PreparedSqliteWorkerOpen,
   stores: Iterable<StoreClient>,

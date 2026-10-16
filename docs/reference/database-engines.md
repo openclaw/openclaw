@@ -49,21 +49,25 @@ database workers; workers do not resolve SecretRefs. Treat the DSN as a credenti
 and do not put it in logs or diagnostic captures.
 
 Restart the Gateway after changing the engine, then run `openclaw doctor` to see
-each store's selected engine. Doctor warns that PostgreSQL is experimental and
-that stores without a PostgreSQL schema remain on SQLite.
+the default, override, and effective engine for each family. These are configured
+choices, not evidence that a store has opened. Doctor warns when any effective
+family uses experimental PostgreSQL.
 
-| Field                            | Default      | Meaning                                                                                                                                                          |
-| -------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database.engine`                | `"sqlite"`   | `"sqlite"` or `"postgres"`. PostgreSQL applies to every registered store that supplies a PostgreSQL schema.                                                      |
-| `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
-| `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
+| Field                            | Default      | Meaning                                                                                                                                                                         |
+| -------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database.engine`                | `"sqlite"`   | Default `"sqlite"` or `"postgres"` for supported families. Families without PostgreSQL support remain on SQLite.                                                                |
+| `database.families.<id>.engine`  | Inherit      | Experimental override for `state`, `agent`, `workboard`, `logbook`, or `team-reports`. Each override requires `engine`; explicit unsupported PostgreSQL overrides are rejected. |
+| `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                             |
+| `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.                |
 
-Shared state, agent databases, Workboard, Logbook, and Team Reports currently support PostgreSQL. The Gateway resolves
-the selected engine before its first shared-state read and retains that immutable
-selection for the lifetime of the process. Reader, writer, and lease workers receive
-the resolved selection explicitly; they never resolve the connection again. A
-different selection in the same process is refused. Restart the process after
-changing the connection or engine.
+Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
+Before its first shared-state read, the Gateway resolves the effective family
+map and, if needed, the shared PostgreSQL connection once on the host. Reader,
+writer, and lease workers receive that immutable selection explicitly. Plugin
+stores retain their family's boot choice across close and reopen. A different
+family map, connection, or prefix in the same process is refused; restart after
+changing them. When all effective families use SQLite, an unused PostgreSQL
+connection is not resolved.
 
 Offline port commands scope their source and target selections to each worker
 task, including resource cleanup, so reusing an idle worker does not change the
@@ -75,16 +79,27 @@ The supported PostgreSQL families are:
 - **Shared state:** runtime storage, bidirectional database ports, and
   matched backups. The provider covers the selected `state/openclaw.sqlite` and
   retained Voice Call state roots, including explicitly configured store paths
-  and disabled plugin entries. Matrix account/token roots are excluded from this
-  provider; their discovery and custody belong to the Matrix account-root lane.
+  and disabled plugin entries. Matrix account/token roots also belong to this
+  family, with one local anchor and PostgreSQL namespace per root.
 - **Agent databases:** fresh agent stores, including shared-main auth and explicit
   agent directories, use the selected engine through the existing agent workers.
   Transcript payloads are stored as plain JSON on PostgreSQL. Transcript text search
   uses the engine's admitted full-text capability and requires `unaccent`.
-  Memory indexing remains unavailable until the memory owner supports PostgreSQL;
-  requests fail with `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
-  Existing SQLite agent stores cannot switch engines; agent ports and backup
-  providers are not available yet. PostgreSQL agent schemas support current-version
+  Memory indexing, text/vector/hybrid search, status, forgetting, and derived-index
+  reset use the selected engine. Memory search remains experimental; see the
+  extension requirements and keyword-only mode below.
+  Memory text and vector admission are owned by the memory engine. Port and backup
+  validate its recorded search extensions against those owner definitions.
+  Existing agent stores support bidirectional ports and matched backups, including
+  retained registry paths and explicit session or agent directories. Older SQLite
+  schemas migrate only in the port's private copy. Compressed transcript events
+  become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
+  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
+  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
+  Canonical memory origins and
+  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  row locator. Cold archive references are retained; user backups embed their blobs.
+  PostgreSQL agent schemas support current-version
   bootstrap only and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
@@ -95,6 +110,19 @@ The supported PostgreSQL families are:
 - **Team Reports:** saved reports, person-day counts, and run history;
   bidirectional database ports; and matched backups. Collected activity is
   session-local scratch and is not exported or backed up.
+
+| Additional state store              | Engine selection                | Port and backup coverage                                                                                       |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Matrix account and token-hash roots | Effective `state` family engine | Declared `matrix` resources, including retained and disabled accounts; separate anchor and namespace per root. |
+
+Matrix uses the existing shared-state keyed-store API for sync, account metadata,
+recovery keys, and serialized crypto IndexedDB state. The SDK's in-memory
+IndexedDB snapshot is persisted in that same root; it does not create another
+persistent IndexedDB file. Changing the `state` engine requires porting every
+retained root. An unsupported or unreadable database inside the declared resource
+refuses the operation; preserve it and use the named repair or compatible version
+before retrying. Doctor lists each root's physical engine and reports a mismatch
+with the effective state-family engine.
 
 A supported store never silently falls back to SQLite when its PostgreSQL
 connection or admission fails.
@@ -109,23 +137,122 @@ destination schema before commit and publication. Failed migrations roll back
 transactionally, while their `.postgres.bak` exports remain available for recovery.
 
 Use `openclaw database port` to move existing supported data between engines.
-Changing `database.engine` alone does not migrate existing data. Omitting
+Changing a default or family override does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no
 configuration or data migration.
 
 Existing SQLite shared state and agent databases refuse a PostgreSQL selection and name
 `openclaw database port` as the migration path. The port command handles
-current-schema shared state, Workboard, Logbook, and Team Reports. Upgrade older
+current-schema shared state, agent databases, Workboard, Logbook, and Team Reports. Upgrade older
 shared state with `openclaw doctor --fix` using a compatible binary before porting.
-Agent porting is not available yet; keep existing agent stores on SQLite.
 Do not remove existing data to switch engines.
+
+### Mixed engines (experimental)
+
+Use family overrides to choose engines for fresh stores. The five configurable
+families share one `database.postgres` connection and schema prefix; per-family
+connection and prefix options are not supported. The default still applies when
+an override is omitted.
+
+Keep agents and standalone plugin stores on SQLite while fresh shared state,
+including Matrix account roots, uses PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "sqlite",
+    families: {
+      state: { engine: "postgres" },
+      agent: { engine: "sqlite" },
+    },
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+    },
+  },
+}
+```
+
+Or keep shared state and agents on SQLite while a fresh Workboard store uses
+PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "sqlite",
+    families: { workboard: { engine: "postgres" } },
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+    },
+  },
+}
+```
+
+Only the five listed families accept overrides. Unknown keys, fixed-local
+families, missing `engine`, and per-family connection/prefix options are rejected.
+`agent: { engine: "sqlite" }` is valid in mixed installations. PostgreSQL agents
+require every configurable family to select PostgreSQL, whether by default or
+override. A PostgreSQL agent combined with any SQLite family refuses with
+`DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED` until mixed-pair conformance lands
+in PR3. The PostgreSQL default includes agent databases.
+Quarantine, managed-update, and package-activation safety journals stay local
+SQLite. Daemon runtime pins do not acquire engine overrides;
+incognito remains memory-only.
+
+An override applies to the whole family: all shared-state fragments together,
+all agent databases together, or the named plugin store. Admission and anchors
+remain per physical store. Existing SQLite content refuses a PostgreSQL choice,
+and a PostgreSQL anchor refuses SQLite; never remove an anchor to switch engines.
+Changing a family's engine requires a port (not yet supported for mixed installs)
+and a Gateway restart. The current port command has no per-family scope, and
+agent port providers are not available yet. Keep existing data on its current engine.
+
+| Configuration                                                          | Runtime support                                                                  |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| All SQLite, including no database config                               | Supported default; existing lifecycle behavior is unchanged.                     |
+| PostgreSQL default for every configurable family                       | Experimental runtime support, including agents; safety stores stay local SQLite. |
+| Fresh PostgreSQL state with SQLite agents/plugins                      | Allowed with the shared PostgreSQL configuration.                                |
+| Fresh SQLite state with PostgreSQL Workboard, Logbook, or Team Reports | Allowed with the shared PostgreSQL configuration.                                |
+| A mixture of state/plugin families with SQLite agents                  | Allowed for runtime; lifecycle commands below refuse it.                         |
+| `agent=postgres` with any configurable SQLite family                   | Refused until PR3 mixed-pair conformance; `agent=sqlite` is valid.               |
+| `agent=postgres` with every configurable family on PostgreSQL          | Allowed, including when all families explicitly override a SQLite default.       |
+
+Until family-scoped recovery support lands, OpenClaw refuses database ports,
+database snapshot backup/restore, and updates for mixed-engine installations.
+The refusal directs you to keep one engine across PostgreSQL-capable families or
+wait for family-scoped support. An update candidate advertising PostgreSQL
+support does not bypass this guard. All-SQLite and the existing uniform
+PostgreSQL configuration keep their current behavior and existing restrictions.
+Fixed-local safety stores do not count as an engine mixture. Agent databases do.
+Config-only archive backups remain available for recovery.
+Updates also refuse any explicit `database.families` map until family-aware
+candidate admission is available: older targets cannot read that config shape.
+For a homogeneous installation, make `database.engine` match the effective engine
+and remove the now-redundant family overrides before updating, without changing
+any store's effective engine.
+Do not change overrides just to bypass a refusal: configuration changes do not
+port stored data.
+
+Mixed storage still requires one Gateway per store. It does not add Team
+multi-node ownership, routing, or failover. Cross-family operations retain their
+existing separate commits, compensation, and lock ordering.
 
 ## Search on PostgreSQL
 
 The experimental engine search contract supports native PostgreSQL full text,
 literal trigram contains, and exact cosine search. Agent transcript text search
-uses this contract; agent memory still follows the support matrix above.
+and memory search use this contract.
 It does not enable PostgreSQL for an unported store.
+
+Owning components can register additional search definitions with
+`admitStoreSearch(connection, definition, { extension: name })` on an admitted
+worker connection. PostgreSQL installs
+the derived objects and records their definitions in one writer transaction.
+Reopening the store verifies PostgreSQL's catalog fingerprint, including these
+extensions, without recreating the indexes. Changing a registered definition,
+including its vector dimension, is refused with `SearchExtensionDefinitionChangedError`;
+restore the previous definition until the owning component provides a derived-index
+rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
+the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
 
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
@@ -149,10 +276,33 @@ tables, indexes, functions, and text-search configuration.
 
 The existing explicit keyword-only memory setting is `memory.search.provider: "none"`
 (or the corresponding agent-specific override). The engine's keyword-only schema
-requires no pgvector extension and exposes no vector capability. The memory owner's
-PostgreSQL integration is pending; this setting does not yet enable memory indexing. Disabling only the native vector
-index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
+requires no pgvector extension and exposes no vector capability. Memory status
+reports `provider: "none"` and `searchMode: "fts-only"`. Disabling only the native
+vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
 does not silently authorize keyword-only PostgreSQL admission.
+
+Memory admits its search definitions through the agent
+database owner. PostgreSQL rebuilds use connection-local temporary staging and
+publish canonical rows and their derived search projections in one writer
+transaction. SQLite retains its existing shadow-file publication. Memory search
+uses these same admitted projections. Forgetting removes derived text and vector
+data in the source-row transaction; reset clears only derived memory data and
+retains the admitted search schema. Status uses admitted index facts without
+per-request schema probes. PostgreSQL storage diagnostics report memory relation
+sizes; WAL and reusable-file bytes are zero because those are server-owned,
+not local SQLite files.
+
+The public memory search path uses the admitted PostgreSQL projections. Vector queries filter model aliases, sources, and any
+candidate IDs before exact cosine ordering and the result limit. Keyword queries
+use native full-text ranking, or literal contains predicates for the configured
+trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
+merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
+text scores remain engine-local and are not calibrated to SQLite BM25. A
+keyword-only store needs no vector extension; requesting semantic search without
+an admitted vector capability raises `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
+The error names the missing extension and the installation SQL. Install it in
+the selected database, then reopen the store; use `provider: "none"` when only
+keyword search is wanted.
 
 Full text uses a named `simple` plus `unaccent` configuration, a stored generated
 `tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
@@ -163,7 +313,8 @@ from SQLite BM25. Tokenization also differs for punctuation, compound words, and
 Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
 selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
-fallback for full-text queries.
+fallback for full-text queries. Trigram matches rank by native `word_similarity`
+before the result limit; multi-term memory queries average their term scores.
 
 Semantic search uses exact float32 `vector(n)` cosine distance, with model and
 source eligibility in the same query before ordering and limit. The canonical
@@ -176,7 +327,7 @@ of the PostgreSQL corpus into JavaScript for per-query scoring.
 Generated columns, GIN indexes, vector projection tables, trigger functions, and
 the named text-search mappings participate in the store's exact schema-drift
 fingerprint. Rebuilds run under the owning writer transaction. PostgreSQL search
-remains experimental while product-flow conformance and agent storage cutover
+remains experimental while product-flow and mixed-engine agent conformance
 are completed.
 
 Managed-service documentation lists pgvector for Amazon RDS, Google Cloud SQL,
@@ -202,8 +353,8 @@ openclaw database port --to postgres
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
 schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
-Logbook, and Team Reports are registered families.** Agent and Matrix-root
-support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
+Logbook, and Team Reports are registered families.** Matrix account roots are
+state-family resources. Agent support is not enabled by this registry yet. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
 selected installed plugin's schema and admission API. Keep the matching plugin
@@ -381,6 +532,12 @@ canonical data, so they are retained rather than rebuilt. Exact captures keep
 secrets and transient rows; user exports apply the existing shared-state sanitizer.
 Restore uses normal owner admission, including PostgreSQL catalog drift checks.
 
+Matched agent backups retain PostgreSQL sequence high-watermarks, including retired
+outbox rows. A reverse port uses SQLite's native allocator: plain `INTEGER PRIMARY
+KEY` columns allocate after the largest retained row, while `AUTOINCREMENT` columns
+retain their recorded high-watermark. Retained outbox order is preserved in both
+directions.
+
 Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
 
@@ -403,12 +560,28 @@ recovery. An update never silently ports a store or falls back to SQLite.
 Release packages declare supported engines in the optional
 `openclaw.databaseEngines` array in `package.json`, next to
 `openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
-admission protocol remains `1`. Only installations with a physical non-SQLite
-store use this additional check. A target without `postgres` is refused before
-mutation with a remedy: reverse-port to SQLite with the current compatible binary,
-or stay on the current version. SQLite-only installations keep their existing
-admission behavior. The installed driver owns this check; a candidate cannot
-repair an older driver. See [Update admission](/cli/update#candidate-owned-admission).
+admission protocol remains `1`. PostgreSQL targets also declare
+`openclaw.postgresFamilies`: the supported family IDs (`state`, `agent`,
+`workboard`, `logbook`, and `team-reports`). On installations configured for PostgreSQL,
+the updater checks every selected family and retained physical store, including
+disabled plugins. Missing engine or family support refuses before stopping the
+previous Gateway or mutating data.
+Reverse-port to SQLite with the current compatible binary, or stay on the
+current version. Homogeneous PostgreSQL installations include agent stores in
+preflight, exact capture, and custody-backed rollback, including retained registry
+paths. Updates with mixed engines or explicit family overrides remain refused.
+
+Shared-state preflight reads registry, plugin installation, schema-version and
+retained-agent facts through an admitted read-only PostgreSQL transaction in a
+worker. It never treats the SQLite anchor as application rows or migrates the
+source during inspection. Disposable candidate rehearsals use provider-exported
+SQLite images and a private SQLite config, so they never reconnect to the source
+PostgreSQL namespaces. Exact rollback restores the captured rows while
+preserving the current update-run history, as SQLite rollback does.
+SQLite-only installations keep their existing admission and inspection behavior.
+The installed driver owns these checks; a candidate cannot repair an older
+driver. PostgreSQL shared state has not shipped, so published-driver compatibility
+is exercised on SQLite installations. See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
 

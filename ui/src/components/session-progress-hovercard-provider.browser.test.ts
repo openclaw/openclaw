@@ -18,6 +18,12 @@ function fixture(
   triggerKind: "sidebar" | "markdown" = "sidebar",
 ) {
   let card = initialCard;
+  const selection: ApplicationContext["agentSelection"]["state"] = {
+    selectedId: "research",
+    scopeId: "research",
+  };
+  type SelectionListener = Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0];
+  const selectionListeners = new Set<SelectionListener>();
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const request = vi.fn(async (method: string) => {
     if (method === "progressCard.get") {
@@ -60,8 +66,11 @@ function fixture(
       subscribe: () => () => undefined,
     },
     agentSelection: {
-      state: { selectedId: "research", scopeId: "research" },
-      subscribe: () => () => undefined,
+      state: selection,
+      subscribe: (listener: SelectionListener) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
   } as unknown as ApplicationContext;
   // SAFETY: Importing the bridge above registers this tag with these properties.
@@ -119,6 +128,13 @@ function fixture(
       await provider.updateComplete;
       flush();
     },
+    select(agentId: string) {
+      selection.selectedId = agentId;
+      selection.scopeId = agentId;
+      for (const listener of selectionListeners) {
+        listener(selection);
+      }
+    },
     change(next: ProgressCard) {
       card = next;
       for (const listener of eventListeners) {
@@ -175,6 +191,48 @@ describe("progress hovercard provider boundary", () => {
     expect(connections).toBe(1);
     expect(disconnections).toBe(0);
     expect(child.parentElement).toBe(h.provider);
+  });
+
+  it("follows replacement sources and retires detached provider interactions", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const h = fixture(progress(1, "Original gateway"));
+    const replacement = fixture(progress(1, "Replacement gateway"));
+    await h.mount();
+    h.trigger.focus();
+    await drainTurn();
+    await waitForSolid(() => expect(portal()?.textContent).toContain("Original gateway"));
+    h.provider.context = replacement.provider.context;
+    h.provider.gateway = replacement.gateway;
+    await drainTurn();
+    expect(portal()).toBeNull();
+    h.trigger.blur();
+    h.trigger.focus();
+    await drainTurn();
+    await waitForSolid(() => expect(portal()?.textContent).toContain("Replacement gateway"));
+    const heldPortal = portal();
+    h.select("other");
+    await drainTurn();
+    expect(portal()).toBe(heldPortal);
+    replacement.select("other");
+    expect(portal()).toBeNull();
+    h.trigger.blur();
+    h.trigger.focus();
+    await drainTurn();
+    await waitForSolid(() => expect(portal()?.textContent).toContain("Replacement gateway"));
+    h.provider.remove();
+    await drainTurn();
+    expect(portal()).toBeNull();
+    const reads = replacement.getReads();
+    h.trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await drainTurn();
+    expect(portal()).toBeNull();
+    expect(replacement.getReads()).toBe(reads);
+    document.body.append(h.provider);
+    await h.provider.updateComplete;
+    flush();
+    h.trigger.focus();
+    await drainTurn();
+    await waitForSolid(() => expect(portal()?.textContent).toContain("Replacement gateway"));
   });
 
   it.each(["participants", "channel avatar"] as const)(

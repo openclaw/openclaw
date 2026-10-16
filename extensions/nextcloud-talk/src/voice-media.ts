@@ -1,5 +1,6 @@
 import { constants, promises as fs } from "node:fs";
 import path from "node:path";
+import type { SavedMedia } from "openclaw/plugin-sdk/media-store";
 
 const BOX_HEADER_BYTES = 8;
 const LARGE_BOX_HEADER_BYTES = 16;
@@ -201,12 +202,7 @@ function replaceExtension(value: string, extension: string): string {
   return `${stem}${extension}`;
 }
 
-export type NextcloudTalkStagedMedia = {
-  id: string;
-  path: string;
-  size: number;
-  contentType?: string;
-};
+export type NextcloudTalkStagedMedia = SavedMedia;
 
 export async function canonicalizeNextcloudTalkNativeVoiceMedia(
   media: NextcloudTalkStagedMedia,

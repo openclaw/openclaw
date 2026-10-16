@@ -15,21 +15,44 @@ function expectWarningPaths(
 }
 
 describe("secrets runtime snapshot inactive core surfaces", () => {
-  it.each([undefined, "sqlite", "postgres"] as const)(
-    "resolves the database connection only for PostgreSQL (engine=%s)",
-    async (engine) => {
+  it.each([
+    { name: "omitted default", database: {}, active: false },
+    { name: "SQLite default", database: { engine: "sqlite" }, active: false },
+    { name: "PostgreSQL default", database: { engine: "postgres" }, active: true },
+    {
+      name: "SQLite default with PostgreSQL Workboard",
+      database: { engine: "sqlite", families: { workboard: { engine: "postgres" } } },
+      active: true,
+    },
+    {
+      name: "PostgreSQL default with all capable families on SQLite",
+      database: {
+        engine: "postgres",
+        families: {
+          state: { engine: "sqlite" },
+          agent: { engine: "sqlite" },
+          workboard: { engine: "sqlite" },
+          logbook: { engine: "sqlite" },
+          "team-reports": { engine: "sqlite" },
+        },
+      },
+      active: false,
+    },
+  ])(
+    "resolves the database connection only for an effective PostgreSQL family ($name)",
+    async ({ database, active }) => {
       const connection = { source: "env", provider: "default", id: "DATABASE_DSN" };
       const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({ database: { engine, postgres: { connection } } }),
-        env: engine === "postgres" ? { DATABASE_DSN: "postgresql:///fixture" } : {},
+        config: asConfig({ database: { ...database, postgres: { connection } } }),
+        env: active ? { DATABASE_DSN: "postgresql:///fixture" } : {},
         includeAuthStoreRefs: false,
         loadablePluginOrigins: new Map(),
       });
       expect(snapshot.config.database?.postgres?.connection).toEqual(
-        engine === "postgres" ? "postgresql:///fixture" : connection,
+        active ? "postgresql:///fixture" : connection,
       );
       expect(snapshot.warnings.map(({ path }) => path)).toEqual(
-        engine === "postgres" ? [] : ["database.postgres.connection"],
+        active ? [] : ["database.postgres.connection"],
       );
     },
   );

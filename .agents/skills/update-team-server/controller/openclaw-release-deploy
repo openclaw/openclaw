@@ -3087,16 +3087,22 @@ activate_release() {
 	# its admitted predecessor through the ordinary activation owner.
 	old_instance="$(read_process_instance "$previous_release" "$old_pid")"
 	assert_frozen_predecessor "$old_instance"
+	# Sealed release audits belong before admission closes; the deployment lock
+	# excludes other pointer writers while the Gateway cannot modify these trees.
+	if [[ -L "$current_link" ]]; then
+		prior_current_sha="$(read_pointer "$current_link")" || return 1
+		prior_current_sha="${prior_current_sha##*/}"
+	fi
+	if [[ -L "$previous_link" ]]; then
+		prior_previous_sha="$(read_pointer "$previous_link")" || return 1
+		prior_previous_sha="${prior_previous_sha##*/}"
+	fi
 	suspension_instance="$old_instance"
 	if prepare_suspension "$previous_release"; then
 		:
 	else
 		suspension_result=$?
 		return "$suspension_result"
-	fi
-	if ! check_suspension; then
-		printf 'DEFERRED preserved Gateway suspension changed before activation\n'
-		return 75
 	fi
 	assert_protected_identity
 	assert_policy
@@ -3106,13 +3112,12 @@ activate_release() {
 		printf 'DEFERRED preserved Gateway suspension expired during compatibility proof\n'
 		return 75
 	fi
-	if [[ -L "$current_link" ]]; then
-		prior_current_sha="$(basename "$(read_pointer "$current_link")")"
-		[[ "$prior_current_sha" == "$predecessor_sha" ]] ||
+	if [[ "$prior_current_sha" != absent || -L "$current_link" ]]; then
+		[[ "$prior_current_sha" == "$predecessor_sha" && -L "$current_link" &&
+			"$(realpath "$current_link")" == "$previous_release" ]] || {
 			fail 'current release changed before journal publication'
-	fi
-	if [[ -L "$previous_link" ]]; then
-		prior_previous_sha="$(basename "$(read_pointer "$previous_link")")"
+			return 1
+		}
 	fi
 	set -- "$journal_file" "$previous_info" "$candidate_info" "$topology" \
 		"$old_pid" "$old_generation" "$old_instance" "$protected_identity" \

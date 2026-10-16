@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import type {
+  EngineConnection,
+  SearchSchema,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
@@ -7,6 +10,7 @@ import {
   stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
+  isPostgresSqlConnection,
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   loadSqliteVecExtension,
@@ -33,7 +37,6 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { requireMemorySearchDatabase } from "../memory-search-database.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -43,6 +46,7 @@ import {
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 import { readMemoryIndex } from "./manager-index-read.js";
+import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -161,10 +165,14 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
+    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
-  const db = requireMemorySearchDatabase(context.database);
+  if (isPostgresSqlConnection(context.database)) {
+    return bindPostgresMemoryPublication(context, "kind" in input ? input.stageId : undefined);
+  }
+  const db = context.database;
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
     pragmas = {
@@ -378,6 +386,16 @@ function createPublicationBackend(
       loadedExtensions.set(db, loaded.extensionPath);
     },
     execute(command) {
+      if (command.type === "database.reset") {
+        throw new Error("Worker memory reset requires PostgreSQL");
+      }
+      if (
+        command.type === "database.stage.start" ||
+        command.type === "database.stage.publish" ||
+        command.type === "database.stage.discard"
+      ) {
+        throw new Error("Connection-local memory staging requires PostgreSQL");
+      }
       if (command.type === "connection.inspect") {
         return "kind" in input
           ? {

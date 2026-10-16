@@ -1,5 +1,6 @@
 import { onSettled } from "solid-js";
 import { composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -357,21 +358,19 @@ export class PortaledHovercardController {
         }
       }
     };
-    window.addEventListener("resize", schedulePosition);
-    window.addEventListener("scroll", handleScroll, true);
-    if (observeVisualViewport) {
-      window.visualViewport?.addEventListener("resize", schedulePosition);
-      window.visualViewport?.addEventListener("scroll", schedulePosition);
-    }
+    const viewport = observeVisualViewport ? window.visualViewport : null;
+    const stopListeners = [
+      listen(window, "resize", schedulePosition),
+      listen(window, "scroll", handleScroll, true),
+      viewport && listen(viewport, "resize", schedulePosition),
+      viewport && listen(viewport, "scroll", schedulePosition),
+    ];
     position();
     this.stopPositioning = () => {
       if (frame !== null) {
         cancelAnimationFrame(frame);
       }
-      window.removeEventListener("resize", schedulePosition);
-      window.removeEventListener("scroll", handleScroll, true);
-      window.visualViewport?.removeEventListener("resize", schedulePosition);
-      window.visualViewport?.removeEventListener("scroll", schedulePosition);
+      stopListeners.forEach((stop) => stop?.());
     };
   }
 

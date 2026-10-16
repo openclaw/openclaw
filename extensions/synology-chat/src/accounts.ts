@@ -35,7 +35,7 @@ const { listAccountIds, resolveAccountConfig: resolveMergedSynologyChatAccountCo
 
 export { listAccountIds };
 
-function getRawAccountConfig(
+export function getRawAccountConfig(
   channelCfg: SynologyChatChannelConfig,
   accountId: string,
 ): SynologyChatChannelConfig {

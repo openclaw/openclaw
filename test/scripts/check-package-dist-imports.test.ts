@@ -24,6 +24,23 @@ function checkPackage(
 }
 
 describe("collectPackageDistImportErrors", () => {
+  it("requires executable helpers resolved beside bundled JavaScript", () => {
+    const sources: Record<string, string> = {
+      "dist/worker/worker.mjs":
+        'export const helper = new URL("./windows-security-helper.exe", import.meta.url);',
+    };
+    const check = () =>
+      collectPackageDistImportErrors({
+        files: Object.keys(sources),
+        readText: (file) => sources[file]!,
+      });
+    expect(check()).toEqual([
+      "dist/worker/worker.mjs imports missing dist/worker/windows-security-helper.exe",
+    ]);
+    sources["dist/worker/windows-security-helper.exe"] = "MZ";
+    expect(check()).toEqual([]);
+  });
+
   it.each([undefined, "commonjs"])(
     "resolves CommonJS files and directory entries with package type %s",
     (type) => {

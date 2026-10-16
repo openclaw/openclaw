@@ -26,6 +26,7 @@ import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
 import { createSandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -170,9 +171,14 @@ type DispatchCase = {
   legacyRetryDelayMs?: number;
   retryPreparation?: "omit" | "mutate" | "change-cwd";
   cancelTrajectory?: boolean;
+  preparedAuth?: "explicit-header" | "no-auth";
 };
 
 const dispatchCases: DispatchCase[] = [
+  ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
+    agentId: "main",
+    preparedAuth,
+  })),
   { agentId: "main", cancelTrajectory: true },
   ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
     sandboxSessionKey: "global",
@@ -242,7 +248,7 @@ const dispatchCases: DispatchCase[] = [
 ];
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth",
   async ({
     agentId = "work",
     sandboxSessionKey,
@@ -261,6 +267,7 @@ it.each(dispatchCases)(
     legacyRetryDelayMs,
     retryPreparation,
     cancelTrajectory,
+    preparedAuth,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -536,6 +543,8 @@ it.each(dispatchCases)(
         setParams: () => {},
       });
       const authProfileStore = { version: 1, profiles: {} };
+      const sourceApiKey =
+        preparedAuth === "explicit-header" ? CUSTOM_LOCAL_AUTH_MARKER : "source-api-key";
       const contextEngine = createContextEngine({
         info: {
           id: configuredContextEngine ? "selected-context" : "legacy",
@@ -579,12 +588,24 @@ it.each(dispatchCases)(
             effectiveModel: {
               id: "fixture-model",
               provider: "fixture",
-              api: "openai-responses",
+              api: preparedAuth ? "openai-completions" : "openai-responses",
               input: imagePath ? ["text", "image"] : ["text"],
+              ...(preparedAuth
+                ? { headers: { Authorization: "Bearer runtime-token", "X-Test": "fixture" } }
+                : {}),
             },
             thinkLevel: "off",
-            apiKeyInfo: null,
-            runtimeAuthState: null,
+            apiKeyInfo: preparedAuth
+              ? { apiKey: sourceApiKey, source: "fixture", mode: "api-key" }
+              : null,
+            runtimeAuthState: preparedAuth
+              ? {
+                  generation: 1,
+                  sourceApiKey,
+                  apiKey: preparedAuth === "no-auth" ? CUSTOM_LOCAL_AUTH_MARKER : "runtime-api-key",
+                  authMode: "api-key",
+                }
+              : null,
             activePreparedAuthPlan: {
               providerForAuth: "fixture",
               authProfileProviderForAuth: "fixture",
@@ -865,6 +886,12 @@ it.each(dispatchCases)(
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        if (preparedAuth) {
+          expect(runAttempt.mock.calls[0]?.[0].model.headers).toEqual({
+            Authorization: preparedAuth === "explicit-header" ? "Bearer runtime-token" : null,
+            "X-Test": "fixture",
+          });
+        }
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
         if (managedWorkspace && !remoteSkills) {
           expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));

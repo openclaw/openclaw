@@ -468,13 +468,15 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("keeps a completion tool-free when the caller disabled tools", async () => {
+  it("lets disableTools override a completion's runtime tool cap", async () => {
     const context = await fixture.prepare({
       ...completionRun(fixture.session.sessionTarget),
       disableTools: true,
+      toolsAllow: ["write"],
     });
     try {
       expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+      expect(context.params.toolsAllow).toBeUndefined();
     } finally {
       await context.preparedBackend.cleanup?.();
     }

@@ -510,7 +510,6 @@ export async function acquireGatewayLock(
       (await acquireWithWait({
         deadlineMs,
         pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
-        maxPollIntervalMs: 2000,
         now,
         sleep: opts.sleep,
         acquire: async () => {

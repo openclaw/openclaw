@@ -1,5 +1,5 @@
-import "./backup-worker.test-support.js";
 import fs from "node:fs";
+import "./backup-worker.test-support.js";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
@@ -39,6 +39,7 @@ import type { StoreSchema } from "./contract.js";
 import { openEngineStore } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
 
 // Keep the actual read contracts in-process so all consumers see the
@@ -153,7 +154,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("doctor-pg-migration-") };
     pathname = resolveOpenClawStateSqlitePath(env);
     installDatabaseEngineSelection({
-      input: { connection: connection!, schemaPrefix: "doctor_fixture" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "doctor_fixture" },
     });
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(

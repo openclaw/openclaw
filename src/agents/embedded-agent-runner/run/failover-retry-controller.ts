@@ -24,7 +24,7 @@ import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_TRANSIENT_RETRIES = 8;
@@ -92,13 +92,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
       lastProfileId?: string;
       pluginHarnessOwnsTransport: boolean;
       agentHarness: { id: string };
+      transportConfig?: PreparedEmbeddedRunInput["runParams"]["config"];
     };
   };
   getSessionId: () => string;
 }) {
   const { runInput, preparedRuntime } = input;
   const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
-  const { provider, modelId, profileFailureStore } = preparedRuntime;
+  const { provider, modelId } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
   let organizationTpmExhausted = false;
@@ -145,9 +146,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
       return;
     }
     const failureParams = {
-      store: profileFailureStore,
+      store: preparedRuntime.profileFailureStore,
       reason,
-      cfg: params.config,
+      cfg: preparedRuntime.snapshot().transportConfig ?? params.config,
       agentDir,
       runId: params.runId,
       modelId: failure.modelId,
@@ -163,10 +164,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
     if (
       apiKeyInfo?.mode !== "api-key" ||
       !isConfigBackedInlineProviderApiKey({
-        cfg: params.config,
+        cfg: preparedRuntime.snapshot().transportConfig ?? params.config,
         provider,
         source: apiKeyInfo.source,
-        store: profileFailureStore,
+        store: preparedRuntime.profileFailureStore,
       })
     ) {
       return;

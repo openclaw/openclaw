@@ -16,6 +16,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -159,7 +160,8 @@ describe.skipIf(!connection)("PostgreSQL local runtime pins", () => {
     await client.connect();
     env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("pin-postgres-") };
     installDatabaseEngineSelection({
-      input: { connection: connection!, schemaPrefix: "pin_conformance" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "pin_conformance" },
     });
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(

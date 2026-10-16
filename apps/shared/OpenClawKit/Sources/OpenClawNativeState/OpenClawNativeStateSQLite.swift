@@ -5,14 +5,21 @@ import Darwin
 #endif
 
 public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
+    public enum Code: Sendable {
+        case failure
+        case busy
+    }
+
     public let message: String
+    public let code: Code
 
     public var errorDescription: String? {
         self.message
     }
 
-    public init(_ message: String) {
+    public init(_ message: String, code: Code = .failure) {
         self.message = message
+        self.code = code
     }
 }
 

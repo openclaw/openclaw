@@ -1,11 +1,11 @@
 ---
 name: solid
-description: Write, port, review, or test Solid 2 UI in OpenClaw (Control UI, plugin views, Canvas hosts), including state ownership, Lit interop during the migration, native overlays, testing, performance, and lessons learned.
+description: Write, refactor, review, or test Solid 2 UI in OpenClaw (Control UI, plugin views, Canvas hosts), including state ownership, native custom elements, overlays, testing, performance, and lessons learned.
 ---
 
 # Solid 2 in OpenClaw
 
-The Control UI, plugin views (`extensions/x`, `extensions/workboard`), and the Canvas A2UI hosts render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Web Awesome is removed, and the last Lit interop modules are retiring; new code is Solid only.
+The Control UI and plugin views (`extensions/x`, `extensions/workboard`) render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit and Web Awesome are removed from these surfaces; new code is Solid only. The Canvas hosts also use Solid, but the sandboxed upstream A2UI v0.8 catalog retains its separate `@a2ui/lit` dependency.
 
 Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules apply to Solid unchanged. Use the exact installed Solid pins from the owning `package.json`: the runtime and compiler are `2.0.0-rc.14`, and `@solidjs/vite-plugin` is `3.0.0-next.49`. `solid-js` and `@solidjs/*` are exempt from the repository's seven-day release-age gate (Peter, 2026-10-11); third-party Solid ecosystem packages remain subject to it.
 
@@ -16,10 +16,10 @@ Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules appl
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
 2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
 3. **Host tags and classes survive.** A component renders its existing `openclaw-*` tag as a plain host element in light DOM; CSS and E2E select it. Never rename a tag or a class. → [components](references/components.md)
-4. **One implementation per registered tag.** A Solid component must never render a tag that a Lit class still registers. When you port a custom element, delete its Lit class; remaining Lit callers reach the Solid version through `defineSolidBridge`. → [Lit interop](references/lit-interop.md)
+4. **One implementation per registered tag.** Native custom elements and Solid callers share one renderer through `defineSolidBridge` in `ui/src/lib/solid-bridge.ts`. Use its returned component in JSX so the host has one lifecycle owner. → [components](references/components.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
-6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code than the Lit you replace.
-7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-lit-era-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
+6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code with fewer owners.
+7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-rendering-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
 
 ## Component skeleton
 
@@ -51,7 +51,7 @@ Use `jsxImportSource: "@solidjs/web"` and its JSX types, not Solid 1's `solid-js
 ## Traps that compile but break
 
 - `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` are gone in Solid 2; they compile to literal attributes or no-ops (lint flags them). `prop:` is the only namespace left.
-- Events are **camelCase** (`onClick`). `onWaSelect` listens to `waselect`; dashed custom events need `onWa-select` or a `listen(...)` ref factory.
+- Events are **camelCase** (`onClick`). Dashed custom events need the exact dash, such as `onSession-change`, or a `listen(...)` ref factory.
 - Native event bindings bind once: dispatch through a stable callback that reads the current handler prop. Runtime spreads, including dynamic elements, can update handlers.
 - A read right after a write sees the **old** value until `flush()`. Don't write-then-read in handlers; derive.
 - Reactive reads after the first `await` in an async memo are untracked, and async memos get no `AbortSignal`.
@@ -74,12 +74,10 @@ More, each with its root cause: [lessons learned](references/lessons.md).
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [idioms](references/idioms.md)                           | choosing a primitive, derivations, props, lifecycle, stores, keys, async, context, diagnostics |
 | [refactor checklist](references/refactor-checklist.md)   | refactoring or reviewing existing Solid: measurable smells, replacements, before/after         |
-| [components](references/components.md)                   | porting or writing components: Lit → Solid table, JSX bindings, events, refs, styles           |
+| [components](references/components.md)                   | writing components, native custom-element hosts, JSX bindings, events, refs, styles            |
 | [state and ownership](references/state-and-ownership.md) | touching owners, projections, async reads, lifetimes, parking, chat render lifecycle           |
-| [Lit interop](references/lit-interop.md)                 | a Lit caller uses your component, or your component hosts unported Lit                         |
 | [overlays](references/overlays.md)                       | menus, popovers, tooltips, dialogs, focus, positioning, the platform floor                     |
 | [testing](references/testing.md)                         | unit, browser, E2E, WebKit, parity, retention suites                                           |
 | [performance](references/performance.md)                 | startup bundle, lazy loading, render budgets                                                   |
 | [plugins](references/plugins.md)                         | building a plugin's Control UI view in Solid                                                   |
-| [migration](references/migration.md)                     | porting the remaining Lit, the final sweep, the inventory                                      |
 | [lessons learned](references/lessons.md)                 | before a new kind of change; most entries cost a failed CI run to learn                        |

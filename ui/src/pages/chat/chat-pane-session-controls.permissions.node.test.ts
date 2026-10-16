@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { Model } from "../../../../src/llm/types.js";
@@ -181,7 +182,12 @@ function createControlsFixture(
     canSelectFull: scope === "operator.admin",
   });
   const container = document.createElement("div");
+  document.body.append(container);
   renderPaneModelControl(controls.composerControls, container);
+  const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  effort.open = true;
+  effort.dispatchEvent(new Event("toggle"));
+  flush();
   return { state, selectedSession, access, controls, container };
 }
 

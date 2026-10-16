@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   encodeMemoryEmbedding,
   type MemoryChunk,
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -46,7 +47,7 @@ type ChunkDatabase = {
 };
 
 export function writeMemoryChunks(
-  database: DatabaseSync,
+  database: EngineConnection,
   context: { path: string; source: MemorySource; model: string; now: number },
   rows: readonly MemoryChunkWrite[],
 ): void {
@@ -139,7 +140,14 @@ export function writeMemoryChunks(
           .where((eb) =>
             eb.or(
               (["origin_class", "session_kind", "observed_at", "supersedes_key"] as const).map(
-                (column) => eb(column, "is not", eb.ref(`excluded.${column}`)),
+                (column) =>
+                  eb(
+                    isPostgresSqlConnection(database)
+                      ? `memory_index_chunk_provenance.${column}`
+                      : column,
+                    isPostgresSqlConnection(database) ? "is distinct from" : "is not",
+                    eb.ref(`excluded.${column}`),
+                  ),
               ),
             ),
           ),

@@ -12,10 +12,6 @@ import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import {
-  deferNextAuthProfileApplication,
-  registerSharedClientAcquisitionDiagnosticsTests,
-} from "./shared-client-acquisition-diagnostics.test-support.js";
 import { registerSharedClientCompactionRetentionTests } from "./shared-client-compaction-retention.test-support.js";
 import { registerSharedClientConnectionArtifactTests } from "./shared-client-connection-artifact.test-support.js";
 import { registerSharedClientIdleTests } from "./shared-client-idle.test-support.js";
@@ -78,6 +74,15 @@ const mocks = vi.hoisted(() => ({
   waitForCodexDesktopGeneration: vi.fn(),
 }));
 mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
+
+function deferNextAuthProfileApplication(): () => void {
+  let release: () => void = () => {};
+  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
+    release = () => resolve(undefined);
+  });
+  mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
+  return release;
+}
 
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
@@ -323,11 +328,6 @@ describe("shared Codex app-server client", () => {
     createStartOptions,
     createInitializingClientHarness,
     authHandoff: mocks.applyCodexAppServerAuthProfile,
-  });
-
-  registerSharedClientAcquisitionDiagnosticsTests({
-    createInitializingClientHarness,
-    sendInitializeResult,
   });
 
   registerSharedClientInferenceTests((generation, command) => {

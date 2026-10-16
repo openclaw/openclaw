@@ -411,7 +411,7 @@ export function resolveAgentConfig(
     ...(entry.params ? { params: entry.params } : {}),
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
-    utilityModel: readStringValue(entry.utilityModel),
+    utilityModel: entry.utilityModel,
     decisionModel: readStringValue(entry.decisionModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,

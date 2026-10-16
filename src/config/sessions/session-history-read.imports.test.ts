@@ -41,6 +41,13 @@ it("keeps history readers independent of host acquisition and decoration", () =>
 
 it("keeps lazy readers independent of unrelated runtime barrels", () => {
   expect(
+    findSourceImportBackedges("src/gateway/session-history-worker-reader.ts", [
+      "src/gateway/session-utils-store-sources.ts",
+      "src/config/sessions/session-store-target-inventory.ts",
+      "src/config/runtime-source-projection.ts",
+    ]),
+  ).toEqual([]);
+  expect(
     findSourceImportBackedges(
       [
         "src/gateway/session-history-worker-reader.ts",

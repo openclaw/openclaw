@@ -159,6 +159,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "infra/database-engine/update-preflight.runtime.test-support":
+    "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":

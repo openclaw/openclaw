@@ -982,7 +982,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       runtime: defaultRuntime,
       retry: async () => await runGatewayCommandOnce(opts, hooks),
     });
-    if (recovery.status === "recovered") {
+    if (recovery) {
       return;
     }
     defaultRuntime.exit(EXIT_CONFIG_ERROR);

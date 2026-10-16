@@ -650,10 +650,12 @@ suite.define(() => {
       expect(
         (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
       ).not.toContain("@openai:");
+      await effortSelect.click();
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
+      await modelSelect.click();
       await revealChatModelOption(modelOption);
       await capture("default-sol", modelPopup, modelOption);
 
@@ -671,12 +673,14 @@ suite.define(() => {
         .toBe("agent:main:session-explicit");
       await modelSelect.click();
       await expect.poll(() => modelOption.count()).toBe(1);
+      await effortSelect.click();
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(
         defaultThinkingValue,
       );
+      await modelSelect.click();
       await revealChatModelOption(modelOption);
       await capture("explicit-sol", modelPopup, modelOption);
 

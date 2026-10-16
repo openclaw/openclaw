@@ -35,7 +35,7 @@ function validateRetainedEnum(value: string, allowed: readonly string[], label: 
   }
 }
 
-function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
+export function normalizeCronRunTimestamps(record: CronRunRecord): CronRunRecord {
   const originalCreatedAt = record.createdAt;
   let createdAt = originalCreatedAt;
   let startedAt = record.startedAt;

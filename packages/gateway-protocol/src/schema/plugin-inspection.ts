@@ -110,6 +110,7 @@ export const PluginDecisionProviderStatusSchema = closedObject({
   providerId: NonEmptyString,
   pluginId: NonEmptyString,
   configured: Type.Boolean(),
+  /** Positive prepared readiness evidence; false also covers unconfirmed readiness. */
   credentialReady: Type.Boolean(),
   callable: Type.Boolean(),
   runtimeGeneration: NonEmptyString,

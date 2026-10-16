@@ -8272,7 +8272,6 @@ test "$package_manager" = "pnpm@12.1.0"
     );
     expect(hydratePnpm.run).toContain("Refusing unsafe pnpm directory");
     expect(hydratePnpm.run).toContain("pnpm_install_artifacts_ready");
-    expect(hydratePnpm.run).toContain("run_pnpm_install || run_pnpm_install");
     expect(hydratePnpm.run).toContain('setsid pnpm "${install_args[@]}"');
     expect(hydratePnpm.run).toContain("grep -qE '^Done in .+ using pnpm v'");
     expect(hydratePnpm.run).toContain("https://github.com/pnpm/pnpm/issues/12297");

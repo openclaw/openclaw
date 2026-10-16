@@ -16,17 +16,16 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
+  createApprovalClient,
+  createApprovalClientLookup,
+} from "./approval-request.test-support.js";
+import {
   bindApprovalReviewerDeviceIds,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
-import {
-  createApprovalClient,
-  createApprovalClientLookup,
-  handleApprovalResolve,
-  requestedEvent,
-} from "./approval.test-support.js";
+import { handleApprovalResolve, requestedEvent } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));

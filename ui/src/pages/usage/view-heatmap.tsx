@@ -67,7 +67,7 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
                 })}`;
               return (
                 <rect
-                  class={`usage-heatmap__cell usage-heatmap__cell--l${day.level}`}
+                  class={["usage-heatmap__cell", `usage-heatmap__cell--l${day.level}`]}
                   x={HEATMAP_LEFT + weekIndex() * HEATMAP_PITCH}
                   y={HEATMAP_TOP + dayIndex() * HEATMAP_PITCH}
                   width={HEATMAP_CELL}
@@ -102,7 +102,7 @@ export function renderUsageHeatmap(
         {(level) => (
           <>
             {" "}
-            <span class={`usage-heatmap__swatch usage-heatmap__cell--l${level}`} />{" "}
+            <span class={["usage-heatmap__swatch", `usage-heatmap__cell--l${level}`]} />{" "}
           </>
         )}
       </For>

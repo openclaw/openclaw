@@ -159,6 +159,9 @@ async function getGatewayCatalogPool(
               if (gatewayCatalog.current === current) {
                 gatewayCatalog.current = undefined;
               }
+              if (signal.aborted || !borrowers.some((borrower) => borrower.isCurrent())) {
+                return;
+              }
               const { recoverPreparedModelRuntimeCatalogWorker } =
                 await import("./prepared-model-runtime.js");
               await recoverPreparedModelRuntimeCatalogWorker(borrowers);

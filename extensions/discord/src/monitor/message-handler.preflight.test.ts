@@ -1,4 +1,6 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import * as preflightRuntime from "./message-handler.preflight.js";
+import * as processRuntime from "./message-handler.process.js";
 
 installDiscordIngressTestRuntime();
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
@@ -872,6 +874,18 @@ describe("preflightDiscordMessage", () => {
         return createGuildEvent({ channelId, guildId, author: message.author, message });
       });
       const evaluated = createDeferred<DiscordPreflightResult | null>();
+      const preflightSpy = vi
+        .spyOn(preflightRuntime, "preflightDiscordMessage")
+        .mockImplementation(async (params) => {
+          const result = await preflightDiscordMessage(params);
+          evaluated.resolve(result);
+          return result;
+        });
+      onTestFinished(() => preflightSpy.mockRestore());
+      const processSpy = vi
+        .spyOn(processRuntime, "processDiscordMessage")
+        .mockImplementation(async () => {});
+      onTestFinished(() => processSpy.mockRestore());
       const dispatcher = createDiscordMessageDispatcher({
         ...createPreflightArgs({
           cfg: {
@@ -887,14 +901,6 @@ describe("preflightDiscordMessage", () => {
           log: vi.fn(),
           error: (...args) => evaluated.reject(new Error(args.join(" "))),
           exit: vi.fn(),
-        },
-        testing: {
-          preflightDiscordMessage: async (params) => {
-            const result = await preflightDiscordMessage(params);
-            evaluated.resolve(result);
-            return result;
-          },
-          processDiscordMessage: async () => {},
         },
       });
       onTestFinished(() => dispatcher.deactivate());

@@ -15,7 +15,7 @@ export const statePostgresRuntime = {
       ],
       dependencies: [],
       activation: "first-use",
-      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "user_profile_emails" (\n  "email" text COLLATE "C" NOT NULL,\n  "profile_id" text COLLATE "C" NOT NULL,\n  "binding_id" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  PRIMARY KEY ("email")\n);\n\nCREATE TABLE "user_profile_identities" (\n  "provider" text COLLATE "C" NOT NULL,\n  "subject" text COLLATE "C" NOT NULL,\n  "profile_id" text COLLATE "C" NOT NULL,\n  "canonical_login" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  "authorization_id" text COLLATE "C",\n  "authorization_basis_json" text COLLATE "C",\n  PRIMARY KEY ("provider", "subject")\n);\n\nCREATE TABLE "user_profiles" (\n  "id" text COLLATE "C" NOT NULL,\n  "display_name" text COLLATE "C",\n  "primary_github_account_id" bigint,\n  "avatar" bytea,\n  "avatar_mime" text COLLATE "C",\n  "avatar_sha256" text COLLATE "C",\n  "merged_into" text COLLATE "C",\n  "role" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  "updated_at" bigint NOT NULL,\n  PRIMARY KEY ("id")\n);\n\nCREATE INDEX "idx_user_profile_emails_profile_id" ON "user_profile_emails" (("profile_id") ASC NULLS FIRST);\n\nCREATE UNIQUE INDEX "idx_user_profile_identities_authorization" ON "user_profile_identities" (("authorization_id") ASC NULLS FIRST);\n\nCREATE INDEX "idx_user_profile_identities_profile_id" ON "user_profile_identities" (("profile_id") ASC NULLS FIRST);\n',
+      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "user_profile_emails" (\n  "email" text COLLATE "C" NOT NULL,\n  "profile_id" text COLLATE "C" NOT NULL,\n  "binding_id" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  PRIMARY KEY ("email")\n);\n\nCREATE TABLE "user_profile_identities" (\n  "provider" text COLLATE "C" NOT NULL,\n  "subject" text COLLATE "C" NOT NULL,\n  "profile_id" text COLLATE "C" NOT NULL,\n  "canonical_login" text COLLATE "C",\n  "verified_email_json" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  "authorization_id" text COLLATE "C",\n  "authorization_basis_json" text COLLATE "C",\n  PRIMARY KEY ("provider", "subject")\n);\n\nCREATE TABLE "user_profiles" (\n  "id" text COLLATE "C" NOT NULL,\n  "display_name" text COLLATE "C",\n  "primary_github_account_id" bigint,\n  "avatar" bytea,\n  "avatar_mime" text COLLATE "C",\n  "avatar_sha256" text COLLATE "C",\n  "merged_into" text COLLATE "C",\n  "role" text COLLATE "C",\n  "created_at" bigint NOT NULL,\n  "updated_at" bigint NOT NULL,\n  PRIMARY KEY ("id")\n);\n\nCREATE INDEX "idx_user_profile_emails_profile_id" ON "user_profile_emails" (("profile_id") ASC NULLS FIRST);\n\nCREATE UNIQUE INDEX "idx_user_profile_identities_authorization" ON "user_profile_identities" (("authorization_id") ASC NULLS FIRST);\n\nCREATE INDEX "idx_user_profile_identities_profile_id" ON "user_profile_identities" (("profile_id") ASC NULLS FIRST);\n',
     },
     {
       id: "skill_library_entries",
@@ -16884,12 +16884,24 @@ export const statePostgresRuntime = {
       table: "user_profile_identities",
       kind: "column",
       value: {
+        name: "verified_email_json",
+        type: "text",
+        nullable: true,
+        identity: false,
+        default: null,
+        position: 5,
+      },
+    },
+    {
+      table: "user_profile_identities",
+      kind: "column",
+      value: {
         name: "created_at",
         type: "bigint",
         nullable: false,
         identity: false,
         default: null,
-        position: 5,
+        position: 6,
       },
     },
     {
@@ -16901,7 +16913,7 @@ export const statePostgresRuntime = {
         nullable: true,
         identity: false,
         default: null,
-        position: 6,
+        position: 7,
       },
     },
     {
@@ -16913,7 +16925,7 @@ export const statePostgresRuntime = {
         nullable: true,
         identity: false,
         default: null,
-        position: 7,
+        position: 8,
       },
     },
     {

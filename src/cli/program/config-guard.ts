@@ -317,7 +317,7 @@ export async function ensureConfigReady(params: {
         );
       },
     });
-    if (recovery.status === "recovered") {
+    if (recovery) {
       return;
     }
     params.runtime.exit(isGatewayStartup ? 78 : 1);

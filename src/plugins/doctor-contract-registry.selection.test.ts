@@ -1,136 +1,38 @@
 // Covers plugin doctor selection from config and touched paths.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createLegacyWebhookListenerDoctorContract } from "../plugin-sdk/legacy-webhook-listener-migration.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
-import {
-  getRegistryJitiMocks,
-  resetRegistryJitiMocks,
-} from "./test-helpers/registry-jiti-mocks.js";
+import { useDoctorContractRegistryHarness } from "./doctor-contract-registry.test-harness.js";
 
-// Script contract exports at module binding while keeping setup instance ownership.
-vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
-  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
-  return {
-    ...actual,
-    bindPluginInstanceModuleLoader: (
-      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
-    ) =>
-      params.instance.bindModuleLoader(
-        getCachedPluginModuleLoader({
-          modulePath: params.source,
-          importerUrl: import.meta.url,
-          createLoader: getRegistryJitiMocks().createJiti,
-        }),
-      ),
-  };
-});
-
-const tempDirs: string[] = [];
-const mocks = getRegistryJitiMocks();
-const doctorContractWarnMock = vi.hoisted(() => vi.fn());
 const retainedConfigDoctorMock = vi.hoisted(() => vi.fn());
 vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: retainedConfigDoctorMock,
 }));
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => ({
-      ...actual.createSubsystemLogger(subsystem),
-      warn: doctorContractWarnMock,
-    }),
-  };
+const harness = useDoctorContractRegistryHarness({
+  reset: () => {
+    mockDoctorPlugins();
+    retainedConfigDoctorMock.mockReset().mockReturnValue(null);
+  },
 });
-
-let applyPluginDoctorCompatibilityMigrations: typeof import("./doctor-contract-registry.js").applyPluginDoctorCompatibilityMigrations;
-let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.test-fixtures.js").clearPluginDoctorContractRegistryCache;
-let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIds;
-let collectDoctorConfigRepairPluginIds: typeof import("./doctor-contract-registry.js").collectDoctorConfigRepairPluginIds;
-let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
-let withDeferredPluginDoctorMigrations: typeof import("./doctor-contract-registry.js").withDeferredPluginDoctorMigrations;
+const { mocks, makeTempDir } = harness;
 
 function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
   mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
 }
 
-function makeTempDir(): string {
-  return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
-}
-
-afterEach(() => {
-  clearPluginDoctorContractRegistryCache?.();
-  cleanupTrackedTempDirs(tempDirs);
-});
-
-describe("doctor-contract-registry module loader", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({
-      applyPluginDoctorCompatibilityMigrations,
-      collectRelevantDoctorPluginIds,
-      collectDoctorConfigRepairPluginIds,
-      listPluginDoctorSessionStoreAgentIds,
-      withDeferredPluginDoctorMigrations,
-    } = await import("./doctor-contract-registry.js"));
-    ({ clearPluginDoctorContractRegistryCache } =
-      await import("./doctor-contract-registry.test-fixtures.js"));
-  });
-
-  beforeEach(() => {
-    resetRegistryJitiMocks();
-    mockDoctorPlugins();
-    doctorContractWarnMock.mockReset();
-    retainedConfigDoctorMock.mockReset().mockReturnValue(null);
-    clearPluginDoctorContractRegistryCache();
-  });
-
+describe("doctor-contract-registry selection", () => {
   it.each([
-    {
-      name: "missing official plugin",
-      ownerId: undefined,
-      warning: undefined,
-      explicit: false,
-      pins: true,
-    },
-    {
-      name: "authored listener endpoints",
-      ownerId: undefined,
-      warning: undefined,
-      explicit: true,
-      pins: true,
-    },
-    {
-      name: "unresolved host facts",
-      ownerId: undefined,
-      warning: "Resolve account ambiguity",
-      explicit: false,
-      pins: false,
-    },
-    {
-      name: "deferred installed owner",
-      ownerId: "feishu",
-      warning: undefined,
-      explicit: false,
-      pins: false,
-    },
-    {
-      name: "deferred trusted official owner",
-      ownerId: "feishu",
-      trusted: true,
-      warning: undefined,
-      explicit: false,
-      pins: true,
-    },
+    { name: "missing official plugin", pins: true },
+    { name: "authored listener endpoints", explicit: true, pins: true },
+    { name: "unresolved host facts", warning: "Resolve account ambiguity", pins: false },
+    { name: "deferred installed owner", ownerId: "feishu", pins: false },
+    { name: "deferred trusted official owner", ownerId: "feishu", trusted: true, pins: true },
     {
       name: "deferred trusted owner with authored endpoints",
       ownerId: "feishu",
       trusted: true,
-      warning: undefined,
       explicit: true,
       pins: true,
     },
@@ -139,19 +41,15 @@ describe("doctor-contract-registry module loader", () => {
       ownerId: "feishu",
       trusted: true,
       restricted: true,
-      warning: undefined,
-      explicit: false,
       pins: false,
     },
     {
       name: "deferred replacement owner",
       ownerId: "custom-feishu",
-      warning: undefined,
-      explicit: false,
       pins: false,
     },
   ])("preserves historical webhook ownership for $name", (scenario) => {
-    const { ownerId, trusted, restricted, warning, explicit, pins } = scenario;
+    const { ownerId, trusted, restricted, warning, explicit = false, pins } = scenario;
     const config: OpenClawConfig = {
       meta: { migrations: { webhookListeners: { telegram: [] } } },
       gateway: { port: 18789 },
@@ -208,8 +106,8 @@ describe("doctor-contract-registry module loader", () => {
       });
     }
     const inspected = vi.fn();
-    const result = withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
-      applyPluginDoctorCompatibilityMigrations(config, {
+    const result = harness.registry.withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
+      harness.registry.applyPluginDoctorCompatibilityMigrations(config, {
         config,
         env: {},
         pluginIds: ["feishu"],
@@ -219,51 +117,35 @@ describe("doctor-contract-registry module loader", () => {
     );
 
     expect(config).toEqual(original);
-    expect(result.config).toEqual(
-      pins
-        ? {
-            ...original,
-            meta: {
-              migrations: {
-                webhookListeners: {
-                  telegram: [],
-                  feishu: explicit
-                    ? []
-                    : [["channels", "feishu", "accounts", "default", "legacyWebhook"]],
-                },
-              },
-            },
-            channels: {
-              feishu: {
-                enabled: true,
-                connectionMode: "webhook",
-                tools: { base: true },
-                ...(explicit ? { legacyWebhook: { port: 9001, host: "0.0.0.0" } } : {}),
-                accounts: {
-                  default: {
-                    enabled: true,
-                    ...(explicit ? {} : { legacyWebhook: { port: 3000, host: "127.0.0.1" } }),
-                  },
-                  optedOut: { legacyWebhook: false },
-                  ...(explicit
-                    ? {
-                        specific: {
-                          enabled: true,
-                          legacyWebhook: { port: 9002, host: "0.0.0.0" },
-                        },
-                      }
-                    : {}),
-                },
-              },
-            },
-          }
-        : restricted
-          ? {
-              ...original,
-              meta: { migrations: { webhookListeners: { telegram: [], feishu: [] } } },
-            }
-          : original,
-    );
+    const expected = structuredClone(original);
+    if (pins || restricted) {
+      expected.meta = {
+        migrations: {
+          webhookListeners: {
+            telegram: [],
+            feishu:
+              pins && !explicit
+                ? [["channels", "feishu", "accounts", "default", "legacyWebhook"]]
+                : [],
+          },
+        },
+      };
+    }
+    if (pins) {
+      const channel = expected.channels!.feishu;
+      if (explicit) {
+        delete channel.webhookPort;
+        delete channel.webhookHost;
+        channel.legacyWebhook = { port: 9001, host: "0.0.0.0" };
+        channel.accounts.specific = {
+          enabled: true,
+          legacyWebhook: { port: 9002, host: "0.0.0.0" },
+        };
+      } else {
+        channel.accounts.default.legacyWebhook = { port: 3000, host: "127.0.0.1" };
+      }
+    }
+    expect(result.config).toEqual(expected);
     expect(result.warnings).toEqual(warning ? [warning] : undefined);
     expect(inspected).not.toHaveBeenCalled();
     expect(mocks.createJiti).not.toHaveBeenCalled();
@@ -321,23 +203,24 @@ describe("doctor-contract-registry module loader", () => {
       );
       expect(mocks.createJiti).toHaveBeenCalledTimes(expected ? 1 : 0);
       // Config migration declarations must not select new session-store owners.
-      const pluginIds = collectRelevantDoctorPluginIds(raw);
+      const pluginIds = harness.registry.collectRelevantDoctorPluginIds(raw);
       expect(pluginIds).toEqual([]);
-      expect(listPluginDoctorSessionStoreAgentIds({ pluginIds })).toEqual([]);
+      expect(harness.registry.listPluginDoctorSessionStoreAgentIds({ pluginIds })).toEqual([]);
     },
   );
 
-  it("collects distinct configured-model and policy providers without shadow-list owners", () => {
-    expect(
-      collectRelevantDoctorPluginIds({
-        models: { providers: { "ollama-cloud": { baseUrl: "https://ai.ollama.com" } } },
+  it.each([
+    {
+      name: "configured-model and policy providers without shadow-list owners",
+      raw: {
+        models: { providers: { "ollama-cloud": {} } },
         agents: {
           defaults: {
             model: { primary: "default/model", fallbacks: ["fallback/model", 42] },
-            modelPolicy: { allow: ["default/*", "default-policy/*", 42, "bare"] },
+            modelPolicy: { allow: ["default/*", "policy/*", 42, "bare"] },
           },
           entries: {
-            worker: { model: "entry/model", modelPolicy: { allow: ["entry-policy/model", null] } },
+            worker: { model: "entry/model", modelPolicy: { allow: ["worker/model", null] } },
           },
           list: [
             {
@@ -348,21 +231,12 @@ describe("doctor-contract-registry module loader", () => {
           ],
         },
         hooks: { mappings: [{ model: "hook/model" }, { model: 42 }] },
-      }),
-    ).toEqual([
-      "default",
-      "default-policy",
-      "entry",
-      "entry-policy",
-      "fallback",
-      "hook",
-      "ollama-cloud",
-    ]);
-  });
-
-  it("collects model and policy providers from the legacy list when entries is absent", () => {
-    expect(
-      collectRelevantDoctorPluginIds({
+      },
+      ids: ["default", "entry", "fallback", "hook", "ollama-cloud", "policy", "worker"],
+    },
+    {
+      name: "model and policy providers from the legacy list when entries is absent",
+      raw: {
         agents: {
           list: [
             {
@@ -372,19 +246,21 @@ describe("doctor-contract-registry module loader", () => {
             },
           ],
         },
-      }),
-    ).toEqual(["legacy-model", "legacy-policy"]);
-  });
-
-  it("does not collect shadow-list policy providers when entries is null", () => {
-    expect(
-      collectRelevantDoctorPluginIds({
+      },
+      ids: ["legacy-model", "legacy-policy"],
+    },
+    {
+      name: "no shadow-list policy providers when entries is null",
+      raw: {
         agents: {
           entries: null,
           list: [{ id: "shadow", modelPolicy: { allow: ["shadow-policy/*"] } }],
         },
-      }),
-    ).toEqual([]);
+      },
+      ids: [],
+    },
+  ])("collects $name", ({ raw, ids }) => {
+    expect(harness.registry.collectRelevantDoctorPluginIds(raw)).toEqual(ids);
   });
 
   it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
@@ -398,11 +274,17 @@ describe("doctor-contract-registry module loader", () => {
       },
     };
 
-    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "memory-wiki", "openai"]);
+    expect(harness.registry.collectRelevantDoctorPluginIds(raw)).toEqual([
+      "discord",
+      "memory-wiki",
+      "openai",
+    ]);
     expect(
-      collectDoctorConfigRepairPluginIds(raw, [["channels", "modelByChannel", "discord", "guild"]]),
+      harness.registry.collectDoctorConfigRepairPluginIds(raw, [
+        ["channels", "modelByChannel", "discord", "guild"],
+      ]),
     ).toStrictEqual(["openai"]);
-    expect(collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual([
+    expect(harness.registry.collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual([
       "discord",
       "memory-wiki",
       "openai",
@@ -424,9 +306,15 @@ describe("doctor-contract-registry module loader", () => {
       },
     };
 
-    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["gemini", "openai", "xai"]);
+    expect(harness.registry.collectRelevantDoctorPluginIds(raw)).toEqual([
+      "gemini",
+      "openai",
+      "xai",
+    ]);
     expect(
-      collectDoctorConfigRepairPluginIds(raw, [["tools", "media", "models", "2", "model"]]),
+      harness.registry.collectDoctorConfigRepairPluginIds(raw, [
+        ["tools", "media", "models", "2", "model"],
+      ]),
     ).toEqual(["gemini", "openai", "xai"]);
   });
 
@@ -435,31 +323,21 @@ describe("doctor-contract-registry module loader", () => {
     const unrelatedRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     fs.writeFileSync(path.join(unrelatedRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    const config = {
+      models: { providers: { "ollama-cloud": { baseUrl: "https://ai.ollama.com", models: [] } } },
+    };
     mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
-      normalizeCompatibilityConfig: ({
-        cfg,
-      }: {
-        cfg: { models?: { providers?: Record<string, Record<string, unknown>> } };
-      }) => ({
-        config: {
-          ...cfg,
-          models: {
-            ...cfg.models,
-            providers: {
-              ...cfg.models?.providers,
-              "ollama-cloud": {
-                ...cfg.models?.providers?.["ollama-cloud"],
-                baseUrl: "https://ollama.com",
-              },
-            },
-          },
-        },
-        changes: [
-          modulePath.startsWith(unrelatedRoot)
-            ? "wrong unrelated provider contract"
-            : "normalized ollama cloud provider endpoint",
-        ],
-      }),
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: typeof config }) => {
+        cfg.models.providers["ollama-cloud"].baseUrl = "https://ollama.com";
+        return {
+          config: cfg,
+          changes: [
+            modulePath.startsWith(unrelatedRoot)
+              ? "wrong unrelated provider contract"
+              : "normalized ollama cloud provider endpoint",
+          ],
+        };
+      },
     }));
     mockDoctorPlugins(
       {
@@ -477,18 +355,8 @@ describe("doctor-contract-registry module loader", () => {
         providerAuthAliases: { "ollama-cloud": "missing" },
       },
     );
-    const config = {
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://ai.ollama.com",
-            models: [],
-          },
-        },
-      },
-    };
 
-    const result = applyPluginDoctorCompatibilityMigrations(config, {
+    const result = harness.registry.applyPluginDoctorCompatibilityMigrations(config, {
       config,
       env: {},
       pluginIds: ["ollama-cloud"],
@@ -504,21 +372,17 @@ describe("doctor-contract-registry module loader", () => {
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
-      collectDoctorConfigRepairPluginIds(
+      harness.registry.collectDoctorConfigRepairPluginIds(
         {
           channels: {
             discord: {},
             telegram: {},
           },
           plugins: {
-            entries: {
-              "memory-wiki": {},
-            },
+            entries: { "memory-wiki": {} },
           },
           models: {
-            providers: {
-              "ollama-cloud": {},
-            },
+            providers: { "ollama-cloud": {} },
           },
           talk: {
             voiceId: "legacy-voice",
@@ -536,22 +400,22 @@ describe("doctor-contract-registry module loader", () => {
 
   it("keeps all configured model and policy providers active during touched scans", () => {
     expect(
-      collectDoctorConfigRepairPluginIds(
+      harness.registry.collectDoctorConfigRepairPluginIds(
         {
           agents: {
             defaults: {
-              model: { primary: "agent-primary/model", fallbacks: ["agent-fallback/model"] },
+              model: { primary: "primary/model", fallbacks: ["fallback/model"] },
             },
             entries: {
-              worker: { modelPolicy: { allow: ["worker-policy/*"] } },
+              worker: { modelPolicy: { allow: ["worker/*"] } },
             },
           },
-          hooks: { gmail: { model: "gmail-model/model" } },
-          tts: { summaryModel: "untouched-tts/model" },
+          hooks: { gmail: { model: "gmail/model" } },
+          tts: { summaryModel: "tts/model" },
           tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
           channels: {
-            modelByChannel: { slack: { room: "channel-model/model" } },
-            discord: { voice: { model: "untouched-voice/model" } },
+            modelByChannel: { slack: { room: "channel/model" } },
+            discord: { voice: { model: "voice/model" } },
           },
         },
         [
@@ -561,15 +425,6 @@ describe("doctor-contract-registry module loader", () => {
           ["channels", "modelByChannel", "slack", "room"],
         ],
       ),
-    ).toEqual([
-      "agent-fallback",
-      "agent-primary",
-      "channel-model",
-      "gmail-model",
-      "opencode",
-      "untouched-tts",
-      "untouched-voice",
-      "worker-policy",
-    ]);
+    ).toEqual(["channel", "fallback", "gmail", "opencode", "primary", "tts", "voice", "worker"]);
   });
 });

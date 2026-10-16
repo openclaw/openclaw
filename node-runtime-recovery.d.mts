@@ -1,4 +1,5 @@
 export function consumeLauncherRootOptionToken(args: string[], index: number): number;
+export function watchCliRespawnParent(): void;
 export function isForegroundGmailRunInvocation(argv: string[]): boolean;
 export function isNativeHookRelayInvocation(argv: string[]): boolean;
 export function resolveRecoveryPath(

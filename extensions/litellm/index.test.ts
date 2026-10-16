@@ -10,6 +10,7 @@ import {
   runProviderCatalog,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
@@ -135,7 +136,7 @@ describe("litellm plugin", () => {
             credential: { type: "api_key", provider: "litellm", key: "old-key" },
           },
         ]);
-        result = interactive?.configPatch;
+        result = applyProviderAuthConfigPatch({}, interactive?.configPatch, interactive);
       }
 
       expect(result?.models?.mode).toBe(modelsMode);

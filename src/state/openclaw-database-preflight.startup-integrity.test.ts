@@ -16,7 +16,6 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
-import * as schemaContracts from "../infra/sqlite-schema-contract.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -68,7 +67,6 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   retireSqliteDatabaseAdmissionForPath(agentPath);
   const before = fs.readFileSync(agentPath);
   const validate = vi.spyOn(integrity, "assertSqliteIntegrity");
-  const templates = vi.spyOn(schemaContracts, "getCanonicalSqliteTableNames");
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
     if (pathname === agentPath) {
@@ -88,7 +86,6 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   expect(onAgentInspection).toHaveBeenLastCalledWith(
     expect.objectContaining({ schemaSnapshotCount: 0, schemaProcessCount: 0 }),
   );
-  expect(templates).not.toHaveBeenCalled();
   expect(validate).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);

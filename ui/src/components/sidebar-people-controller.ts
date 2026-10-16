@@ -1,9 +1,9 @@
 import { t } from "../i18n/index.ts";
 import { createPresenceActivityLifecycle } from "../lib/presence-activity-lifecycle.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import { showToast } from "../lib/toast.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import { sidebarPresenceActivityViewers, sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { registerPersonActivityData } from "./person-activity-data.ts";

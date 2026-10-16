@@ -239,6 +239,16 @@ credential, lease, and external-effect authority stays with the execution owner.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
+Cron history reads selection metadata in bounded keyset batches using the
+`created_at, task_id` indexes. Completion-time ordering, exact totals, search,
+and live session visibility still select the response page; only that page's
+response fields are hydrated. Summary pages exclude diagnostics and delivery
+traces in SQL, and neither view loads trigger or script recovery state.
+Diagnostic searches retain their existing text semantics. Transcript links use
+the same lightweight identities without loading every run's detail payload.
+The Gateway checks disclosure authority after page hydration; a concurrent
+removal or visibility revocation may shorten a page until the next refresh.
+
 Scope receipts to the data actually changed. Memory-index DML, for example,
 declares no session-row or transcript changes and preserves unrelated session
 actor replicas. Transcript mutations still update or invalidate their session
@@ -635,12 +645,26 @@ transcript indexes, per-event byte tables, and retry history. The Gateway retain
 selected positive anchors from hydration and append receipts. A missing anchor
 is unknown, so requests for it use the canonical reader.
 
+The actor retains exact context event and byte totals separately from its bounded
+transcript window. Cold admission counts once; ordinary appends and metadata-only
+rewrites update those totals in the writer transaction and publish them with its
+receipt. Context boundaries and uncovered historical rewrites recompute the totals
+through the history owner. Rollback preserves the previous totals. Completion
+hydration retains at most 512 successful or failed receipts; an uncached retry uses
+its indexed durable completion record, preserving idempotency after eviction.
+
 A context window retains its header and at most the requested event limit plus
 128 rows, with a stored-byte limit of the requested byte limit plus 512 KiB,
 including the header. Reads still honor the caller's original limits. The separate
 committed tail retains at most 128 events and 512 KiB; selected anchors retain at
 most 128 entries and 128 KiB of estimated memory. These bounded facts share the
 actor's eviction and write-receipt invalidation lifecycle.
+
+The history worker retains visible marker positions for recently read sessions.
+Repeated pages reuse that projection, and ordinary appends extend it from new
+navigation rows without rereading old markers or message bodies. Branch changes,
+reset, and rewritten markers rebuild the projection. Page payloads retain their
+existing byte and event bounds; model-context selection is unchanged.
 
 Covered prompt-metadata rewrites that preserve admission and navigation can
 update retained windows from their receipt rows. Cold or evicted facts,
@@ -665,6 +689,20 @@ leaves stored messages unchanged and retains the database owner's failed-write
 cache invalidation. Cold actors, content or topology changes, unknown writes,
 and insufficient retained coverage use the canonical reader. No extra receipt,
 freshness query, permission grant, or stored format is introduced.
+
+Model-prompt capture selects the current user message, applies its immutable
+projection, and commits through one worker command. It preserves metadata written
+since the recorder's admission and returns the stored projection for identical
+captures. Arbitrary transcript rewrite callbacks retain host preparation because
+their work is not serializable; the closed model-prompt projection needs no host
+prepare round trip.
+
+Gateway run-lifecycle events use the deterministic entry reducer in the same
+worker commit. Goal pauses and recovery updates derive from the current stored
+entry. The commit receipt carries the resulting failure and recovery facts back
+to the Gateway, which publishes runtime changes and appends failure records in
+the existing order. Terminal persistence still completes before reply accounting
+and final-delivery custody.
 
 Trajectory append and retention writers publish the session and trajectory
 sequence range they changed. Their trajectory-only SQL declares no session-row
@@ -2446,9 +2484,24 @@ Gateway restart readiness inspects shared-state schema, registry, and retained
 agent-deletion facts in the existing schema inspection worker. Boot and Doctor
 retain their native admission callbacks. The preflight owner keeps the captured
 snapshot until inspection and child cleanup settle; snapshot staging locks retain
-their native owner. Shared comparison contracts return through the existing
-schema-contract cache; version facts stay within their unchanged snapshot. Each
-request rereads stored facts. Schemas, stored bytes, and update behavior are unchanged.
+their native owner. Canonical comparison contracts come from build-generated
+SQLite fingerprints without constructing a scratch database or transferring
+contracts between processes. Version facts stay within their unchanged
+snapshot. Each request rereads stored facts. Schemas, stored bytes, and update
+behavior are unchanged.
+
+`pnpm db:postgres:gen` also generates the SQLite catalogs for declared shared-state
+and agent schema fragments, including supported historical migration definitions.
+`pnpm db:postgres:check` verifies these artifacts alongside the PostgreSQL schema.
+Fingerprints cover normalized schema SQL and native table, index, and foreign-key
+facts. Matching live facts finish admission without loading the full catalog.
+Per-store JSON catalogs load only for mismatch diagnostics, historical compatibility,
+or explicit repair. Admission still rejects changed defaults, CHECK expressions, partial-index
+predicates, and trigger bodies; normalization does not interpret expressions.
+Historical column-order and migration compatibility rules remain with their
+existing owners. Memory migrations with caller-selected table names use an
+explicit dynamic catalog builder pending their owner cutover. The same generator
+accepts computed fragments and native extension preparation for memory owners.
 
 Shared-state readers reuse physical-database version admission across connections
 and workers, including within transactions. Ordinary commits and connection

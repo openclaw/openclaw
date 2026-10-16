@@ -138,10 +138,7 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(
-    private readonly now: () => number = () => Date.now(),
-    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
-  ) {}
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
@@ -379,8 +376,7 @@ export class SidebarSessionProjection {
   revision = 0;
   createdOrderRevision = 0;
   private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
-  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private subtitleDeadline = Infinity;
+  subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
@@ -460,7 +456,7 @@ export class SidebarSessionProjection {
   project(input: SidebarProjectionInput): SidebarVisibleSections {
     // Record the state published by this pass, including sticky membership and subtitles.
     this.revision += 1;
-    this.clearSubtitleTimer();
+    this.subtitleDeadline = Infinity;
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -619,34 +615,9 @@ export class SidebarSessionProjection {
     }
   }
 
-  dispose(): void {
-    this.clearSubtitleTimer();
-    this.revision += 1;
-  }
-
-  private clearSubtitleTimer(): void {
-    if (this.subtitleTimer !== null) {
-      globalThis.clearTimeout(this.subtitleTimer);
-    }
-    this.subtitleTimer = null;
+  invalidate(): void {
     this.subtitleDeadline = Infinity;
-  }
-
-  private scheduleSubtitleUpdate(deadline: number): void {
-    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
-      return;
-    }
-    this.clearSubtitleTimer();
-    this.subtitleDeadline = deadline;
-    this.subtitleTimer = globalThis.setTimeout(
-      () => {
-        this.subtitleTimer = null;
-        this.subtitleDeadline = Infinity;
-        this.revision += 1;
-        this.host?.requestUpdate();
-      },
-      Math.max(0, deadline - this.now()),
-    );
+    this.revision += 1;
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
@@ -702,7 +673,10 @@ export class SidebarSessionProjection {
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
       !isOperatorCriticalSubtitle(session)
     ) {
-      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
+      this.subtitleDeadline = Math.min(
+        this.subtitleDeadline,
+        held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS,
+      );
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useApplication } from "../lib/reactive/context.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import type { ApplicationContext } from "./context.ts";
 

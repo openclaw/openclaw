@@ -444,6 +444,16 @@ write receipt still advances. Only certify the kernel's own writes; keep user
 callbacks and authority admission outside the scope. Schema changes continue to
 invalidate all scopes.
 
+Built-in engine-aware stores consume their boot-selected family through
+`getDatabaseEngineInput(family)` from
+`openclaw/plugin-sdk/database-engine-runtime`. The host resolves the shared
+PostgreSQL secret once; plugin openers and reopens use this immutable choice.
+The experimental mixed-mode configuration is described in
+[Database engines](/reference/database-engines).
+
+External stores continue using `resolveDatabaseEngineInput(config)`, which follows
+`database.engine` independently of the built-in family overrides.
+
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
 recipes in the worker/admission-only

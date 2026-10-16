@@ -85,7 +85,7 @@ describe("runGuidedOnboarding", () => {
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
     const prompter = createWizardPrompter();
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       handoffMode: "chat",

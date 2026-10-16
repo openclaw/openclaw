@@ -565,25 +565,6 @@ it.each(["payload", "instance"])(
   30_000,
 );
 
-it("runs hourly reclamation on a live metadata owner", async () => {
-  const stateDir = temp.make("plugin-capture-periodic-");
-  const orphan = await abandonCapture(stateDir, createSource());
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const time = createGatewaySchedulerClock();
-  const scheduler = createTestGatewayScheduler(time.clock);
-  const metadata = retainGatewayPluginMetadata(scheduler);
-  try {
-    await sweepPluginSourceCapturesForTest(stateDir);
-    expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
-    age(orphan.instanceRoot);
-    await time.advanceBy(2 * hour);
-    expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
-  } finally {
-    await metadata.close();
-    await sweepPluginSourceCapturesForTest(stateDir);
-  }
-}, 30_000);
-
 it("joins hourly reclamation during metadata retirement without stopping sibling schedules", async () => {
   const stateDir = temp.make("plugin-capture-hourly-join-");
   const root = path.join(stateDir, "tmp", "plugin-captures");

@@ -301,6 +301,8 @@ async function startMcpLoopbackServer(
                   admittedRunContext: boundClientGrant?.admittedRunContext,
                   sessionEventSourcePolicy: boundClientGrant?.sessionEventSourcePolicy,
                   messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
+                  // Only a run-bound CLI grant carries a verified turn sender's audience.
+                  memoryAudience: boundClientGrant?.memoryAudience,
                   cfg,
                   signal: requestAbort.signal,
                   authProfileStore: boundClientGrant?.toolAuth?.store,

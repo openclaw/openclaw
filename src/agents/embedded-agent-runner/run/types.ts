@@ -144,6 +144,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Transport hooks follow the current endpoint without changing admitted request policy. */
+  transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;

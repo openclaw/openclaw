@@ -94,7 +94,7 @@ extensions/clawrouter/tool-schemas.ts	1
 extensions/clawrouter/usage.ts	1
 extensions/clickclack/src/access.ts	2
 extensions/clickclack/src/channel-config.ts	5
-extensions/clickclack/src/channel.ts	4
+extensions/clickclack/src/channel.ts	3
 extensions/clickclack/src/command-menu.ts	1
 extensions/clickclack/src/discussions/service-open.ts	1
 extensions/clickclack/src/discussions/service.ts	1
@@ -108,7 +108,7 @@ extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
-extensions/clickclack/src/setup-verify.ts	4
+extensions/clickclack/src/setup-verify.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-notifications.ts	1
@@ -256,7 +256,6 @@ extensions/discord/src/monitor/provider.allowlist.ts	1
 extensions/discord/src/monitor/provider.deploy-errors.ts	9
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2
-extensions/discord/src/monitor/provider.startup-log.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -391,7 +390,7 @@ extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
-extensions/line/src/actions.ts	4
+extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	2
 extensions/line/src/flex-templates/media-control-cards.ts	1
@@ -767,7 +766,6 @@ extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1
-extensions/slack/src/http/plugin-routes.ts	1
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
@@ -818,8 +816,7 @@ extensions/telegram/src/action-runtime.ts	1
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
 extensions/telegram/src/bot-core.ts	1
-extensions/telegram/src/bot-deps.ts	1
-extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
+extensions/telegram/src/bot-handlers.callback-router-controls.ts	1
 extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
@@ -851,7 +848,6 @@ extensions/telegram/src/outbound-message-context.ts	1
 extensions/telegram/src/poll-answer-context.ts	1
 extensions/telegram/src/polling-lease.ts	1
 extensions/telegram/src/probe.ts	3
-extensions/telegram/src/raw-update-log.ts	1
 extensions/telegram/src/reply-parameters.ts	2
 extensions/telegram/src/request-timeouts.ts	1
 extensions/telegram/src/rich-message.ts	1
@@ -1008,7 +1004,7 @@ packages/ai/src/transports/anthropic-payload-policy.ts	4
 packages/ai/src/transports/anthropic-transport-stream.ts	3
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
-packages/ai/src/transports/openai-completions-params.ts	5
+packages/ai/src/transports/openai-completions-params.ts	3
 packages/ai/src/transports/openai-completions-replay.ts	1
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-transport.ts	5
@@ -1016,7 +1012,7 @@ packages/ai/src/transports/openai-responses-client.ts	8
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	10
+packages/ai/src/transports/openai-responses-debug.ts	9
 packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1109,7 +1105,7 @@ src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	3
+src/agents/agent-bundle-mcp-runtime.ts	2
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	9
@@ -1961,7 +1957,6 @@ src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	1
 src/gateway/session-history-state.ts	2
-src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-recovery-service.ts	1
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/sessions-history-http.ts	1
@@ -2097,7 +2092,7 @@ src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
-src/infra/sqlite-schema-contract.ts	7
+src/infra/sqlite-schema-contract.ts	3
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
@@ -2171,7 +2166,7 @@ src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
-src/media/media-facts.ts	16
+src/media/media-facts.ts	14
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
@@ -2237,9 +2232,8 @@ src/plugin-sdk/migration-runtime.ts	1
 src/plugin-sdk/migration.ts	7
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
-src/plugin-sdk/provider-auth-result.ts	3
+src/plugin-sdk/provider-auth-result.ts	2
 src/plugin-sdk/provider-auth-runtime.ts	1
-src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	1
 src/plugin-sdk/provider-stream-shared.ts	4
 src/plugin-sdk/provider-stream.ts	1
@@ -2287,7 +2281,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	9
+src/plugins/hooks.ts	8
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2547,7 +2541,6 @@ ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
 ui/src/app/server-prefs-state.ts	1
 ui/src/app/settings.ts	2
-ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1

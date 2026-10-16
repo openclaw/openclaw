@@ -731,6 +731,7 @@ describe("package-openclaw-for-docker", () => {
   it("loads from a trusted harness checkout without installed dependencies", async () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
     const copiedFiles = [
+      "cli-invocation.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",

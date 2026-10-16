@@ -38,6 +38,31 @@ async function discoverModelContexts(
 }
 
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
+  it("retains discovered total parameter counts and display names", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(
+        Response.json({
+          data: [
+            { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+            { id: "alias", name: "Qwen3 4B" },
+            { id: "invalid", parameterCount: 0 },
+          ],
+        }),
+      ),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "self-hosted",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(models.map(({ id, name, parameterCount }) => ({ id, name, parameterCount }))).toEqual([
+      { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+      { id: "alias", name: "Qwen3 4B", parameterCount: undefined },
+      { id: "invalid", name: "invalid", parameterCount: undefined },
+    ]);
+  });
+
   it("recognizes reasoning aliases without enabling legacy chat models", async () => {
     const expected = [
       { id: "yk_nemotron-3-super", reasoning: true },

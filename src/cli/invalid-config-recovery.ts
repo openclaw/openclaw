@@ -3,29 +3,24 @@ import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { isTerminalInteractive } from "./terminal-interactivity.js";
 
-type InvalidConfigRecoveryResult<T> =
-  | { status: "declined" }
-  | { status: "recovered"; value: T }
-  | { status: "retry-failed" };
-
 /** Offer a consent-gated doctor repair, then retry the failed operation once. */
-export async function offerInvalidConfigRecovery<T>(params: {
+export async function offerInvalidConfigRecovery(params: {
   runtime: RuntimeEnv;
-  retry: () => Promise<T>;
-}): Promise<InvalidConfigRecoveryResult<T>> {
+  retry: () => Promise<void>;
+}): Promise<boolean> {
   const command = formatCliCommand("openclaw doctor --fix");
   const printCommand = () => {
     params.runtime.error(`Run "${command}" to repair the config, then retry.`);
   };
   if (!isTerminalInteractive()) {
     printCommand();
-    return { status: "declined" };
+    return false;
   }
 
   const { promptYesNo } = await import("./prompt.js");
   if (!(await promptYesNo(`Run "${command}" now?`, true))) {
     printCommand();
-    return { status: "declined" };
+    return false;
   }
 
   try {
@@ -36,11 +31,12 @@ export async function offerInvalidConfigRecovery<T>(params: {
       throw error;
     }
     params.runtime.error(`Failed to run "${command}": ${formatErrorMessage(error)}`);
-    return { status: "retry-failed" };
+    return false;
   }
 
   try {
-    return { status: "recovered", value: await params.retry() };
+    await params.retry();
+    return true;
   } catch (error) {
     const { isInvalidConfigError } = await import("../config/io.invalid-config.js");
     if (!isInvalidConfigError(error)) {
@@ -48,6 +44,6 @@ export async function offerInvalidConfigRecovery<T>(params: {
     }
     params.runtime.error(`Config is still invalid after "${command}":`);
     params.runtime.error(formatErrorMessage(error));
-    return { status: "retry-failed" };
+    return false;
   }
 }

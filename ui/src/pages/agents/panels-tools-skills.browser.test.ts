@@ -4,7 +4,7 @@ import {
   createGitHubIdentityForTest,
   githubIdentityViewFixture,
 } from "../../features/github-connections/github-identity.test-support.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";

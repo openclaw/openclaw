@@ -963,7 +963,10 @@ function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0
   });
 }
 
-function runInternalModelCommand(runId: string) {
+function runInternalModelCommand(
+  runId: string,
+  onSessionIdChanged?: Parameters<typeof agentCommand>[0]["onSessionIdChanged"],
+) {
   return agentCommand({
     message: "probe",
     to: "+1234567890",
@@ -971,6 +974,7 @@ function runInternalModelCommand(runId: string) {
     modelRun: true,
     promptMode: "none",
     sessionEffects: "internal",
+    onSessionIdChanged,
   });
 }
 
@@ -3238,6 +3242,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("removes the one-shot internal model-run SQLite session after success", async () => {
     setupSingleAttemptFallback();
+    const onSessionIdChanged = vi.fn();
     const result = makeSuccessResult("openai", "gpt-5.4");
     state.runAgentAttemptMock.mockImplementationOnce(
       async (
@@ -3283,7 +3288,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await releaseCleanup.promise;
     });
     let settled = false;
-    const pending = runInternalModelCommand("model-run-success").finally(() => {
+    const pending = runInternalModelCommand("model-run-success", onSessionIdChanged).finally(() => {
       settled = true;
     });
     try {
@@ -3317,6 +3322,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const cleanupOrder =
       state.applySessionEntryLifecycleMutationMock.mock.invocationCallOrder[0] ?? 0;
     expect(deliveryOrder).toBeLessThan(cleanupOrder);
+    expect(onSessionIdChanged).not.toHaveBeenCalled();
   });
 
   it.each(["prepare", "cleanup"] as const)(

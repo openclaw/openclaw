@@ -192,6 +192,9 @@ async function prepareStartupConfig(
     // before webhook history or other runtime tables are consumed.
     if (!isStatePostgres()) {
       initializeNativeOpenClawStateDatabase({ env });
+      const { initializeFreshDaemonRuntimePinMigration } =
+        await import("../infra/state-migrations.daemon-runtime-pins.js");
+      initializeFreshDaemonRuntimePinMigration(env);
     }
     const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
       await import("./doctor/shared/legacy-webhook-pins.js");
@@ -259,7 +262,7 @@ async function prepareStartupConfig(
 function result(read: ConfigPreflightSnapshotRead) {
   const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
-    ...(selection?.input ? { databaseEngineSelection: selection } : {}),
+    ...(selection ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

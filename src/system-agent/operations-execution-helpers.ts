@@ -562,44 +562,20 @@ export async function executeSetDefaultModel(
     runtime,
     opts,
     run: async (ctx) => {
-      const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
+      const { mutateConfigFile } = await import("../config/config.js");
       const { createSystemAgentModelSelectionUpdater } = await import("./setup-model-selection.js");
       const targetAgentId = operation.agentId;
-      const snapshot = await readConfigFileSnapshot();
-      // Route projection and the live probes below all take the same optional
-      // agent scope, so a per-agent selection is verified against that agent's
-      // route with the exact rigor the default route gets.
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
       const selectModel = await createSystemAgentModelSelectionUpdater({
         model: operation.model,
         ...(targetAgentId ? { targetAgentId } : {}),
       });
-      const stagedConfig = selectModel(snapshot.sourceConfig);
-      const beforeRoute = await projectRoute(snapshot.sourceConfig);
-      const verifiedRoute = await projectRoute(stagedConfig);
       const verifyInferenceConfig =
         ctx.deps?.verifyInferenceConfig ??
         (await import("./setup-inference.js")).verifySetupInferenceConfig;
-      const initialVerification = await verifyInferenceConfig({
-        config: stagedConfig,
-        runtime: ctx.runtime,
-        requireExecutionOwner: true,
-        ...(targetAgentId ? { agentId: targetAgentId } : {}),
-      });
-      if (!initialVerification.ok) {
-        throw new Error(
-          `The requested model failed a live inference test, so the current default model was not changed. ${initialVerification.error} Fix provider authentication or model access, then retry.`,
-        );
-      }
-      const verifiedModelRef = verifiedRoute.route?.modelLabel;
-      if (!verifiedModelRef || initialVerification.modelRef !== verifiedModelRef) {
-        throw new Error(
-          "The live inference test did not verify the exact model route that would be saved, so the current default model was not changed. Review model aliases and runtime routing, then retry.",
-        );
-      }
-      let persistedVerification = initialVerification;
+      let persistedModelRef = operation.model;
+      let inferenceLatencyMs = 0;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
-      let selectedRouteForCommit = verifiedRoute;
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
@@ -609,11 +585,6 @@ export async function executeSetDefaultModel(
             : {}),
           preCommitRuntimePreflight: async (sourceConfig) => {
             const commitRoute = await projectRoute(sourceConfig);
-            if (!isDeepStrictEqual(commitRoute, selectedRouteForCommit)) {
-              throw new Error(
-                "The selected inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
-              );
-            }
             ctx.assertPersistentApply?.();
             let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
@@ -647,31 +618,14 @@ export async function executeSetDefaultModel(
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
             ctx.assertPersistentApply?.();
-            persistedVerification = latestVerification;
+            persistedModelRef = latestVerification.modelRef;
+            inferenceLatencyMs = latestVerification.latencyMs;
             persistedBinding = latestBinding;
           },
         },
-        mutate: async (cfg) => {
-          // Verification may take time. Preserve unrelated edits, but never
-          // combine the passing result with a concurrently changed route.
-          const currentRoute = await projectRoute(cfg);
-          if (!isDeepStrictEqual(currentRoute, beforeRoute)) {
-            throw new Error(
-              "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
-            );
-          }
-          const selected = selectModel(cfg);
-          const selectedRoute = await projectRoute(selected);
-          if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
-            throw new Error(
-              "The model selection no longer resolves to the exact model that passed live inference. Review the current model/auth/runtime settings and retry.",
-            );
-          }
-          // Unrelated concurrent edits can change how the selected model is
-          // represented. Bind the commit gate to this deterministic projection;
-          // the final live probe below verifies these exact bytes before write.
-          selectedRouteForCommit = selectedRoute;
-          cfg.agents = selected.agents;
+        mutate: (cfg) => {
+          // Select on the writer's current config; its precommit probes this exact route once.
+          cfg.agents = selectModel(cfg).agents;
         },
       });
       if (persistedBinding) {
@@ -680,8 +634,8 @@ export async function executeSetDefaultModel(
       ctx.runtime.log(`Updated ${result.path}`);
       ctx.runtime.log(
         targetAgentId
-          ? `Agent ${targetAgentId} model: ${persistedVerification.modelRef}`
-          : `Default model: ${persistedVerification.modelRef}`,
+          ? `Agent ${targetAgentId} model: ${persistedModelRef}`
+          : `Default model: ${persistedModelRef}`,
       );
       return {
         summary: targetAgentId
@@ -691,9 +645,9 @@ export async function executeSetDefaultModel(
         details: {
           ...(targetAgentId ? { agentId: targetAgentId } : {}),
           requestedModel: operation.model,
-          effectiveModel: persistedVerification.modelRef,
+          effectiveModel: persistedModelRef,
           inferenceVerified: true,
-          inferenceLatencyMs: persistedVerification.latencyMs,
+          inferenceLatencyMs,
         },
       };
     },

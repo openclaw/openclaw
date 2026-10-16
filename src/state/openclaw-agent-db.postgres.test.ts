@@ -12,6 +12,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -134,7 +135,10 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   beforeAll(async () => {
     root = tempDirs.make("agent-postgres-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    installDatabaseEngineSelection({ input: { connection: connection!, schemaPrefix: prefix } });
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: prefix },
+    });
     client = new pg.Client({ connectionString: connection });
     await client.connect();
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");

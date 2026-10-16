@@ -9,7 +9,7 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 import * as catalog from "./catalog-target.ts";

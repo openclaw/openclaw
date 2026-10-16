@@ -36,6 +36,7 @@ export function bindPostgresSearch(
 ): StoreSearchCapabilities {
   assertPostgresSearchAdmitted(db, schema);
   const config = `${pgSearchName(getPostgresPhysicalFacts(db)!.namespace)}.${pgSearchName(searchConfig)}`;
+  const extension = pgSearchName(schema.extensionSchema ?? "public");
   const store = {};
   const text = Object.fromEntries(
     Object.entries(schema.text ?? {}).map(([name, index]) => [name, { ...index, store }]),
@@ -76,6 +77,16 @@ export function bindPostgresSearch(
             return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
           },
           rank(index, query) {
+            if (query?.kind === "contains") {
+              if (index.postgres?.mode !== "trigram") {
+                throw new Error("Contains requires a declared PostgreSQL trigram index");
+              }
+              return {
+                value: /* kysely-allow-raw: The admitted extension ranks a bound literal against its declared field. */ sql<number>`${sql.raw(extension)}.word_similarity(${query.text}, ${relation(index, index.fields[0])})`,
+                order: "desc",
+                toRank: (raw) => raw,
+              };
+            }
             const column = relation(index);
             return {
               value: /* kysely-allow-raw: The native rank is a numeric scalar. */ sql<number>`ts_rank_cd(${column}, ${requireQuery(query)}, 2)`,

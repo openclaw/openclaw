@@ -17,6 +17,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import * as fileAssets from "./server-methods/sessions-file-assets.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import { fetchSessionFileDownload } from "./server-methods/sessions-files.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
@@ -29,7 +30,12 @@ const profileState = { scenario: "minimal", prepareProfileCatalog: true } as con
 
 afterEach(() => vi.restoreAllMocks());
 
-const methods = ["sessions.files.list", "sessions.files.get", "sessions.branches.list"] as const;
+const methods = [
+  "sessions.files.list",
+  "sessions.files.get",
+  "sessions.files.assets",
+  "sessions.branches.list",
+] as const;
 const key = "agent:main:scoped-read";
 
 function dispatchRead(
@@ -48,7 +54,10 @@ function dispatchRead(
       params: {
         sessionKey: key,
         agentId: "main",
-        ...(method === "sessions.files.get" ? { path: "note.txt" } : {}),
+        ...(method === "sessions.files.get" || method === "sessions.files.assets"
+          ? { path: "note.txt" }
+          : {}),
+        ...(method === "sessions.files.assets" ? { refs: [] } : {}),
       },
     },
     isWebchatConnect: () => false,
@@ -57,6 +66,12 @@ function dispatchRead(
 }
 
 function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promise<void>) {
+  if (method === "sessions.files.assets") {
+    return vi.spyOn(fileAssets, "getSessionWorkspaceAssets").mockImplementation(async () => {
+      await beforeReturn();
+      return { assets: [] };
+    });
+  }
   if (method === "sessions.files.list") {
     return vi.spyOn(workspace, "listSessionWorkspaceFiles").mockImplementation(async () => {
       await beforeReturn();
@@ -581,7 +596,7 @@ describe("narrow session read owners", () => {
   });
 
   it.each(methods)("%s retains only current session read facts", async (method) => {
-    await withOpenClawTestState(profileState, async () => {
+    await withOpenClawTestState(profileState, async (state) => {
       const reader = roleClient("view", "retained-reader");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(reader);
@@ -595,6 +610,9 @@ describe("narrow session read owners", () => {
         "authority",
         "generation",
         "visibility",
+        ...(method === "sessions.branches.list"
+          ? []
+          : (["reset", "archive", "workspace"] as const)),
       ] as const) {
         const metadataOnly = changed === "metadata-no-revision" || changed === "metadata";
         const entry = {
@@ -602,6 +620,8 @@ describe("narrow session read owners", () => {
           lifecycleRevision: changed === "metadata-no-revision" ? undefined : "original",
           updatedAt: 1,
           visibility: "shared" as const,
+          archivedAt: undefined,
+          spawnedWorkspaceDir: state.workspaceDir,
         };
         await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
         if (changed === "metadata-no-revision") {
@@ -636,10 +656,21 @@ describe("narrow session read owners", () => {
               {
                 ...entry,
                 ...(metadataOnly
-                  ? { label: "Renamed during read", updatedAt: 2 }
+                  ? {
+                      label: "Renamed during read",
+                      updatedAt: 2,
+                      lastActivityAt: 2,
+                      totalTokens: 10,
+                    }
                   : changed === "generation"
                     ? { lifecycleRevision: "replacement" }
-                    : { visibility: "draft" }),
+                    : changed === "reset"
+                      ? { sessionId: "replacement" }
+                      : changed === "archive"
+                        ? { archivedAt: 2 }
+                        : changed === "workspace"
+                          ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
+                          : { visibility: "draft" }),
               },
             );
           }
@@ -657,11 +688,20 @@ describe("narrow session read owners", () => {
         } else {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond).toHaveBeenCalledOnce();
-          const unchangedAccess = method === "sessions.branches.list" && metadataOnly;
-          expect(respond.mock.calls[0]?.[0]).toBe(unchangedAccess);
-          expect(respond.mock.calls[0]?.[1]).toEqual(
-            unchangedAccess ? { branches: [] } : undefined,
-          );
+          const response = respond.mock.calls[0];
+          const scenario = `${method}/${changed}: ${JSON.stringify(response)}`;
+          expect.soft(response?.[0], scenario).toBe(metadataOnly);
+          expect
+            .soft(response?.[1], scenario)
+            .toEqual(
+              metadataOnly
+                ? method === "sessions.branches.list"
+                  ? { branches: [] }
+                  : method === "sessions.files.assets"
+                    ? { assets: [] }
+                    : expect.objectContaining({ sessionKey: key })
+                : undefined,
+            );
         }
       }
     });

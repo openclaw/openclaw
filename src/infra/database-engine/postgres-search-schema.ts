@@ -9,10 +9,11 @@ import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";
-const key: SqliteDatabaseAdmissionKey<string> = {
+const key: SqliteDatabaseAdmissionKey<string[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
-  read: (value) => (typeof value === "string" ? value : undefined),
+  read: (value) =>
+    Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined,
 };
 
 /** Called only by store admission; query paths consume these retained facts. */
@@ -23,7 +24,7 @@ export function admitPostgresSearch(
 ): (() => void) | undefined {
   const signature = JSON.stringify(schema);
   const retained = getSqliteDatabaseAdmission(db, key);
-  if (retained === signature) {
+  if (retained?.includes(signature)) {
     return undefined;
   }
   const required = new Set<string>();
@@ -75,27 +76,41 @@ export function admitPostgresSearch(
       `PostgreSQL search capability unavailable: insufficient CREATE privilege. Have the database owner grant CREATE on schema ${pgSearchName(namespace)} (or on the database before initial admission).`,
     );
   }
-  return () => publishSqliteDatabaseAdmission(db, key, signature);
+  return () => publishPostgresSearch(db, schema);
+}
+
+export function publishPostgresSearch(db: PostgresSqlConnection, schema: SearchSchema): void {
+  publishSqliteDatabaseAdmission(db, key, [
+    ...(getSqliteDatabaseAdmission(db, key) ?? []),
+    JSON.stringify(schema),
+  ]);
 }
 
 export function assertPostgresSearchAdmitted(
   db: PostgresSqlConnection,
   schema: SearchSchema,
 ): void {
-  if (!db.isOpen || getSqliteDatabaseAdmission(db, key) !== JSON.stringify(schema)) {
-    throw new Error(
+  if (!db.isOpen || !getSqliteDatabaseAdmission(db, key)?.includes(JSON.stringify(schema))) {
+    throw new DatabaseSearchCapabilityUnavailableError(
+      schema.mode !== "keyword-only" && Object.keys(schema.vector ?? {}).length
+        ? "vector"
+        : "fullText",
       "PostgreSQL search requires matching store admission; reopen the store with its search schema.",
     );
   }
 }
 
 /** Deterministic derived DDL joins the store's generated DDL hash and exact catalog seal. */
-export function postgresSearchSql(schema: SearchSchema, namespace: string): string {
+export function postgresSearchSql(
+  schema: SearchSchema,
+  namespace: string,
+  shared: { text?: boolean; vector?: boolean } = {},
+): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
   const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
   const configLiteral = `'${config.replaceAll("'", "''")}'`;
   const statements: string[] = [];
-  if (Object.keys(schema.text ?? {}).length) {
+  if (Object.keys(schema.text ?? {}).length && !shared.text) {
     statements.push(`CREATE TEXT SEARCH CONFIGURATION ${config} (COPY = pg_catalog.simple);
 ALTER TEXT SEARCH CONFIGURATION ${config} ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart WITH ${ext}.unaccent, pg_catalog.simple;`);
   }
@@ -116,7 +131,7 @@ CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(
   if (schema.mode === "keyword-only") {
     return statements.join("\n");
   }
-  if (Object.keys(schema.vector ?? {}).length) {
+  if (Object.keys(schema.vector ?? {}).length && !shared.vector) {
     // Canonical bytes are IEEE754 little-endian binary64. Only this derived value rounds to float32.
     statements.push(`CREATE FUNCTION openclaw_vector(bytes bytea, dimensions integer) RETURNS ${ext}.vector
 LANGUAGE plpgsql IMMUTABLE STRICT AS $$
@@ -146,12 +161,14 @@ END $$;`);
       owner = pgSearchName(source.source),
       id = pgSearchName(source.key),
       embedding = pgSearchName(source.embedding);
-    const project = `INSERT INTO ${table}(id, embedding) SELECT ${id}, openclaw_vector(${embedding}, ${source.dimensions}) FROM ${owner} WHERE ${embedding} IS NOT NULL`;
+    // Empty canonical bytes mean a text-only row, including NOT NULL source columns.
+    const project = `INSERT INTO ${table}(id, embedding) SELECT ${id}, openclaw_vector(${embedding}, ${source.dimensions}) FROM ${owner} WHERE octet_length(${embedding}) > 0`;
     statements.push(`CREATE TABLE ${table} (id TEXT PRIMARY KEY REFERENCES ${owner}(${id}) ON UPDATE CASCADE ON DELETE CASCADE, embedding ${ext}.vector(${source.dimensions}) NOT NULL);
 CREATE FUNCTION ${pgSearchName(`${index.table}_sync`)}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.${embedding} IS NOT DISTINCT FROM NEW.${embedding} THEN RETURN NEW; END IF;
   DELETE FROM ${table} WHERE id = NEW.${id};
-  IF NEW.${embedding} IS NOT NULL THEN INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions})); END IF;
+  IF octet_length(NEW.${embedding}) > 0 THEN INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions})); END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER ${pgSearchName(`${index.table}_sync`)} AFTER INSERT OR UPDATE OF ${embedding} ON ${owner} FOR EACH ROW EXECUTE FUNCTION ${pgSearchName(`${index.table}_sync`)}();
@@ -177,7 +194,7 @@ export function rebuildPostgresSearch(db: PostgresSqlConnection, schema: SearchS
   for (const index of Object.values(schema.vector ?? {})) {
     const source = index.postgres!;
     db.exec(
-      `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE ${pgSearchName(source.embedding)} IS NOT NULL`,
+      `DELETE FROM ${pgSearchName(index.table)}; INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE octet_length(${pgSearchName(source.embedding)}) > 0`,
     );
   }
 }

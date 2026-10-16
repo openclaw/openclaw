@@ -426,7 +426,9 @@ function startHeartbeat(
     runAutomatic(() => receive(request), "automatic-renewal");
   }
   try {
-    installDatabaseEngineSelection({ input: params.databaseEngineInput });
+    if (params.databaseEngineSelection) {
+      installDatabaseEngineSelection(params.databaseEngineSelection);
+    }
     const existingDatabase = databases.get(databaseKey);
     if (existingDatabase) {
       retainedDatabase = existingDatabase;

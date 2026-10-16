@@ -195,7 +195,7 @@ describe("offline device placement abandonment", () => {
       attachedSessionIds: [],
       lastError: FORCED_WORKER_ABANDONMENT_ERROR,
     });
-    expect(fixture.invoke).toHaveBeenLastCalledWith(
+    expect(fixture.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
         params: expect.objectContaining({
@@ -205,8 +205,7 @@ describe("offline device placement abandonment", () => {
         }),
       }),
     );
-    expect(fixture.invoke).toHaveBeenNthCalledWith(
-      fixture.invoke.mock.calls.length - 1,
+    expect(fixture.invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
         params: expect.objectContaining({
@@ -254,10 +253,10 @@ describe("offline device placement abandonment", () => {
     await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
       state: "local",
     });
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(2);
     expectRetainedDeviceCleanup(fixture);
     await finishDeviceCleanup(fixture);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it("force destroys an unreachable device and accepts its already fenced placement for abandonment", async () => {

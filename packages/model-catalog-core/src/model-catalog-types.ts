@@ -233,6 +233,8 @@ export type ModelCatalogModel = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Total model parameters, including inactive experts. */
+  parameterCount?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
@@ -253,6 +255,8 @@ export type ModelCatalogModel = {
 };
 
 export type ModelCatalogProvider = {
+  /** Credential owner; omitted providers keep agent-owned profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
