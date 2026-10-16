@@ -333,6 +333,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
         expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
         await page.keyboard.press("Escape");
+        await detail.getByRole("heading", { name: "Workspace files" }).click();
         const fileDescriptions = detail
           .locator(".plugin-capabilities")
           .first()
