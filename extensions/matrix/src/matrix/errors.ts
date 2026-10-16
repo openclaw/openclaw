@@ -1,5 +1,8 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function formatMatrixErrorReason(err: unknown): string {
   return normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
@@ -21,8 +24,8 @@ export function isMatrixNotFoundError(err: unknown): boolean {
 const MATRIX_INVALID_FROM_TOKEN_PATTERN = /['"]?from['"]? parameter is invalid/;
 
 export function isMatrixInvalidPaginationTokenError(err: unknown): boolean {
-  const errObj = err as { statusCode?: number; httpStatus?: number };
-  const status = errObj?.statusCode ?? errObj?.httpStatus;
+  const record = asOptionalRecord(err);
+  const status = record?.statusCode ?? record?.httpStatus;
   if (status !== 400) {
     return false;
   }
