@@ -151,78 +151,68 @@ function createUsageDetailRequest<T>(
   };
 }
 
-export class UsageDetailsController {
-  readonly timeSeries;
-  readonly sessionLogs;
-  readonly session;
+export function createUsageDetails(
+  notify: () => void,
+  gateway: GatewayPageBinding,
+  query: () => SessionUsageQuery,
+  sessions: () => UsageSessionEntry[],
+  clearTimeSeriesRange: () => void,
+) {
+  const resolveTarget = (key: string): UsageDetailTarget => {
+    const session = sessions().find((entry) => entry.key === key);
+    const agentId = session?.agentId ?? query().agentId;
+    return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
+  };
+  const timeSeries = createUsageDetailRequest(
+    notify,
+    gateway,
+    requestSessionUsageTimeSeries,
+    resolveTarget,
+    clearTimeSeriesRange,
+  );
+  const sessionLogs = createUsageDetailRequest(
+    notify,
+    gateway,
+    async (client, target) => {
+      const payload = await requestSessionUsageLogs(client, target);
+      // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
+      return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
+    },
+    resolveTarget,
+  );
+  const session = createUsageDetailRequest(
+    notify,
+    gateway,
+    async (client, target, signal, sessionId) => {
+      const result = await requestSessionUsage(
+        client,
+        { ...query(), agentId: target.agentId },
+        { key: target.key, includeContextWeight: true, signal },
+      );
+      const selected = result.sessions[0];
+      if (
+        sessionId !== undefined &&
+        selected?.sessionId !== undefined &&
+        selected.sessionId !== sessionId
+      ) {
+        throw new Error(t("usage.details.contextOutOfDate"));
+      }
+      return selected;
+    },
+    resolveTarget,
+  );
+  const requests = [session, timeSeries, sessionLogs];
+  return {
+    timeSeries,
+    sessionLogs,
+    session,
+    load(sessionKey: string, refreshAll = true, refreshSummary = false): void {
+      void session.load(sessionKey, refreshAll || refreshSummary);
+      void timeSeries.load(sessionKey, refreshAll);
+      void sessionLogs.load(sessionKey, refreshAll);
+    },
 
-  constructor(
-    notify: () => void,
-    gateway: GatewayPageBinding,
-    query: () => SessionUsageQuery,
-    sessions: () => UsageSessionEntry[],
-    clearTimeSeriesRange: () => void,
-  ) {
-    const resolveTarget = (key: string): UsageDetailTarget => {
-      const session = sessions().find((entry) => entry.key === key);
-      const agentId = session?.agentId ?? query().agentId;
-      return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
-    };
-    this.timeSeries = createUsageDetailRequest(
-      notify,
-      gateway,
-      requestSessionUsageTimeSeries,
-      resolveTarget,
-      clearTimeSeriesRange,
-    );
-    this.sessionLogs = createUsageDetailRequest(
-      notify,
-      gateway,
-      async (client, target) => {
-        const payload = await requestSessionUsageLogs(client, target);
-        // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
-        return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
-      },
-      resolveTarget,
-    );
-    this.session = createUsageDetailRequest(
-      notify,
-      gateway,
-      async (client, target, signal, sessionId) => {
-        const result = await requestSessionUsage(
-          client,
-          { ...query(), agentId: target.agentId },
-          { key: target.key, includeContextWeight: true, signal },
-        );
-        const session = result.sessions[0];
-        if (
-          sessionId !== undefined &&
-          session?.sessionId !== undefined &&
-          session.sessionId !== sessionId
-        ) {
-          throw new Error(t("usage.details.contextOutOfDate"));
-        }
-        return session;
-      },
-      resolveTarget,
-    );
-  }
-
-  load(sessionKey: string, refreshAll = true, refreshSummary = false): void {
-    void this.session.load(sessionKey, refreshAll || refreshSummary);
-    void this.timeSeries.load(sessionKey, refreshAll);
-    void this.sessionLogs.load(sessionKey, refreshAll);
-  }
-
-  cancel(): void {
-    this.session.cancel();
-    this.timeSeries.cancel();
-    this.sessionLogs.cancel();
-  }
-
-  clear(): void {
-    this.session.clear();
-    this.timeSeries.clear();
-    this.sessionLogs.clear();
-  }
+    cancel: () => requests.forEach((request) => request.cancel()),
+    clear: () => requests.forEach((request) => request.clear()),
+  };
 }
