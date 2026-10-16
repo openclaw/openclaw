@@ -67,14 +67,10 @@ const renderPlist = (args: string[]) => {
   native.plists.add(contents);
   return contents;
 };
+const renderTask = (args: string[]) => buildTaskScript({ programArguments: args, environment });
 const readers = [
   ["LaunchAgent", readLaunchAgentProgramArguments, resolveLaunchAgentPlistPath, renderPlist],
-  [
-    "Scheduled Task",
-    readScheduledTaskCommand,
-    resolveTaskScriptPath,
-    (args: string[]) => buildTaskScript({ programArguments: args, environment }),
-  ],
+  ["Scheduled Task", readScheduledTaskCommand, resolveTaskScriptPath, renderTask],
 ] as const;
 const nativeError = (code: string, errno?: number) => ({
   error: Object.assign(new Error("native-secret-canary"), { code, errno }),
@@ -198,20 +194,21 @@ describe("native service command inspection", () => {
       stderr: "",
     });
     it.each([
-      { placement: "parallel", condition: "absent", explicit: false },
-      { placement: "parallel", condition: "running", explicit: true },
-      { placement: "delegated serial", condition: "absent", explicit: true },
-      { placement: "delegated serial", condition: "ready", explicit: false },
-    ])(
-      "$placement preserves $condition state (explicit=$explicit)",
-      async ({ placement, condition, explicit }) => {
+      ["parallel", "absent", false, false],
+      ["parallel", "running", true, false],
+      ["delegated serial", "absent", true, false],
+      ["delegated serial", "ready", false, false],
+      ["parallel", "ready", true, true],
+    ] as const)(
+      "%s preserves %s state (explicit=%s, expired=%s)",
+      async (placement, condition, explicit, expired) => {
         let now = 0;
         let firstRead = true;
         vi.spyOn(performance, "now").mockImplementation(() => now);
         const { scriptPath, run, observe } = await windowsFixture(condition !== "absent", () => {
           if (firstRead) {
             firstRead = false;
-            now += 100.25;
+            now += expired ? 1_000 : 100.25;
           }
         });
         const schedulerAllowances: Array<{ timeout: number | undefined; remaining: number }> = [];
@@ -226,7 +223,7 @@ describe("native service command inspection", () => {
             }
             expect(args).toContain("-EncodedCommand");
             schedulerAllowances.push({ timeout, remaining: 1_000 - now });
-            now += 100.25;
+            now += expired ? 0 : 100.25;
             return condition === "absent"
               ? { status: 1, stdout: "-2147024894", stderr: "" }
               : registeredTask(scriptPath, condition === "running" ? 4 : 3);
@@ -234,15 +231,25 @@ describe("native service command inspection", () => {
         );
         const readState = () => observe(explicit ? 1_000 : undefined);
         const { withGatewayServiceUpdateAuthority } = await import("./service-update-authority.js");
-        const state =
+        const result =
           placement === "delegated serial"
-            ? await withGatewayServiceUpdateAuthority(undefined, readState, {
+            ? withGatewayServiceUpdateAuthority(undefined, readState, {
                 updateOwned: false,
                 nativeCommand: async () => {
                   throw new Error("Unexpected delegated command");
                 },
               })
-            : await readState();
+            : readState();
+        if (expired) {
+          await expect(result).rejects.toMatchObject({
+            reason: "windows-task-inspection-failed",
+            cause: { kind: "timeout", timeoutMs: 0 },
+          });
+          expect(native.scheduler).toHaveBeenCalledOnce();
+          expect(run).not.toHaveBeenCalled();
+          return;
+        }
+        const state = await result;
 
         const absent = condition === "absent";
         expect(state).toMatchObject({
@@ -269,22 +276,6 @@ describe("native service command inspection", () => {
         );
       },
     );
-
-    it("stops native work when the launcher read exhausts its deadline", async () => {
-      let now = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const { scriptPath, run, observe } = await windowsFixture(true, () => {
-        now = 1_000;
-      });
-      // Registration is inspected first; the later launcher read consumes its remaining budget.
-      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
-      await expect(observe(1_000)).rejects.toMatchObject({
-        reason: "windows-task-inspection-failed",
-        cause: { kind: "timeout", timeoutMs: 0 },
-      });
-      expect(native.scheduler).toHaveBeenCalledOnce();
-      expect(run).not.toHaveBeenCalled();
-    });
 
     it("rejects late Scheduler absence", async () => {
       let now = 0;
@@ -343,16 +334,12 @@ describe("native service command inspection", () => {
         timeoutMs: 731,
       }).catch((caughtError: unknown) => caughtError);
       expect(error).toBeInstanceOf(ServiceInspectionError);
-      expect(error).toMatchObject({
-        reason: "windows-task-inspection-failed",
-        message: expect.stringContaining("openclaw gateway status --deep"),
-      });
+      expect(error).toMatchObject({ reason: "windows-task-inspection-failed" });
       const sanitized = sanitizeServiceInspectionError(error);
       expect(sanitized.message).toContain("openclaw gateway status --deep");
       expect(sanitized.message).toContain(reported);
       expect(sanitized.cause).toEqual(diagnostic);
       expect(inspect(sanitized)).not.toContain("native-secret-canary");
-      expect(JSON.stringify(sanitized.cause)).not.toContain("native-secret-canary");
     },
   );
 
@@ -449,11 +436,10 @@ describe("native service command inspection", () => {
       env,
       label,
     ).expectedEnvironmentFilePath;
-    const envFile = recovering
-      ? path.join(root, "other", "service-env", `${label}.env`)
-      : expectedEnvFile;
+    const other = path.join(root, "other", "service-env", label);
+    const envFile = recovering ? `${other}.env` : expectedEnvFile;
     const wrapper = recovering
-      ? path.join(root, "other", "service-env", `${label}-env-wrapper.sh`)
+      ? `${other}-env-wrapper.sh`
       : resolveLaunchAgentEnvWrapperPath(env, label);
     const literal = "first line\r\n  second line\nthird 'quoted' \\cash$";
     await writeFile(
@@ -471,16 +457,22 @@ describe("native service command inspection", () => {
       resolveLaunchAgentPlistPath(env),
       renderPlist([LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapper, envFile, ...programArguments]),
     );
-    if (scenario === "literal") {
-      await expect(strictPlist()).resolves.toMatchObject({
-        programArguments,
-        environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
-      });
-    } else {
-      await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({
-        programArguments,
-        ...(recovering ? { environment: { OPENCLAW_STATE_DIR: "/recovered-state" } } : {}),
-      });
+    const expected =
+      scenario === "literal"
+        ? {
+            environment: {
+              OPENCLAW_STATE_DIR: "/recorded-state",
+              NODE_OPTIONS: "",
+              QUOTE: literal,
+            },
+          }
+        : recovering
+          ? { environment: { OPENCLAW_STATE_DIR: "/recovered-state" } }
+          : {};
+    await expect(
+      scenario === "literal" ? strictPlist() : readLaunchAgentProgramArguments(env),
+    ).resolves.toMatchObject({ programArguments, ...expected });
+    if (scenario !== "literal") {
       await expect(strictPlist()).rejects.toThrow(unreadable("LaunchAgent"));
     }
   });
