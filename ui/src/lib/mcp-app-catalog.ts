@@ -161,5 +161,13 @@ export function createMcpAppCatalog(
       }
     }
   }
-  return () => ({ ...state, available: available(), refresh });
+  return () => ({
+    ...state,
+    // Consumers can retain a launch during render, before the refresh effect clears old results.
+    ...(discoveryIdentity() === identity
+      ? {}
+      : { servers: [], onboarding: [], loading: false, error: null }),
+    available: available(),
+    refresh,
+  });
 }
