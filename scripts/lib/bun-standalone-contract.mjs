@@ -7,6 +7,16 @@ export const STANDALONE_USAGE =
   "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot] [--plugins <id,id,...>]\n" +
   "Default: JIT. --compile-aot is EXPERIMENTAL and requires an AOT-capable Bun.";
 
+/**
+ * @param {string[]} args
+ * @returns {{ help: true } | {
+ *   help?: false,
+ *   outputDirectory: string,
+ *   mode: "jit" | "bytecode" | "aot",
+ *   compileFlags: string[],
+ *   pluginIds?: string[]
+ * }}
+ */
 export function parseStandaloneArguments(args) {
   const [outputDirectory, ...flags] = args;
   if (args.length === 1 && ["--help", "-h"].includes(outputDirectory)) {

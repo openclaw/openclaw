@@ -32,8 +32,16 @@ describe("standalone build interface", () => {
       mode: "jit",
       compileFlags: [],
     });
-    expect(parseStandaloneArguments(["out", "--bytecode"])).toMatchObject({ mode: "bytecode" });
-    expect(parseStandaloneArguments(["out", "--compile-aot"])).toMatchObject({ mode: "aot" });
+    for (const [flag, mode] of Object.entries({
+      "--bytecode": "bytecode",
+      "--compile-aot": "aot",
+    })) {
+      const parsed = parseStandaloneArguments(["out", flag]);
+      if (parsed.help) {
+        throw new Error("A build mode must not request help");
+      }
+      expect(parsed.mode).toBe(mode);
+    }
     expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
       "at most one",
     );
