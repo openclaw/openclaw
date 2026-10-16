@@ -126,6 +126,12 @@ export function readTranscriptStorageEncoding(database: EngineConnection): strin
   return facts.textEncoding;
 }
 
+/** Matches stored transcript byte accounting, including the exported JSONL newline. */
+export function transcriptSerializedBytes(database: EngineConnection, eventJson: string): number {
+  const encoding = readTranscriptStorageEncoding(database) === "UTF-8" ? "utf8" : "utf16le";
+  return Buffer.byteLength(eventJson, encoding) + 1;
+}
+
 /** Prepared bytes grant no write authority and must match the eventual envelope and encoding. */
 export function prepareTranscriptPayloadForReuse(
   database: EngineConnection,

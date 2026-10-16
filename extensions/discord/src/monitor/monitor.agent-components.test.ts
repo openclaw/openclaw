@@ -16,9 +16,8 @@ import {
 import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  ButtonInteraction,
+  BaseComponentInteraction,
   createInteraction,
-  StringSelectMenuInteraction,
   type ComponentData,
 } from "../internal/discord.js";
 import {
@@ -77,7 +76,7 @@ describe("agent components", () => {
 
   const createDmButtonInteraction = (interactionId = "interaction-1") => {
     const interaction = createDmInteraction({ interactionId });
-    if (!(interaction instanceof ButtonInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord button interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
@@ -97,7 +96,7 @@ describe("agent components", () => {
         values: ["alpha"],
       },
     });
-    if (!(interaction instanceof StringSelectMenuInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord string select interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
@@ -146,7 +145,7 @@ describe("agent components", () => {
         },
       }),
     );
-    if (!(interaction instanceof ButtonInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord button interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);

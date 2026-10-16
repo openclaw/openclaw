@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { SolidRouteProps } from "../app-route-types.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
-import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
@@ -259,8 +259,8 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     NonNullable<ApplicationRouteMatch["module"]>
   >(props);
   let committedSnapshot: ReturnType<typeof outlet.snapshot> | undefined;
-  const retainedGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
-  const transientGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
+  const retainedGate = createMcpAppUnmountGate<Presentation | null>(invalidate);
+  const transientGate = createMcpAppUnmountGate<Presentation | null>(invalidate);
   let retainedMatch: ApplicationRouteMatch | undefined;
   let retainedOwnerKey: string | undefined;
   let retainedPresented = false;
@@ -440,6 +440,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     };
   });
 
+  // Readiness must observe the DOM commit, not just the preceding presentation calculation.
   createEffect(presentation, (value) => {
     committedSnapshot = value.snapshot;
     committedSettled = value.settled;

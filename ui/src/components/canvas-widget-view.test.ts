@@ -741,10 +741,12 @@ describe("Canvas widget view", () => {
     let onMessage!: (event: MessageEvent) => void;
     const postMessage = vi.fn();
     const close = vi.fn();
+    const removeEventListener = vi.fn();
     const port = {
       addEventListener: vi.fn((_type, handler) => {
         onMessage = handler;
       }),
+      removeEventListener,
       start: vi.fn(),
       postMessage,
       close,
@@ -866,6 +868,7 @@ describe("Canvas widget view", () => {
       view.allowScripts = false;
     }
     expect(close).toHaveBeenCalledOnce();
+    expect(removeEventListener).toHaveBeenCalledWith("message", onMessage);
     onMessage(
       new MessageEvent("message", {
         data: { type: "openclaw:widget-prompt", prompt: "Stale port" },

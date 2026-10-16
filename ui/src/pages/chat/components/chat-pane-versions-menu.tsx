@@ -5,7 +5,7 @@ import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 
 type ChatPaneVersionsMenuProps = {
   catalog: boolean;

@@ -252,7 +252,7 @@ export default {
   test: {
     root: ${JSON.stringify(root)},
     include: ["*.test.ts"],
-    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/lit-warnings.setup.ts"))}],
+    setupFiles: [${JSON.stringify(path.join(process.cwd(), "ui/src/test-helpers/dom.setup.ts"))}],
     environment: "jsdom", isolate: false, pool: "threads", maxWorkers: 1,
     execArgv: ${JSON.stringify(sharedVitestConfig.test.execArgv)},
     sequence: { sequencer: class extends BaseSequencer {
@@ -324,7 +324,7 @@ export default {
           name: "chromium",
           root: uiRoot,
           viteRoot: uiRoot,
-          setupFiles: [path.join(uiRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(uiRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(standalone?.files).toContain(
@@ -336,7 +336,7 @@ export default {
           name: "chromium",
           root: topLevelRoot,
           viteRoot: topLevelRoot,
-          setupFiles: [path.join(topLevelRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(topLevelRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
       expect(testOption?.projects).toEqual([
@@ -344,7 +344,7 @@ export default {
           name: "chromium",
           root: testRoot,
           viteRoot: testRoot,
-          setupFiles: [path.join(testRoot, "src/test-helpers/lit-warnings.setup.ts")],
+          setupFiles: [path.join(testRoot, "src/test-helpers/dom.setup.ts")],
         },
       ]);
     }));

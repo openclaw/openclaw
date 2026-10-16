@@ -7,6 +7,8 @@ import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
 } from "../../infra/node-runner-inventory.js";
+import type { WorkerExecutionMode } from "../../plugins/types.js";
+import { getProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecResult,
@@ -15,11 +17,16 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { measureGatewayCloseStep } from "../restart-trace.js";
 import { RETRYABLE_NODE_WORKER_TRANSPORT_CODES } from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import type { NodeWorkerWorkspaceBinding } from "./node-worker-workspace-actions.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import {
+  joinWorkerTunnelStops,
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelStopReason,
+} from "./tunnel-contract.js";
 
 type NodeWorkerWorkspaceBindingIdentity = {
   environmentId: string;
@@ -49,6 +56,65 @@ type NodeWorkerWorkspaceDrainRequest = {
   }>;
   isAuthorized: () => boolean;
 };
+
+/** Remote acknowledgements share one budget; native owners retain unconfirmed cleanup. */
+export async function stopNodeWorkerWorkspaceOwner(
+  owner: {
+    executionMode: WorkerExecutionMode;
+    shutdownDeadline?: number;
+    drainLocalWork?: () => Promise<void>;
+  },
+  params: NodeWorkerWorkspaceDrainRequest,
+  reason?: WorkerTunnelStopReason,
+) {
+  const budget = getProcessCleanupBudget();
+  const shutdownDeadline = budget
+    ? Math.min(owner.shutdownDeadline ?? Infinity, budget.deadline, performance.now() + 10_000)
+    : undefined;
+  owner.shutdownDeadline = shutdownDeadline;
+  const run = (
+    name: string,
+    operation: (request: NodeWorkerWorkspaceDrainRequest) => Promise<void>,
+  ) =>
+    measureGatewayCloseStep(`shutdown.worker-environment.node-${name}`, async () => {
+      const timeoutMs =
+        shutdownDeadline === undefined
+          ? params.timeoutMs
+          : Math.ceil(shutdownDeadline - performance.now());
+      const expired = () =>
+        new WorkerTunnelOwnerDisconnectedError(
+          "Node workspace cleanup exceeded the Gateway shutdown deadline; retry on reconnect",
+        );
+      if (timeoutMs <= 0) {
+        throw expired();
+      }
+      try {
+        await operation({ ...params, timeoutMs });
+      } catch (error) {
+        if (
+          shutdownDeadline !== undefined &&
+          error instanceof Error &&
+          error.name === "TimeoutError"
+        ) {
+          throw expired();
+        }
+        throw error;
+      }
+    });
+  // Stop native processes before joining queues they may hold. Remote-exec
+  // attachments retain their independently owned app processes across shutdown.
+  const remoteStop =
+    owner.executionMode === "worker-turn" && reason === undefined
+      ? run("stop", stopNodeWorkerWorkspaceEnvironment)
+      : undefined;
+  const stopped = joinWorkerTunnelStops([remoteStop, owner.drainLocalWork?.()]);
+  // Older nodes can still drain workspace work when native environment stop is unavailable.
+  const drain = () =>
+    reason !== "provider-destroying" && reason !== "provider-destroyed"
+      ? run("drain", drainNodeWorkerWorkspace)
+      : undefined;
+  await joinWorkerTunnelStops([stopped, stopped.then(drain, drain)]);
+}
 
 /** Cancellation is only a request. This acknowledgement joins the node's physical workspace queue. */
 export async function drainNodeWorkerWorkspace(
@@ -86,7 +152,7 @@ export async function drainNodeWorkerWorkspace(
 }
 
 /** Retirement authorizes stopping only the exact old environment, never its replacement. */
-export async function stopNodeWorkerWorkspaceEnvironment(
+async function stopNodeWorkerWorkspaceEnvironment(
   params: NodeWorkerWorkspaceDrainRequest,
 ): Promise<void> {
   const signal = AbortSignal.timeout(params.timeoutMs);

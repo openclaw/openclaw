@@ -16,6 +16,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
+import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -58,6 +59,7 @@ import {
   applyChatAgentOwnerTransition,
   applySelectedChatAgent,
   refreshPageChat,
+  refreshChatModelAuthStatus,
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
@@ -342,7 +344,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           applyChatCacheSnapshot(pageState, snapshot);
           const target = this.resolveChatReadTarget();
           if (target && snapshot.progressCard !== undefined) {
-            this.progressCard.hydrate(target, snapshot.progressCard);
+            this.progressCards.hydrate(target, snapshot.progressCard);
           }
         } else {
           this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
@@ -438,6 +440,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (state && modelAuthEventInvalidates(event)) {
+          state.modelAuthStatusResult = null;
+          state.modelAuthStatusError = null;
+          this.requestUpdate();
+          void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
+        }
         if (
           state &&
           event.event === "sessions.changed" &&
@@ -505,7 +513,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       subscribeChatPaneSnapshotInvalidation(
         () => this.state,
-        () => this.progressCard.invalidate(this.resolveChatReadTarget()),
+        () => {
+          const target = this.resolveChatReadTarget();
+          if (target) {
+            this.progressCards.invalidate(target);
+          }
+        },
       ),
     );
     this.applyGatewaySnapshot(this.context.gateway.snapshot);

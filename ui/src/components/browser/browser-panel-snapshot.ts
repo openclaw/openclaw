@@ -9,7 +9,7 @@ import {
   type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
-import type { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
+import type { BrowserPanelNative } from "./browser-panel-native-owner.ts";
 import type {
   BrowserPanelControllerHost,
   BrowserPanelOperationOwnership,
@@ -32,7 +32,7 @@ type BrowserPanelSnapshotState = {
 
 interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
   readonly host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken" | "fixedTab">;
-  readonly native: Pick<BrowserPanelNativeController, "activeTab" | "mergeRemoteTabs">;
+  readonly native: Pick<BrowserPanelNative, "activeTab" | "mergeRemoteTabs">;
   readonly stream: Pick<
     BrowserPanelStream,
     "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"

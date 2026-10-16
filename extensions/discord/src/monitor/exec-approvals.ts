@@ -24,7 +24,7 @@ import {
   Container,
   Separator,
   TextDisplay,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
   type ComponentData,
   type MessagePayloadObject,
 } from "../internal/discord.js";
@@ -107,7 +107,7 @@ class ExecApprovalButton extends Button {
     super();
   }
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       await replySilently(interaction, {

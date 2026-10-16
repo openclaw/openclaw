@@ -386,11 +386,13 @@ export function replaceSkillCommands(
   ]);
 }
 
+// Separate user gestures run in separate browser tasks, after Solid has settled.
 export function inputDraft(container: HTMLElement, value: string) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   textarea!.value = value;
   textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
 }
 
 export function inputDraftAtEnd(container: HTMLElement, value: string) {
@@ -398,6 +400,7 @@ export function inputDraftAtEnd(container: HTMLElement, value: string) {
   textarea.value = value;
   textarea.setSelectionRange(value.length, value.length);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
 }
 
 export function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
@@ -405,6 +408,7 @@ export function keydownComposer(container: HTMLElement, key: string, init: Keybo
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
   textarea!.dispatchEvent(event);
+  flush();
   return event;
 }
 

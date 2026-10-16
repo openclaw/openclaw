@@ -192,6 +192,9 @@ async function prepareStartupConfig(
     // before webhook history or other runtime tables are consumed.
     if (!isStatePostgres()) {
       initializeNativeOpenClawStateDatabase({ env });
+      const { initializeFreshDaemonRuntimePinMigration } =
+        await import("../infra/state-migrations.daemon-runtime-pins.js");
+      initializeFreshDaemonRuntimePinMigration(env);
     }
     const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
       await import("./doctor/shared/legacy-webhook-pins.js");

@@ -201,6 +201,35 @@ async function startRuntime(
   };
 }
 
+it.each(["reparented", "unchanged ppid"])(
+  "settles maintenance with a lost launcher (%s) before forced termination",
+  async (kind) => {
+    const rootPath = path.join(tempDirs.make("openclaw-owner-orphan-"), "root.lock");
+    const raw = JSON.stringify({
+      pid: process.pid,
+      parentPid: kind === "reparented" ? process.ppid + 1 : process.ppid,
+      ...(kind === "unchanged ppid" ? { parentStartTime: 0 } : {}),
+      role: "sqlite-maintenance",
+      createdAt: new Date().toISOString(),
+      configPath: "synthetic-config",
+    });
+    fs.writeFileSync(rootPath, raw);
+    const oldStamp = new Date(Date.now() - 30_000);
+    fs.utimesSync(rootPath, oldStamp, oldStamp);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const runtime = await startRuntime({ [rootPath]: raw });
+    try {
+      expect(runtime.readEvents()).toContain("parent-lost");
+      expect(kill).not.toHaveBeenCalled();
+      expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+    } finally {
+      await runtime.stop();
+    }
+  },
+);
+
 it.each([65_000, -5_000])(
   "renews unchanged worker custody after a heartbeat age of %s ms",
   async (age) => {

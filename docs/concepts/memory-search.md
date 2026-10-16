@@ -11,6 +11,16 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The built-in index supports SQLite and PostgreSQL agent databases. PostgreSQL
+search is experimental and uses engine-local text ranking, so scores and ordering
+can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
+trigram tokenizer, and `vector` for semantic search. Explicit
+`memory.search.provider: "none"` enables keyword-only search without `vector`;
+memory status reports this as `fts-only`. See
+[PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
+behavior and [Database engines](/reference/database-engines#search-on-postgresql)
+for extension setup.
+
 The result-count argument is `maxResults` (an integer of at least 1). The tool
 also accepts `max_results` and `limit` as aliases. If several are supplied,
 `maxResults` takes precedence over `max_results`, which takes precedence over
@@ -109,7 +119,7 @@ flowchart LR
     Q["Query"] --> E["Embedding"]
     Q --> T["Tokenize"]
     E --> VS["Vector search"]
-    T --> BM["BM25 search"]
+    T --> BM["Text search"]
     VS --> M["Weighted merge"]
     BM --> M
     M --> D["Recency and importance"]

@@ -18,7 +18,7 @@ import {
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntryAsync,
@@ -375,7 +375,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const { deliverTarget, replyTarget, autoThreadContext } = replyPlan;
+  const { replyTarget, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -600,12 +600,6 @@ export async function buildDiscordMessageProcessContext(params: {
       media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
       messageId: message.id,
     });
-  }
-
-  if (shouldLogVerbose()) {
-    logVerbose(
-      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} chars=${combinedBody.length}`,
-    );
   }
 
   return {

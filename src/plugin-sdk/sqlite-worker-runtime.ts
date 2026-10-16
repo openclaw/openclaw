@@ -44,6 +44,6 @@ export type {
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 export { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+export { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";

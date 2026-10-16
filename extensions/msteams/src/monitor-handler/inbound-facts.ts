@@ -138,12 +138,6 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     rawBody: entry.text,
     advertisedMedia,
     quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
-    attachmentTypes: entry.attachments
-      .map((attachment) =>
-        typeof attachment.contentType === "string" ? attachment.contentType : undefined,
-      )
-      .filter(Boolean)
-      .slice(0, 3),
     htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
     rawConversationId,
     conversationId,

@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createRenderEffect } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { SolidPanelController } from "./solid-panel-controller.ts";
 
 type MethodKey<T> = {

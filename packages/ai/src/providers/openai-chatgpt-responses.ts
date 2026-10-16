@@ -369,7 +369,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,

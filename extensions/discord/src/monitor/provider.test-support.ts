@@ -47,9 +47,6 @@ export const discordProviderTestSupport = {
   ) {
     discordProviderRuntime.prepareSkillCommandsForAgents = mock;
   },
-  setIsVerbose(mock: typeof discordProviderRuntime.isVerbose) {
-    discordProviderRuntime.isVerbose = mock;
-  },
   setShouldLogVerbose(mock: typeof discordProviderRuntime.shouldLogVerbose) {
     discordProviderRuntime.shouldLogVerbose = mock;
   },

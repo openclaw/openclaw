@@ -98,10 +98,10 @@ export function waitForFile(file) {
     }),
   );
   write("node_modules/tsx/loader.mjs", "export {};\n");
-  // Git inventory behavior is covered by the ratchet's own repository fixtures.
+  // Git inventory behavior is covered by the controller guard's own repository fixtures.
   write(
-    "scripts/check-control-ui-lit-ratchet.mts",
-    "export function main() { return Number(process.env.FIXTURE_RATCHET_EXIT || 0); }\n",
+    "scripts/check-control-ui-controllers.mts",
+    "export function main() { return Number(process.env.FIXTURE_CONTROLLER_GUARD_EXIT || 0); }\n",
   );
   preparedScripts ??= (async () => {
     const { bundles } = await build({
@@ -222,7 +222,7 @@ process.stderr.write = (chunk, ...args) => {
   );
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    FIXTURE_RATCHET_EXIT: phase === "ratchet" && mode === "nonzero" ? "7" : "0",
+    FIXTURE_CONTROLLER_GUARD_EXIT: phase === "controllers" && mode === "nonzero" ? "7" : "0",
     OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
   };
   for (const key of [
@@ -486,7 +486,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       }),
   );
 
-  it.for(["ratchet", "i18n", "oxlint"] as const)(
+  it.for(["controllers", "i18n", "oxlint"] as const)(
     "runs all lint phases after %s fails and retains its verdict",
     (phase, { signal }) =>
       fixture.run(async () => {

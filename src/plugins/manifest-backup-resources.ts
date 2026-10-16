@@ -107,20 +107,20 @@ export function resolveActivatedPluginBackupInventory(params: {
       throw new Error(invalidDeclaration.message);
     }
     for (const plugin of snapshot.plugins) {
-      if (
-        !normalizedConfig.enabled ||
-        !plugin.backupResources?.length ||
-        !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.config }) ||
-        !isManifestPluginAvailableForControlPlane({
+      const activated =
+        normalizedConfig.enabled &&
+        isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.config }) &&
+        isManifestPluginAvailableForControlPlane({
           snapshot,
           plugin,
           config: params.config,
-        })
-      ) {
-        continue;
-      }
-      for (const resource of plugin.backupResources) {
-        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}`;
+        });
+      for (const resource of plugin.backupResources ?? []) {
+        // Retained databases still need matched capture when their plugin is disabled.
+        if (!activated && !resource.databaseFamily) {
+          continue;
+        }
+        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}`;
         if (!resources.has(key)) {
           resources.set(key, { pluginId: plugin.id, ...resource });
         }

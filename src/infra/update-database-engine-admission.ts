@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -42,6 +43,8 @@ export async function assertUpdateDatabaseEngineContexts(
   const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
   const { readBackupEngine, readPostgresBackupFamily } =
     await import("../snapshot/database-backup.js");
+  const { readUpdateStateDatabaseInventory } = await import("./update-candidate-state.js");
+  const { updateStateDatabaseExists } = await import("./update-candidate-state.sizes.js");
   for (const context of contexts) {
     const required = new Set(
       listDatabaseEngineStores()
@@ -52,11 +55,29 @@ export async function assertUpdateDatabaseEngineContexts(
     if (supportsPostgres && required.size === 0) {
       continue;
     }
+    const stateDir = resolveStateDir(context.env);
     const paths = await discoverBackupDatabasePaths({
       ...context,
-      stateDir: resolveStateDir(context.env),
+      stateDir,
+      agentRegistry: [],
     });
     const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
+    if (
+      postgres.length === 0 &&
+      (await updateStateDatabaseExists(path.join(stateDir, "state", "openclaw.sqlite")))
+    ) {
+      const inventory = await readUpdateStateDatabaseInventory({ ...context, stateDir });
+      const known = new Set(paths);
+      for (const file of [...inventory.values()].flatMap((entry) => entry.spellings)) {
+        if (known.has(file) || !(await updateStateDatabaseExists(file))) {
+          continue;
+        }
+        known.add(file);
+        if (readBackupEngine(file).engine === "postgres") {
+          postgres.push(file);
+        }
+      }
+    }
     if (postgres.length === 0 && required.size === 0) {
       continue;
     }

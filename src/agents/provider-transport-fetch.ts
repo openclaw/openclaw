@@ -18,6 +18,7 @@ import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { formatModelTransportContext } from "../llm/model-transport-context.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
@@ -282,10 +283,12 @@ export function buildGuardedModelFetch(
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean; onSseComment?: () => void },
 ): typeof fetch {
+  const assertAuthCurrent = getProviderAuthAuthority(model);
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
+    assertAuthCurrent?.();
     const diagnosticContext = formatModelTransportContext();
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -349,6 +352,8 @@ export function buildGuardedModelFetch(
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
+      // Local service preparation, DNS and capture admission may outlive the credential owner.
+      beforeRequest: assertAuthCurrent,
       ...(policy ? { policy } : {}),
     };
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;

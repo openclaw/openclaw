@@ -92,6 +92,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAudioTrack
+import org.robolectric.shadows.ShadowLog
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowTextToSpeech
@@ -1388,9 +1389,13 @@ class TalkModeManagerTest {
       val talkAudioPlayer = FakeTalkAudioPlayer()
       val manager = createManager(talkSpeakClient = talkSpeakClient, talkAudioPlayer = talkAudioPlayer)
 
-      val job = launch { manager.speakAssistantReply("hello") }
+      val previousLogs = ShadowLog.getLogsForTag("TalkMode").size
+      val job = launch { manager.speakAssistantReply("{\"voice\":\"voice-1\",\"private-directive-marker\":true}\nhello") }
       talkSpeakClient.requested.await()
 
+      val logs = ShadowLog.getLogsForTag("TalkMode").drop(previousLogs).joinToString("\n") { it.msg }
+      assertTrue(logs.contains("Unknown talk directive keys: count=1"))
+      assertFalse(logs.contains("private-directive-marker"))
       assertEquals("Generating voice…", manager.statusText.value)
       assertFalse(manager.isSpeaking.value)
 

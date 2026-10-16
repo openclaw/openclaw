@@ -2448,7 +2448,7 @@ export const single = {
   it.each(["changed", "explicit"])(
     "routes %s ui support files to the ui lane without dead include globs",
     (mode) => {
-      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/lit-warnings.setup.ts"];
+      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/dom.setup.ts"];
       const plans = buildVitestRunPlans(
         mode === "changed" ? ["--changed", "origin/main"] : targets,
         process.cwd(),

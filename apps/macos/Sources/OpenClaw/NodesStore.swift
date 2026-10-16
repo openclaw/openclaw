@@ -238,7 +238,6 @@ final class NodesStore {
         } catch {
             guard self.isCurrent(refresh) else { return }
             if Self.isCancelled(error) {
-                self.logger.debug("node.list cancelled; keeping last nodes")
                 // Finish the cache read before its optional mutation begins.
                 let message = self.nodes.isEmpty ? "Refreshing devices…" : nil
                 self.gatewayState?.message = message

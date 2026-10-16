@@ -9,7 +9,11 @@ import {
 } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import { ButtonInteraction, createInteraction, type ComponentData } from "../internal/discord.js";
+import {
+  BaseComponentInteraction,
+  createInteraction,
+  type ComponentData,
+} from "../internal/discord.js";
 import {
   attachRestMock,
   createInternalComponentInteractionPayload,
@@ -103,7 +107,7 @@ describe("Discord modal presentation failures", () => {
           },
         }),
       );
-      if (!(interaction instanceof ButtonInteraction)) {
+      if (!(interaction instanceof BaseComponentInteraction)) {
         throw new Error("expected a Discord button interaction");
       }
 

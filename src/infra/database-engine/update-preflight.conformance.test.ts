@@ -12,6 +12,7 @@ import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fingerprintPostgresDatabase } from "../../snapshot/database-backup-core.worker.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
@@ -34,6 +35,7 @@ import {
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
+import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -61,7 +63,7 @@ function createAnchor(pathname: string, storeId: string, namespace: string) {
 describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
-  const pluginAnchors: string[] = [];
+  const additionalAnchors: string[] = [];
   let root: string;
   let stateDir: string;
   let shared: string;
@@ -171,7 +173,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     vi.unstubAllEnvs();
     try {
       if (anchorCreated) {
-        for (const pathname of [shared, ...pluginAnchors]) {
+        for (const pathname of [shared, ...additionalAnchors]) {
           const restored = readBackupEngine(pathname);
           if (restored.engine === "postgres") {
             namespaces.add(restored.namespace);
@@ -264,7 +266,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     expect(await fs.readFile(shared)).toEqual(before);
   });
 
-  it("refuses an unsupported state family or unavailable agent capture before disturbing the previous Gateway", async () => {
+  it("refuses an unsupported state family before disturbing the previous Gateway", async () => {
     const previous = await acquireGatewayLock({
       env,
       role: "gateway",
@@ -282,28 +284,53 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       ).rejects.toThrow(/state.*(port|version|candidate)|(?:port|version|candidate).*state/i);
       previous!.assertCurrent();
       expect(await fs.readFile(shared)).toEqual(before);
-      await expect(
-        assertUpdateDatabaseEngineContexts(
-          [{ config, env }],
-          ["sqlite", "postgres"],
-          ["state", "agent", "workboard", "logbook", "team-reports"],
-        ),
-      ).rejects.toThrow(
-        "PostgreSQL agent capture requires agent-family port and exact-backup support",
-      );
-      previous!.assertCurrent();
-      expect(await fs.readFile(shared)).toEqual(before);
     } finally {
       await previous!.release();
     }
   });
-  describe("four-family recovery below candidate admission", () => {
+  describe("five-family recovery below candidate admission", () => {
     const stores: Array<(typeof families)[number] & { pathname: string; namespace: string }> = [];
+    const agentJson = ' {"value":"agent baseline","opaque":"\\u0061"} ';
+    const agentBlob = Buffer.from([0, 255, 128, 1]);
+    let agentNamespace: string;
+    let agentStoreId: string;
     beforeAll(async () => {
       await client.query(
         `DELETE FROM "${namespace}".agent_databases WHERE agent_id = 'registered'`,
       );
       await fs.unlink(agent);
+      const agentDescriptor = await agentPortProvider.loadDescriptor();
+      agentStoreId = randomUUID();
+      agentNamespace = `update_agent_${agentStoreId.replaceAll("-", "")}`;
+      namespaces.add(agentNamespace);
+      {
+        using source = openNodeSqliteDatabase(":memory:");
+        source.exec(agentDescriptor.sqlite);
+        source.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        source
+          .prepare(
+            "INSERT INTO schema_meta VALUES ('primary', 'agent', ?, 'registered', NULL, 1, 1)",
+          )
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION);
+        source
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, blob, updated_at) VALUES ('update-conformance', 'retained', ?, ?, 1)",
+          )
+          .run(agentJson, agentBlob);
+        await materializeDatabasePort({
+          source: { engine: "sqlite", db: source },
+          destination: { engine: "postgres", db: client, namespace: agentNamespace },
+          descriptor: agentDescriptor,
+          storeId: agentStoreId,
+          assertCurrent() {},
+        });
+      }
+      createAnchor(agent, agentStoreId, agentNamespace);
+      additionalAnchors.push(agent);
+      await client.query(
+        `INSERT INTO "${namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('registered', $1, $2, 1)`,
+        [agent, OPENCLAW_AGENT_SCHEMA_VERSION],
+      );
       const pluginRoots: string[] = [];
       for (const family of families) {
         const id = family.provider.id;
@@ -351,7 +378,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           }
         }
         createAnchor(pathname, storeId, storeNamespace);
-        pluginAnchors.push(pathname);
+        additionalAnchors.push(pathname);
         stores.push({ ...family, pathname, namespace: storeNamespace });
       }
       config = {
@@ -364,6 +391,29 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         },
       };
       await activateUpdatePostgresPluginFixtures(config, env, path.dirname(pluginRoots[0]!));
+    });
+
+    it("admits homogeneous PostgreSQL with a retained agent without disturbing the previous Gateway", async () => {
+      const previous = await acquireGatewayLock({
+        env,
+        role: "gateway",
+        allowInTests: true,
+        timeoutMs: 0,
+      });
+      const before = await Promise.all([fs.readFile(shared), fs.readFile(agent)]);
+      try {
+        await expect(
+          assertUpdateDatabaseEngineContexts(
+            [{ config, env }],
+            ["sqlite", "postgres"],
+            ["state", "agent", "workboard", "logbook", "team-reports"],
+          ),
+        ).resolves.toBeUndefined();
+        previous!.assertCurrent();
+        expect(await Promise.all([fs.readFile(shared), fs.readFile(agent)])).toEqual(before);
+      } finally {
+        await previous!.release();
+      }
     });
 
     it("seals an original recovery baseline containing all PostgreSQL families", async () => {
@@ -393,7 +443,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         await owner!.release();
       }
     });
-    it("captures before a failed candidate migration and restores exact PostgreSQL rows while preserving current update history", async () => {
+    it("captures a retained PostgreSQL agent and restores exact rows after candidate failure while preserving current update history", async () => {
       const owner = await acquireGatewayLock({
         env,
         role: "sqlite-maintenance",
@@ -412,6 +462,31 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           }),
         );
         expect(backup.warnings).toEqual([]);
+        const capturedAgent = backup.databases.find((entry) => entry.path === agent);
+        expect(capturedAgent).toMatchObject({
+          engine: "postgres",
+          storeId: agentStoreId,
+          namespace: agentNamespace,
+        });
+        if (!capturedAgent?.exportDirectory) {
+          throw new Error("Retained agent has no matched PostgreSQL capture");
+        }
+        {
+          using image = openNodeSqliteDatabase(
+            path.join(capturedAgent.exportDirectory, "database.sqlite"),
+            { readOnly: true },
+          );
+          expect(
+            image
+              .prepare(
+                "SELECT value_json, blob FROM cache_entries WHERE scope = 'update-conformance' AND key = 'retained'",
+              )
+              .get(),
+          ).toEqual({
+            value_json: agentJson,
+            blob: new Uint8Array(agentBlob),
+          });
+        }
         const migration = await owner!.run(() =>
           runLegacyStateMigrationSteps([
             {
@@ -434,6 +509,10 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
                     `UPDATE "${store.namespace}"."${store.table}" SET "${store.column}" = 'candidate'`,
                   );
                 }
+                await client.query(
+                  `UPDATE "${agentNamespace}".cache_entries SET value_json = '"candidate"', blob = $1 WHERE scope = 'update-conformance' AND key = 'retained'`,
+                  [Buffer.from([9, 8, 7])],
+                );
                 throw new Error("candidate migration failed after committed data write");
               },
             },
@@ -482,6 +561,25 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
           after_json: ' {"opaque":"\\u0062"} ',
         },
       ]);
+      const restoredAgent = readBackupEngine(agent);
+      if (restoredAgent.engine !== "postgres") {
+        throw new Error("Recovery replaced the retained PostgreSQL agent with SQLite data");
+      }
+      namespaces.add(restoredAgent.namespace);
+      expect(
+        (
+          await client.query(
+            `SELECT value_json, blob FROM "${restoredAgent.namespace}".cache_entries WHERE scope = 'update-conformance' AND key = 'retained'`,
+          )
+        ).rows,
+      ).toEqual([{ value_json: agentJson, blob: agentBlob }]);
+      expect(
+        (
+          await client.query(
+            `SELECT path FROM "${restored.namespace}".agent_databases WHERE agent_id = 'registered'`,
+          )
+        ).rows,
+      ).toEqual([{ path: agent }]);
       for (const store of stores) {
         const restoredStore = readBackupEngine(store.pathname);
         if (restoredStore.engine !== "postgres") {

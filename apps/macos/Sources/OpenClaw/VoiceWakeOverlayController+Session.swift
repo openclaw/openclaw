@@ -105,7 +105,7 @@ extension VoiceWakeOverlayController {
         self.model.isEditing = false
 
         if sendChime != .none {
-            VoiceWakeChimePlayer.play(sendChime, reason: "overlay.send")
+            VoiceWakeChimePlayer.play(sendChime)
         }
 
         self.model.isSending = true

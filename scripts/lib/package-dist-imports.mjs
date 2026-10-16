@@ -11,8 +11,8 @@ function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
 }
 
-function hasJavaScriptFileExtension(value) {
-  return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
+function hasRuntimeFileExtension(value) {
+  return /\.(?:cjs|js|mjs|exe)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
 function literal(node) {
@@ -116,7 +116,7 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
     }
     if (
       specifier?.startsWith(".") &&
-      (kind !== "import-meta-url" || hasJavaScriptFileExtension(specifier))
+      (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier))
     ) {
       const importedPath = path.posix.normalize(
         path.posix.join(

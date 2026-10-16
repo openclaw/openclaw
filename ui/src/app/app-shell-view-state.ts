@@ -79,6 +79,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
 }
 
 export function readShellView(host: ShellViewHost) {
+  // Imperative preparation consumes current owner facts; it must not widen view dependencies.
   untrack(() => host.prepareView());
   const context = host.context;
   const runtime = host.runtime;

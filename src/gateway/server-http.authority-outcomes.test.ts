@@ -32,6 +32,40 @@ let listener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 const connectionWork = new GatewayConnectionWork();
 const context = createGatewayRequestContext(makeContextParams({ connectionWork }));
 let requestEntryLifetime: GatewayRequestEntryLifetime;
+let cancellations: string[];
+let stopDiagnostics: (() => void) | undefined;
+const clients = new Set<ReturnType<typeof request>>();
+const releases: Array<() => void> = [];
+
+function createRelease() {
+  const release = createDeferred();
+  releases.push(release.resolve);
+  return release;
+}
+
+function watchCancellations() {
+  cancellations = [];
+  stopDiagnostics = onInternalDiagnosticEvent((event) => {
+    if (event.type === "gateway.http.cancelled") {
+      cancellations.push(event.source);
+    }
+  });
+}
+
+function createClientRequest(surface = "core", onResponse?: (res: IncomingMessage) => void) {
+  const client = request(
+    { host: "127.0.0.1", port: listener.claim.port, path: `/authority/${surface}`, agent: false },
+    onResponse,
+  );
+  client.on("error", () => {});
+  clients.add(client);
+  return client;
+}
+
+async function drainRequests() {
+  await connectionWork.runWhenIdle(() => {});
+  await waitForDiagnosticEventsDrained();
+}
 
 beforeAll(async () => {
   const startup = new AsyncWorkScope();
@@ -72,7 +106,18 @@ beforeEach(() => {
   context.requestEntryLifetime = requestEntryLifetime;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  clients.forEach((client) => client.destroy());
+  releases.forEach((release) => release());
+  const runHttpConnectionRequest = lifecycle.runHttpConnectionRequest;
+  if (vi.isMockFunction(runHttpConnectionRequest)) {
+    await Promise.all(runHttpConnectionRequest.mock.results.map((result) => result.value));
+  }
+  await connectionWork.runWhenIdle(() => {});
+  clients.clear();
+  releases.length = 0;
+  stopDiagnostics?.();
+  stopDiagnostics = undefined;
   route.mockReset();
   vi.restoreAllMocks();
 });
@@ -119,75 +164,47 @@ it.each([false, true])(
   },
 );
 
-it("serves HTTP work after the listener's startup scope has closed", async () => {
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const cancellations: string[] = [];
-  const stop = onInternalDiagnosticEvent((event) => {
-    if (event.type === "gateway.http.cancelled") {
-      cancellations.push(event.source);
-    }
-  });
-  route.mockImplementation(async (_req, res) => {
-    // Shared-state readers honor the ambient work signal before admitting a read.
-    getAsyncWorkSignal()?.throwIfAborted();
-    res.end("live request");
-    return true;
-  });
-  try {
-    const response = await fetch(`http://127.0.0.1:${listener.claim.port}/authority/core`, {
-      headers: { Connection: "close" },
+it.each([false, true])(
+  "keeps delivered HTTP work out of cancellation telemetry (rejected=%s)",
+  async (rejected) => {
+    const errors = rejected ? undefined : vi.spyOn(console, "error").mockImplementation(() => {});
+    watchCancellations();
+    route.mockImplementation(async (req, res) => {
+      if (rejected) {
+        await lifecycle.sendHttpRequestRejection(req, res, 413, "Payload too large", "text/plain");
+      } else {
+        getAsyncWorkSignal()?.throwIfAborted();
+        res.end("live request");
+      }
+      return true;
     });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("live request");
-    await connectionWork.runWhenIdle(() => {});
-    await waitForDiagnosticEventsDrained();
-    expect(errors).not.toHaveBeenCalled();
-    expect(cancellations).toEqual([]);
-  } finally {
-    stop();
-  }
-});
-
-it("does not count a delivered server rejection as a client cancellation", async () => {
-  const cancellations: string[] = [];
-  const stop = onInternalDiagnosticEvent((event) => {
-    if (event.type === "gateway.http.cancelled") {
-      cancellations.push(event.source);
+    const response = await fetch(
+      "http://127.0.0.1:" + listener.claim.port + "/authority/core",
+      rejected ? undefined : { headers: { Connection: "close" } },
+    );
+    expect([response.status, await response.text()]).toEqual(
+      rejected ? [413, "Payload too large"] : [200, "live request"],
+    );
+    await drainRequests();
+    if (!rejected) {
+      expect(errors).not.toHaveBeenCalled();
     }
-  });
-  route.mockImplementation(async (req, res) => {
-    await lifecycle.sendHttpRequestRejection(req, res, 413, "Payload too large", "text/plain");
-    return true;
-  });
-  try {
-    const response = await fetch(`http://127.0.0.1:${listener.claim.port}/authority/core`);
-    expect(response.status).toBe(413);
-    expect(await response.text()).toBe("Payload too large");
-    await connectionWork.runWhenIdle(() => {});
-    await waitForDiagnosticEventsDrained();
     expect(cancellations).toEqual([]);
-  } finally {
-    stop();
-  }
-});
+  },
+);
 
 it.each(["core", "plugin"])(
   "cancels disconnected %s reads without logging a handler failure",
   async (surface) => {
     const entered = createDeferred();
-    const cancelled = createDeferred();
+    const cancelled = createRelease();
     const finished = createDeferred();
-    const releaseCleanup = createDeferred();
+    const releaseCleanup = createRelease();
     let cleanup = Promise.resolve();
     let cleanupBelongsToRequest = false;
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const cancellations: string[] = [];
-    const stop = onInternalDiagnosticEvent((event) => {
-      if (event.type === "gateway.http.cancelled") {
-        cancellations.push(event.source);
-      }
-    });
+    watchCancellations();
     route.mockImplementation(async (_req, _res) => {
       const signal = getAsyncWorkSignal();
       expect(signal?.aborted).toBe(false);
@@ -211,35 +228,19 @@ it.each(["core", "plugin"])(
       }
     });
     const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
-    const client = request({
-      host: "127.0.0.1",
-      port: listener.claim.port,
-      path: `/authority/${surface}`,
-      agent: false,
-    });
-    client.on("error", () => {});
+    const client = createClientRequest(surface);
     client.end();
-    try {
-      await entered.promise;
-      client.destroy();
-      await finished.promise;
-      await Promise.all(requests.mock.results.map((result) => result.value));
-      expect(cleanupBelongsToRequest).toBe(true);
-      expect(connectionWork.hasPendingWork).toBe(true);
-      releaseCleanup.resolve();
-      await cleanup;
-      await connectionWork.runWhenIdle(() => {});
-      await waitForDiagnosticEventsDrained();
-      expect(errors).not.toHaveBeenCalled();
-      expect(warnings).not.toHaveBeenCalled();
-      expect(cancellations).toEqual(["client"]);
-    } finally {
-      client.destroy();
-      cancelled.resolve();
-      releaseCleanup.resolve();
-      await cleanup.catch(() => {});
-      stop();
-    }
+    await entered.promise;
+    client.destroy();
+    await finished.promise;
+    await Promise.all(requests.mock.results.map((result) => result.value));
+    expect([cleanupBelongsToRequest, connectionWork.hasPendingWork]).toEqual([true, true]);
+    releaseCleanup.resolve();
+    await cleanup;
+    await drainRequests();
+    expect(errors).not.toHaveBeenCalled();
+    expect(warnings).not.toHaveBeenCalled();
+    expect(cancellations).toEqual(["client"]);
   },
 );
 
@@ -253,12 +254,7 @@ it.each([
     const partial = createDeferred();
     const entered = createDeferred<ServerResponse>();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const cancellations: string[] = [];
-    const stop = onInternalDiagnosticEvent((event) => {
-      if (event.type === "gateway.http.cancelled") {
-        cancellations.push(event.source);
-      }
-    });
+    watchCancellations();
     route.mockImplementation(async (_req, res) => {
       if (ended) {
         // Exceed TCP buffering so end() cannot finish flushing into the paused reader.
@@ -269,46 +265,29 @@ it.each([
       entered.resolve(res);
       return true;
     });
-    const client = request(
-      {
-        host: "127.0.0.1",
-        port: listener.claim.port,
-        path: "/authority/core",
-        agent: false,
-      },
-      (response) => {
-        response.once("data", () => {
-          response.pause();
-          partial.resolve();
-        });
-        response.on("error", () => {});
-      },
-    );
-    client.on("error", () => {});
+    const client = createClientRequest("core", (response) => {
+      response.once("data", () => {
+        response.pause();
+        partial.resolve();
+      });
+      response.on("error", () => {});
+    });
     client.end();
-    try {
-      const response = await entered.promise;
-      await partial.promise;
-      expect(response.writableEnded).toBe(ended);
-      expect(response.writableFinished).toBe(false);
-      const closed = once(response, "close");
-      if (source === "shutdown") {
-        requestEntryLifetime.beginClose();
-        expect(response.destroyed).toBe(true);
-      } else {
-        // ClientRequest.destroy() drains paused response data; reset the transport instead.
-        client.socket!.resetAndDestroy();
-      }
-      await closed;
-      await connectionWork.runWhenIdle(() => {});
-      await waitForDiagnosticEventsDrained();
-      expect(errors).not.toHaveBeenCalled();
-      expect(cancellations).toEqual([source]);
-    } finally {
-      client.destroy();
-      await connectionWork.runWhenIdle(() => {});
-      stop();
+    const response = await entered.promise;
+    await partial.promise;
+    expect([response.writableEnded, response.writableFinished]).toEqual([ended, false]);
+    const closed = once(response, "close");
+    if (source === "shutdown") {
+      requestEntryLifetime.beginClose();
+      expect(response.destroyed).toBe(true);
+    } else {
+      // ClientRequest.destroy() drains paused response data; reset the transport instead.
+      client.socket!.resetAndDestroy();
     }
+    await closed;
+    await drainRequests();
+    expect(errors).not.toHaveBeenCalled();
+    expect(cancellations).toEqual([source]);
   },
 );
 
@@ -326,17 +305,26 @@ it.each([
   ["plugin", "unexpected abort"],
 ])("Gateway HTTP %s owns %s after awaited request work", async (surface, outcome) => {
   const entered = createDeferred<ServerResponse>();
-  const release = createDeferred();
+  const release = createRelease();
   const streaming = createDeferred();
   const operator = new AbortController();
   let auth: ResolvedGatewayAuth = { mode: "token", token: "before", allowTailscale: false };
   const unexpected = outcome.startsWith("unexpected");
+  const streamingResponse = outcome.startsWith("stream");
+  const disconnected = outcome === "disconnect";
+  const closed = disconnected || streamingResponse;
+  const [status, message, type] =
+    outcome === "client expired"
+      ? [401, "Unauthorized", "unauthorized"]
+      : outcome === "operator revoked"
+        ? [403, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, "forbidden"]
+        : [500, "Internal Server Error", ""];
   const unexpectedError =
     outcome === "unexpected abort"
       ? new DOMException("Unrelated upstream cancellation", "AbortError")
       : new Error("HTTP request authority expired");
-  const unhandled = vi.spyOn(console, "error").mockImplementation(() => {});
-  const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
   const requests = vi.spyOn(lifecycle, "runHttpConnectionRequest");
   route.mockImplementation(async (req, res) => {
     const authority = bindHttpResponseAuthority(
@@ -356,9 +344,9 @@ it.each([
       }),
     );
     authority.assertCurrent();
-    if (outcome.startsWith("stream")) {
+    if (streamingResponse) {
       res.write("partial");
-    } else if (outcome !== "disconnect") {
+    } else if (!disconnected) {
       res.setHeader("Content-Length", "1");
       res.setHeader("Content-Encoding", "gzip");
       res.setHeader("Content-Disposition", "attachment; filename=report.txt");
@@ -383,129 +371,97 @@ it.each([
     body: string;
     aborted?: boolean;
   }>();
-  const client = request(
-    {
-      host: "127.0.0.1",
-      port: listener.claim.port,
-      path: `/authority/${surface}`,
-      agent: false,
-    },
-    (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk: string) => {
-        body += chunk;
-        streaming.resolve();
-      });
-      res.once("end", () =>
-        response.resolve({
-          status: res.statusCode,
-          statusMessage: res.statusMessage,
-          headers: res.headers,
-          body,
-        }),
-      );
-      res.once("aborted", () => response.resolve({ status: res.statusCode, body, aborted: true }));
-      res.once("error", (error) => {
-        if (!outcome.startsWith("stream")) {
-          response.reject(error);
-        }
-      });
-    },
-  );
+  const client = createClientRequest(surface, (res) => {
+    let body = "";
+    res.setEncoding("utf8");
+    res.on("data", (chunk: string) => {
+      body += chunk;
+      streaming.resolve();
+    });
+    res.once("end", () =>
+      response.resolve({
+        status: res.statusCode,
+        statusMessage: res.statusMessage,
+        headers: res.headers,
+        body,
+      }),
+    );
+    res.once("aborted", () => response.resolve({ status: res.statusCode, body, aborted: true }));
+    res.once("error", (error) => {
+      if (!streamingResponse) {
+        response.reject(error);
+      }
+    });
+  });
   client.once("error", (error) => {
-    if (outcome === "disconnect") {
+    if (disconnected) {
       response.resolve({ body: "" });
     } else {
       response.reject(error);
     }
   });
   client.end();
-  try {
-    const res = await entered.promise;
-    if (outcome.startsWith("stream")) {
-      await streaming.promise;
-    }
-    if (outcome === "disconnect") {
-      const closed = once(res, "close");
-      client.destroy();
-      await closed;
-    } else if (outcome.endsWith("client expired")) {
-      auth = { ...auth, token: "after" };
-    } else if (outcome.endsWith("operator revoked")) {
-      operator.abort();
-    }
-    const end = vi.spyOn(res, "end");
-    const write = vi.spyOn(res, "write");
-    const headers = vi.spyOn(res, "setHeader");
-    const writeHead = vi.spyOn(res, "writeHead");
-    release.resolve();
-    await requests.mock.results[0]!.value;
-    const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
-    expect(write).not.toHaveBeenCalled();
-    const closed = outcome === "disconnect" || outcome.startsWith("stream");
-    expect(end).toHaveBeenCalledTimes(closed ? 0 : 1);
-    if (closed) {
-      expect(headers).not.toHaveBeenCalled();
-      expect(writeHead).not.toHaveBeenCalled();
-    }
-    if (outcome.startsWith("stream")) {
-      expect(received).toEqual({ status: 200, body: "partial", aborted: true });
-    } else if (outcome === "client expired") {
-      expect(received).toEqual({
-        status: 401,
-        body: JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-      });
-    } else if (outcome === "operator revoked") {
-      expect(received).toEqual({
-        status: 403,
-        body: JSON.stringify({
-          error: { message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, type: "forbidden" },
-        }),
-      });
-    } else if (unexpected) {
-      expect(received).toEqual({ status: 500, body: "Internal Server Error" });
-    }
-    if (!closed) {
-      expect(statusMessage).toBe(
-        outcome === "client expired"
-          ? "Unauthorized"
-          : outcome === "operator revoked"
-            ? "Forbidden"
-            : "Internal Server Error",
-      );
-      expect(responseHeaders?.["content-type"]).toBe(
-        unexpected ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
-      );
-      const contentLength = responseHeaders?.["content-length"];
-      if (contentLength !== undefined) {
-        expect(contentLength).toBe(String(Buffer.byteLength(received.body)));
-      }
-      expect(responseHeaders?.["content-encoding"]).toBeUndefined();
-      expect(responseHeaders?.["content-disposition"]).toBeUndefined();
-      expect(responseHeaders?.etag).toBeUndefined();
-      expect(responseHeaders?.["cache-control"]).toBe("no-store");
-      expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
-      expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
-    }
-    if (unexpected) {
-      if (surface === "core") {
-        expect(unhandled).toHaveBeenCalledExactlyOnceWith(
-          "[gateway-http] unhandled error in request handler:",
-          unexpectedError,
-        );
-      } else {
-        expect(warning).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("plugin http route failed"),
-        );
-      }
-    } else {
-      expect(unhandled).not.toHaveBeenCalled();
-      expect(warning).not.toHaveBeenCalled();
-    }
-  } finally {
-    release.resolve();
+  const res = await entered.promise;
+  if (streamingResponse) {
+    await streaming.promise;
+  }
+  if (disconnected) {
+    const responseClosed = once(res, "close");
     client.destroy();
-    await Promise.all(requests.mock.results.map((result) => result.value));
+    await responseClosed;
+  } else if (outcome.endsWith("client expired")) {
+    auth = { ...auth, token: "after" };
+  } else if (outcome.endsWith("operator revoked")) {
+    operator.abort();
+  }
+  const end = vi.spyOn(res, "end");
+  const write = vi.spyOn(res, "write");
+  const headers = vi.spyOn(res, "setHeader");
+  const writeHead = vi.spyOn(res, "writeHead");
+  release.resolve();
+  await requests.mock.results[0]!.value;
+  const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
+  expect(write).not.toHaveBeenCalled();
+  expect(end).toHaveBeenCalledTimes(closed ? 0 : 1);
+  if (closed) {
+    expect(headers).not.toHaveBeenCalled();
+    expect(writeHead).not.toHaveBeenCalled();
+  }
+  if (streamingResponse) {
+    expect(received).toEqual({ status: 200, body: "partial", aborted: true });
+  } else if (!closed) {
+    expect(received).toEqual({
+      status,
+      body: unexpected ? message : JSON.stringify({ error: { message, type } }),
+    });
+    expect(statusMessage).toBe(type === "forbidden" ? "Forbidden" : message);
+    expect(responseHeaders?.["content-type"]).toBe(
+      unexpected ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
+    );
+    const contentLength = responseHeaders?.["content-length"];
+    if (contentLength !== undefined) {
+      expect(contentLength).toBe(String(Buffer.byteLength(received.body)));
+    }
+    expect(responseHeaders?.["content-encoding"]).toBeUndefined();
+    expect(responseHeaders?.["content-disposition"]).toBeUndefined();
+    expect(responseHeaders?.etag).toBeUndefined();
+    expect(responseHeaders?.["cache-control"]).toBe("no-store");
+    expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
+    expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
+  }
+  if (unexpected) {
+    if (surface === "core") {
+      expect(errors).toHaveBeenCalledExactlyOnceWith(
+        "[gateway-http] unhandled error in request handler:",
+        unexpectedError,
+      );
+    } else {
+      expect(warnings).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("plugin http route failed"),
+      );
+    }
+  } else {
+    expect(errors).not.toHaveBeenCalled();
+    expect(warnings).not.toHaveBeenCalled();
   }
 });

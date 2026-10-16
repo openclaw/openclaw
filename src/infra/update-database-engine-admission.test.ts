@@ -66,6 +66,38 @@ it("admits a matching PostgreSQL target without changing its anchor", async () =
   expect(await fs.readFile(file)).toEqual(before);
 });
 
+it.each(["sqlite", "postgres"] as const)(
+  "reads a legacy registry before deciding whether its retained %s agent prevents downgrade",
+  async (engine) => {
+    const { context } = await store("sqlite");
+    const registry = path.join(context.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+    const retained = path.join(directories.make("retained-agent-engine-"), "agent.sqlite");
+    await fs.mkdir(path.dirname(registry), { recursive: true });
+    {
+      using db = openNodeSqliteDatabase(retained);
+      if (engine === "postgres") {
+        db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+        db.prepare(
+          "INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', 'retained_agent')",
+        ).run("e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f");
+      } else {
+        db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('retained')");
+      }
+      using shared = openNodeSqliteDatabase(registry);
+      shared.exec("PRAGMA user_version=17; CREATE TABLE agent_databases(path TEXT)");
+      shared.prepare("INSERT INTO agent_databases VALUES (?)").run(retained);
+    }
+    const before = await Promise.all([fs.readFile(registry), fs.readFile(retained)]);
+    const inspection = assertUpdateDatabaseEngineContexts([context], undefined);
+    if (engine === "postgres") {
+      await expect(inspection).rejects.toThrow(retained);
+    } else {
+      await inspection;
+    }
+    expect(await Promise.all([fs.readFile(registry), fs.readFile(retained)])).toEqual(before);
+  },
+);
+
 it.each([
   { engine: "sqlite", families: { workboard: { engine: "postgres" } } },
   { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
@@ -155,14 +187,14 @@ it("protects selected PostgreSQL families before any anchor has been created", a
   await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
     /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
   );
-  // A homogeneous selection passes the mixed-engine guard, but still needs capture support.
+  // Every selected family has matched capture and rollback support.
   await expect(
     assertUpdateDatabaseEngineContexts(
       [postgres],
       ["sqlite", "postgres"],
       ["state", "agent", "workboard", "logbook", "team-reports"],
     ),
-  ).rejects.toThrow(/PostgreSQL agent capture requires agent-family port and exact-backup support/);
+  ).resolves.toBeUndefined();
 });
 
 it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {

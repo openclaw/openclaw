@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -534,6 +535,7 @@ defineDiscordVoiceTests(
     it("acknowledges leading wake names from partial realtime transcripts", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
       const { entry, bridgeParams } = await createWakeNameFixture();
+      voiceTestMocks.loggerInfoMock.mockClear();
 
       beginSpeakerTurn(entry);
       bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
@@ -553,6 +555,9 @@ defineDiscordVoiceTests(
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");
       expectUserMessageIncludes("wake answer");
+      const diagnostics = JSON.stringify(voiceTestMocks.loggerInfoMock.mock.calls).toLowerCase();
+      expect(diagnostics).not.toContain("molty");
+      expect(diagnostics).not.toContain("how is it going");
     });
 
     it("does not acknowledge an unfinished fuzzy name that the final wake gate rejects", async () => {

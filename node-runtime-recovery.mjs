@@ -4,6 +4,7 @@ import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { resolveOpenClawCliInvocation } from "./cli-invocation.mjs";
+import { CLI_PARENT_BOUND_PRELOAD } from "./cli-parent-lifetime.mjs";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
@@ -18,6 +19,8 @@ import {
 } from "./node-sqlite.mjs";
 
 export { consumeLauncherRootOptionToken };
+
+export { watchCliRespawnParent } from "./cli-parent-lifetime.mjs";
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 
 // Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
@@ -55,8 +58,8 @@ export const runRespawnedChild = (command, args, env) => {
   });
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
-  const child = spawn(command, args, {
-    stdio: "inherit",
+  const child = spawn(command, ["--import", CLI_PARENT_BOUND_PRELOAD, ...args], {
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
     windowsHide: !stdioIsTerminal,
   });

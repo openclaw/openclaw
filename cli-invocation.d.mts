@@ -1,14 +1,17 @@
 export type StandaloneRuntimeManifest = {
   schemaVersion: 1;
   mode: "jit" | "bytecode" | "aot";
-  executable: { path: string };
-  runtime: { path: string };
-  openclaw: { version: string };
+  executable: { path: string; sha256?: string };
+  runtime: { path: string; sha256?: string };
+  openclaw: { version: string; commit?: string };
   bun: { version: string };
 };
 
 export function readStandaloneRuntimeManifest(
   executable?: string,
+): StandaloneRuntimeManifest | undefined;
+export function readStandaloneRuntimeManifestForRoot(
+  runtimeRoot: string,
 ): StandaloneRuntimeManifest | undefined;
 export function isStandaloneRuntimeExecutable(executable?: string): boolean;
 export function getEmbeddedStandaloneRuntimeRoot(): string | undefined;

@@ -4,7 +4,7 @@ import type { LazyViewError } from "../../../components/solid/lazy-view-error.ts
 import type { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type {
   SidebarPanelData,
   SidebarPanelDefinitionParams,

@@ -1,9 +1,36 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
+import { transcriptSerializedBytes } from "./transcript-payload.js";
 
 const MAX_CONTEXT_METADATA_ROWS = 4096;
+
+export function rewriteSessionActorContextStats(
+  database: OpenClawAgentDatabase,
+  scope: { sessionId: string },
+  rows: readonly { seq: number; eventJson: string; expectedEventJson: string }[],
+  projectionUnchanged: boolean,
+): void {
+  const actor = readSessionActorTransactionState(database, scope);
+  if (!actor) {
+    return;
+  }
+  if (!projectionUnchanged) {
+    actor.transcript.contextStats = undefined;
+    return;
+  }
+  rewriteSessionActorContextMetadata(
+    actor,
+    rows.map((row) => ({
+      rawSeq: row.seq,
+      serializedBytes: transcriptSerializedBytes(database.db, row.eventJson),
+      previousSerializedBytes: transcriptSerializedBytes(database.db, row.expectedEventJson),
+    })),
+  );
+}
 
 /** Reuse stored byte lengths; parsed navigation never establishes payload size. */
 export function projectSessionActorContextMetadata(
@@ -69,10 +96,33 @@ export function projectSessionActorContextMetadata(
   };
 }
 
-export function rewriteSessionActorContextMetadata(
+function rewriteSessionActorContextMetadata(
   actor: SessionActorStoredState,
-  rewritten: SessionActorTranscriptRow[],
+  rewritten: Array<
+    Pick<SessionActorTranscriptRow, "rawSeq" | "serializedBytes"> & {
+      previousSerializedBytes: number;
+    }
+  >,
 ): void {
+  for (const row of rewritten) {
+    const stats = actor.transcript.contextStats;
+    if (!stats) {
+      break;
+    }
+    const active = actor.transcript.active.get(row.rawSeq);
+    if (
+      (!active && !actor.transcript.complete) ||
+      (active && active.active_position <= stats.boundaryActivePosition)
+    ) {
+      // Historical rewrites may touch the retained prefix; its reader owns membership.
+      actor.transcript.contextStats = undefined;
+    } else if (active?.context_eligible === 1) {
+      actor.transcript.contextStats = {
+        ...stats,
+        sizeBytes: stats.sizeBytes + row.serializedBytes - row.previousSerializedBytes,
+      };
+    }
+  }
   const metadata = actor.transcript.contextMetadata;
   if (!metadata) {
     return;
@@ -86,6 +136,31 @@ export function rewriteSessionActorContextMetadata(
       serialized_bytes: bytes.get(row.event_seq) ?? row.serialized_bytes,
     })),
   };
+}
+
+export function appendSessionActorContextStats(
+  actor: SessionActorStoredState,
+  seq: number,
+  event: unknown,
+  serializedBytes: number,
+  projectionNeedsRebuild: boolean,
+): void {
+  const stats = actor.transcript.contextStats;
+  if (!stats) {
+    return;
+  }
+  if (
+    projectionNeedsRebuild ||
+    (isRecord(event) && (event.type === "reset" || event.type === "compaction"))
+  ) {
+    actor.transcript.contextStats = undefined;
+  } else if (actor.transcript.active.get(seq)?.context_eligible === 1) {
+    actor.transcript.contextStats = {
+      ...stats,
+      eventCount: stats.eventCount + 1,
+      sizeBytes: stats.sizeBytes + serializedBytes,
+    };
+  }
 }
 
 /** Initial bytes ride the actor's existing navigation hydration statement. */

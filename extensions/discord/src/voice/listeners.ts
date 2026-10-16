@@ -5,7 +5,6 @@ import {
   type Client,
   GatewayDispatchEvents,
   type GatewayGuildCreateDispatchData,
-  VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 
@@ -48,10 +47,9 @@ export class DiscordVoiceGuildCreateListener {
   }
 }
 
-export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
+export class DiscordVoiceStateUpdateListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  constructor(private manager: DiscordVoiceListenerManager) {}
 
   async handle(data: APIVoiceState, client: Client): Promise<void> {
     const transition = client.getPlugin("gateway")?.takeVoiceStateTransition(data);

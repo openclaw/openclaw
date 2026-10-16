@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { CANCEL_SYMBOL } from "@clack/core";
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, aroundEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -84,6 +85,10 @@ import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.tes
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  // Reuse native reader imports; each request still captures fresh state and admission.
+  const inspectionWorkers = createSqliteReadOnlyWorkerScope();
+  aroundEach((runTest) => inspectionWorkers.run(runTest));
+  afterAll(() => inspectionWorkers.close());
   const nodeExecutable = resolveTestNodeExecPath();
   const {
     configSnapshot,
