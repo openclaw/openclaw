@@ -1,6 +1,3 @@
-/**
- * Tests subagent session utility behavior and persisted session lookups.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,13 +45,33 @@ import { registerSubagentSessionStatusTests } from "./session-utils.subagent-sta
 
 const fixtureStorePath = useSessionStoreFixture("openclaw-session-subagent-list-");
 
-async function seedSessionEntry(
-  storePath: string,
-  sessionKey: string,
-  entry: SessionEntry,
-  agentId?: string,
-): Promise<void> {
-  await replaceSessionEntry({ ...(agentId ? { agentId } : {}), sessionKey, storePath }, entry);
+function childEntry(
+  sessionId: string,
+  updatedAt: number,
+  overrides: Partial<SessionEntry> = {},
+): SessionEntry {
+  return { sessionId, updatedAt, spawnedBy: "agent:main:main", ...overrides };
+}
+
+function runFixture(
+  runId: string,
+  childSessionKey: string,
+  requesterSessionKey: string,
+  createdAt: number,
+  startedAt: number,
+  overrides: Partial<SubagentRunFixture> = {},
+): SubagentRunFixture {
+  return {
+    runId,
+    childSessionKey,
+    requesterSessionKey,
+    createdAt,
+    startedAt,
+    requesterDisplayKey: "tree",
+    task: "synthetic task",
+    cleanup: "keep",
+    ...overrides,
+  };
 }
 
 describe("session list subagent metadata", () => {
@@ -96,60 +113,43 @@ describe("session list subagent metadata", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
         try {
           for (const sessionKey of [root, movedRoot, navigation, child, grandchild]) {
-            await seedSessionEntry(storePath, sessionKey, {
-              sessionId: sessionKey.split(":").at(-1)!,
-              updatedAt: now,
-              ...(sessionKey === child ? { spawnedBy: root, parentSessionKey: navigation } : {}),
-            });
+            await replaceSessionEntry(
+              { storePath, sessionKey },
+              {
+                sessionId: sessionKey.split(":").at(-1)!,
+                updatedAt: now,
+                ...(sessionKey === child ? { spawnedBy: root, parentSessionKey: navigation } : {}),
+              },
+            );
           }
-          const makeRun = (
-            runId: string,
-            childSessionKey: string,
-            requesterSessionKey: string,
-          ): SubagentRunFixture => ({
-            runId,
-            childSessionKey,
-            requesterSessionKey,
-            requesterDisplayKey: "tree",
-            task: "synthetic task",
-            cleanup: "keep",
-            createdAt: now - 10_000,
-            startedAt: now - 9_000,
-          });
+          const makeRun = (runId: string, childSessionKey: string, requesterSessionKey: string) =>
+            runFixture(runId, childSessionKey, requesterSessionKey, now - 10_000, now - 9_000);
+          const records: SubagentRunFixture[] = [
+            {
+              ...makeRun("child", child, key("other")),
+              controllerSessionKey: root,
+              endedAt: now - 3 * 60 * 60_000,
+              outcome: { status: "ok" },
+            },
+            { ...makeRun("grandchild", grandchild, child), generation: 1 },
+            makeRun("collision", key("old-collision"), root),
+            {
+              ...makeRun(" collision ", key("new-collision"), key("other")),
+              createdAt: now - 5_000,
+            },
+            {
+              ...makeRun("deleted-collector", key("deleted"), key("other")),
+              controllerSessionKey: root,
+              collect: true,
+              groupId: "group",
+              swarmRequesterSessionKey: root,
+              requesterAgentId: "main",
+              collectorCompletion: { status: "done" },
+              endedAt: now - 1_000,
+            },
+          ];
           const runs = canonicalSubagentRunFixtures(
-            new Map([
-              [
-                "child",
-                {
-                  ...makeRun("child", child, key("other")),
-                  controllerSessionKey: root,
-                  endedAt: now - 3 * 60 * 60_000,
-                  outcome: { status: "ok" },
-                },
-              ],
-              ["grandchild", { ...makeRun("grandchild", grandchild, child), generation: 1 }],
-              ["collision", makeRun("collision", key("old-collision"), root)],
-              [
-                " collision ",
-                {
-                  ...makeRun(" collision ", key("new-collision"), key("other")),
-                  createdAt: now - 5_000,
-                },
-              ],
-              [
-                "deleted-collector",
-                {
-                  ...makeRun("deleted-collector", key("deleted"), key("other")),
-                  controllerSessionKey: root,
-                  collect: true,
-                  groupId: "group",
-                  swarmRequesterSessionKey: root,
-                  requesterAgentId: "main",
-                  collectorCompletion: { status: "done" },
-                  endedAt: now - 1_000,
-                },
-              ],
-            ]),
+            new Map(records.map((run) => [run.runId, run])),
           );
           saveSubagentRegistryToSqlite(runs);
           const read = async (sessionKey: string, at = now) =>
@@ -209,13 +209,7 @@ describe("session list subagent metadata", () => {
   test("uses the newest child-session row for stale/current replacement pairs", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-current";
-    const store: Record<string, SessionEntry> = {
-      [childSessionKey]: {
-        sessionId: "sess-stale-current",
-        updatedAt: now,
-        spawnedBy: "agent:main:main",
-      } as SessionEntry,
-    };
+    const store = { [childSessionKey]: childEntry("sess-stale-current", now) };
 
     await addSubagentRunForTests({
       runId: "run-stale-active",
@@ -239,10 +233,12 @@ describe("session list subagent metadata", () => {
     const result = await listSubagentSessions(store);
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]?.key).toBe(childSessionKey);
-    expect(result.sessions[0]?.status).toBe("done");
-    expect(result.sessions[0]?.startedAt).toBe(now - 900);
-    expect(result.sessions[0]?.endedAt).toBe(now - 200);
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      status: "done",
+      startedAt: now - 900,
+      endedAt: now - 200,
+    });
   });
 
   test("keeps follow-up turn timing instead of the finished spawn run", async () => {
@@ -259,19 +255,16 @@ describe("session list subagent metadata", () => {
     });
     const list = (entry: Partial<SessionEntry>) =>
       listSubagentSessions({
-        [childSessionKey]: {
-          sessionId: "sess-follow-up",
-          updatedAt: now,
-          spawnedBy: "agent:main:main",
-          ...entry,
-        } as SessionEntry,
+        [childSessionKey]: childEntry("sess-follow-up", now, entry),
       }).then((result) => result.sessions.find((session) => session.key === childSessionKey));
 
     // Lifecycle start cleared endedAt/runtimeMs for the follow-up turn.
     const running = await list({ startedAt: now - 30_000 });
-    expect(running?.startedAt).toBe(now - 30_000);
-    expect(running?.endedAt).toBeUndefined();
-    expect(running?.runtimeMs).toBeUndefined();
+    expect(running).toMatchObject({
+      startedAt: now - 30_000,
+      endedAt: undefined,
+      runtimeMs: undefined,
+    });
 
     const finished = await list({
       startedAt: now - 30_000,
@@ -279,8 +272,7 @@ describe("session list subagent metadata", () => {
       runtimeMs: 29_000,
       status: "done",
     });
-    expect(finished?.endedAt).toBe(now - 1_000);
-    expect(finished?.runtimeMs).toBe(29_000);
+    expect(finished).toMatchObject({ endedAt: now - 1_000, runtimeMs: 29_000 });
   });
 
   test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
@@ -293,31 +285,19 @@ describe("session list subagent metadata", () => {
       const persistedRuns = new Map<string, SubagentRunFixture>([
         [
           "run-complete",
-          {
-            runId: "run-complete",
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
+          runFixture("run-complete", childSessionKey, "agent:main:main", now - 2_000, now - 1_900, {
             requesterDisplayKey: "main",
             task: "finished too early",
-            cleanup: "keep",
-            createdAt: now - 2_000,
-            startedAt: now - 1_900,
             endedAt: now - 1_800,
             outcome: { status: "ok" },
-          },
+          }),
         ],
         [
           "run-live",
-          {
-            runId: "run-live",
-            childSessionKey,
-            requesterSessionKey: "agent:main:main",
+          runFixture("run-live", childSessionKey, "agent:main:main", now - 10_000, now - 9_000, {
             requesterDisplayKey: "main",
             task: "still running",
-            cleanup: "keep",
-            createdAt: now - 10_000,
-            startedAt: now - 9_000,
-          },
+          }),
         ],
       ]);
 
@@ -329,25 +309,24 @@ describe("session list subagent metadata", () => {
         async () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = await listSubagentSessions({
-            [childSessionKey]: {
-              sessionId: "sess-disk-live",
-              updatedAt: now,
-              spawnedBy: "agent:main:main",
+            [childSessionKey]: childEntry("sess-disk-live", now, {
               status: "done",
               endedAt: now - 1_800,
               runtimeMs: 100,
-            } as SessionEntry,
+            }),
           });
           return result.sessions.find((session) => session.key === childSessionKey);
         },
       );
 
-      expect(row?.status).toBe("done");
-      expect(row?.subagentRunState).toBe("historical");
-      expect(row?.hasActiveSubagentRun).toBe(false);
-      expect(row?.startedAt).toBe(now - 9_000);
-      expect(row?.endedAt).toBe(now - 1_800);
-      expect(row?.runtimeMs).toBe(100);
+      expect(row).toMatchObject({
+        status: "done",
+        subagentRunState: "historical",
+        hasActiveSubagentRun: false,
+        startedAt: now - 9_000,
+        endedAt: now - 1_800,
+        runtimeMs: 100,
+      });
     } finally {
       await closeOpenClawStateDatabaseAsync();
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -362,14 +341,11 @@ describe("session list subagent metadata", () => {
       "agent:main:main": {
         sessionId: "sess-main",
         updatedAt: now,
-      } as SessionEntry,
-      "agent:claude:acp:done-child": {
-        sessionId: "sess-done-child",
-        updatedAt: staleAt,
-        spawnedBy: "agent:main:main",
+      },
+      "agent:claude:acp:done-child": childEntry("sess-done-child", staleAt, {
         status: "done",
         endedAt: staleAt,
-      } as SessionEntry,
+      }),
     };
 
     const all = await listSubagentSessions(store);

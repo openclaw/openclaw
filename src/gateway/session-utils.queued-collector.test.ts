@@ -78,6 +78,44 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
   );
 }
 
+function spawnCollector(
+  label: string,
+  context: Partial<Parameters<typeof nativeSpawn.spawnSubagentDirect>[1]> = {},
+) {
+  return nativeSpawn.spawnSubagentDirect(
+    {
+      task: "Wait for cancellation",
+      label,
+      collect: true,
+      context: "isolated",
+      lightContext: true,
+    },
+    {
+      agentSessionKey: parentKey,
+      requesterRunId: "parent-turn",
+      requesterTurnRunId: "parent-turn",
+      ...context,
+    },
+  );
+}
+
+function expectRejected(respond: ReturnType<typeof vi.fn>) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: expect.any(String) }),
+  );
+}
+
+function reserveAgain(entry: { runId: string; groupId?: string }) {
+  reserveSwarmRun({
+    runId: entry.runId,
+    groupId: entry.groupId!,
+    maxConcurrent: 1,
+    activeRunIds: [],
+  });
+}
+
 describe("queued collector session projection", () => {
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
@@ -267,25 +305,10 @@ describe("queued collector session projection", () => {
         await releaseFirstRequester.promise;
         return await readRequester(params);
       });
-    const spawn = () =>
-      nativeSpawn.spawnSubagentDirect(
-        {
-          task: "Wait for cancellation",
-          label,
-          collect: true,
-          context: "isolated",
-          lightContext: true,
-        },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          requesterTurnRunId: "parent-turn",
-        },
-      );
-    const first = spawn();
+    const first = spawnCollector(label);
     try {
       // Finish the second preparation while the first still owns FIFO admission.
-      const second = await spawn();
+      const second = await spawnCollector(label);
       releaseFirstRequester.resolve();
       const results = [await first, second];
       expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
@@ -326,22 +349,7 @@ describe("queued collector session projection", () => {
     });
     const effectsStarted = vi.fn();
     const spawn = (label: string, assertActive?: () => void) =>
-      nativeSpawn.spawnSubagentDirect(
-        {
-          task: "Wait for cancellation",
-          label,
-          collect: true,
-          context: "isolated",
-          lightContext: true,
-        },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          requesterTurnRunId: "parent-turn",
-          onSpawnEffectsStart: effectsStarted,
-          assertActive,
-        },
-      );
+      spawnCollector(label, { onSpawnEffectsStart: effectsStarted, assertActive });
     const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
     try {
       const second = await spawn("Surviving collector");
@@ -471,12 +479,7 @@ describe("queued collector session projection", () => {
     const hold = holdQueuedSwarmRun(entry.runId);
     try {
       hold?.withdraw();
-      reserveSwarmRun({
-        runId: entry.runId,
-        groupId: entry.groupId!,
-        maxConcurrent: 1,
-        activeRunIds: [],
-      });
+      reserveAgain(entry);
       await registerSubagentRun(registration);
       const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
       expect(isSubagentRunQueued(current)).toBe(true);
@@ -526,15 +529,8 @@ describe("queued collector session projection", () => {
         // Real cancellation is complete; an awaited consumer can now observe
         // another owner before it consumes the predecessor's result.
         await releaseSubagentRun(entry.runId);
-        {
-          reserveSwarmRun({
-            runId: entry.runId,
-            groupId: entry.groupId!,
-            maxConcurrent: 1,
-            activeRunIds: [],
-          });
-          await registerSubagentRun(registration);
-        }
+        reserveAgain(entry);
+        await registerSubagentRun(registration);
         order.push("replacement");
         return result;
       });
@@ -553,12 +549,10 @@ describe("queued collector session projection", () => {
         new Set(["observer"]),
         expect.any(Object),
       );
-      {
-        const successor = subagentRuns.get(entry.runId);
-        expect(successor).not.toBe(entry);
-        expect(isSubagentRunQueued(successor)).toBe(true);
-        expect(successor?.execution.endedAt).toBeUndefined();
-      }
+      const successor = subagentRuns.get(entry.runId);
+      expect(successor).not.toBe(entry);
+      expect(isSubagentRunQueued(successor)).toBe(true);
+      expect(successor?.execution.endedAt).toBeUndefined();
     } finally {
       spy.mockRestore();
     }
@@ -636,11 +630,7 @@ describe("queued collector session projection", () => {
       sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
     });
     await Promise.all([Promise.resolve(abort).finally(() => authorization.resolve()), mutation]);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: expect.any(String) }),
-    );
+    expectRejected(respond);
     expect(entry.execution.endedAt).toBeUndefined();
     expect(entry.collectorCompletion).toBeUndefined();
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
@@ -673,11 +663,7 @@ describe("queued collector session projection", () => {
       isWebchatConnect: () => false,
       sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: expect.any(String) }),
-    );
+    expectRejected(respond);
     expect(entry.execution.endedAt).toBeUndefined();
     expect(isSubagentRunQueued(entry)).toBe(true);
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);

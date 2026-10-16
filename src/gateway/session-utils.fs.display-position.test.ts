@@ -35,6 +35,21 @@ function positions(messages: unknown[]) {
   return messages.map((message) => metadata(message).transcriptPosition);
 }
 
+const timestamp = "2026-08-28T00:00:00.000Z";
+function custom(
+  id: string,
+  parentId: string,
+  customType: string,
+  content: string,
+  display?: boolean,
+) {
+  return { type: "custom_message", id, parentId, customType, content, display, timestamp };
+}
+
+function placement(afterRawSeq: number | null, startOrder: number) {
+  return { afterRawSeq, scopeId: "archive-scope", startOrder };
+}
+
 describe("archive transcript display positions", () => {
   let dir: string;
   let storePath: string;
@@ -80,41 +95,22 @@ describe("archive transcript display positions", () => {
         ...activity("missing", "dispatch-anchor", 5),
         details: { ...activity("missing", "dispatch-anchor", 5).details, afterEntryId: undefined },
       }),
-      {
-        type: "custom_message",
-        id: "notice",
-        parentId: "missing",
-        customType: "run-failed-before-reply",
-        content: "This turn ended before a reply.",
-        display: true,
-        timestamp: "2026-08-28T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "hidden",
-        parentId: "notice",
-        customType: "private-report",
-        content: "PRIVATE_REPORT",
-        display: false,
-        timestamp: "2026-08-28T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "missing-display",
-        parentId: "hidden",
-        customType: "private-report",
-        content: "PRIVATE_REPORT",
-        timestamp: "2026-08-28T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "runtime-context",
-        parentId: "missing-display",
-        customType: "openclaw.runtime-context",
-        content: "PRIVATE_CONTEXT",
-        display: true,
-        timestamp: "2026-08-28T00:00:00.000Z",
-      },
+      custom(
+        "notice",
+        "missing",
+        "run-failed-before-reply",
+        "This turn ended before a reply.",
+        true,
+      ),
+      custom("hidden", "notice", "private-report", "PRIVATE_REPORT", false),
+      custom("missing-display", "hidden", "private-report", "PRIVATE_REPORT"),
+      custom(
+        "runtime-context",
+        "missing-display",
+        "openclaw.runtime-context",
+        "PRIVATE_CONTEXT",
+        true,
+      ),
       entry("final", "runtime-context", { role: "assistant", content: "done" }),
     ]);
     const reader = new ArchivedTranscriptReader({ sessionId, storePath });
@@ -159,15 +155,11 @@ describe("archive transcript display positions", () => {
     const expected = [
       { source, rawSeq: 2 },
       { source, rawSeq: 5 },
-      { source, rawSeq: 6, activity: { afterRawSeq: 4, scopeId: "archive-scope", startOrder: 1 } },
-      { source, rawSeq: 7, activity: { afterRawSeq: 4, scopeId: "archive-scope", startOrder: 0 } },
+      { source, rawSeq: 6, activity: placement(4, 1) },
+      { source, rawSeq: 7, activity: placement(4, 0) },
       { source, rawSeq: 8 },
-      { source, rawSeq: 9, activity: { afterRawSeq: 6, scopeId: "archive-scope", startOrder: 2 } },
-      { source, rawSeq: 10 },
-      { source, rawSeq: 11 },
-      { source, rawSeq: 12 },
-      { source, rawSeq: 13 },
-      { source, rawSeq: 17 },
+      { source, rawSeq: 9, activity: placement(6, 2) },
+      ...[10, 11, 12, 13, 17].map((rawSeq) => ({ source, rawSeq })),
     ];
     expect(positions(full)).toEqual(expected);
     for (const result of [recent, bounded, page]) {
@@ -198,10 +190,7 @@ describe("archive transcript display positions", () => {
     for (const message of full) {
       const id = metadata(message).id as string;
       const byId = await reader.readById(id);
-      const around = await reader.readAroundId({
-        messageId: id,
-        maxMessages: 2,
-      });
+      const around = await reader.readAroundId({ messageId: id, maxMessages: 2 });
       expect(byId).toMatchObject({ found: true, oversized: false });
       expect(metadata(byId.message).transcriptPosition).toEqual(
         metadata(message).transcriptPosition,
@@ -217,11 +206,7 @@ describe("archive transcript display positions", () => {
       ["notice", "older", 1, full.slice(9, 10), 1],
       ["notice", "newer", 1, full.slice(9, 10), 1],
     ] as const) {
-      const directionalPage = await reader.readAroundId({
-        messageId,
-        direction,
-        maxMessages,
-      });
+      const directionalPage = await reader.readAroundId({ messageId, direction, maxMessages });
       expect(directionalPage).toMatchObject({
         found: true,
         displaySource: source,
@@ -251,12 +236,8 @@ describe("archive transcript display positions", () => {
     ]);
     expect(positions(page.messages)).toEqual([
       { source, rawSeq: 3 },
-      { source, rawSeq: 4, activity: { afterRawSeq: 2, scopeId: "archive-scope", startOrder: 0 } },
-      {
-        source,
-        rawSeq: 5,
-        activity: { afterRawSeq: null, scopeId: "archive-scope", startOrder: 1 },
-      },
+      { source, rawSeq: 4, activity: placement(2, 0) },
+      { source, rawSeq: 5, activity: placement(null, 1) },
     ]);
   });
 

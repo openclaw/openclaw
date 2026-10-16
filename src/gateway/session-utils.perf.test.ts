@@ -1,5 +1,3 @@
-// Session utility performance tests protect resolver cache scaling for large
-// session lists with repeated provider/model tuples.
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, test, expect, vi } from "vitest";
@@ -25,23 +23,40 @@ import { projectSessionPatchResult } from "./session-utils-model.js";
 import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
-/**
- * Regression smoke for the per-list rowContext resolver cache. The bug we are
- * guarding against is O(rows) scaling of deterministic resolvers whose results
- * only depend on `(provider, model[, agentId])`: with N sessions sharing K
- * unique model tuples, the cached path must perform at most O(K) underlying
- * resolver calls -- not O(N).
- *
- * We assert call counts directly instead of a wall-time bound because shared
- * CI runners cannot give a stable wall-time signal, and call-count regressions
- * are the actual scaling failure mode we care about.
- */
+function prepareRuntime(cfg: OpenClawConfig) {
+  resetPluginRuntimeStateForTest();
+  const registry = createEmptyPluginRegistry();
+  setActivePluginRegistry(registry);
+  resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(cfg);
+  return registry;
+}
+
+function makeStore(count: number, entry: (index: number) => [string, SessionEntry]) {
+  return Object.fromEntries(Array.from({ length: count }, (_, index) => entry(index)));
+}
+
+function budgetStore(count: number) {
+  return makeStore(count, (index) => [
+    `agent:main:budget-${index}`,
+    { sessionId: `budget-${index}`, updatedAt: index + 1 },
+  ]);
+}
+
+function atImmediate(callback: () => void) {
+  return new Promise<void>((resolve) => {
+    setImmediate(() => {
+      callback();
+      resolve();
+    });
+  });
+}
+
+// Resolver call counts protect O(unique model tuples), without CI wall-clock noise.
 describe("session list resolver cache", () => {
   test("bounds dirty-refresh roster work across config publication", async () => {
     const rosterSize = 32;
     await withStateDirEnv("openclaw-roster-chunks-", async () => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
       const rowCount = 80;
       const ownerId = `agent-${rosterSize - 1}`;
       const entries = Object.fromEntries(
@@ -71,18 +86,15 @@ describe("session list resolver cache", () => {
           defaults: { model: { primary: "example/roster-model" }, thinkingDefault: "off" },
         },
       };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      const store = Object.fromEntries(
-        Array.from({ length: rowCount }, (_, index) => [
-          `agent:${ownerId}:dashboard:${index}`,
-          {
-            sessionId: `row-chunk-${index}`,
-            updatedAt: index + 1,
-            createdActor: { type: "agent" as const, id: ownerId },
-          },
-        ]),
-      );
+      prepareRuntime(cfg);
+      const store = makeStore(rowCount, (index) => [
+        `agent:${ownerId}:dashboard:${index}`,
+        {
+          sessionId: `row-chunk-${index}`,
+          updatedAt: index + 1,
+          createdActor: { type: "agent" as const, id: ownerId },
+        },
+      ]);
       writeResidentEntries(store);
       let projection: SessionRowProjection | undefined;
       let refreshBatch = 0;
@@ -117,17 +129,14 @@ describe("session list resolver cache", () => {
               insideRow = false;
               projectedRows++;
               if (projectedRows === 1) {
-                control = new Promise<void>((resolve) => {
-                  setImmediate(() => {
-                    rowsBeforePause = projectedRows;
-                    entries[ownerId] = {
-                      identity: { name: "Refreshed owner" },
-                      fastModeDefault: true,
-                    };
-                    setRuntimeConfigSnapshot(cfg);
-                    identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
-                    resolve();
-                  });
+                control = atImmediate(() => {
+                  rowsBeforePause = projectedRows;
+                  entries[ownerId] = {
+                    identity: { name: "Refreshed owner" },
+                    fastModeDefault: true,
+                  };
+                  setRuntimeConfigSnapshot(cfg);
+                  identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
                 });
               }
             }
@@ -166,20 +175,12 @@ describe("session list resolver cache", () => {
     "yields during expensive %s materialization without reprojecting unchanged rows",
     async (phase) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
-        resetPluginRuntimeStateForTest();
-        setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {
           agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
         };
-        resetConfigRuntimeState();
-        setRuntimeConfigSnapshot(cfg);
+        prepareRuntime(cfg);
         const rowCount = 96;
-        const store = Object.fromEntries(
-          Array.from({ length: rowCount }, (_, index) => [
-            `agent:main:budget-${index}`,
-            { sessionId: `budget-${index}`, updatedAt: index + 1 },
-          ]),
-        );
+        const store = budgetStore(rowCount);
         writeResidentEntries(store);
         let projection: SessionRowProjection | undefined;
         if (phase === "dirty refresh") {
@@ -198,11 +199,8 @@ describe("session list resolver cache", () => {
             workMs += 20;
             projectedRows++;
             if (projectedRows === 1) {
-              control = new Promise<void>((resolve) => {
-                setImmediate(() => {
-                  rowsAtControl = projectedRows;
-                  resolve();
-                });
+              control = atImmediate(() => {
+                rowsAtControl = projectedRows;
               });
             }
             return result;
@@ -235,17 +233,13 @@ describe("session list resolver cache", () => {
 
   test("bounds catalog acquisition per publication and reuses each agent's model metadata", async () => {
     await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      const pluginRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(pluginRegistry);
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: {}, research: {} },
           defaults: { model: { primary: "example/model-hit" } },
         },
       };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
+      const pluginRegistry = prepareRuntime(cfg);
       const modelCatalog = new Map(
         ["main", "research"].map((agentId, index) => [
           agentId,
@@ -265,21 +259,19 @@ describe("session list resolver cache", () => {
           },
         ]),
       );
-      const store: Record<string, SessionEntry> = Object.fromEntries(
-        Array.from({ length: 80 }, (_, index) => {
-          const agentId = index % 2 ? "research" : "main";
-          return [
-            `agent:${agentId}:dashboard:catalog-${index}`,
-            {
-              sessionId: `catalog-${index}`,
-              updatedAt: index,
-              providerOverride: "example",
-              modelOverride:
-                index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
-            } satisfies SessionEntry,
-          ];
-        }),
-      );
+      const store = makeStore(80, (index) => {
+        const agentId = index % 2 ? "research" : "main";
+        return [
+          `agent:${agentId}:dashboard:catalog-${index}`,
+          {
+            sessionId: `catalog-${index}`,
+            updatedAt: index,
+            providerOverride: "example",
+            modelOverride:
+              index % 8 < 2 ? "model-hit" : index % 8 < 4 ? "Model-Hit" : "model-missing",
+          },
+        ];
+      });
       writeResidentEntries(store);
       const acpSessionKeys = new Set<string>();
       for (const [index, [sessionKey, entry]] of Object.entries(store).entries()) {
@@ -397,18 +389,10 @@ describe("session list resolver cache", () => {
     "reuses resident input facts for $name without a request-time yield",
     async ({ limit, search }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
-        resetPluginRuntimeStateForTest();
-        setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {};
-        resetConfigRuntimeState();
-        setRuntimeConfigSnapshot(cfg);
+        prepareRuntime(cfg);
         const entryCount = limit === 300 ? 2051 : 32;
-        const store = Object.fromEntries(
-          Array.from({ length: entryCount }, (_, index) => [
-            `agent:main:budget-${index}`,
-            { sessionId: `budget-${index}`, updatedAt: index + 1 },
-          ]),
-        );
+        const store = budgetStore(entryCount);
         const projection = createSessionRowProjectionFixture({
           cfg,
           store,
@@ -430,11 +414,8 @@ describe("session list resolver cache", () => {
             return readInputs(params);
           });
         let controlRan = false;
-        const control = new Promise<void>((resolve) => {
-          setImmediate(() => {
-            controlRan = true;
-            resolve();
-          });
+        const control = atImmediate(() => {
+          controlRan = true;
         });
         try {
           for (let request = 0; request < 2; request++) {
@@ -470,34 +451,29 @@ describe("session list resolver cache", () => {
       sharedTail: 99,
     };
     await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
+      const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
+      };
+      prepareRuntime(cfg);
       const storePath = path.join(stateDir, "sessions.json");
-      const store: Record<string, SessionEntry> = {};
-      const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
+      const ownerId = ensureProfileForEmail("owner@example.com").id;
       using _ = {
         [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
       };
-      for (let index = 0; index < scenario.count; index += 1) {
+      const store = makeStore(scenario.count, (index) => {
         const sessionId = `title-batch-${index}`;
-        const sessionKey = `agent:main:${sessionId}`;
         const entry: SessionEntry = {
           sessionId,
           updatedAt: 1_000 - index,
-          ...(ownerId && index >= scenario.count - scenario.owned
+          ...(index >= scenario.count - scenario.owned
             ? {
                 createdVia: "operator",
                 createdActor: { type: "human", source: "profile", id: ownerId },
               }
             : {}),
         };
-        store[sessionKey] = entry;
-      }
+        return [`agent:main:${sessionId}`, entry];
+      });
 
       const titleFieldsBySessionKey = new Map(
         Array.from(
@@ -510,31 +486,27 @@ describe("session list resolver cache", () => {
         ),
       );
       let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
-      const client: GatewayClient | undefined = ownerId
-        ? {
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: {
-                id: "openclaw-control-ui",
-                version: "test",
-                platform: "test",
-                mode: "webchat",
-              },
-              role: "operator",
-              scopes: ["operator.admin"],
-            },
-            authenticatedUserProfile: {
-              profileId: ownerId,
-              displayName: ownerId,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
-          }
-        : undefined;
-      if (client) {
-        prepareGatewayRecipientProfile(client);
-      }
+      const client: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "test",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: ["operator.admin"],
+        },
+        authenticatedUserProfile: {
+          profileId: ownerId,
+          displayName: ownerId,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      };
+      prepareGatewayRecipientProfile(client);
       try {
         projection = createSessionRowProjectionFixture({
           cfg,
@@ -546,7 +518,7 @@ describe("session list resolver cache", () => {
           projection,
           client,
           opts: {
-            ownerFirst: Boolean(ownerId),
+            ownerFirst: true,
             includeDerivedTitles: true,
             includeLastMessage: true,
             limit: scenario.limit,
@@ -574,7 +546,7 @@ describe("session list resolver cache", () => {
           projection,
           client,
           opts: {
-            ownerFirst: Boolean(ownerId),
+            ownerFirst: true,
             includeDerivedTitles: false,
             includeLastMessage: false,
             limit: scenario.limit,
