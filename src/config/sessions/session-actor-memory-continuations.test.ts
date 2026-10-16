@@ -69,6 +69,32 @@ afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
+const completionClaim = (): HarnessCompletionRecovery => ({
+  taskId: "child-task",
+  taskRunId: "child-task",
+  taskStatus: "succeeded",
+  sourceRunId: "announce:child",
+  requesterSessionKey: scope.sessionKey,
+  requesterAgentId: scope.agentId,
+  sessionId: scope.sessionId,
+});
+const makePendingOwner = (
+  inputId: string,
+  idempotencyKey: string,
+  messageJson: string,
+): SessionPendingInputOwner => ({
+  ...scope,
+  inputId,
+  transcriptInputId: inputId,
+  idempotencyKey,
+  messageJson,
+  lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  databasePath: scope.storePath,
+  workerDatabasePath: scope.storePath,
+  assertCurrent() {},
+  finish() {},
+});
+
 async function fixture(patch: Partial<SessionEntry> = {}) {
   const owner = memorySessionActorOwners.get({ agentId: scope.agentId, path: scope.storePath });
   const acquire = async (): Promise<SessionActorStorageBinding> => {
@@ -203,18 +229,7 @@ describe("memory continuation adapters", () => {
       requestHash: "hash",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
     });
-    const pendingOwner: SessionPendingInputOwner = {
-      ...scope,
-      inputId: "pending-input",
-      transcriptInputId: "pending-input",
-      idempotencyKey,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      databasePath: scope.storePath,
-      workerDatabasePath: scope.storePath,
-      messageJson,
-      assertCurrent() {},
-      finish() {},
-    };
+    const pendingOwner = makePendingOwner("pending-input", idempotencyKey, messageJson);
     registerSessionPendingInputOwner(pendingOwner);
     try {
       await runWithSessionActorStorage(binding, async () => {
@@ -250,23 +265,16 @@ describe("memory continuation adapters", () => {
   it("settles input through the store adapter without losing an intervening session patch", async () => {
     const { owner, binding, replace } = await fixture();
     const idempotencyKey = "store:user";
-    const pendingOwner: SessionPendingInputOwner = {
-      ...scope,
-      inputId: "store-input",
-      transcriptInputId: "store-input",
+    const pendingOwner = makePendingOwner(
+      "store-input",
       idempotencyKey,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      databasePath: scope.storePath,
-      workerDatabasePath: scope.storePath,
-      messageJson: JSON.stringify({
+      JSON.stringify({
         role: "user",
         content: "stored",
         idempotencyKey,
         timestamp: 1,
       }),
-      assertCurrent() {},
-      finish() {},
-    };
+    );
     registerSessionPendingInputOwner(pendingOwner);
     const guard = () => assertSessionPendingInputLifetimeCurrent(pendingOwner);
     const store = await runWithSessionActorStorage(binding, () =>
@@ -401,15 +409,7 @@ describe("memory continuation adapters", () => {
   it.each(["human", "reset"])(
     "rechecks an unbound completion source after an in-process %s write",
     async (change) => {
-      const claim: HarnessCompletionRecovery = {
-        taskId: "child-task",
-        taskRunId: "child-task",
-        taskStatus: "succeeded",
-        sourceRunId: "announce:child",
-        requesterSessionKey: scope.sessionKey,
-        requesterAgentId: scope.agentId,
-        sessionId: scope.sessionId,
-      };
+      const claim = completionClaim();
       const { binding, append } = await fixture({
         restartRecoveryHarnessCompletion: claim,
         restartRecoveryDeliverySourceRunId: claim.sourceRunId,
@@ -465,15 +465,7 @@ describe("memory continuation adapters", () => {
   );
 
   it("requires confirmed terminal delivery and blocks a submitted input after its claim is lost", async () => {
-    const claim: HarnessCompletionRecovery = {
-      taskId: "child-task",
-      taskRunId: "child-task",
-      taskStatus: "succeeded",
-      sourceRunId: "announce:child",
-      requesterSessionKey: scope.sessionKey,
-      requesterAgentId: scope.agentId,
-      sessionId: scope.sessionId,
-    };
+    const claim = completionClaim();
     const { binding, append, replace } = await fixture();
     const request = { ...scope, sourceRunId: claim.sourceRunId };
     await runWithSessionActorStorage(binding, async () => {
