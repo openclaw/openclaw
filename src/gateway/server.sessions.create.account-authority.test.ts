@@ -33,7 +33,28 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const model = "openai/gpt-4.1";
+const catalogEntries = () => [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+const forbidden = { ok: false, error: { code: "FORBIDDEN" } };
 afterEach(() => vi.useRealTimers());
+
+function accountAccess(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  return prepareSessionModelAccountAccess(
+    {
+      ...fixture,
+      req: { type: "req", id: "account-authority", method: "sessions.create" },
+      params: {},
+      isWebchatConnect: () => false,
+    },
+    model,
+  );
+}
+
+function directContext(context: GatewayRequestHandlerOptions["context"]) {
+  return {
+    getRuntimeConfig: context.getRuntimeConfig,
+    getClientConnIds: context.getClientConnIds,
+  };
+}
 
 function sessionCreation(
   client: GatewayClient,
@@ -181,7 +202,7 @@ async function createFixture(
     getRuntimeConfig: () => cfg,
     getClientConnIds: (filter) =>
       new Set([...clients].filter((current) => !filter || filter(current)).map((c) => c.connId)),
-    loadGatewayModelCatalog: async () => [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
+    loadGatewayModelCatalog: async () => catalogEntries(),
   });
   context.readPreparedGatewayModelCatalog = async () => {
     const catalog = await context.loadGatewayModelCatalogSnapshot();
@@ -216,18 +237,7 @@ async function createFixture(
   const request = sessionCreation(client, context, key, storePath, "create-account-authority");
   const create = (selection?: string, idempotent = true) =>
     request.create(selection, idempotent ? "create-once" : undefined);
-  return {
-    authProfileId,
-    client,
-    clients,
-    context,
-    key,
-    owner,
-    role,
-    storePath,
-    ...request,
-    create,
-  };
+  return { authProfileId, client, clients, context, key, owner, role, ...request, create };
 }
 
 test.each([
@@ -258,10 +268,10 @@ test.each([
       expect(entry).toMatchObject({
         createdActor: { type: "human", source: "profile", id: fixture.owner.id },
       });
-      expect(entry?.authProfileOverride).toBe(fixture.authProfileId);
-      expect(entry?.authProfileOverrideSource).toBe(
-        row.selection === "none" ? undefined : row.selection === "explicit" ? "user" : "user-link",
-      );
+      expect([entry?.authProfileOverride, entry?.authProfileOverrideSource]).toEqual([
+        fixture.authProfileId,
+        { none: undefined, explicit: "user", default: "user-link" }[row.selection],
+      ]);
       expect(listUserProfileAuthLinks(fixture.owner.id)).toEqual(links);
     });
   },
@@ -313,53 +323,11 @@ test("raw session-write scopes do not replace recorded session-create admission"
       { key: fixture.key, idempotencyKey: "direct-create" },
       {
         client: fixture.client,
-        context: {
-          getRuntimeConfig: fixture.context.getRuntimeConfig,
-          getClientConnIds: fixture.context.getClientConnIds,
-        },
+        context: directContext(fixture.context),
       },
     );
-    expect(result).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+    expect(result).toMatchObject(forbidden);
     expect(fixture.entry()).toBeUndefined();
-  });
-});
-
-test("session-only creation authority does not permit changing personal defaults", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async () => {
-    const fixture = await createFixture("operator.sessions.write", true);
-    const links = listUserProfileAuthLinks(fixture.owner.id);
-    const service = createModelAccountConnectService({
-      getConfig: fixture.context.getRuntimeConfig,
-    });
-    try {
-      for (const [method, params] of [
-        [
-          "users.selectModelAccount",
-          { authProfileId: expectDefined(fixture.authProfileId, "owned account") },
-        ],
-        ["users.unlinkAuthProfile", { provider: "openai" }],
-      ] as const) {
-        const result = await directSessionReq(
-          method,
-          { ...params, profileId: fixture.owner.id },
-          {
-            client: fixture.client,
-            context: {
-              getRuntimeConfig: fixture.context.getRuntimeConfig,
-              getClientConnIds: fixture.context.getClientConnIds,
-              modelAccountConnectService: service,
-            },
-          },
-        );
-        expect(result, JSON.stringify(result.error)).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN" },
-        });
-      }
-      expect(listUserProfileAuthLinks(fixture.owner.id)).toEqual(links);
-    } finally {
-      await service.stop();
-    }
   });
 });
 
@@ -392,7 +360,7 @@ async function createCatalogFixture(withCapturedAuthority = false) {
     workspaceDir: resolveAgentWorkspaceDir(cfg, "main"),
     config: cfg,
     catalogComplete: true,
-    entries: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
+    entries: catalogEntries(),
     routeVariants: [],
   };
   const context = createDirectChatContext({
@@ -523,13 +491,7 @@ test.each([-3_600_000, 3_600_000])(
 test("ordinary tool default authority retains role revocation without main-thread SQL", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const fixture = await createFixture("operator.write", true, "agent");
-    const options: GatewayRequestHandlerOptions = {
-      ...fixture,
-      req: { type: "req", id: "default-authority", method: "sessions.create" },
-      params: {},
-      isWebchatConnect: () => false,
-    };
-    const { personalAccountDefaults } = await prepareSessionModelAccountAccess(options, model);
+    const { personalAccountDefaults } = await accountAccess(fixture);
     const action = expectDefined(personalAccountDefaults, "operator default authority");
     expect(action.owner).toBe(fixture.owner.id);
     const sql = observeMainThreadSql();
@@ -562,17 +524,9 @@ test.each(["copied capability", "unadmitted session scope"] as const)(
       } else {
         fixture.client.connect.scopes = ["operator.sessions.write"];
       }
-      await expect(
-        prepareSessionModelAccountAccess(
-          {
-            ...fixture,
-            req: { type: "req", id: "invalid-authority", method: "sessions.create" },
-            params: {},
-            isWebchatConnect: () => false,
-          },
-          model,
-        ),
-      ).rejects.toBeInstanceOf(ModelAccountConnectAuthorityError);
+      await expect(accountAccess(fixture)).rejects.toBeInstanceOf(
+        ModelAccountConnectAuthorityError,
+      );
     });
   },
 );
@@ -589,33 +543,49 @@ test("an unqualified synthetic creation does not acquire the operator's default"
   });
 });
 
-test("ordinary tool default use does not authorize personal selection or account management", async () => {
-  await withOpenClawTestState({ layout: "state-only" }, async () => {
-    const fixture = await createFixture("operator.write", true, "agent");
-    const authProfileId = expectDefined(fixture.authProfileId, "owned account");
-    const links = listUserProfileAuthLinks(fixture.owner.id);
-    await fixture.create(`${model}@${authProfileId}`);
-    fixture.expectRejected();
-    const service = createModelAccountConnectService({
-      getConfig: fixture.context.getRuntimeConfig,
-    });
-    try {
-      for (const [method, params] of [
-        ["users.selectModelAccount", { authProfileId }],
-        [
-          "users.authConnect.start",
-          { profileId: fixture.owner.id, provider: "openai", method: "oauth" },
-        ],
-      ] as const) {
-        const result = await directSessionReq(method, params, {
-          client: fixture.client,
-          context: { ...fixture.context, modelAccountConnectService: service },
-        });
-        expect(result).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+test.each(["human", "agent"] as const)(
+  "%s session creation authority does not permit personal account management",
+  async (origin) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const fixture = await createFixture(
+        origin === "human" ? "operator.sessions.write" : "operator.write",
+        true,
+        origin,
+      );
+      const authProfileId = expectDefined(fixture.authProfileId, "owned account");
+      const links = listUserProfileAuthLinks(fixture.owner.id);
+      if (origin === "agent") {
+        await fixture.create(`${model}@${authProfileId}`);
+        fixture.expectRejected();
       }
-      expect(listUserProfileAuthLinks(fixture.owner.id)).toEqual(links);
-    } finally {
-      await service.stop();
-    }
-  });
-});
+      const getConfig = fixture.context.getRuntimeConfig;
+      const service = createModelAccountConnectService({ getConfig });
+      try {
+        const requests =
+          origin === "human"
+            ? ([
+                ["users.selectModelAccount", { authProfileId, profileId: fixture.owner.id }],
+                ["users.unlinkAuthProfile", { provider: "openai", profileId: fixture.owner.id }],
+              ] as const)
+            : ([
+                ["users.selectModelAccount", { authProfileId }],
+                [
+                  "users.authConnect.start",
+                  { profileId: fixture.owner.id, provider: "openai", method: "oauth" },
+                ],
+              ] as const);
+        const context = origin === "human" ? directContext(fixture.context) : fixture.context;
+        for (const [method, params] of requests) {
+          const result = await directSessionReq(method, params, {
+            client: fixture.client,
+            context: { ...context, modelAccountConnectService: service },
+          });
+          expect(result, JSON.stringify(result.error)).toMatchObject(forbidden);
+        }
+        expect(listUserProfileAuthLinks(fixture.owner.id)).toEqual(links);
+      } finally {
+        await service.stop();
+      }
+    });
+  },
+);

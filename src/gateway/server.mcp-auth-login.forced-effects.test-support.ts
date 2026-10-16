@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -19,6 +19,8 @@ import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admissi
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { registerMcpAuthCommitEffects } from "./server.mcp-auth-login.commit-effects.test-support.js";
 import { rpcReq } from "./test-helpers.server.js";
+
+type OAuthProvider = Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>;
 
 export type McpAuthEffectEndpoint = {
   tokenLifetimeSeconds: number;
@@ -51,6 +53,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     let changedConfig = false;
 
     const stored = () => oauthStore.readMcpOAuthStore(identity().storeKey);
+    const pending = (state: string) => oauthStore.readMcpOAuthPendingAuthorization(state);
     const writeServerConfig = (server: McpServerConfig) =>
       writeConfigFile({ gateway: { reload: { mode: "off" } }, mcp: { servers: { docs: server } } });
     const holdEffect = () => {
@@ -88,11 +91,16 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
     });
+    const respond = (response: ServerResponse, value: unknown, status = 200) => {
+      response.writeHead(status).end(JSON.stringify(value));
+      return true;
+    };
+    const expectAbsent = (
+      store: Awaited<ReturnType<typeof stored>>,
+      ...keys: (keyof typeof store)[]
+    ) => expect(keys.map((key) => store[key])).toEqual(keys.map(() => undefined));
     const observeProvider = (
-      observe: (
-        provider: Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>,
-        login: oauthProvider.McpOAuthLoginLifecycle,
-      ) => void,
+      observe: (provider: OAuthProvider, login: oauthProvider.McpOAuthLoginLifecycle) => void,
     ) => {
       const create = oauthProvider.createMcpOAuthClientProvider;
       const spy = vi
@@ -150,12 +158,16 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(JSON.stringify(result)).not.toContain("private exchange detail");
       return result;
     };
-    const seed = async () => {
+    const seed = async (lifetime = 3600) => {
+      effects.tokenLifetimeSeconds = lifetime;
       const started = await begin();
       expect((await callback(started.state)).status).toBe(200);
       expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
-      expect((await stored()).tokens?.access_token).toBe("fixture-access");
-      expect((await stored()).tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
+      expect(await stored()).toMatchObject({
+        tokens: { access_token: "fixture-access" },
+        tokensAuthorizationServerUrl: new URL(resourceUrl).origin,
+      });
+      effects.tokenLifetimeSeconds = 3600;
     };
 
     beforeEach(async () => {
@@ -191,9 +203,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     });
 
     it("rejects the real enriched resource discovery save after revocation", async () => {
-      effects.tokenLifetimeSeconds = 30;
-      await seed();
-      effects.tokenLifetimeSeconds = 3600;
+      await seed(30);
       const cached = { ...expectDefined((await stored()).discoveryState, "seed discovery") };
       delete cached.resourceMetadata;
       await withMcpOAuthProviderForTest({ identity: identity() }, async (provider) => {
@@ -204,13 +214,16 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       });
       const before = await stored();
       const beforeRequests = requests.length;
-      const saves: OAuthDiscoveryState[] = [];
+      const saves: Parameters<NonNullable<OAuthProvider["saveDiscoveryState"]>>[0][] = [];
       observeProvider((provider) => {
-        const save = expectDefined(provider.saveDiscoveryState?.bind(provider), "discovery writer");
+        const write = expectDefined(
+          provider.saveDiscoveryState?.bind(provider),
+          "discovery writer",
+        );
         vi.spyOn(provider, "saveDiscoveryState").mockImplementation((value) => {
           saves.push(value);
           revoke();
-          return save(value);
+          return write(value);
         });
       });
       await finishError(await start());
@@ -231,40 +244,35 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         if (request.url !== "/.well-known/oauth-authorization-server") {
           return false;
         }
-        response.end(
-          JSON.stringify({ ...metadata(), client_id_metadata_document_supported: true }),
-        );
-        return true;
+        return respond(response, { ...metadata(), client_id_metadata_document_supported: true });
       };
-      let attemptedClient: unknown;
       let beforeSave: Awaited<ReturnType<typeof stored>> | undefined;
-      let saveCalls = 0;
+      const clients: unknown[] = [];
       observeProvider((provider) => {
-        const save = expectDefined(
+        const write = expectDefined(
           provider.saveClientInformation?.bind(provider),
           "client information writer",
         );
         vi.spyOn(provider, "saveClientInformation").mockImplementation(async (value) => {
-          saveCalls++;
-          attemptedClient = value;
+          clients.push(value);
           beforeSave = await stored();
           revoke();
-          return save(value);
+          return write(value);
         });
       });
       const beforeRequests = requests.length;
       await finishError(await start());
-      expect(saveCalls).toBe(1);
-      expect(attemptedClient).toEqual({
-        client_id: clientMetadataUrl,
-        issuer: new URL(resourceUrl).origin,
-      });
+      expect(clients).toEqual([
+        {
+          client_id: clientMetadataUrl,
+          issuer: new URL(resourceUrl).origin,
+        },
+      ]);
       expect(beforeSave?.discoveryState?.authorizationServerMetadata).toMatchObject({
         client_id_metadata_document_supported: true,
       });
       expect(await stored()).toEqual(expectDefined(beforeSave, "pre-client-save store"));
-      expect((await stored()).clientInformation).toBeUndefined();
-      expect((await stored()).tokens).toBeUndefined();
+      expectAbsent(await stored(), "clientInformation", "tokens");
       expect(requests.slice(beforeRequests)).toEqual([
         "/.well-known/oauth-protected-resource/mcp",
         "/.well-known/oauth-authorization-server",
@@ -287,24 +295,18 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           return true;
         }
         if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
-          response.end(
-            JSON.stringify({
-              resource: resourceUrl,
-              authorization_servers: [new URL("/tenant", resourceUrl).href],
-            }),
-          );
-          return true;
+          return respond(response, {
+            resource: resourceUrl,
+            authorization_servers: [new URL("/tenant", resourceUrl).href],
+          });
         }
         if (pathname === next) {
-          response.end(
-            JSON.stringify({
-              ...metadata(new URL("/tenant", resourceUrl).href),
-              jwks_uri: new URL("/jwks", resourceUrl).href,
-              subject_types_supported: ["public"],
-              id_token_signing_alg_values_supported: ["RS256"],
-            }),
-          );
-          return true;
+          return respond(response, {
+            ...metadata(new URL("/tenant", resourceUrl).href),
+            jwks_uri: new URL("/jwks", resourceUrl).href,
+            subject_types_supported: ["public"],
+            id_token_signing_alg_values_supported: ["RS256"],
+          });
         }
         return false;
       };
@@ -375,76 +377,72 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(resourceAttempts[1]?.protocol).toBeNull();
     });
 
-    const refreshCells = [
-      { error: "server_error", lifetime: 30 },
-      { error: "server_error", lifetime: 0 },
-    ];
-    for (const { error, lifetime } of refreshCells) {
-      it.each(lifetime === 0 ? [false, true] : [false])(
-        `refresh ${error}, lifetime=${lifetime}, revoke=%s`,
-        async (withdraw) => {
-          effects.tokenLifetimeSeconds = lifetime;
-          await seed();
-          effects.tokenLifetimeSeconds = 3600;
-          const before = await stored();
-          expect(before.pendingAuthorizationChallenge).toBeUndefined();
-          let requestParams: URLSearchParams | undefined;
-          let responseBoundary = 0;
-          effects.endpoint = async (request, response) => {
-            if (request.url !== "/token") {
-              return false;
-            }
-            let body = "";
-            for await (const chunk of request) {
-              body += chunk;
-            }
-            requestParams = new URLSearchParams(body);
-            response
-              .writeHead(500)
-              .end(JSON.stringify({ error, error_description: "private exchange detail" }));
-            return true;
-          };
-          observeFetch({
-            response: (pathname) => {
-              if (pathname === "/token") {
-                responseBoundary++;
-                if (withdraw) {
-                  revoke();
-                }
-              }
-            },
-          });
-          const beforeRequests = requests.length;
-          if (lifetime === 0 && !withdraw) {
-            const started = await begin();
-            expect(await oauthStore.readMcpOAuthPendingAuthorization(started.state)).toBe(
-              identity().storeKey,
-            );
-            expect((await stored()).lastAuthorizationUrl).toBeDefined();
-          } else {
-            await finishError(await start());
-            expect(await stored()).toEqual(before);
+    it.each([
+      { lifetime: 30, withdraw: false },
+      { lifetime: 0, withdraw: false },
+      { lifetime: 0, withdraw: true },
+    ])(
+      "refresh server_error, lifetime=$lifetime, revoke=$withdraw",
+      async ({ lifetime, withdraw }) => {
+        await seed(lifetime);
+        const before = await stored();
+        expect(before.pendingAuthorizationChallenge).toBeUndefined();
+        let requestParams: URLSearchParams | undefined;
+        let responseBoundary = 0;
+        effects.endpoint = async (request, response) => {
+          if (request.url !== "/token") {
+            return false;
           }
-          expect(responseBoundary).toBe(1);
-          expect(requestParams?.get("grant_type")).toBe("refresh_token");
-          expect(requestParams?.get("refresh_token")).toBe(before.tokens?.refresh_token);
-          expect(requestParams?.get("client_id")).toBe(before.clientInformation?.client_id);
-          expect(requests.slice(beforeRequests)).toEqual(["/token"]);
-          expect((await stored()).tokens).toEqual(before.tokens);
-          expect((await stored()).clientInformation).toEqual(before.clientInformation);
-          expect((await stored()).tokensAuthorizationServerUrl).toBe(
-            before.tokensAuthorizationServerUrl,
+          requestParams = new URLSearchParams(await text(request));
+          return respond(
+            response,
+            { error: "server_error", error_description: "private exchange detail" },
+            500,
           );
-          if (lifetime > 0) {
-            expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
-          } else {
-            expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeLessThanOrEqual(
-              Date.now(),
-            );
-          }
-        },
-      );
-    }
+        };
+        observeFetch({
+          response: (pathname) => {
+            if (pathname === "/token") {
+              responseBoundary++;
+              if (withdraw) {
+                revoke();
+              }
+            }
+          },
+        });
+        const beforeRequests = requests.length;
+        if (lifetime === 0 && !withdraw) {
+          const started = await begin();
+          expect(await pending(started.state)).toBe(identity().storeKey);
+          expect((await stored()).lastAuthorizationUrl).toBeDefined();
+        } else {
+          await finishError(await start());
+          expect(await stored()).toEqual(before);
+        }
+        expect(responseBoundary).toBe(1);
+        expect(
+          ["grant_type", "refresh_token", "client_id"].map((key) => requestParams?.get(key)),
+        ).toEqual([
+          "refresh_token",
+          before.tokens?.refresh_token,
+          before.clientInformation?.client_id,
+        ]);
+        expect(requests.slice(beforeRequests)).toEqual(["/token"]);
+        const current = await stored();
+        expect([
+          current.tokens,
+          current.clientInformation,
+          current.tokensAuthorizationServerUrl,
+        ]).toEqual([before.tokens, before.clientInformation, before.tokensAuthorizationServerUrl]);
+        if (lifetime > 0) {
+          expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
+        } else {
+          expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeLessThanOrEqual(
+            Date.now(),
+          );
+        }
+      },
+    );
 
     registerMcpAuthCommitEffects({
       identity,
@@ -462,21 +460,18 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
 
     it("rejects verifier publication after the real PKCE digest resolves under revoked authority", async () => {
       const { entered, release } = holdEffect();
-      let digestInput: unknown;
-      let verifier: string | undefined;
-      let digestCalls = 0;
+      const digest = vi.fn(globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle));
+      const verifier = vi.fn((value: string, save: OAuthProvider["saveCodeVerifier"]) =>
+        save(value),
+      );
       let redirectCalls = 0;
-      let verifierFailure: unknown;
       observeProvider((provider) => {
         const state = expectDefined(provider.state?.bind(provider), "state owner");
         vi.spyOn(provider, "state").mockImplementation(async () => {
           const value = await state();
-          const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
           const spy = vi
             .spyOn(globalThis.crypto.subtle, "digest")
             .mockImplementationOnce(async (algorithm, data) => {
-              digestCalls++;
-              digestInput = data;
               const result = await digest(algorithm, data);
               entered.resolve();
               await release.promise;
@@ -486,15 +481,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           return value;
         });
         const save = provider.saveCodeVerifier.bind(provider);
-        vi.spyOn(provider, "saveCodeVerifier").mockImplementation((value) => {
-          verifier = value;
-          try {
-            return save(value);
-          } catch (error) {
-            verifierFailure = error;
-            throw error;
-          }
-        });
+        vi.spyOn(provider, "saveCodeVerifier").mockImplementation((value) => verifier(value, save));
         const redirect = provider.redirectToAuthorization.bind(provider);
         vi.spyOn(provider, "redirectToAuthorization").mockImplementation((url) => {
           redirectCalls++;
@@ -508,16 +495,16 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       revoke();
       release.resolve();
       await finishError(sessionId);
-      expect(digestCalls).toBe(1);
-      expect(verifierFailure).toBeInstanceOf(Error);
+      expect(digest).toHaveBeenCalledTimes(1);
+      expect(
+        verifier.mock.results.findLast((result) => result.type === "throw")?.value,
+      ).toBeInstanceOf(Error);
       expect(redirectCalls).toBe(0);
-      expect(verifier).toHaveLength(43);
-      expect(digestInput).toEqual(
-        new TextEncoder().encode(expectDefined(verifier, "SDK verifier")),
-      );
+      const code = expectDefined(verifier.mock.calls.at(-1)?.[0], "SDK verifier");
+      expect(code).toHaveLength(43);
+      expect(digest.mock.calls[0]?.[1]).toEqual(new TextEncoder().encode(code));
       expect(await stored()).toEqual(before);
-      expect((await stored()).codeVerifier).toBeUndefined();
-      expect((await stored()).lastAuthorizationUrl).toBeUndefined();
+      expectAbsent(await stored(), "codeVerifier", "lastAuthorizationUrl");
       expect(requests).toHaveLength(beforeRequests);
     });
 
@@ -538,7 +525,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             });
           restoreEffects.push(() => cleanup.mockRestore());
         }
-        const publishedPending: string[] = [];
         observeProvider((provider) => {
           const redirect = provider.redirectToAuthorization.bind(provider);
           vi.spyOn(provider, "redirectToAuthorization").mockImplementation(async (url) => {
@@ -548,6 +534,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             await release.promise;
           });
         });
+        const publishedPending: string[] = [];
         const insert = oauthStore.writeMcpOAuthPendingAuthorization;
         const spy = vi
           .spyOn(oauthStore, "writeMcpOAuthPendingAuthorization")
@@ -566,7 +553,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           ),
         ).toBe(rejectedState);
         expect(published.codeVerifier).toHaveLength(43);
-        expect(await oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
+        expect(await pending(rejectedState)).toBeUndefined();
         const beforeRequests = requests.length;
         revoke();
         release.resolve();
@@ -585,23 +572,18 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           replacementState = newer.state;
           replacement = await stored();
           expect(replacementState).not.toBe(rejectedState);
-          expect(await oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
-            identity().storeKey,
-          );
+          expect(await pending(replacementState)).toBe(identity().storeKey);
         }
         releaseCleanup.resolve();
         await finishError(sessionId);
         expect(publishedPending).toEqual(replacementState ? [replacementState] : []);
-        expect(await oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
+        expect(await pending(rejectedState)).toBeUndefined();
         expect((await callback(rejectedState)).status).toBe(410);
         if (replacementState) {
           expect(await stored()).toEqual(expectDefined(replacement, "newer CLI store"));
-          expect(await oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
-            identity().storeKey,
-          );
+          expect(await pending(replacementState)).toBe(identity().storeKey);
         } else {
-          expect((await stored()).codeVerifier).toBeUndefined();
-          expect((await stored()).lastAuthorizationUrl).toBeUndefined();
+          expectAbsent(await stored(), "codeVerifier", "lastAuthorizationUrl");
         }
         expect((await stored()).tokens).toBeUndefined();
         expect(requests).toHaveLength(beforeRequests);

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   EnvironmentsListResultSchema,
   EnvironmentsStatusResultSchema,
@@ -71,7 +71,9 @@ async function collectUntilCompleted(events: AsyncIterable<OpenClawEvent>) {
   return collected;
 }
 
-async function proveRealGatewayContracts(): Promise<void> {
+installGatewayTestHooks({ scope: "test" });
+
+it("proves composed SDK event, run, artifact, environment, and schema contracts", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-a2-gateway-"));
   const sessionKey = "agent:main:sdk-real-gateway";
   const sessionId = "sdk-real-gateway-session";
@@ -109,6 +111,12 @@ async function proveRealGatewayContracts(): Promise<void> {
   let started: Awaited<ReturnType<typeof startServer>> | undefined;
   let oc: OpenClaw | undefined;
   testState.sessionStorePath = path.join(tempDir, "sessions.json");
+
+  const emit = (
+    id: string,
+    data: Parameters<typeof emitAgentEvent>[0]["data"],
+    stream = "lifecycle",
+  ) => emitAgentEvent({ runId: id, stream, data });
 
   try {
     await fs.writeFile(
@@ -168,21 +176,9 @@ async function proveRealGatewayContracts(): Promise<void> {
       status: "accepted",
     });
     const eventsPromise = collectUntilCompleted(run.events());
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 111 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "assistant",
-      data: { delta: "hello from real gateway" },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "end", endedAt: 222 },
-    });
+    emit(runId, { phase: "start", startedAt: 111 });
+    emit(runId, { delta: "hello from real gateway" }, "assistant");
+    emit(runId, { phase: "end", endedAt: 222 });
     const realEvents = await withTimeout(eventsPromise, 2_000, {
       message: "timed out waiting for real Gateway SDK events",
     });
@@ -204,25 +200,17 @@ async function proveRealGatewayContracts(): Promise<void> {
     });
 
     registerAgentRunContext(timeoutRunId, { sessionKey, verboseLevel: "off" });
-    emitAgentEvent({
-      runId: timeoutRunId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 333 },
-    });
-    emitAgentEvent({
-      runId: timeoutRunId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 333,
-        endedAt: 444,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "provider timed out",
-        fallbackExhaustedFailure: true,
-      },
+    emit(timeoutRunId, { phase: "start", startedAt: 333 });
+    emit(timeoutRunId, {
+      phase: "error",
+      startedAt: 333,
+      endedAt: 444,
+      aborted: true,
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      error: "provider timed out",
+      fallbackExhaustedFailure: true,
     });
     await expect(oc.runs.wait(timeoutRunId, { timeoutMs: 2_000 })).resolves.toMatchObject({
       runId: timeoutRunId,
@@ -310,12 +298,4 @@ async function proveRealGatewayContracts(): Promise<void> {
       }
     }
   }
-}
-
-describe("composed preview App SDK Gateway contracts", () => {
-  installGatewayTestHooks({ scope: "test" });
-
-  it("proves event, run, artifact, environment, and schema contracts", async () => {
-    await proveRealGatewayContracts();
-  }, 30_000);
-});
+}, 30_000);

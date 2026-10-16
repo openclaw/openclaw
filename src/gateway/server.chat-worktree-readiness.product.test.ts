@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -19,6 +20,7 @@ import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-w
 import type { Deferred } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderCall = { body: Record<string, unknown>; response: ServerResponse };
@@ -37,8 +39,8 @@ const fileContents = "WORKTREE_TOOL_MARKER: the complete checkout is ready.\n";
 const userMessage = "Read src/remaining.txt and report its marker.";
 const partial = "I can start while the workspace finishes.";
 
-function writeEvent(response: ServerResponse, event: Record<string, unknown>) {
-  response.write(`data: ${JSON.stringify(event)}\n\n`);
+function writeEvent(response: ServerResponse, type: string, fields: Record<string, unknown>) {
+  response.write(`data: ${JSON.stringify({ type: `response.${type}`, ...fields })}\n\n`);
 }
 
 function finishText(response: ServerResponse, text: string, id: string) {
@@ -61,67 +63,58 @@ function finishWithTool(response: ServerResponse, name: string, args: Record<str
     arguments: JSON.stringify(args),
     status: "completed",
   };
-  for (const event of [
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text: partial,
+  const event = (type: string, fields: Record<string, unknown>) =>
+    writeEvent(response, type, fields);
+  event("output_text.done", {
+    item_id: message.id,
+    output_index: 0,
+    content_index: 0,
+    text: partial,
+  });
+  event("output_item.done", { output_index: 0, item: message });
+  event("output_item.added", { output_index: 1, item: { ...item, arguments: "" } });
+  event("function_call_arguments.done", {
+    item_id: item.id,
+    output_index: 1,
+    arguments: item.arguments,
+  });
+  event("output_item.done", { output_index: 1, item });
+  event("completed", {
+    response: {
+      id: "resp_read_remaining",
+      status: "completed",
+      output: [message, item],
+      usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
     },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    { type: "response.output_item.added", output_index: 1, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 1,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 1, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_read_remaining",
-        status: "completed",
-        output: [message, item],
-        usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
-      },
-    },
-  ]) {
-    writeEvent(response, event);
-  }
+  });
   response.end("data: [DONE]\n\n");
 }
 
 async function writeRecordingChannel(root: string, captureUrl: string) {
   const id = "readiness-chat";
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: id,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(root, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      channels: [id],
-      activation: { onStartup: true },
-      channelConfigs: {
-        [id]: {
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: { enabled: { type: "boolean" } },
-          },
+  const writeJson = (file: string, value: unknown) =>
+    fs.writeFile(path.join(root, file), JSON.stringify(value));
+  await writeJson("package.json", {
+    name: id,
+    version: "1.0.0",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id,
+    channels: [id],
+    activation: { onStartup: true },
+    channelConfigs: {
+      [id]: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { enabled: { type: "boolean" } },
         },
       },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
+    },
+    configSchema: { type: "object", additionalProperties: false },
+  });
   await fs.writeFile(
     path.join(root, "index.cjs"),
     `
@@ -187,76 +180,48 @@ it(
     const state = await createOpenClawTestState({
       label: "chat-worktree-readiness",
       env: {
+        ...KERNEL_TEST_ENV,
+        VITEST: process.env.VITEST,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
       },
     });
     const repo = state.workspaceDir;
-    const calls: ProviderCall[] = [];
+    let providerCalls = 0;
     const deliveries: Array<Record<string, unknown>> = [];
     const failures: unknown[] = [];
-    const terminals: Array<{ sessionKey?: string; state?: string; errorMessage?: string }> = [];
+    const terminalErrors: Array<string | undefined> = [];
     let nextCall = createDeferred<ProviderCall>();
     let activeGate: CheckoutGate | undefined;
     const firstDelta = createDeferred();
     const failedTurn = createDeferred();
-    let checkpoint = "gateway startup";
-    const makeGate = (key: string, failure?: Error): CheckoutGate => ({
-      key,
-      failure,
-      entered: createDeferred<PromptFacts>(),
-      release: createDeferred(),
-      toolWaiting: createDeferred(),
-      settled: createDeferred(),
-    });
     // The spy calls this captured method with its original service instance below.
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const create = ManagedWorktreeService.prototype.createWithOutcome;
     const creationObserver = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     creationObserver.mockImplementation(function (this: ManagedWorktreeService, params) {
       const gate = activeGate;
-      const onPromptReady = params.onPromptReady;
       if (!gate || params.ownerId !== gate.key) {
         return create.call(this, params);
       }
-      const operation = create.call(
-        this,
-        onPromptReady
-          ? {
-              ...params,
-              onPromptReady: async (facts) => {
-                await onPromptReady(facts);
-                gate.entered.resolve(facts);
-                await gate.release.promise;
-                if (gate.failure) {
-                  throw gate.failure;
-                }
-              },
-            }
-          : params,
-      );
-      void operation.then(
-        () => {
-          gate.entered.reject(
-            new Error(
-              `Checkout did not publish early prompt (callback=${Boolean(onPromptReady)}, sourceOnly=${params.provisionIgnoredFiles === false})`,
-            ),
-          );
-          gate.settled.resolve();
+      const onPromptReady = expectDefined(params.onPromptReady, "early prompt callback");
+      const operation = create.call(this, {
+        ...params,
+        onPromptReady: async (facts) => {
+          await onPromptReady(facts);
+          gate.entered.resolve(facts);
+          await gate.release.promise;
+          if (gate.failure) {
+            throw gate.failure;
+          }
         },
-        (error: unknown) => {
-          gate.entered.reject(error);
-          gate.settled.resolve();
-        },
-      );
+      });
+      void operation
+        .then(
+          () => gate.entered.reject(new Error("Checkout completed without an early prompt")),
+          (error: unknown) => gate.entered.reject(error),
+        )
+        .finally(() => gate.settled.resolve());
       return operation;
     });
     const captureReadiness = workspaceReadiness.captureAgentWorkspaceReadiness;
@@ -277,11 +242,12 @@ it(
       });
     const providerServer = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
+        request.setEncoding("utf8");
+        let json = "";
         for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          json += chunk;
         }
-        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const body: unknown = JSON.parse(json);
         if (!isRecord(body)) {
           throw new Error("Synthetic provider received an invalid request");
         }
@@ -291,7 +257,7 @@ it(
           return;
         }
         const call = { body, response };
-        calls.push(call);
+        providerCalls++;
         nextCall.resolve(call);
       })().catch((error: unknown) => {
         failures.push(error);
@@ -381,17 +347,14 @@ it(
           if (payload.sessionKey === "agent:main:readiness-early" && payload.state === "delta") {
             firstDelta.resolve();
           }
-          if (["final", "error", "aborted"].includes(payload.state ?? "")) {
-            terminals.push({
-              sessionKey: payload.sessionKey,
-              state: payload.state,
-              ...(typeof payload.errorMessage === "string"
-                ? { errorMessage: payload.errorMessage }
-                : {}),
-            });
-            if (payload.sessionKey === "agent:main:readiness-failure") {
-              failedTurn.resolve();
-            }
+          if (
+            payload.sessionKey === "agent:main:readiness-failure" &&
+            ["final", "error", "aborted"].includes(payload.state)
+          ) {
+            terminalErrors.push(
+              typeof payload.errorMessage === "string" ? payload.errorMessage : undefined,
+            );
+            failedTurn.resolve();
           }
         },
       });
@@ -410,31 +373,45 @@ it(
         expect(await client.request("agent.wait", { runId, timeoutMs: 60_000 })).toMatchObject({
           status,
         });
-      activeGate = makeGate("agent:main:readiness-early");
-      const early = await createWorktree<{
-        key: string;
-        runId: string;
-        runStarted: boolean;
-      }>("readiness-early", { displayName: "Readiness proof", message: userMessage });
+      const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
+      const startCheckout = async (
+        name: string,
+        message: string,
+        failure?: Error,
+        displayName = name,
+      ) => {
+        const gate: CheckoutGate = {
+          key: `agent:main:${name}`,
+          failure,
+          entered: createDeferred<PromptFacts>(),
+          release: createDeferred(),
+          toolWaiting: createDeferred(),
+          settled: createDeferred(),
+        };
+        activeGate = gate;
+        nextCall = createDeferred<ProviderCall>();
+        const started = await createWorktree<{
+          key: string;
+          runId: string;
+          sessionId: string;
+          runStarted: boolean;
+        }>(name, { message, displayName });
+        const facts = await wait(gate.entered.promise);
+        return { gate, started, facts, call: await wait(nextCall.promise) };
+      };
+      const {
+        gate: earlyGate,
+        started: early,
+        facts,
+        call: initial,
+      } = await startCheckout("readiness-early", userMessage, undefined, "Readiness proof");
       expect(early.runStarted).toBe(true);
-      checkpoint = "early prompt preparation";
-      const facts = await withinTest(
-        awaitGateBeforeSettlement(
-          activeGate.entered.promise,
-          activeGate.settled.promise,
-          "Checkout completed without publishing an early prompt",
-        ),
-        signal,
-      );
-      checkpoint = "first model request";
-      const initial = await withinTest(nextCall.promise, signal);
       expect(JSON.stringify(initial.body)).toContain(instruction);
       await expect(fs.access(path.join(facts.path, "src/remaining.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
       initial.response.writeHead(200, { "content-type": "text/event-stream" });
-      writeEvent(initial.response, {
-        type: "response.output_item.added",
+      writeEvent(initial.response, "output_item.added", {
         output_index: 0,
         item: {
           type: "message",
@@ -444,32 +421,27 @@ it(
           status: "in_progress",
         },
       });
-      writeEvent(initial.response, {
-        type: "response.output_text.delta",
+      writeEvent(initial.response, "output_text.delta", {
         item_id: "msg_readiness",
         output_index: 0,
         content_index: 0,
         delta: partial,
       });
-      checkpoint = "first text delta";
-      await withinTest(firstDelta.promise, signal);
+      await wait(firstDelta.promise);
       nextCall = createDeferred<ProviderCall>();
       finishWithTool(initial.response, "read", { path: "src/remaining.txt" });
-      checkpoint = "workspace tool readiness wait";
-      await withinTest(activeGate.toolWaiting.promise, signal);
-      expect(calls).toHaveLength(1);
+      await wait(earlyGate.toolWaiting.promise);
+      expect(providerCalls).toBe(1);
       await expect(fs.access(path.join(facts.path, "src/remaining.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      activeGate.release.resolve();
-      checkpoint = "workspace tool result";
-      const result = await withinTest(nextCall.promise, signal);
+      earlyGate.release.resolve();
+      const result = await wait(nextCall.promise);
       expect(JSON.stringify(result.body.input)).toContain(fileContents.trim());
       finishText(result.response, fileContents, "done");
       await expectRun(early.runId);
 
       activeGate = undefined;
-      checkpoint = "prepared-workspace comparison";
       const normal = await createWorktree<{
         key: string;
         worktree: { path: string; branch: string };
@@ -480,7 +452,7 @@ it(
         message: userMessage,
         idempotencyKey: "readiness-normal-run",
       });
-      const prepared = await withinTest(nextCall.promise, signal);
+      const prepared = await wait(nextCall.promise);
       const initialPrefix = promptPrefix(initial.body, facts.path, facts.branch, early.key);
       const preparedPrefix = promptPrefix(
         prepared.body,
@@ -495,18 +467,16 @@ it(
       for (const toolName of ["write", "message"] as const) {
         for (const revoked of [false, true]) {
           const name = `readiness-${toolName}-${revoked ? "aborted" : "allowed"}`;
-          checkpoint = name;
-          const gate = makeGate(`agent:main:${name}`);
-          activeGate = gate;
-          nextCall = createDeferred<ProviderCall>();
-          const started = await createWorktree<{ runId: string; sessionId: string }>(name, {
-            message:
-              toolName === "write"
-                ? "Write a workspace canary."
-                : "Send the workspace marker attachment.",
-          });
-          await withinTest(gate.entered.promise, signal);
-          const request = await withinTest(nextCall.promise, signal);
+          const {
+            gate,
+            started,
+            call: request,
+          } = await startCheckout(
+            name,
+            toolName === "write"
+              ? "Write a workspace canary."
+              : "Send the workspace marker attachment.",
+          );
           // Checkout rollback must not erase evidence of an unauthorized effect.
           const canary = state.path(`effects/${name}.txt`);
           nextCall = createDeferred<ProviderCall>();
@@ -524,13 +494,12 @@ it(
                   media: path.join(repo, "src/remaining.txt"),
                 },
           );
-          await withinTest(
+          await wait(
             awaitGateBeforeSettlement(
               gate.toolWaiting.promise,
               nextCall.promise,
               `${name}: tool finished without waiting for checkout`,
             ),
-            signal,
           );
           expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
           await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
@@ -544,9 +513,9 @@ it(
             ).toMatchObject({ aborted: true, runIds: [started.runId] });
           }
           gate.release.resolve();
-          await withinTest(gate.settled.promise, signal);
+          await wait(gate.settled.promise);
           if (!revoked) {
-            const completedTool = await withinTest(nextCall.promise, signal);
+            const completedTool = await wait(nextCall.promise);
             if (toolName === "write") {
               expect(await fs.readFile(canary, "utf8")).toBe("workspace write canary");
             } else {
@@ -556,7 +525,7 @@ it(
             }
             finishText(completedTool.response, "Effect completed.", name);
           }
-          expect(await withinTest(runEnded, signal)).toBe(true);
+          expect(await wait(runEnded)).toBe(true);
           await expectRun(started.runId, revoked ? "error" : "ok");
           if (revoked) {
             await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
@@ -566,27 +535,19 @@ it(
       }
 
       const preparationError = new Error("Synthetic checkout failed; retry the session.");
-      checkpoint = "preparation failure";
-      const failedGate = makeGate("agent:main:readiness-failure", preparationError);
-      activeGate = failedGate;
-      nextCall = createDeferred<ProviderCall>();
-      const failed = await createWorktree<{ runId: string }>("readiness-failure", {
-        displayName: "Readiness failure",
-        message: userMessage,
-      });
-      await withinTest(activeGate.entered.promise, signal);
-      await withinTest(nextCall.promise, signal);
-      activeGate.release.resolve();
-      await withinTest(failedTurn.promise, signal);
+      const { gate: failedGate, started: failed } = await startCheckout(
+        "readiness-failure",
+        userMessage,
+        preparationError,
+        "Readiness failure",
+      );
+      failedGate.release.resolve();
+      await wait(failedTurn.promise);
       await gateway.client.request("agent.wait", { runId: failed.runId, timeoutMs: 60_000 });
-      const errors = terminals.filter((event) => event.sessionKey === failedGate.key);
-      expect(errors).toHaveLength(1);
-      expect(JSON.stringify(errors)).toContain(preparationError.message);
+      expect(terminalErrors).toHaveLength(1);
+      expect(JSON.stringify(terminalErrors)).toContain(preparationError.message);
       expect(failures).toEqual([]);
     } finally {
-      if (signal.aborted) {
-        console.error(`Worktree proof stopped at: ${checkpoint}`);
-      }
       activeGate?.release.resolve();
       providerServer.closeAllConnections();
       await new Promise<void>((resolve) => {
