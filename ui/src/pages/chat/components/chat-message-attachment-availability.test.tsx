@@ -5,9 +5,35 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import {
+  releaseChatMediaResourceSubscriber,
+  type ImageRenderOptions,
+} from "./chat-message-media.ts";
 
 const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
+function mountPane(source: string, options: ImageRenderOptions) {
+  const container = document.body.appendChild(document.createElement("div"));
+  const image = () => [{ url: source, width: 1200, height: 800 }];
+  const [images, setImages] = createSignal(image());
+  const draw = () => {
+    setImages(image());
+    flush();
+  };
+  const { unmount } = mountSolid(
+    () => <MessageImages images={images()} options={{ ...options, onRequestUpdate: draw }} />,
+    { container },
+  );
+  const pane = { container, draw, unmount };
+  panes.push(pane);
+  return pane;
+}
+
+const ticket = (mediaTicket: string, lifetime = 60_000) =>
+  Response.json({
+    available: true,
+    mediaTicket,
+    mediaTicketExpiresAt: new Date(Date.now() + lifetime).toISOString(),
+  });
 afterEach(() => {
   for (const pane of panes.splice(0)) {
     pane.unmount();
@@ -24,36 +50,13 @@ it("does not reuse another message's available ticket for the same source", asyn
   const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
   const fetchMock = vi
     .fn<typeof fetch>()
-    .mockResolvedValueOnce(
-      Response.json({
-        available: true,
-        mediaTicket: "readable-message-ticket",
-        mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
-    )
+    .mockResolvedValueOnce(ticket("readable-message-ticket"))
     .mockResolvedValueOnce(
       Response.json({ available: false, reason: "Message unavailable", retryable: false }),
     );
   vi.stubGlobal("fetch", fetchMock);
-  const mount = (messageId: string) => {
-    const container = document.body.appendChild(document.createElement("div"));
-    const [images, setImages] = createSignal([{ url: source, width: 1200, height: 800 }]);
-    const draw = () => {
-      setImages([{ url: source, width: 1200, height: 800 }]);
-      flush();
-    };
-    const { unmount } = mountSolid(
-      () => (
-        <MessageImages
-          images={images()}
-          options={{ sessionKey: "agent:main:shared-source", messageId, onRequestUpdate: draw }}
-        />
-      ),
-      { container },
-    );
-    panes.push({ container, draw, unmount });
-    return container;
-  };
+  const mount = (messageId: string) =>
+    mountPane(source, { sessionKey: "agent:main:shared-source", messageId }).container;
   const readable = mount("readable-message");
   await vi.advanceTimersByTimeAsync(0);
   expect(readable.querySelector("img")?.getAttribute("src")).toContain(
@@ -83,12 +86,6 @@ it("does not let an aborted late renewal replace a newly mounted pane retry", as
   const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
   const retry = createDeferred<Response>();
   let renewalSignal: AbortSignal | undefined;
-  const ticket = (name: string) =>
-    Response.json({
-      available: true,
-      mediaTicket: name,
-      mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
   const fetchMock = vi
     .fn()
     .mockResolvedValueOnce(ticket("original"))
@@ -106,22 +103,7 @@ it("does not let an aborted late renewal replace a newly mounted pane retry", as
     .mockReturnValueOnce(retry.promise);
   vi.stubGlobal("fetch", fetchMock);
   const options = { sessionKey: "renewal-retry-proof", agentId: "main" };
-  const mount = () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const [images, setImages] = createSignal([{ url: source, width: 1200, height: 800 }]);
-    const draw = () => {
-      setImages([{ url: source, width: 1200, height: 800 }]);
-      flush();
-    };
-    const { unmount } = mountSolid(
-      () => <MessageImages images={images()} options={{ ...options, onRequestUpdate: draw }} />,
-      { container },
-    );
-    panes.push({ container, draw, unmount });
-    return { container, draw };
-  };
-  const first = mount();
+  const first = mountPane(source, options);
   await vi.advanceTimersByTimeAsync(0);
   expect(first.container.querySelector("img")?.getAttribute("src")).toContain(
     "mediaTicket=original",
@@ -133,7 +115,7 @@ it("does not let an aborted late renewal replace a newly mounted pane retry", as
   first.draw();
   expect(fetchMock).toHaveBeenCalledTimes(2);
   vi.setSystemTime(startedAt + 60_001);
-  const second = mount();
+  const second = mountPane(source, options);
   const retryButton = second.container.querySelector<HTMLButtonElement>(
     ".chat-assistant-attachment-card__retry",
   );

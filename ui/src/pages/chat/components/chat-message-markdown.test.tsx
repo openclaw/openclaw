@@ -4,13 +4,10 @@
 // transcript mutation actions.
 import { For } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
-import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -18,15 +15,7 @@ import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
-import { MessageMarkdown, type MessageMarkdownProps } from "./chat-message-text-view.tsx";
-
-function MessageSection(props: MessageMarkdownProps) {
-  return (
-    <section onClick={handleMarkdownCodeBlockClick}>
-      <MessageMarkdown {...props} />
-    </section>
-  );
-}
+import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
@@ -280,138 +269,6 @@ describe("user message disclosure", () => {
 });
 
 describe("streaming message Markdown", () => {
-  it.each([
-    { stage: "following paragraph", tail: "The answer is ready.", isStreaming: true },
-    {
-      stage: "later paragraph",
-      tail: "The answer is ready.\n\nMore is arriving.",
-      isStreaming: true,
-    },
-    {
-      stage: "completed reply with its message owner retained",
-      tail: "The answer is ready.",
-      isStreaming: false,
-    },
-  ])("retains completed code choices in the $stage", async ({ tail, isStreaming }) => {
-    const container = document.createElement("div");
-    const blocks = renderSolidRef(() => markdownBlocksRef(() => true), {
-      targetElement: container,
-    });
-    const code = Array.from({ length: 10 }, (_, index) => `const value${index} = ${index};`).join(
-      "\n",
-    );
-    const prefix = `\`\`\`ts\n${code}\n\`\`\`\n\n`;
-    const view = mountSolid(
-      MessageSection,
-      {
-        markdown: prefix + "The answer",
-        messageKey: "retained-fence",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: { codeBlockInteraction: "interactive", linkFavicons: false },
-      },
-      container,
-    );
-    const renderTail = (text: string, streaming: boolean) =>
-      view.update({
-        markdown: prefix + text,
-        messageKey: "retained-fence",
-        options: { role: "assistant", isStreaming: streaming },
-        markdownOptions: { codeBlockInteraction: "interactive", linkFavicons: !streaming },
-      });
-    try {
-      renderTail("The answer", true);
-      await Promise.resolve();
-      container.querySelector<HTMLButtonElement>(".code-block-expand")?.click();
-      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
-      expect(container.querySelector(".code-block-expand")?.getAttribute("aria-expanded")).toBe(
-        "true",
-      );
-      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
-        "true",
-      );
-
-      renderTail(tail, isStreaming);
-      await Promise.resolve();
-
-      expect(container.querySelector(".code-block-expand")?.getAttribute("aria-expanded")).toBe(
-        "true",
-      );
-      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
-        "true",
-      );
-      expect(container.querySelector(".code-block-wrapper.is-expanded.is-wrapped")).not.toBeNull();
-      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
-        tail.split("\n\n").at(-1),
-      );
-    } finally {
-      view.dispose();
-      blocks.unmount();
-      container.remove();
-    }
-  });
-
-  it.each([
-    "message identity",
-    "source correction",
-    "render options",
-    "reference definition",
-  ] as const)("updates streaming Markdown after a %s change", async (change) => {
-    const container = document.createElement("div");
-    const blocks = renderSolidRef(() => markdownBlocksRef(() => true), {
-      targetElement: container,
-    });
-    const source = "```ts\nconst original = 42;\n```\n\nSee [guide][ref]\n\nTail";
-    const view = mountSolid(
-      MessageSection,
-      {
-        markdown: source,
-        messageKey: "message",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: { codeBlockInteraction: "interactive" },
-      },
-      container,
-    );
-    const show = (markdown: string, key = "message", interactive = true) =>
-      view.update({
-        markdown,
-        messageKey: key,
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: { codeBlockInteraction: interactive ? "interactive" : "static" },
-      });
-    try {
-      show(source);
-      await Promise.resolve();
-      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
-      expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
-        "true",
-      );
-
-      if (change === "message identity") {
-        show(source, "other-message");
-        expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
-          "false",
-        );
-      } else if (change === "source correction") {
-        show(source.replace("const original = 42;", "const corrected = 43;"));
-        expect(container.querySelector("code")?.textContent).toBe("const corrected = 43;\n");
-      } else if (change === "render options") {
-        show(source, "message", false);
-        expect(container.querySelector(".code-block-wrap")).toBeNull();
-        expect(container.querySelector(".code-block-copy")).not.toBeNull();
-      } else {
-        show(`${source}\n\n[ref]: https://example.com/guide`);
-        expect(container.querySelector('a[href="https://example.com/guide"]')?.textContent).toBe(
-          "guide",
-        );
-      }
-      expect(container.querySelectorAll("pre code")).toHaveLength(1);
-    } finally {
-      view.dispose();
-      blocks.unmount();
-      container.remove();
-    }
-  });
-
   it.each([
     { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
     { markdown: "Intro\n\n", owner: ".chat-text > p" },

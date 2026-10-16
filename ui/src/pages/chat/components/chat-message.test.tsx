@@ -26,7 +26,6 @@ import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
-  createCanvasPreview,
   createToolResultBlock,
   createAssistantCanvasBlock,
   createUserMessage,
@@ -2981,40 +2980,6 @@ describe("grouped chat rendering", () => {
     expect(image).toBeInstanceOf(HTMLImageElement);
     image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenImage).not.toHaveBeenCalled();
-  });
-
-  it("preserves widget identity and updates script policy across sandbox modes", () => {
-    const message = createAssistantMessage(
-      [
-        { type: "text", text: "Rendered inline." },
-        {
-          type: "canvas",
-          preview: createCanvasPreview({
-            viewId: "cv_inline_scoped",
-            title: "Scoped preview",
-            preferredHeight: 320,
-          }),
-        },
-      ],
-      { id: "assistant-scoped-canvas" },
-    );
-    const options = {
-      canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
-      sessionKey: "agent:main:canvas",
-    };
-    renderAssistantMessage(message, options);
-    const widget = expectCanvasWidget(view, {
-      docId: "cv_inline_scoped",
-      title: "Scoped preview",
-      preferredHeight: 320,
-      sessionKey: options.sessionKey,
-    });
-    expect(widget).toMatchObject({ allowScripts: true });
-
-    renderAssistantMessage(structuredClone(message), { ...options, embedSandboxMode: "strict" });
-    expect(view.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(view.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", async () => {

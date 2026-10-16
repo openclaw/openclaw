@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -14,7 +15,12 @@ import {
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
-import { createMessageGroup, createUserMessage } from "./chat-message.test-support.ts";
+import {
+  createAssistantMessage,
+  createAttachmentBlock,
+  createMessageGroup,
+  createUserMessage,
+} from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
 let onRequestUpdate: () => void;
@@ -66,6 +72,30 @@ function stubImageDecoding(blobPrefix: string, decode: () => Promise<void>) {
   );
 }
 
+function ticketResponse(mediaTicket: string) {
+  return Response.json({
+    available: true,
+    mediaTicket,
+    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+  });
+}
+
+async function whenImageAppears(draw: () => void) {
+  const ready = createDeferred();
+  const observer = new MutationObserver(() => {
+    if (container.querySelector(".chat-message-image")) {
+      ready.resolve();
+    }
+  });
+  observer.observe(container, { childList: true, subtree: true });
+  try {
+    draw();
+    await ready.promise;
+  } finally {
+    observer.disconnect();
+  }
+}
+
 function imageResponse() {
   return new Response("png", { headers: { "Content-Type": "image/png" } });
 }
@@ -100,21 +130,13 @@ describe("message image gallery loading", () => {
   it("renders canonical inbound transcript images through the authenticated media route", async () => {
     const source = `media://inbound/${crypto.randomUUID()}.png`;
     const filename = "café 雪 🦞.png";
-    const available = createDeferred();
     const opened = createDeferred();
     const onOpenImage = vi.fn(() => opened.resolve());
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const mediaUrl = new URL(url, "http://control.test");
       expect(mediaUrl.searchParams.get("source")).toBe(source);
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-auth-token");
-      return new Response(
-        JSON.stringify({
-          available: true,
-          mediaTicket: "ticket-inbound",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-        }),
-        { headers: { "Content-Type": "application/json" } },
-      );
+      return ticketResponse("ticket-inbound");
     });
     vi.stubGlobal("fetch", fetchMock);
     const message = createUserMessage("", {
@@ -140,18 +162,7 @@ describe("message image gallery loading", () => {
         },
         container,
       );
-    const observer = new MutationObserver(() => {
-      if (container.querySelector(".chat-message-image")) {
-        available.resolve();
-      }
-    });
-    observer.observe(container, { childList: true, subtree: true });
-    try {
-      draw();
-      await available.promise;
-    } finally {
-      observer.disconnect();
-    }
+    await whenImageAppears(draw);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
@@ -179,41 +190,25 @@ describe("message image gallery loading", () => {
     "keeps legacy local %s images on one native source without an upgrade",
     async (extension) => {
       const source = "/workspace/legacy-" + crypto.randomUUID() + "." + extension;
-      const fetchMetadata = vi.fn(async () =>
-        Response.json({
-          available: true,
-          mediaTicket: "legacy-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-        }),
-      );
+      const fetchMetadata = vi.fn(async () => ticketResponse("legacy-ticket"));
       vi.stubGlobal("fetch", fetchMetadata);
-      const ready = createDeferred();
-      const observer = new MutationObserver(() => {
-        if (container.querySelector(".chat-message-image")) {
-          ready.resolve();
-        }
-      });
-      observer.observe(container, { childList: true, subtree: true });
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-      try {
+      await whenImageAppears(() =>
         renderImages([{ url: source, mimeType: "image/" + extension }], {
           onOpenImage,
           onRequestUpdate,
-        });
-        await ready.promise;
-        const image = container.querySelector<HTMLImageElement>("img")!;
-        const url = new URL(image.src);
-        expect(url.searchParams.get("source")).toBe(source);
-        expect(url.searchParams.has("variant")).toBe(false);
-        expect(url.searchParams.has("width")).toBe(false);
-        expect(image.getAttribute("srcset")).toBeNull();
-        container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
-        expect(onOpenImage).toHaveBeenCalledOnce();
-        expect(onOpenImage.mock.calls[0]![0].loadDisplayImage).toBeUndefined();
-        expect(fetchMetadata).toHaveBeenCalledOnce();
-      } finally {
-        observer.disconnect();
-      }
+        }),
+      );
+      const image = container.querySelector<HTMLImageElement>("img")!;
+      const url = new URL(image.src);
+      expect(url.searchParams.get("source")).toBe(source);
+      expect(url.searchParams.has("variant")).toBe(false);
+      expect(url.searchParams.has("width")).toBe(false);
+      expect(image.getAttribute("srcset")).toBeNull();
+      container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+      expect(onOpenImage).toHaveBeenCalledOnce();
+      expect(onOpenImage.mock.calls[0]![0].loadDisplayImage).toBeUndefined();
+      expect(fetchMetadata).toHaveBeenCalledOnce();
     },
   );
 
@@ -392,16 +387,7 @@ describe("message image gallery loading", () => {
         imageView?.dispose();
         releaseChatMediaResourceSubscriber(onRequestUpdate);
       }
-      metadata.resolve(
-        new Response(
-          JSON.stringify({
-            available: true,
-            mediaTicket: "gallery-neighbor-ticket",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        ),
-      );
+      metadata.resolve(ticketResponse("gallery-neighbor-ticket"));
       const result = await neighbor;
       if (removeOwner) {
         expect(result).toBeNull();
@@ -415,4 +401,134 @@ describe("message image gallery loading", () => {
       }
     },
   );
+});
+
+function renderAssistantMessage(
+  target: HTMLElement,
+  message: unknown,
+  options: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
+) {
+  mountSolid(
+    MessageGroup,
+    {
+      group: createMessageGroup(message, "assistant"),
+      options: {
+        showReasoning: false,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        ...options,
+      },
+    },
+    target,
+  );
+}
+
+describe("message attachment image gallery projection", () => {
+  it.each([
+    {
+      format: "MEDIA directives",
+      content:
+        "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
+    },
+    {
+      format: "mixed image blocks and document-shaped images",
+      content: [
+        { type: "text", text: "Introduction\n\n**Before**" },
+        { type: "image", url: "https://example.com/before.png" },
+        { type: "text", text: "**After**" },
+        createAttachmentBlock(
+          "https://example.com/after.png",
+          "document",
+          "after.png",
+          "application/octet-stream; charset=binary",
+        ),
+        { type: "text", text: "Closing paragraph" },
+      ],
+    },
+  ])(
+    "keeps assistant $format in order and in one image gallery without persisted mirrors",
+    async ({ content }) => {
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      renderAssistantMessage(
+        container,
+        createAssistantMessage(content, {
+          timestamp: 1000,
+        }),
+        { onOpenImage },
+      );
+
+      expect(
+        Array.from(
+          container.querySelectorAll(".chat-text strong, .chat-message-image"),
+          (element) =>
+            element instanceof HTMLImageElement
+              ? new URL(element.src).pathname
+              : element.textContent?.replace(/\s+/g, " ").trim(),
+        ),
+      ).toEqual(["Before", "/before.png", "After", "/after.png"]);
+      const text = container.querySelector(".chat-text")?.textContent?.trim() ?? "";
+      expect(text.startsWith("Introduction")).toBe(true);
+      expect(text.endsWith("Closing paragraph")).toBe(true);
+      const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+      for (const [index, tile] of tiles.entries()) {
+        tile.click();
+        const opened = onOpenImage.mock.calls.at(-1)?.[0];
+        expect(opened?.gallery?.index).toBe(index);
+        expect(opened?.gallery?.items).toHaveLength(2);
+        const gallery = expectDefined(opened?.gallery, "message image gallery");
+        const neighbors = await Promise.all(gallery.items.map((load) => load()));
+        expect(neighbors.map((image) => image?.src)).toEqual([
+          "https://example.com/before.png",
+          "https://example.com/after.png",
+        ]);
+        neighbors.forEach((image) => image?.release?.());
+      }
+    },
+  );
+
+  const source = "https://example.com/repeated.png";
+  it.each([
+    {
+      name: "duplicate attachment slots without persisted mirrors",
+      message: createAssistantMessage(
+        [
+          createAttachmentBlock(source, "document", "Repeated", "image/png"),
+          createAttachmentBlock(source, "document", "Repeated", "image/png"),
+        ],
+        { __openclaw: { media: [{ path: source, contentType: "image/png" }] } },
+      ),
+      index: 1,
+    },
+    {
+      name: "persisted images with opaque download filenames",
+      message: createAssistantMessage("", {
+        __openclaw: {
+          media: [
+            {
+              path: "https://example.com/download/first",
+              fileName: "first.png",
+              contentType: "application/octet-stream; charset=binary",
+            },
+            {
+              path: "https://example.com/download/second",
+              fileName: "second.avif",
+              contentType: "application/octet-stream",
+            },
+          ],
+        },
+      }),
+      index: 0,
+    },
+  ])("projects $name into the gallery", ({ message, index }) => {
+    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+    renderAssistantMessage(container, message, { onOpenImage });
+    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+    expect(tiles).toHaveLength(2);
+    tiles[index]?.click();
+    expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({
+      index,
+      items: [expect.any(Function), expect.any(Function)],
+    });
+  });
 });

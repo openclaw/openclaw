@@ -10,6 +10,7 @@ import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
+import { createCanvasPreview } from "./chat-message.test-support.ts";
 
 function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {
   type Props = {
@@ -194,15 +195,7 @@ describe("assistant message embed policy", () => {
           { type: "text", text: "Inline canvas result." },
           {
             type: "canvas",
-            preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              viewId: "cv_inline_sandbox-change",
-              title: "Inline demo",
-              url: "/__openclaw__/canvas/documents/cv_inline_sandbox-change/index.html",
-              preferredHeight: 360,
-            },
+            preview: createCanvasPreview({ viewId: "cv_inline_sandbox-change" }),
           },
         ],
       };
@@ -215,7 +208,15 @@ describe("assistant message embed policy", () => {
       if (group?.kind !== "group") {
         throw new Error("expected a prepared assistant message group");
       }
-      const next = { group, options: { showReasoning: true, embedSandboxMode } };
+      const next = {
+        group,
+        options: {
+          showReasoning: true,
+          embedSandboxMode,
+          sessionKey: "agent:main:canvas",
+          canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+        },
+      };
       if (root) {
         update(next);
       } else {
@@ -245,6 +246,8 @@ describe("assistant message embed policy", () => {
     expect(widget).toMatchObject({
       docId: "cv_inline_sandbox-change",
       title: "Inline demo",
+      preferredHeight: 360,
+      sessionKey: "agent:main:canvas",
       allowScripts: false,
     });
     expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();

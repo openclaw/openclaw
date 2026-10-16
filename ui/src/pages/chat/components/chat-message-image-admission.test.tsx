@@ -124,6 +124,45 @@ async function loadAdmittedImage() {
   return loaded;
 }
 
+function submitInlineImage(artifactId: string) {
+  const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
+  draw([inline], { localSubmission: true });
+  const image = container.querySelector("img")!;
+  Object.defineProperty(image, "naturalWidth", { value: 20 });
+  image.dispatchEvent(new Event("load"));
+  return { inline, image };
+}
+
+it.each(["render", "click"] as const)(
+  "does not replay an automatic image retry already claimed by %s",
+  async (trigger) => {
+    const images = [
+      { url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full` },
+    ];
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    onRequestUpdate = () => draw([...images]);
+    draw(images);
+    intersections[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    if (trigger === "render") {
+      // Claim the elapsed retry before its queued timer runs.
+      vi.setSystemTime(Date.now() + 5_000);
+      onRequestUpdate();
+    } else {
+      const retry = container.querySelector<HTMLButtonElement>("button");
+      expect(retry?.textContent).toContain("Retry");
+      retry?.click();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
 it("replaces failed native images with unavailable cards and offers local retry", async () => {
   vi.stubGlobal(
     "fetch",
@@ -491,14 +530,10 @@ it("lets explicit gallery navigation load an offscreen neighbor", async () => {
 
 it("preserves an immediate inline submission and its settled canonical handoff", async () => {
   const artifactId = crypto.randomUUID();
-  const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
   const metadata = createDeferred<Response>();
   const fetch = vi.fn(() => metadata.promise);
   vi.stubGlobal("fetch", fetch);
-  draw([inline], { localSubmission: true });
-  const image = container.querySelector("img")!;
-  Object.defineProperty(image, "naturalWidth", { value: 20 });
-  image.dispatchEvent(new Event("load"));
+  const { inline, image } = submitInlineImage(artifactId);
   expect(intersections).toHaveLength(0);
 
   const canonical: ImageBlock = { url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 };
@@ -528,10 +563,7 @@ it("retires inline handoff pixels synchronously when the transcript disconnects"
     "fetch",
     vi.fn(() => metadata.promise),
   );
-  draw([{ url: "data:image/png;base64,cG5n", artifactId }], { localSubmission: true });
-  const image = container.querySelector("img")!;
-  Object.defineProperty(image, "naturalWidth", { value: 20 });
-  image.dispatchEvent(new Event("load"));
+  const { image } = submitInlineImage(artifactId);
   draw([{ url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 }], {
     localSubmission: true,
     canonicalMessageKey: "disconnecting-submission",
@@ -577,13 +609,9 @@ it.each(["error", "timeout"] as const)(
   "retries a canonical upload handoff after native %s without reviving inline pixels",
   async (failure) => {
     const artifactId = crypto.randomUUID();
-    const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
     const fetch = vi.fn(async () => ticketResponse());
     vi.stubGlobal("fetch", fetch);
-    draw([inline], { localSubmission: true });
-    const image = container.querySelector("img")!;
-    Object.defineProperty(image, "naturalWidth", { value: 20 });
-    image.dispatchEvent(new Event("load"));
+    const { image } = submitInlineImage(artifactId);
     const canonical: ImageBlock = {
       url: "media://inbound/" + artifactId,
       artifactId,

@@ -7,23 +7,26 @@ import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 
-it("renders the startup status with elapsed time instead of a working phrase", () => {
+function renderStartup(startupLabel: string | undefined) {
   const container = document.createElement("div");
-
   mountSolid(
     () =>
       createComponent(StreamGroup, {
         parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
-        options: {
-          startupLabel: chatStartupStatusLabel(
-            { state: "status", runId: "startup-run", phase: "waiting_for_state" },
-            null,
-          ),
-        },
+        options: { startupLabel },
       }),
     { container },
   );
+  return container;
+}
 
+it("renders the startup status with elapsed time instead of a working phrase", () => {
+  const container = renderStartup(
+    chatStartupStatusLabel(
+      { state: "status", runId: "startup-run", phase: "waiting_for_state" },
+      null,
+    ),
+  );
   expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
     "Temporarily busy—retrying…",
   );
@@ -32,22 +35,24 @@ it("renders the startup status with elapsed time instead of a working phrase", (
   expect(container.querySelector("openclaw-working-phrase")).toBeNull();
 });
 
-it.each(["state_contention"])(
-  "labels only certified contention as a calm system notice (%s)",
-  (errorKind) => {
-    expect(
-      resolveMessageGroupSenderLabel(
-        {
-          role: "custom",
-          messages: [
-            { message: { customType: "run-failed-before-reply", details: { errorKind } } },
-          ],
-        },
-        {},
-      ),
-    ).toBe(errorKind === "state_contention" ? "System" : "Error");
-  },
-);
+it("labels certified contention as a calm system notice", () => {
+  expect(
+    resolveMessageGroupSenderLabel(
+      {
+        role: "custom",
+        messages: [
+          {
+            message: {
+              customType: "run-failed-before-reply",
+              details: { errorKind: "state_contention" },
+            },
+          },
+        ],
+      },
+      {},
+    ),
+  ).toBe("System");
+});
 
 it.each([
   [{ mode: "snapshot" }, "Starting from snapshot…"],
@@ -56,24 +61,16 @@ it.each([
   [{ mode: "snapshot", phase: "saving" }, "Saving snapshot…"],
   [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment…"],
 ] as const)("renders cloud start status in the existing line (%j)", (startStatus, label) => {
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(StreamGroup, {
-        parts: [{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }],
-        options: {
-          startupLabel: chatStartupStatusLabel(
-            null,
-            {
-              sessionKey: "agent:main:cloud-status",
-              phase: "provisioning",
-              startedAt: 1_000,
-            },
-            startStatus,
-          ),
-        },
-      }),
-    { container },
+  const container = renderStartup(
+    chatStartupStatusLabel(
+      null,
+      {
+        sessionKey: "agent:main:cloud-status",
+        phase: "provisioning",
+        startedAt: 1_000,
+      },
+      startStatus,
+    ),
   );
   expect(container.querySelectorAll(".chat-working-indicator__status")).toHaveLength(1);
   expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(label);
