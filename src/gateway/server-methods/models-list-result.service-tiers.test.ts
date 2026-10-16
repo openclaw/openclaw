@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -28,6 +28,17 @@ import {
 } from "./models-list-result.openai-routes.test-support.js";
 
 const advertisedTiers = ["priority", "ultrafast"];
+const subscriptionFields = { api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl };
+const apiCredential = { type: "api_key" as const, provider: "openai", key: "synthetic-api-key" };
+const catalogModel = (
+  id: string,
+  route: Pick<ModelCatalogEntry, "api" | "baseUrl"> = platformRoute,
+): ModelCatalogEntry => ({
+  id,
+  name: id,
+  provider: "openai",
+  ...route,
+});
 
 function modelConfig(
   ids: string[],
@@ -77,257 +88,231 @@ function preparePublic(context: ReturnType<typeof createModelsListTestContext>) 
   });
 }
 
-describe("models.list account service tiers", () => {
-  it.each(["profile", "direct"] as const)(
-    "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
-    async (source) => {
-      const model = {
-        id: "synthetic-api-model",
-        name: "Synthetic API model",
-        provider: "openai",
-        ...platformRoute,
-      };
-      const profileId = source === "profile" ? "openai:api-fixture" : undefined;
-      const credential = { type: "api_key" as const, provider: "openai", key: "synthetic-api-key" };
-      const context = createModelsListTestContext({
-        cfg: {
-          ...(source === "direct"
-            ? {
-                models: {
-                  providers: {
-                    openai: {
-                      ...platformRoute,
-                      auth: "api-key" as const,
-                      apiKey: "synthetic-api-key",
-                      models: [],
-                    },
-                  },
-                },
-              }
-            : {}),
-          ...modelConfig([model.id]),
+it.each(["profile", "direct"] as const)(
+  "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
+  async (source) => {
+    const model = catalogModel("synthetic-api-model");
+    const profileId = source === "profile" ? "openai:api-fixture" : undefined;
+    const credential = apiCredential;
+    const cfg = modelConfig([model.id]);
+    if (source === "direct") {
+      cfg.models = {
+        providers: {
+          openai: {
+            ...platformRoute,
+            auth: "api-key",
+            apiKey: credential.key,
+            models: [],
+          },
         },
-        catalog: [model],
-        preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: credential } : {} },
-      });
-      const accountCatalog = await installAccountCatalog(context, () => true, true);
-      const prepare = () => preparePublic(context);
-      const first = await prepare();
-      expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
-        available: true,
+      };
+    }
+    const context = createModelsListTestContext({
+      cfg,
+      catalog: [model],
+      preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: credential } : {} },
+    });
+    const accountCatalog = await installAccountCatalog(context, () => true, true);
+    const prepare = () => preparePublic(context);
+    const first = await prepare();
+    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+      available: true,
+      serviceTiers: advertisedTiers,
+    });
+    const selectedCredential = expectDefined(
+      resolveSelectedModelCredential({ provider: "openai", profileId, mode: "api-key" }),
+      "Missing selected fixture credential",
+    );
+    const record = accountCatalog.prepareServiceTierObserver({
+      selectedCredential,
+      credential,
+    });
+    const observation = {
+      modelId: model.id,
+      runtimeId: "openclaw",
+      api: platformRoute.api,
+      baseUrl: platformRoute.baseUrl,
+      requestedTier: "ultrafast",
+      responseTier: "priority",
+    };
+    record(observation);
+    const next = await prepare();
+    for (const projection of [first, next]) {
+      expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
         serviceTiers: advertisedTiers,
+        supportsServiceTierRecovery: true,
+        serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
       });
-      const selectedCredential = resolveSelectedModelCredential({
-        provider: "openai",
-        profileId,
-        mode: "api-key",
-      });
-      if (!selectedCredential) {
-        throw new Error("Missing selected fixture credential");
-      }
-      const record = accountCatalog.prepareServiceTierObserver({
-        selectedCredential,
-        credential,
-      });
-      const observation = {
-        modelId: model.id,
-        runtimeId: "openclaw",
-        api: platformRoute.api,
-        baseUrl: platformRoute.baseUrl,
-        requestedTier: "ultrafast",
-        responseTier: "priority",
-      };
-      record(observation);
-      const next = await prepare();
-      for (const projection of [first, next]) {
-        expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
-          serviceTiers: advertisedTiers,
-          supportsServiceTierRecovery: true,
-          serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+    }
+    record({ ...observation, responseTier: "ultrafast" });
+    expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+      "serviceTierObservation",
+    );
+  },
+);
+it.for(["codex", "openclaw"] as const)(
+  "filters Codex tiers with %s selected while retaining account scope",
+  async (selectedRuntime, { signal }) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "model-tiers-",
+        agentEnv: "main",
+        env: WITHOUT_OPENAI_ENV_AUTH,
+      },
+      async (state) => {
+        const model = catalogModel("synthetic-tier-model", subscriptionFields);
+        const cfg = modelConfig([model.id], selectedRuntime, ["codex", "openclaw"]);
+        cfg.agents!.defaults!.workspace = state.workspaceDir;
+        const human = ensureProfileForEmail("tier-owner@example.test");
+        const connectAccount = (token: string) =>
+          connectUserModelAccount({
+            ownerProfileId: human.id,
+            credential: { type: "token", provider: "openai", token },
+            assertCurrent: () => {},
+          }).authProfileId;
+        const accountA = connectAccount("synthetic-account-a");
+        const accountB = connectAccount("synthetic-account-b");
+        const registry = createEmptyPluginRegistry();
+        let filteredTiers: readonly string[] | undefined;
+        const filterModelServiceTiers = vi.fn<NonNullable<AgentHarness["filterModelServiceTiers"]>>(
+          ({ serviceTiers }) => filteredTiers ?? serviceTiers,
+        );
+        registry.agentHarnesses.push({
+          pluginId: "codex",
+          source: "test",
+          harness: {
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: vi.fn(),
+            filterModelServiceTiers,
+          },
         });
-      }
-      record({ ...observation, responseTier: "ultrafast" });
-      expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
-        "serviceTierObservation",
-      );
-    },
-  );
-  it.for(["codex", "openclaw"] as const)(
-    "filters Codex tiers with %s selected while retaining account scope",
-    async (selectedRuntime, { signal }) => {
-      await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "model-tiers-",
-          agentEnv: "main",
-          env: WITHOUT_OPENAI_ENV_AUTH,
-        },
-        async (state) => {
-          const model: ModelCatalogEntry = {
-            id: "synthetic-tier-model",
-            name: "Synthetic tier model",
-            provider: "openai",
-            api: subscriptionRoute.api,
-            baseUrl: subscriptionRoute.baseUrl,
-          };
-          const cfg = modelConfig([model.id], selectedRuntime, ["codex", "openclaw"]);
-          cfg.agents!.defaults!.workspace = state.workspaceDir;
-          const human = ensureProfileForEmail("tier-owner@example.test");
-          const connectAccount = (token: string) =>
-            connectUserModelAccount({
-              ownerProfileId: human.id,
-              credential: { type: "token", provider: "openai", token },
-              assertCurrent: () => {},
-            }).authProfileId;
-          const accountA = connectAccount("synthetic-account-a");
-          const accountB = connectAccount("synthetic-account-b");
-          const registry = createEmptyPluginRegistry();
-          let filteredTiers: readonly string[] | undefined;
-          const filterModelServiceTiers = vi.fn<
-            NonNullable<AgentHarness["filterModelServiceTiers"]>
-          >(({ serviceTiers }) => filteredTiers ?? serviceTiers);
-          registry.agentHarnesses.push({
-            pluginId: "codex",
-            source: "test",
-            harness: {
-              id: "codex",
-              label: "Codex",
-              supports: () => ({ supported: true }),
-              runAttempt: vi.fn(),
-              filterModelServiceTiers,
-            },
-          });
-          const discover = vi.fn(
-            async (
-              ctx: import("../../plugins/provider-catalog.types.js").ProviderCatalogContext,
-            ) => {
-              const auth = ctx.resolveProviderAuth("openai");
-              return {
-                provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
-                outcomes: [
-                  {
-                    provider: "openai",
-                    profileId: auth.profileId,
-                    status: "ready" as const,
-                    modelServiceTiers: [
-                      {
-                        modelId: model.id,
-                        runtimeId: "codex",
-                        api: subscriptionRoute.api,
-                        baseUrl: subscriptionRoute.baseUrl,
-                        serviceTiers: auth.profileId === accountA ? [...advertisedTiers] : [],
-                      },
-                    ],
-                  },
-                ],
-              };
-            },
-          );
-          registry.providers.push({
-            pluginId: "openai",
-            source: "test",
-            provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: discover } },
-          });
-          const context = createModelsListTestContext({
-            cfg,
-            agentDir: state.agentDir("main"),
-            workspaceDir: state.workspaceDir,
-            catalog: [model],
-            pluginRegistry: registry,
-          });
-          let current = true;
-          await installAccountCatalog(context, () => current);
-          const prepare = (profile: string, preparedOnly = false, refresh = false) =>
-            prepareModelsListResult({
-              source: { kind: "gateway", context },
-              agentId: "main",
-              params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
-              readScope: {
-                agentId: "main",
-                sessionKey: "agent:main:tiers",
-                sessionEntry: {
-                  authProfileOverride: profile,
-                  authProfileOverrideSource: "user",
-                  providerOverride: "openai",
-                  modelOverride: model.id,
+        const discover = vi.fn(
+          async (ctx: import("../../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
+            const auth = ctx.resolveProviderAuth("openai");
+            return {
+              provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+              outcomes: [
+                {
+                  provider: "openai",
+                  profileId: auth.profileId,
+                  status: "ready" as const,
+                  modelServiceTiers: [
+                    {
+                      modelId: model.id,
+                      runtimeId: "codex",
+                      ...subscriptionFields,
+                      serviceTiers: auth.profileId === accountA ? [...advertisedTiers] : [],
+                    },
+                  ],
                 },
-              },
-              routeResolverFactory: routeResolverFactory(dualRoutes),
-            });
-          const a = await prepare(accountA, false, true);
-          const readRuntime = (result: typeof a, runtimeId: string) => {
-            const row = result.read().models.find((entry) => entry.id === model.id);
-            return row?.agentRuntime?.id === runtimeId
-              ? row
-              : row?.runtimeChoices?.find((choice) => choice.agentRuntime.id === runtimeId);
-          };
-          const selected = a.read().models.find((row) => row.id === model.id);
-          expect(selected).toMatchObject({
-            available: true,
-            agentRuntime: { id: selectedRuntime },
-          });
-          expect(readRuntime(a, "codex")).toMatchObject({
-            available: true,
-            serviceTiers: advertisedTiers,
-            agentRuntime: { id: "codex" },
-          });
-          expect(filterModelServiceTiers).toHaveBeenCalledWith({
-            config: cfg,
+              ],
+            };
+          },
+        );
+        registry.providers.push({
+          pluginId: "openai",
+          source: "test",
+          provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: discover } },
+        });
+        const context = createModelsListTestContext({
+          cfg,
+          agentDir: state.agentDir("main"),
+          workspaceDir: state.workspaceDir,
+          catalog: [model],
+          pluginRegistry: registry,
+        });
+        let current = true;
+        await installAccountCatalog(context, () => current);
+        const prepare = (profile: string, preparedOnly = false, refresh = false) =>
+          prepareModelsListResult({
+            source: { kind: "gateway", context },
             agentId: "main",
-            provider: model.provider,
-            modelId: model.id,
-            serviceTiers: advertisedTiers,
+            params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
+            readScope: {
+              agentId: "main",
+              sessionKey: "agent:main:tiers",
+              sessionEntry: {
+                authProfileOverride: profile,
+                authProfileOverrideSource: "user",
+                providerOverride: "openai",
+                modelOverride: model.id,
+              },
+            },
+            routeResolverFactory: routeResolverFactory(dualRoutes),
           });
-          filteredTiers = ["priority"];
-          expect(readRuntime(a, "codex")?.serviceTiers).toEqual(["priority"]);
-          expect(readRuntime(a, "openclaw")).not.toHaveProperty("serviceTiers");
-          filteredTiers = ["priority", "ultrafast", "unadvertised-tier"];
-          expect(readRuntime(a, "codex")?.serviceTiers).toEqual(advertisedTiers);
-          filteredTiers = undefined;
-          expect(a.read().providerOutcomes).toEqual([
-            { provider: "openai", profileId: accountA, status: "ready" },
-          ]);
-          const repeated = await prepare(accountA);
-          expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(advertisedTiers);
-          expect(discover).toHaveBeenCalledOnce();
-          const b = await prepare(accountB, false, true);
-          expect(readRuntime(b, "codex")?.serviceTiers).toEqual([]);
-          expect(discover).toHaveBeenCalledTimes(2);
-          const preparedOnly = await prepare(accountA, true);
-          expect(readRuntime(preparedOnly, "codex")?.serviceTiers).toEqual(advertisedTiers);
-          expect(discover).toHaveBeenCalledTimes(2);
-          const entered = createDeferred();
-          const release = createDeferred();
-          const discoverAccount = discover.getMockImplementation()!;
-          discover.mockImplementationOnce(async (ctx) => {
-            entered.resolve();
-            await release.promise;
-            return discoverAccount(ctx);
-          });
-          const refreshing = prepare(accountA, false, true);
-          try {
-            await withinTest(entered.promise, signal);
-            const saved = await prepare(accountA, true);
-            expect(readRuntime(saved, "codex")?.serviceTiers).toEqual(advertisedTiers);
-            const duringRefresh = await withinTest(prepare(accountA), signal);
-            expect(readRuntime(duringRefresh, "codex")?.serviceTiers).toEqual(advertisedTiers);
-            expect(a.isCurrent()).toBe(true);
-            expect(readRuntime(await prepare(accountB), "codex")?.serviceTiers).toEqual([]);
-          } finally {
-            release.resolve();
-            await refreshing;
-          }
-          expect(discover).toHaveBeenCalledTimes(3);
-          expect(a.isCurrent()).toBe(false);
-          current = false;
-          expect(() => readRuntime(a, "codex")).toThrow(
-            PreparedModelRuntimePublicationSupersededError,
-          );
-        },
-      );
-    },
-  );
-});
+        const a = await prepare(accountA, false, true);
+        const readRuntime = (result: typeof a, runtimeId: string) => {
+          const row = result.read().models.find((entry) => entry.id === model.id);
+          return row?.agentRuntime?.id === runtimeId
+            ? row
+            : row?.runtimeChoices?.find((choice) => choice.agentRuntime.id === runtimeId);
+        };
+        const selected = a.read().models.find((row) => row.id === model.id);
+        expect(selected).toMatchObject({
+          available: true,
+          agentRuntime: { id: selectedRuntime },
+        });
+        expect(readRuntime(a, "codex")).toMatchObject({
+          available: true,
+          serviceTiers: advertisedTiers,
+          agentRuntime: { id: "codex" },
+        });
+        expect(filterModelServiceTiers).toHaveBeenCalledWith({
+          config: cfg,
+          agentId: "main",
+          provider: model.provider,
+          modelId: model.id,
+          serviceTiers: advertisedTiers,
+        });
+        filteredTiers = ["priority"];
+        expect(readRuntime(a, "codex")?.serviceTiers).toEqual(["priority"]);
+        expect(readRuntime(a, "openclaw")).not.toHaveProperty("serviceTiers");
+        filteredTiers = ["priority", "ultrafast", "unadvertised-tier"];
+        expect(readRuntime(a, "codex")?.serviceTiers).toEqual(advertisedTiers);
+        filteredTiers = undefined;
+        expect(a.read().providerOutcomes).toEqual([
+          { provider: "openai", profileId: accountA, status: "ready" },
+        ]);
+        const expectTiers = (result: typeof a, tiers = advertisedTiers) =>
+          expect(readRuntime(result, "codex")?.serviceTiers).toEqual(tiers);
+        expectTiers(await prepare(accountA));
+        expect(discover).toHaveBeenCalledOnce();
+        expectTiers(await prepare(accountB, false, true), []);
+        expect(discover).toHaveBeenCalledTimes(2);
+        expectTiers(await prepare(accountA, true));
+        expect(discover).toHaveBeenCalledTimes(2);
+        const entered = createDeferred();
+        const release = createDeferred();
+        const discoverAccount = discover.getMockImplementation()!;
+        discover.mockImplementationOnce(async (ctx) => {
+          entered.resolve();
+          await release.promise;
+          return discoverAccount(ctx);
+        });
+        const refreshing = prepare(accountA, false, true);
+        try {
+          await withinTest(entered.promise, signal);
+          expectTiers(await prepare(accountA, true));
+          expectTiers(await withinTest(prepare(accountA), signal));
+          expect(a.isCurrent()).toBe(true);
+          expectTiers(await prepare(accountB), []);
+        } finally {
+          release.resolve();
+          await refreshing;
+        }
+        expect(discover).toHaveBeenCalledTimes(3);
+        expect(a.isCurrent()).toBe(false);
+        current = false;
+        expect(() => readRuntime(a, "codex")).toThrow(
+          PreparedModelRuntimePublicationSupersededError,
+        );
+      },
+    );
+  },
+);
 
 it("publishes provider tier restrictions through the model catalog projection", async () => {
   const ids = ["synthetic-priority-model", "synthetic-default-model"];
@@ -347,30 +332,25 @@ it("publishes provider tier restrictions through the model catalog projection", 
   const context = createModelsListTestContext({
     pluginRegistry,
     cfg: modelConfig(ids),
-    catalog: ids.map((id) => ({ id, name: id, provider: "openai", ...platformRoute })),
+    catalog: ids.map((id) => catalogModel(id)),
     preparedAuthStore: {
       version: 1,
       profiles: {
-        "openai:policy-fixture": {
-          type: "api_key",
-          provider: "openai",
-          key: "synthetic-api-key",
-        },
+        "openai:policy-fixture": apiCredential,
       },
     },
   });
   const result = await preparePublic(context);
   const models = result.read().models;
-  expect(models.find((row) => row.id === ids[0])).toMatchObject({
-    available: true,
-    supportsFastMode: true,
-    supportsServiceTierRecovery: true,
-    serviceTiers: ["default", "priority"],
-  });
-  expect(models.find((row) => row.id === ids[1])).toMatchObject({
-    available: true,
-    supportsFastMode: false,
-    supportsServiceTierRecovery: true,
-    serviceTiers: ["default"],
-  });
+  for (const [index, supportsFastMode, serviceTiers] of [
+    [0, true, ["default", "priority"]],
+    [1, false, ["default"]],
+  ] as const) {
+    expect(models.find((row) => row.id === ids[index])).toMatchObject({
+      available: true,
+      supportsServiceTierRecovery: true,
+      supportsFastMode,
+      serviceTiers,
+    });
+  }
 });

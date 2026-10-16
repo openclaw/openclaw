@@ -1,7 +1,7 @@
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
@@ -61,7 +61,7 @@ function writeSessionFixture(
   });
 }
 
-function fixture() {
+function fixture(state: OpenClawTestState) {
   const person = ensureProfileForEmail("catalog-reader@example.test");
   setDisplayName(person.id, "Catalog Reader");
   const authProfileId = connectChatMetadataAccount(person.id);
@@ -84,20 +84,12 @@ function fixture() {
     "openai",
     "openai-chatgpt-responses",
   );
-  const authStore = expectDefined(getPreparedModelRuntimeAuthStore(owner), "prepared auth store");
   let snapshotCurrent = true;
   const snapshot: PreparedGatewayModelCatalogSnapshot = {
+    ...resolvePublishedModelCatalogOwner(owner),
     ...owner.modelCatalog,
     catalogComplete: false,
-    agentId: expectDefined(owner.agentId, "fixture agent"),
-    agentDir: owner.agentDir,
-    workspaceDir: expectDefined(owner.workspaceDir, "fixture workspace"),
-    config,
-    observationConfig: config,
-    metadataSnapshot: owner.metadataSnapshot,
     isCurrent: () => snapshotCurrent && owner.isCurrent(),
-    authStore,
-    authModes: owner.authModes,
     authMaterializations: [],
   };
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
@@ -133,14 +125,16 @@ function fixture() {
   });
   const request = async (
     params: Record<string, unknown>,
-    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
+    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> & {
+      respond?: Reply;
+    } = {},
+    method: "models.list" | "chat.metadata" = "models.list",
   ) => {
-    const respond = vi.fn<RespondFn>();
-    await expectDefined(
-      modelsHandlers["models.list"],
-      "models.list handler",
-    )({
-      req: { type: "req", id: "session-catalog", method: "models.list", params },
+    const respond = overrides.respond ?? vi.fn<RespondFn>();
+    const handler =
+      method === "chat.metadata" ? handleChatMetadataRequest : modelsHandlers["models.list"]!;
+    await handler({
+      req: { type: "req", id: "session-catalog", method, params },
       params,
       context,
       client,
@@ -151,6 +145,7 @@ function fixture() {
     return respond;
   };
   return {
+    state,
     person,
     authProfileId,
     config,
@@ -164,15 +159,18 @@ function fixture() {
     readPrepared,
     loadDeferred,
     request,
-    writeSession: (
-      scope: Parameters<typeof writeSessionFixture>[0],
-      patch: Partial<SessionEntry>,
-    ) =>
-      writeSessionFixture(scope, {
+    saveSession: async (sessionKey: string, patch: Partial<SessionEntry> | "pinned" = {}) => {
+      const scope = { agentId: "main", sessionKey };
+      await writeSessionFixture(scope, {
+        sessionId: sessionKey,
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: person.id },
-        ...patch,
-      }),
+        ...(patch === "pinned"
+          ? { authProfileOverride: authProfileId, authProfileOverrideSource: "user" }
+          : patch),
+      });
+      return scope;
+    },
     holdCatalog: () => {
       const entered = createDeferred();
       const release = createDeferred();
@@ -193,18 +191,37 @@ const isolated = {
   env: WITHOUT_OPENAI_ENV_AUTH,
 } as const;
 
-async function withFixture(
-  run: (f: ReturnType<typeof fixture>, state: OpenClawTestState) => Promise<void>,
-  writeConfig = true,
+function withFixture(run: (f: ReturnType<typeof fixture>) => Promise<void>) {
+  return () =>
+    withOpenClawTestState(isolated, async (state) => {
+      const f = fixture(state);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await run(f);
+    });
+}
+
+async function duringCatalog(
+  f: ReturnType<typeof fixture>,
+  params: Record<string, unknown>,
+  change: () => Promise<void> | void,
+  overrides?: Parameters<typeof f.request>[1],
 ) {
-  await withOpenClawTestState(isolated, async (state) => {
-    const f = fixture();
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    if (writeConfig) {
-      await state.writeConfig(f.config);
-    }
-    await run(f, state);
-  });
+  const { entered, release } = f.holdCatalog();
+  const pending = f.request(params, overrides);
+  void pending.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pending, "Catalog bypassed preparation hold");
+    await change();
+  } finally {
+    release.resolve();
+    await pending.catch(() => {});
+  }
+  return pending;
+}
+
+async function closeDatabases(f: ReturnType<typeof fixture>) {
+  await closeOpenClawAgentDatabasesAsync(f.state.root);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
 }
 
 const personalSelection = (authProfileId: string) =>
@@ -232,175 +249,151 @@ function expectModels(respond: Reply, available: boolean) {
   expectReply(respond, { models: [expect.objectContaining({ available })] });
 }
 
-describe("direct session model catalogs", () => {
-  it("shares a saved selection revision with session events without retiring it for activity", async () => {
-    await withFixture(async (f) => {
-      const scope = { agentId: "main", sessionKey: "agent:main:catalog-revision" };
-      await f.writeSession(scope, {
-        sessionId: "catalog-revision-session",
-        authProfileOverride: f.authProfileId,
-        authProfileOverrideSource: "user",
+it(
+  "shares selection revisions with events, ignoring activity",
+  withFixture(async (f) => {
+    await f.state.writeConfig(f.config);
+    const scope = await f.saveSession("agent:main:catalog-revision", "pinned");
+    let revision: unknown;
+    for (const [patch, changed] of [
+      [{}, true],
+      [{ label: "Renamed", updatedAt: 2, lastReadAt: 2 }, false],
+      [{ authProfileOverride: "openai:shared" }, true],
+      [{ modelOverride: "gpt-5.6-luna", providerOverride: "openai" }, true],
+      [{ agentRuntimeOverride: "openclaw" }, true],
+      [{ lifecycleRevision: "replacement" }, true],
+    ] satisfies Array<[Partial<SessionEntry>, boolean]>) {
+      await writeSessionFixture(scope, patch);
+      const respond = await f.request({ sessionKey: scope.sessionKey, view: "configured" });
+      const result = respond.mock.calls[0]?.[1];
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(result).toHaveProperty("sessionModelRevision", expect.any(String));
+      const nextRevision = (result as { sessionModelRevision: string }).sessionModelRevision;
+      expect(nextRevision === revision).toBe(!changed);
+      revision = nextRevision;
+      const entry = expectDefined(loadSessionEntry(scope), "saved entry");
+      const row = buildGatewaySessionRow({
+        cfg: f.config,
+        agentId: scope.agentId,
+        key: scope.sessionKey,
+        entry,
+        store: { [scope.sessionKey]: entry },
+        storePath: openOpenClawAgentDatabase(scope).path,
+        preparedAcpMeta: null,
+        preparedRepositoryWorkspace: null,
+        activeModel: null,
       });
-      let revision: unknown;
-      for (const [patch, changed] of [
-        [{}, true],
-        [{ label: "Renamed", updatedAt: 2, lastReadAt: 2 }, false],
-        [{ authProfileOverride: "openai:shared" }, true],
-        [{ modelOverride: "gpt-5.6-luna", providerOverride: "openai" }, true],
-        [{ agentRuntimeOverride: "openclaw" }, true],
-        [{ lifecycleRevision: "replacement" }, true],
-      ] satisfies Array<[Partial<SessionEntry>, boolean]>) {
-        await writeSessionFixture(scope, patch);
-        const respond = await f.request({ sessionKey: scope.sessionKey, view: "configured" });
-        const result = respond.mock.calls[0]?.[1];
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        expect(result).toHaveProperty("sessionModelRevision", expect.any(String));
-        const nextRevision = (result as { sessionModelRevision: string }).sessionModelRevision;
-        expect(nextRevision === revision).toBe(!changed);
-        revision = nextRevision;
-        const entry = expectDefined(loadSessionEntry(scope), "saved entry");
-        const row = buildGatewaySessionRow({
-          cfg: f.config,
-          agentId: scope.agentId,
-          key: scope.sessionKey,
-          entry,
-          store: { [scope.sessionKey]: entry },
-          storePath: openOpenClawAgentDatabase(scope).path,
-          preparedAcpMeta: null,
-          preparedRepositoryWorkspace: null,
-          activeModel: null,
-        });
-        expect(
-          buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true }),
-        ).toMatchObject({
-          session: { sessionModelRevision: revision },
-        });
-      }
-    });
-  });
+      expect(buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true })).toMatchObject({
+        session: { sessionModelRevision: revision },
+      });
+    }
+  }),
+);
 
-  it.each(["missing", "foreign"] as const)(
-    "rejects a saved session with %s ownership before catalog I/O",
-    async (ownership) => {
-      await withFixture(async (f, state) => {
-        const sessionKey = "agent:main:hidden-catalog";
-        await writeSessionFixture(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: "hidden-catalog-session",
-            updatedAt: 1,
-            createdActor:
-              ownership === "foreign"
-                ? {
-                    type: "human",
-                    source: "profile",
-                    id: ensureProfileForEmail("hidden-catalog-owner@example.test").id,
-                  }
-                : undefined,
-          },
-        );
-        const respond = await f.request({ sessionKey, view: "configured" });
-        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-          code: "INVALID_REQUEST",
-          message: `Session "${sessionKey}" was not found.`,
-        });
-        expect(f.readPrepared).not.toHaveBeenCalled();
-        expect(f.loadDeferred).not.toHaveBeenCalled();
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-      });
-    },
-  );
-
-  it("keeps a scoped models.list result across only a committed read acknowledgment", async () => {
-    await withFixture(async (f, state) => {
-      const scope = { agentId: "main", sessionKey: "agent:main:catalog-read-marker" };
-      await f.writeSession(scope, {
-        sessionId: "catalog-read-marker-session",
-        lifecycleRevision: "catalog-read-marker-lifecycle",
-        lastReadAt: 1,
-        label: "catalog-read-marker-label",
-        authProfileOverride: f.authProfileId,
-        authProfileOverrideSource: "user",
-        toolOverrides: { webSearch: false },
-      });
-      const before = expectDefined(loadSessionEntry(scope), "saved entry");
-      const database = openOpenClawAgentDatabase(scope);
-      const readRow = () =>
-        expectDefined(
-          database.db
-            .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-            .get(scope.sessionKey),
-          "saved row",
-        );
-      const beforeRow = readRow();
-      const beforePayload = expectDefined(
-        safeParseJsonRecord(String(beforeRow.entry_json)),
-        "saved payload",
-      );
-      const params = { sessionKey: scope.sessionKey, view: "configured" };
-      const control = await f.request(params);
-      expectReply(
-        control,
+it.each(["missing", "foreign"] as const)(
+  "rejects %s session ownership before catalog I/O",
+  async (ownership) => {
+    return withFixture(async (f) => {
+      await f.state.writeConfig(f.config);
+      const sessionKey = "agent:main:hidden-catalog";
+      await writeSessionFixture(
+        { agentId: "main", sessionKey },
         {
-          models: [availableModel],
+          sessionId: "hidden-catalog-session",
+          updatedAt: 1,
+          createdActor:
+            ownership === "foreign"
+              ? {
+                  type: "human",
+                  source: "profile",
+                  id: ensureProfileForEmail("hidden-catalog-owner@example.test").id,
+                }
+              : undefined,
         },
-        true,
       );
-      const { entered, release } = f.holdCatalog();
-      const pending = f.request(params);
-      void pending.catch(() => {});
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Model catalog completed before the preparation hold");
-          }),
-        ]);
-        await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
-          preserveActivity: true,
-          skipMaintenance: true,
-        });
-        expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
-        expect(readRow()).toEqual({
-          ...beforeRow,
-          entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
-          last_read_at: 2,
-        });
-      } finally {
-        release.resolve();
-        await pending.catch(() => {});
-      }
-      const changed = await pending;
-      const fresh = await f.request(params);
-      expect(fresh.mock.calls).toEqual(control.mock.calls);
-      expect(changed.mock.calls).toEqual(control.mock.calls);
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-    });
-  });
-
-  it.each([
-    "selected patch",
-    "selected reset",
-    "store close",
-    "same-file reopen",
-    "profile alias change",
-    "catalog owner",
-  ] as const)("revalidates the selected model catalog after %s", async (change) => {
-    await withFixture(async (f, state) => {
-      let closedStorePath: string | undefined;
-      const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
-      await f.writeSession(scope, {
-        sessionId: "original",
-        authProfileOverride: f.authProfileId,
-        authProfileOverrideSource: "user",
+      const respond = await f.request({ sessionKey, view: "configured" });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: `Session "${sessionKey}" was not found.`,
       });
-      const { entered, release } = f.holdCatalog();
-      const pending = f.request({ sessionKey: scope.sessionKey, view: "configured" });
-      void pending.catch(() => {});
-      try {
-        await Promise.race([entered.promise, pending]);
+      expect(f.readPrepared).not.toHaveBeenCalled();
+      expect(f.loadDeferred).not.toHaveBeenCalled();
+      await closeDatabases(f);
+    })();
+  },
+);
+
+it(
+  "retains catalog across committed read acknowledgments",
+  withFixture(async (f) => {
+    await f.state.writeConfig(f.config);
+    const scope = await f.saveSession("agent:main:catalog-read-marker", {
+      sessionId: "catalog-read-marker-session",
+      lifecycleRevision: "catalog-read-marker-lifecycle",
+      lastReadAt: 1,
+      label: "catalog-read-marker-label",
+      authProfileOverride: f.authProfileId,
+      authProfileOverrideSource: "user",
+      toolOverrides: { webSearch: false },
+    });
+    const before = expectDefined(loadSessionEntry(scope), "saved entry");
+    const database = openOpenClawAgentDatabase(scope);
+    const readRow = () =>
+      expectDefined(
+        database.db
+          .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+          .get(scope.sessionKey),
+        "saved row",
+      );
+    const beforeRow = readRow();
+    const beforePayload = expectDefined(
+      safeParseJsonRecord(String(beforeRow.entry_json)),
+      "saved payload",
+    );
+    const params = { sessionKey: scope.sessionKey, view: "configured" };
+    const control = await f.request(params);
+    expectReply(
+      control,
+      {
+        models: [availableModel],
+      },
+      true,
+    );
+    const changed = await duringCatalog(f, params, async () => {
+      await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
+        preserveActivity: true,
+        skipMaintenance: true,
+      });
+      expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
+      expect(readRow()).toEqual({
+        ...beforeRow,
+        entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
+        last_read_at: 2,
+      });
+    });
+    const fresh = await f.request(params);
+    expect(fresh.mock.calls).toEqual(control.mock.calls);
+    expect(changed.mock.calls).toEqual(control.mock.calls);
+    await closeDatabases(f);
+  }),
+);
+
+it.each([
+  "selected patch",
+  "selected reset",
+  "store close",
+  "same-file reopen",
+  "profile alias change",
+  "catalog owner",
+] as const)("revalidates selected catalog after %s", async (change) => {
+  return withFixture(async (f) => {
+    await f.state.writeConfig(f.config);
+    let closedStorePath: string | undefined;
+    const scope = await f.saveSession("agent:main:held-saved", "pinned");
+    const respond = await duringCatalog(
+      f,
+      { sessionKey: scope.sessionKey, view: "configured" },
+      async () => {
         expect(f.readPrepared).toHaveBeenCalledOnce();
         if (change === "selected patch") {
           await writeSessionFixture(scope, { label: "changed" });
@@ -423,271 +416,248 @@ describe("direct session model catalogs", () => {
         } else {
           f.invalidateSnapshot();
         }
+      },
+    );
+    if (change === "selected patch") {
+      expect(loadSessionEntry(scope)?.label).toBe("changed");
+      expectReply(
+        respond,
+        {
+          models: [availableModel],
+          accountSelection: personalSelection(f.authProfileId),
+        },
+        true,
+      );
+    } else {
+      expectError(
+        respond,
+        {
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(/changed|current/),
+          retryable: true,
+          retryAfterMs: 0,
+        },
+        true,
+      );
+      if (closedStorePath) {
+        // Synchronous revocation precedes the async resource owner's settlement.
+        await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
+      }
+    }
+    await closeDatabases(f);
+  })();
+});
+
+it.each([false, true])(
+  "revalidates chat.metadata when selected model changes (%s)",
+  async (changeSelected) => {
+    return withFixture(async (f) => {
+      await f.state.writeConfig(f.config);
+      const selected = await f.saveSession("agent:main:metadata-selected");
+      const other = await f.saveSession("agent:main:metadata-other");
+      const entered = createDeferred();
+      const release = createDeferred();
+      f.context.readChatMetadata = async () => {
+        entered.resolve();
+        await release.promise;
+        return { swarmEnabled: false };
+      };
+      const respond = vi.fn<RespondFn>();
+      const pending = f.request({ sessionKey: selected.sessionKey }, { respond }, "chat.metadata");
+      void pending.catch(() => {});
+      try {
+        await Promise.race([entered.promise, pending]);
+        await writeSessionFixture(changeSelected ? selected : other, {
+          modelOverride: "replacement",
+        });
       } finally {
         release.resolve();
       }
-      const respond = await pending;
-      if (change === "selected patch") {
-        expect(loadSessionEntry(scope)?.label).toBe("changed");
-        expectReply(
-          respond,
-          {
-            models: [availableModel],
-            accountSelection: personalSelection(f.authProfileId),
-          },
-          true,
-        );
+      if (changeSelected) {
+        await expect(pending).rejects.toThrow("Session changed");
+        expect(respond).not.toHaveBeenCalled();
       } else {
-        expectError(
-          respond,
-          {
-            code: "UNAVAILABLE",
-            message: expect.stringMatching(/changed|current/),
-            retryable: true,
-            retryAfterMs: 0,
-          },
-          true,
-        );
-        if (closedStorePath) {
-          // Synchronous revocation precedes the async resource owner's settlement.
-          await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
-        }
+        await pending;
+        expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
       }
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      await closeDatabases(f);
+    })();
+  },
+);
+
+it(
+  "retains session pins independently of viewer defaults",
+  withFixture(async (f) => {
+    f.config.agents = {
+      ...f.config.agents,
+      ownership: "explicit",
+      defaults: {
+        ...f.config.agents?.defaults,
+        systemAgent: { agentId: "main" },
+      },
+      entries: { main: {}, other: {} },
+    };
+    await f.state.writeConfig(f.config);
+    const sessionKey = "agent:main:saved";
+    await f.saveSession(sessionKey, "pinned");
+    clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
+    const saved = await f.request({ sessionKey, view: "configured" });
+    expectReply(saved, {
+      models: [availableModel],
+      accountSelection: personalSelection(f.authProfileId),
     });
-  });
+    const neutral = await f.request({ agentId: "main", view: "configured" });
+    expectReply(neutral, {
+      models: [expect.objectContaining({ available: false })],
+      accountSelection: { kind: "automatic", label: "Automatic account selection" },
+    });
+    const mismatch = await f.request({ agentId: "other", sessionKey, view: "configured" });
+    expectError(mismatch, { code: "INVALID_REQUEST" });
+    expect(f.loadDeferred).not.toHaveBeenCalled();
+    expect(f.snapshot.authStore.profiles).toEqual({});
+  }),
+);
 
-  it.each([false, true])(
-    "revalidates chat.metadata before response (selected model changed: %s)",
-    async (changeSelected) => {
-      await withFixture(async (f, state) => {
-        const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
-        const other = { ...selected, sessionKey: "agent:main:metadata-other" };
-        await f.writeSession(selected, {
-          sessionId: "selected",
-        });
-        await f.writeSession(other, {
-          sessionId: "other",
-        });
-        const entered = createDeferred();
-        const release = createDeferred();
-        f.context.readChatMetadata = async () => {
-          entered.resolve();
-          await release.promise;
-          return { swarmEnabled: false };
-        };
-        const respond = vi.fn<RespondFn>();
-        const params = { sessionKey: selected.sessionKey };
-        const pending = handleChatMetadataRequest({
-          req: { type: "req", id: "held-metadata", method: "chat.metadata", params },
-          params,
-          context: f.context,
-          client: f.client,
-          respond,
-          isWebchatConnect: () => false,
-        });
-        void pending.catch(() => {});
-        try {
-          await Promise.race([entered.promise, pending]);
-          await writeSessionFixture(changeSelected ? selected : other, {
-            modelOverride: "replacement",
-          });
-        } finally {
-          release.resolve();
-        }
-        if (changeSelected) {
-          await expect(pending).rejects.toThrow("Session changed");
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          await pending;
-          expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
-        }
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+it(
+  "does not borrow host auth for native sessions",
+  withFixture(async (f) => {
+    await f.state.writeConfig(f.config);
+    clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
+    const sessionKey = "agent:main:harness:catalog-native:saved";
+    await f.saveSession(sessionKey, {
+      sessionId: "catalog-native-session",
+      agentHarnessId: "catalog-native",
+      modelSelectionLocked: true,
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "catalog-native",
+      source: "test",
+      harness: {
+        id: "catalog-native",
+        label: "Native catalog fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("A model read must not run inference");
+        },
+        resolveSessionRuntimeOwnership: (params) => {
+          params.assertCurrent();
+          return params.sessionKey === sessionKey && params.sessionId === "catalog-native-session"
+            ? { model: "native", auth: "native" }
+            : undefined;
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    try {
+      const direct = await f.request({ sessionKey, view: "configured" });
+      expect(direct.mock.calls[0]?.[1]).toMatchObject({
+        models: [{ id: "gpt-5.6-luna", provider: "openai" }],
+        sessionModelRevision: undefined,
       });
-    },
-  );
-
-  it("uses a saved session pin after the viewer changes their default and keeps agent reads separate", async () => {
-    await withFixture(async (f, state) => {
-      f.config.agents = {
-        ...f.config.agents,
-        ownership: "explicit",
-        defaults: {
-          ...f.config.agents?.defaults,
-          systemAgent: { agentId: "main" },
-        },
-        entries: { main: {}, other: {} },
-      };
-      await state.writeConfig(f.config);
-      const sessionKey = "agent:main:saved";
-      await f.writeSession(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "saved-catalog-session",
-          authProfileOverride: f.authProfileId,
-          authProfileOverrideSource: "user",
-        },
+      const payload = direct.mock.calls[0]?.[1];
+      expect(payload).not.toEqual(
+        expect.objectContaining({
+          models: [expect.objectContaining({ available: expect.anything() })],
+        }),
       );
-      clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
-      const saved = await f.request({ sessionKey, view: "configured" });
-      expectReply(saved, {
-        models: [availableModel],
-        accountSelection: personalSelection(f.authProfileId),
-      });
       const neutral = await f.request({ agentId: "main", view: "configured" });
-      expectReply(neutral, {
-        models: [expect.objectContaining({ available: false })],
-        accountSelection: { kind: "automatic", label: "Automatic account selection" },
-      });
-      const mismatch = await f.request({ agentId: "other", sessionKey, view: "configured" });
-      expectError(mismatch, { code: "INVALID_REQUEST" });
-      expect(f.loadDeferred).not.toHaveBeenCalled();
-      expect(f.snapshot.authStore.profiles).toEqual({});
-    }, false);
-  });
+      expectModels(neutral, false);
+      expect(f.snapshot.entries[0]).not.toHaveProperty("available");
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  }),
+);
 
-  it("projects a saved native session without borrowing host authentication state", async () => {
-    await withFixture(async (f) => {
-      clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
-      const sessionKey = "agent:main:harness:catalog-native:saved";
-      await f.writeSession(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "catalog-native-session",
-          agentHarnessId: "catalog-native",
-          modelSelectionLocked: true,
-        },
-      );
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "catalog-native",
-        source: "test",
-        harness: {
-          id: "catalog-native",
-          label: "Native catalog fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("A model read must not run inference");
-          },
-          resolveSessionRuntimeOwnership: (params) => {
-            params.assertCurrent();
-            return params.sessionKey === sessionKey && params.sessionId === "catalog-native-session"
-              ? { model: "native", auth: "native" }
-              : undefined;
-          },
-        },
-      });
-      setActivePluginRegistry(registry);
-      try {
-        const direct = await f.request({ sessionKey, view: "configured" });
-        expect(direct.mock.calls[0]?.[1]).toMatchObject({
-          models: [{ id: "gpt-5.6-luna", provider: "openai" }],
-          sessionModelRevision: undefined,
-        });
-        const payload = direct.mock.calls[0]?.[1];
-        expect(payload).not.toEqual(
-          expect.objectContaining({
-            models: [expect.objectContaining({ available: expect.anything() })],
-          }),
-        );
-        const neutral = await f.request({ agentId: "main", view: "configured" });
-        expectModels(neutral, false);
-        expect(f.snapshot.entries[0]).not.toHaveProperty("available");
-      } finally {
-        resetPluginRuntimeStateForTest();
+it(
+  "does not use viewer defaults for unpinned sessions",
+  withFixture(async (f) => {
+    await f.state.writeConfig(f.config);
+    const agent = await f.request({ agentId: "main", view: "configured" });
+    expectModels(agent, true);
+    const session = await f.request({ sessionKey: "agent:main:uncreated", view: "configured" });
+    expectModels(session, false);
+  }),
+);
+
+it(
+  "previews owned drafts without mutating shared accounts",
+  withFixture(async (f) => {
+    clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
+    const before = readUserModelAuthProfile(f.authProfileId);
+    const preview = await f.request({
+      agentId: "main",
+      authProfileId: f.authProfileId,
+      view: "configured",
+    });
+    expectReply(preview, {
+      models: [expect.objectContaining({ available: true })],
+      accountSelection: personalSelection(f.authProfileId),
+    });
+    const inventory = await f.request({
+      agentId: "main",
+      authProfileId: f.authProfileId,
+      view: "provider-config",
+    });
+    expect(inventory.mock.calls[0]?.[1]).not.toHaveProperty("accountSelection");
+    expect(listUserProfileAuthLinks(f.person.id)).toEqual([]);
+    expect(readUserModelAuthProfile(f.authProfileId)).toEqual(before);
+    expect(f.snapshot.authStore.profiles).toEqual({});
+    expect(f.loadDeferred).not.toHaveBeenCalled();
+  }),
+);
+
+it.each(["foreign admin", "anonymous", "synthetic", "forged locator"] as const)(
+  "rejects %s before private catalog reads",
+  async (caller) => {
+    return withFixture(async (f) => {
+      let authProfileId = f.authProfileId;
+      if (caller === "foreign admin") {
+        const other = ensureProfileForEmail("other-reader@example.test");
+        f.client.connect.scopes = ["operator.admin"];
+        f.client.authenticatedUserProfile = {
+          profileId: other.id,
+          displayName: other.displayName,
+          hasAvatar: false,
+          updatedAt: other.updatedAt,
+        };
+      } else if (caller === "synthetic") {
+        f.client.internal = { syntheticClient: true };
+      } else if (caller === "forged locator") {
+        authProfileId = "personal:missing:missing";
       }
-    });
-  });
-
-  it("does not substitute a viewer default for a session with no saved pin", async () => {
-    await withFixture(async (f) => {
-      const agent = await f.request({ agentId: "main", view: "configured" });
-      expectModels(agent, true);
-      const session = await f.request({ sessionKey: "agent:main:uncreated", view: "configured" });
-      expectModels(session, false);
-    });
-  });
-
-  it("previews a retained self-owned draft without changing shared inventory or account defaults", async () => {
-    await withFixture(async (f) => {
-      clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
-      const before = readUserModelAuthProfile(f.authProfileId);
-      const preview = await f.request({
-        agentId: "main",
-        authProfileId: f.authProfileId,
-        view: "configured",
-      });
-      expectReply(preview, {
-        models: [expect.objectContaining({ available: true })],
-        accountSelection: personalSelection(f.authProfileId),
-      });
-      const inventory = await f.request({
-        agentId: "main",
-        authProfileId: f.authProfileId,
-        view: "provider-config",
-      });
-      expect(inventory.mock.calls[0]?.[1]).not.toHaveProperty("accountSelection");
-      expect(listUserProfileAuthLinks(f.person.id)).toEqual([]);
-      expect(readUserModelAuthProfile(f.authProfileId)).toEqual(before);
-      expect(f.snapshot.authStore.profiles).toEqual({});
-      expect(f.loadDeferred).not.toHaveBeenCalled();
-    }, false);
-  });
-
-  it.each(["foreign admin", "anonymous", "synthetic", "forged locator"] as const)(
-    "rejects %s before reading private catalog state",
-    async (caller) => {
-      await withFixture(async (f) => {
-        let authProfileId = f.authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("other-reader@example.test");
-          f.client.connect.scopes = ["operator.admin"];
-          f.client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "synthetic") {
-          f.client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          authProfileId = "personal:missing:missing";
-        }
-        const result = await f.request(
-          { agentId: "main", authProfileId },
-          caller === "anonymous" ? { client: null } : {},
-        );
-        expectError(result, { code: "FORBIDDEN" });
-        expect(f.readPrepared).not.toHaveBeenCalled();
-      }, false);
-    },
-  );
-
-  it("rejects a combined saved-session and draft-account request", async () => {
-    await withFixture(async (f) => {
-      const result = await f.request({
-        sessionKey: "agent:main:saved",
-        authProfileId: f.authProfileId,
-      });
-      expectError(result, { code: "INVALID_REQUEST" });
+      const result = await f.request(
+        { agentId: "main", authProfileId },
+        caller === "anonymous" ? { client: null } : {},
+      );
+      expectError(result, { code: "FORBIDDEN" });
       expect(f.readPrepared).not.toHaveBeenCalled();
-    }, false);
-  });
+    })();
+  },
+);
 
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rechecks draft authority after a snapshot await and %s",
-    async (loss) => {
-      await withFixture(async (f) => {
-        const { entered, release } = f.holdCatalog();
-        const abort = new AbortController();
-        const pending = f.request(
-          { agentId: "main", authProfileId: f.authProfileId },
-          { signal: abort.signal },
-        );
-        try {
-          await Promise.race([entered.promise, pending]);
+it(
+  "rejects combined session and draft selectors",
+  withFixture(async (f) => {
+    const result = await f.request({
+      sessionKey: "agent:main:saved",
+      authProfileId: f.authProfileId,
+    });
+    expectError(result, { code: "INVALID_REQUEST" });
+    expect(f.readPrepared).not.toHaveBeenCalled();
+  }),
+);
+
+it.each(["disconnect", "role loss", "abort"] as const)(
+  "rechecks draft authority after %s",
+  async (loss) => {
+    return withFixture(async (f) => {
+      const abort = new AbortController();
+      const result = await duringCatalog(
+        f,
+        { agentId: "main", authProfileId: f.authProfileId },
+        () => {
           expect(f.readPrepared).toHaveBeenCalledOnce();
           if (loss === "disconnect") {
             f.clients.delete(f.client);
@@ -696,13 +666,11 @@ describe("direct session model catalogs", () => {
           } else {
             abort.abort();
           }
-        } finally {
-          release.resolve();
-        }
-        const result = await pending;
-        expectError(result, { code: "FORBIDDEN" });
-        expect(f.snapshot.authStore.profiles).toEqual({});
-      }, false);
-    },
-  );
-});
+        },
+        { signal: abort.signal },
+      );
+      expectError(result, { code: "FORBIDDEN" });
+      expect(f.snapshot.authStore.profiles).toEqual({});
+    })();
+  },
+);
