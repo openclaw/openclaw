@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment node
 import {
-  GatewayProtocolRequestError,
-  GatewayProtocolRequestTimeoutError,
+  GatewayProtocolRequestError as RequestError,
+  GatewayProtocolRequestTimeoutError as RequestTimeoutError,
 } from "../../../packages/gateway-client/src/protocol-request.js";
-import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
+import { GatewaySessionMessageSubscriptionCoordinator as SubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   browserVisibility,
@@ -13,29 +13,43 @@ import {
 } from "../test-helpers/app-sidebar-session-narration.ts";
 import {
   SidebarSessionNarrationController,
-  type SidebarNarrationSyncInput,
+  type SidebarNarrationSyncInput as SyncInput,
 } from "./app-sidebar-session-narration.ts";
 
-function sourceWith<
-  T extends NonNullable<SidebarNarrationSyncInput["source"]>["subscribeMessages"],
->(subscribeMessages: T) {
+function sourceWith<T extends NonNullable<SyncInput["source"]>["subscribeMessages"]>(
+  subscribeMessages: T,
+) {
   return { subscribeMessages, unsubscribeMessages: vi.fn().mockResolvedValue(undefined) };
 }
 
-function syncInput(
-  source: SidebarNarrationSyncInput["source"],
-  rows: SidebarNarrationSyncInput["rows"],
+const subscribeMethod = "sessions.messages.subscribe";
+type Handle = { key: string; agentId: null };
+function retrySource(error: Error, next?: Promise<Handle>) {
+  const subscribe = vi.fn().mockRejectedValueOnce(error);
+  return sourceWith(
+    next
+      ? subscribe.mockReturnValueOnce(next)
+      : subscribe.mockResolvedValue({ key: "agent:main:run", agentId: null }),
+  );
+}
+const retryError = (retryAfterMs?: number) => new RequestError({ retryable: true, retryAfterMs });
+function start(
+  source: SyncInput["source"],
+  rows: SyncInput["rows"],
   connectionIdentity: object = {},
-): SidebarNarrationSyncInput {
-  return {
+) {
+  const input: SyncInput = {
     enabled: true,
     connected: true,
-    connectionIdentity,
     source,
     rows,
+    connectionIdentity,
     openSessionKey: "",
     agentId: "main",
   };
+  const controller = new SidebarSessionNarrationController(() => undefined);
+  controller.sync(input);
+  return { input, controller };
 }
 
 describe("sidebar narration subscription retries", () => {
@@ -54,9 +68,9 @@ describe("sidebar narration subscription retries", () => {
     let busy = true;
     const wireKeys = new Set<string>();
     const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
-      if (method === "sessions.messages.subscribe") {
+      if (method === subscribeMethod) {
         if (busy) {
-          throw new GatewayProtocolRequestError({ code: "UNAVAILABLE", retryable: true });
+          throw new RequestError({ code: "UNAVAILABLE", retryable: true });
         }
         wireKeys.add(params.key);
       } else {
@@ -64,8 +78,8 @@ describe("sidebar narration subscription retries", () => {
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-    const input = syncInput(
+    const coordinator = new SubscriptionCoordinator({ request });
+    const { input, controller } = start(
       {
         subscribeMessages: (key, options) => coordinator.acquire(key, options),
         unsubscribeMessages: (handle) => coordinator.release(handle),
@@ -77,8 +91,6 @@ describe("sidebar narration subscription retries", () => {
       })),
       coordinator,
     );
-    const controller = new SidebarSessionNarrationController(() => undefined);
-    controller.sync(input);
     for (let index = 0; index < 100; index++) {
       await vi.advanceTimersByTimeAsync(0);
       input.rows[0]!.updatedAt = index + 10;
@@ -108,32 +120,28 @@ describe("sidebar narration subscription retries", () => {
   });
 
   it("reacquires after a sent request timeout without a compensating RPC", async () => {
+    const timeout = new RequestTimeoutError({
+      method: subscribeMethod,
+      timeoutMs: 30_000,
+      requestSent: true,
+    });
     const request = vi
       .fn()
-      .mockRejectedValueOnce(
-        new GatewayProtocolRequestTimeoutError({
-          method: "sessions.messages.subscribe",
-          timeoutMs: 30_000,
-          requestSent: true,
-        }),
-      )
+      .mockRejectedValueOnce(timeout)
       .mockResolvedValue({ key: "agent:main:run" });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const coordinator = new SubscriptionCoordinator({ request });
     const subscribeMessages = vi.fn(coordinator.acquire.bind(coordinator));
     const { controller } = createRunningNarrationController({
       subscribeMessages,
       unsubscribeMessages: (handle) => coordinator.release(handle),
     });
     await expect(subscribeMessages.mock.results[0]?.value).rejects.toBeInstanceOf(
-      GatewayProtocolRequestTimeoutError,
+      RequestTimeoutError,
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.messages.subscribe"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([subscribeMethod]);
     await vi.advanceTimersByTimeAsync(250);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.messages.subscribe",
-      "sessions.messages.subscribe",
-    ]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(Array(2).fill(subscribeMethod));
     expect(vi.getTimerCount()).toBe(0);
     controller.disconnect();
     await vi.advanceTimersByTimeAsync(0);
@@ -150,14 +158,7 @@ describe("sidebar narration subscription retries", () => {
     "honors full jitter and the server retry floor: %j",
     async ({ draw, hint, delay, clockShift }) => {
       vi.spyOn(Math, "random").mockReturnValue(draw);
-      const source = sourceWith(
-        vi
-          .fn()
-          .mockRejectedValueOnce(
-            new GatewayProtocolRequestError({ retryable: true, retryAfterMs: hint }),
-          )
-          .mockResolvedValue({ key: "agent:main:run", agentId: null }),
-      );
+      const source = retrySource(retryError(hint));
       const { controller } = createRunningNarrationController(source);
       await vi.advanceTimersByTimeAsync(0);
       if (clockShift) {
@@ -173,7 +174,7 @@ describe("sidebar narration subscription retries", () => {
 
   it.each([false, undefined])("does not retry a rejection with retryable=%s", async (retryable) => {
     const source = sourceWith(
-      vi.fn().mockRejectedValue(new GatewayProtocolRequestError({ code: "FORBIDDEN", retryable })),
+      vi.fn().mockRejectedValue(new RequestError({ code: "FORBIDDEN", retryable })),
     );
     const visibility = browserVisibility();
     const { controller } = createRunningNarrationController(source);
@@ -189,13 +190,8 @@ describe("sidebar narration subscription retries", () => {
   });
 
   it("coalesces an overdue retry with a sync and shares the in-flight attempt", async () => {
-    const ready = createDeferred<{ key: string; agentId: null }>();
-    const source = sourceWith(
-      vi
-        .fn()
-        .mockRejectedValueOnce(new GatewayProtocolRequestError({ retryable: true }))
-        .mockReturnValueOnce(ready.promise),
-    );
+    const ready = createDeferred<Handle>();
+    const source = retrySource(retryError(), ready.promise);
     const visibility = browserVisibility();
     const { controller } = createRunningNarrationController(source);
     await vi.advanceTimersByTimeAsync(0);
@@ -216,21 +212,19 @@ describe("sidebar narration subscription retries", () => {
     "cancels retry work when %s changes and ignores late failures",
     async (change) => {
       const visibility = browserVisibility();
-      const failure = new GatewayProtocolRequestError({ retryable: true });
-      const late = createDeferred<{ key: string; agentId: null }>();
-      const source = sourceWith(
-        vi
-          .fn()
-          .mockRejectedValueOnce(failure)
-          .mockReturnValueOnce(late.promise)
-          .mockImplementation(async (key: string, options?: { agentId?: string }) => ({
-            key,
-            agentId: options?.agentId ?? null,
-          })),
+      const failure = retryError();
+      const late = createDeferred<Handle>();
+      const source = retrySource(failure, late.promise);
+      source.subscribeMessages.mockImplementation(
+        async (key: string, options?: { agentId?: string }) => ({
+          key,
+          agentId: options?.agentId ?? null,
+        }),
       );
-      const controller = new SidebarSessionNarrationController(() => undefined);
-      const input = syncInput(source, [runningRow("global"), runningRow("agent:main:late")]);
-      controller.sync(input);
+      const { input, controller } = start(source, [
+        runningRow("global"),
+        runningRow("agent:main:late"),
+      ]);
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(1);
       const changes: Record<string, () => void> = {
