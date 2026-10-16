@@ -115,6 +115,7 @@ vi.mock("./mantis/cli.runtime.js", () => ({
   runMantisSlackDesktopSmokeCommand,
 }));
 
+// mock-isolation: command wiring tests must not load execution backends or run real QA suites.
 vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
@@ -127,6 +128,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaSuiteCommand,
 }));
 
+// mock-isolation: command wiring tests capture report arguments without writing report artifacts.
 vi.mock("./cli-report.runtime.js", () => ({
   runQaCoverageReportCommand,
 }));
