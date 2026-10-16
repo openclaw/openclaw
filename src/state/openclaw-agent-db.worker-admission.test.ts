@@ -71,6 +71,27 @@ function makeOptions(prefix: string, agentId = "main") {
   return { agentId, env: { OPENCLAW_STATE_DIR: tempDirs.make(prefix) } };
 }
 
+function executionOptions(prefix: string) {
+  const { agentId, env } = makeOptions(prefix);
+  env.OPENCLAW_STATE_DIR = fs.realpathSync(env.OPENCLAW_STATE_DIR);
+  return { agentId, env, path: agentPath({ agentId, env }) };
+}
+
+function replaceFile(pathname: string) {
+  fs.copyFileSync(pathname, `${pathname}.replacement`);
+  fs.renameSync(`${pathname}.replacement`, pathname);
+}
+
+function observePublications(observe: (path: string, publish: () => void) => void) {
+  const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+  return vi
+    .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
+    .mockImplementation((target) => {
+      const publish = capture(target);
+      return (identity, received) => observe(target.path, () => publish(identity, received));
+    });
+}
+
 function countSessions({ db }: { db: EngineConnection }) {
   return db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
 }
@@ -118,11 +139,7 @@ it.each(["before handoff", "after handoff"] as const)(
   "refuses stale creation %s without revoking admitted readers",
   async (phase) => {
     const { env } = makeOptions("agent-creation-validation-");
-    const options = {
-      agentId: "main",
-      env,
-      path: agentPath({ agentId: "main", env }),
-    };
+    const options = { agentId: "main", env, path: agentPath({ agentId: "main", env }) };
     const creator = captureExecution(options, {
       expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
     });
@@ -197,20 +214,14 @@ it("adopts worker admission after a retained reader observes an already-revalida
   foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
   foreign.close();
   closeCachedOpenClawAgentDatabase(database);
-  const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
   const observeReader = vi.fn(() => {
     expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
   });
-  const publication = vi
-    .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
-    .mockImplementation((target) => {
-      const publish = capture(target);
-      return (identity, received) => {
-        publish(identity, received);
-        // A retained read can run after worker publication, before the awaiting host adopts it.
-        observeReader();
-      };
-    });
+  const publication = observePublications((_path, publish) => {
+    publish();
+    // A retained read can run before the awaiting host adopts the worker publication.
+    observeReader();
+  });
   try {
     await expect(
       writeAgent(options, ({ db }) => {
@@ -518,12 +529,10 @@ it.each([
         retainedExecution = undefined;
         await closeOpenClawAgentDatabasesAsync();
         // Immutable ownership is checked on the replacement's first admission.
-        fs.copyFileSync(pathname, `${pathname}.replacement`);
-        fs.renameSync(`${pathname}.replacement`, pathname);
+        replaceFile(pathname);
       }
       if (change === "replacement") {
-        fs.copyFileSync(pathname, `${pathname}.replacement`);
-        fs.renameSync(`${pathname}.replacement`, pathname);
+        replaceFile(pathname);
       }
       if (change === "damage") {
         revokeSqliteDatabaseAdmissionsForPath(pathname);
@@ -583,23 +592,16 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
     };
     const source = executionSource({ assertCurrent });
     let publications = 0;
-    const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
-    vi.spyOn(
-      validationCache,
-      "captureOpenClawAgentDatabaseAdmissionPublication",
-    ).mockImplementation((target) => {
-      const publish = capture(target);
-      return (identity, received) => {
-        publications += 1;
-        if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
-          // Revoke actual captured proof at the worker-to-host publication boundary.
-          validationCache.invalidateOpenClawAgentDatabaseValidation(target.path);
-          if (failure === "source-revoked") {
-            current = false;
-          }
+    observePublications((pathname, publish) => {
+      publications += 1;
+      if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
+        // Revoke actual captured proof at the worker-to-host publication boundary.
+        invalidateValidation(pathname);
+        if (failure === "source-revoked") {
+          current = false;
         }
-        publish(identity, received);
-      };
+      }
+      publish();
     });
     const operation = vi.fn(async () => {
       if (failure === "after-entry") {
@@ -611,17 +613,17 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
       const result = execution.runExisting(source, operation);
       if (failure === "once") {
         await expect(result).resolves.toBe("executed");
-        expect(operation).toHaveBeenCalledTimes(1);
-        expect(publications).toBe(2);
       } else {
         await expect(result).rejects.toThrow(
           failure === "source-revoked"
             ? "Fixture request authority revoked"
             : "Agent schema admission changed before publication",
         );
-        expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
-        expect(publications).toBe(failure === "always" ? 2 : 1);
       }
+      expect(operation).toHaveBeenCalledTimes(
+        failure === "once" || failure === "after-entry" ? 1 : 0,
+      );
+      expect(publications).toBe(failure === "once" || failure === "always" ? 2 : 1);
       expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
     } finally {
       await execution.release();
@@ -669,12 +671,7 @@ function executionSource({
 }
 
 it("retains accepted work across borrower release and refuses late registration after retirement", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("execution-authority-")) };
-  const options = {
-    agentId: "main",
-    env,
-    path: agentPath({ agentId: "main", env }),
-  };
+  const options = executionOptions("execution-authority-");
   const execution = captureExecution(options);
   const service = createSqliteWriterAdmissionService();
   const connection = await service.connect();
@@ -750,12 +747,7 @@ it("retains accepted work across borrower release and refuses late registration 
 });
 
 it("publishes owner revocation before a host grant and rolls back the native write", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("execution-authority-")) };
-  const options = {
-    agentId: "main",
-    env,
-    path: agentPath({ agentId: "main", env }),
-  };
+  const options = executionOptions("execution-authority-");
   const execution = captureExecution(options);
   await execution.prepare(executionSource());
   let authority: SqliteWorkerExecutionAuthority | undefined;
