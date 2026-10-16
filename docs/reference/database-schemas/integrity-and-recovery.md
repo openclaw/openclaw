@@ -57,8 +57,12 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the application version, canonical SQL definitions,
-and the admission policy revision. Commit and build
+Schema identity covers the application version, the database family's canonical
+SQL definitions, and the admission policy revision. Admitted facts identify agent
+and shared-state databases, including databases at custom paths. A shared-state
+schema change does not invalidate an unchanged agent database's seal, or vice versa.
+Unclassified or mixed admission facts conservatively depend on both schemas.
+Commit and build
 IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
 the policy revision for migrations or schema-version changes not reflected in canonical
 SQL, and for changes to validation rules or serialized admission facts.
@@ -343,6 +347,14 @@ It does not discard committed WAL pages, repair the source, or change plan ident
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
+Verified snapshot publication hashes the private staged image once after validation
+and verifies the published file again after transfer. Source and output integrity
+checks, durable backup publication, and recovery ownership remain unchanged.
+Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
+expanding compressed events outside user and assistant messages. A detected repair
+still reads the complete exact transcript and revalidates it before writing;
+plaintext and older transcript stores retain their existing inspection behavior.
+
 Update validation reuses the prepared rehearsal databases for read-only checks.
 The complete updater isolation markers and physical containment of the database
 and its sidecars are required; external paths still use artifact-preserving
@@ -448,6 +460,14 @@ databases. Losing shared state must not recreate unknown deletion history as
 fresh state. The released quarantine schema retains its old integrity-receipt
 table, but runtime no longer reads or writes those rows; clean-close proof lives
 only in the adjacent seal files.
+
+Native first-run state receives an empty deletion journal when the shared
+catalog contains only native bootstrap tables and no existing agent history.
+If an older installation omitted that journal, Doctor can migrate configured
+agent stores whose integrity, ownership, and contents prove they contain only
+initial schema and index metadata. Stores with user data, unknown contents, or
+previous recovery holds remain held until their deletion history is resolved.
+Doctor reports failure when a held store prevents a required agent from starting.
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 

@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
@@ -1106,7 +1107,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.directory.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.integration.test.ts",
-  "src/agents/prepared-model-catalog-worker.mismatch.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.native.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts",
@@ -1131,7 +1131,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.native-picker-failures.test.ts",
   "src/agents/prepared-model-runtime.owner-selection.test.ts",
   "src/agents/prepared-model-runtime.owner-supersession.test.ts",
-  "src/agents/prepared-model-runtime.published-replacement.test.ts",
   "src/agents/prepared-model-runtime.registry-borrow.test.ts",
   "src/agents/prepared-model-runtime.reload-auth.test.ts",
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",

@@ -1,14 +1,18 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { createRoot } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { createContext } from "../custodian/custodian-page.test-harness.ts";
 import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
-import { PluginHelpController } from "./plugin-help-controller.ts";
+import { createPluginHelp } from "./plugin-help.ts";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import type { PluginSettingsField } from "./settings-editor.tsx";
 
-function createController() {
-  return new PluginHelpController();
+function createHelp(context: Parameters<typeof createPluginHelp>[0]) {
+  return createRoot((dispose) => {
+    onTestFinished(dispose);
+    return { help: createPluginHelp(context), dispose };
+  });
 }
 
 afterEach(() => {
@@ -21,26 +25,25 @@ it.each(["plugin", "route", "connection", "disconnect"])(
   async (change) => {
     const { context, setPathname, setGatewayToken } = createContext(vi.fn());
     setPathname("/settings/plugins/first");
-    const controller = createController();
+    const { help, dispose } = createHelp(context);
     const model = (id: string) =>
       ({
-        context,
         connected: true,
         result: { plugins: [{ id, name: id, installed: true }] },
         detail: { pluginId: id },
         installedDetailTab: "configuration",
-      }) as unknown as Parameters<PluginHelpController["update"]>[0];
-    controller.update(model("first"));
-    const ask = controller.ask.bind(controller);
+      }) as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0];
+    help.update(model("first"));
+    const ask = help.ask;
     if (change === "plugin") {
-      controller.update(model("second"));
+      help.update(model("second"));
     } else if (change === "route") {
       setPathname("/agents");
     } else if (change === "connection") {
       setGatewayToken("replacement-operator");
-      controller.update(model("first"));
+      help.update(model("first"));
     } else {
-      controller.dispose();
+      dispose();
     }
     const toggled = vi.fn();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
@@ -56,7 +59,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
       expect(takePluginHelpDraft(context)).toBe("");
     } finally {
       window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-      controller.dispose();
+      dispose();
     }
   },
 );
@@ -88,7 +91,7 @@ it.each<{
   ({ id, name, local, contracts, install }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname(`/plugins/${id}`);
-    const controller = createController();
+    const { help, dispose } = createHelp(context);
     const catalog = createDiscoveryDetail(createPlugin({ id, name }));
     catalog.plugin.id = "catalog-workboard";
     catalog.plugin.local.pluginId = local ? id : undefined;
@@ -102,8 +105,7 @@ it.each<{
       configuration: [{ name: "credential", required: true, sensitive: true }],
       readme: "Do not inject this document.",
     };
-    const model: Parameters<PluginHelpController["update"]>[0] = {
-      context,
+    const model: Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] = {
       connected: true,
       result: createResult([]),
       detail: null,
@@ -111,7 +113,7 @@ it.each<{
       catalogDetail: { result: catalog },
     };
     try {
-      controller.update(model);
+      help.update(model);
       expect(currentPluginHelpReference(context)).toEqual({
         id,
         name,
@@ -126,7 +128,7 @@ it.each<{
         },
       });
       if (install) {
-        controller.update({
+        help.update({
           ...model,
           result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
           detail: { pluginId: id, inspection: null },
@@ -138,7 +140,7 @@ it.each<{
         });
       }
     } finally {
-      controller.dispose();
+      dispose();
     }
   },
 );
@@ -163,16 +165,15 @@ it.each([
   async ({ path, label, value, expected, sensitive }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname("/settings/plugins/workboard");
-    const controller = createController();
-    controller.update({
-      context,
+    const { help, dispose } = createHelp(context);
+    help.update({
       connected: true,
       result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
       detail: { pluginId: "workboard" },
       installedDetailTab: "configuration",
-    } as unknown as Parameters<PluginHelpController["update"]>[0]);
+    } as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0]);
     try {
-      await controller.ask({
+      await help.ask({
         path,
         label,
         value,
@@ -184,7 +185,7 @@ it.each([
       expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
       expect(draft).not.toContain("synthetic-sensitive-value");
     } finally {
-      controller.dispose();
+      dispose();
     }
   },
 );

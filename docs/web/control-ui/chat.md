@@ -12,6 +12,9 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Click a session-menu submenu, such as **Assign to…**, to open it immediately.
+Hovering still uses a short delay so moving across the menu does not open every submenu.
+
 When the visible conversation does not fill the chat pane, including when the
 latest history page is empty or tool activity is hidden, earlier history loads
 automatically after the layout settles. Filling stops once the prefetch margin

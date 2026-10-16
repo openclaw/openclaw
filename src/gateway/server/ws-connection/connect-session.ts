@@ -43,7 +43,7 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { formatForLog, logWs } from "../../ws-log.js";
+import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
@@ -102,7 +102,6 @@ export async function attachAuthenticatedGatewayConnect(
     isLocalClient,
     reportedClientIp,
     runDetachedConnectWork,
-    isWebchatConnect,
     clientLabel,
     clientMeta,
     markHandshakeFailure,
@@ -557,29 +556,18 @@ export async function attachAuthenticatedGatewayConnect(
         logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
     );
   }
-  logWs("in", "connect", {
-    connId,
-    client: connectParams.client.id,
-    clientDisplayName: connectParams.client.displayName,
-    version: connectParams.client.version,
-    mode: connectParams.client.mode,
-    clientId,
-    platform: connectParams.client.platform,
-    auth: authMethod,
-  });
-
-  if (authenticatedUserId) {
-    logWsControl.info(
-      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
-    );
-  }
-
-  if (isWebchatConnect(connectParams)) {
-    const clientBuildId = connectParams.client.buildId?.trim();
-    logWsControl.info(
-      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} build=${formatForLog(clientBuildId ?? "legacy")}`,
-    );
-  }
+  logWsControl.info(
+    [
+      `client connected conn=${connId}`,
+      `client=${clientId} name=${formatForLog(clientLabel)}`,
+      `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
+      `version=${formatForLog(connectParams.client.version)} platform=${formatForLog(connectParams.client.platform)}`,
+      `build=${formatForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 
   const currentAuthenticatedPresenceUser = () =>
     nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile

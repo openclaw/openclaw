@@ -1296,7 +1296,7 @@ src/agents/model-provider-auth.ts	1
 src/agents/model-scan.ts	2
 src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
-src/agents/models-config.merge.ts	2
+src/agents/models-config.merge.ts	1
 src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
 src/agents/modes/interactive/theme/theme.ts	11

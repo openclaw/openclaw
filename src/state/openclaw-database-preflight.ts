@@ -117,7 +117,13 @@ export async function assertOpenClawDatabasesReady(
         ? { requireStartupMigrationReadiness: true }
         : {}),
       ...(options.operation === "doctor"
-        ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
+        ? {
+            configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets,
+            inspectHeldAgentDatabaseTargets: options.configuredAgentDatabaseTargets.filter(
+              (target) =>
+                !options.config || !canIsolateAgentDatabase(options.config, target.agentId),
+            ),
+          }
         : {}),
     },
     options.operation === "doctor" ? "maintenance" : "runtime",

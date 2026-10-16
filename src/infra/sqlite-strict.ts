@@ -70,10 +70,15 @@ const DEFAULT_STRICT_MIGRATION_BUSY_TIMEOUT_MS = 5_000;
 const STRICT_MIGRATION_TABLE_PREFIX = "__openclaw_strict_migration_";
 const SQLITE_ROWID_ALIASES = ["_rowid_", "rowid", "oid"] as const;
 
-export function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: string }> {
+export function readMainTableList(
+  db: DatabaseSync,
+  options: { includeInternal?: boolean } = {},
+): Array<TableListRow & { name: string }> {
   return (db.prepare("PRAGMA table_list").all() as TableListRow[]).filter(
     (row): row is TableListRow & { name: string } =>
-      row.schema === "main" && typeof row.name === "string" && !row.name.startsWith("sqlite_"),
+      row.schema === "main" &&
+      typeof row.name === "string" &&
+      (options.includeInternal === true || !row.name.startsWith("sqlite_")),
   );
 }
 

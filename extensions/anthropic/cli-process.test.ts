@@ -460,7 +460,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   it.skipIf(process.platform === "win32").each([false, true])(
     "shares one failure across late sends and terminal notifications (diagnostics reject: %s)",
     async (diagnosticsReject) => {
-      const context = await contextForChild("process.exit(1);");
+      const context = await contextForChild('process.stdin.once("data", () => process.exit(1));');
       const onError = vi.fn();
       const diagnosticError = new Error("Synthetic diagnostic collection failure.");
       let lateSend: Promise<void> | undefined;

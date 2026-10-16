@@ -245,6 +245,27 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
   });
 
+  it("attributes ephemeral backend connections in the normal journal", async () => {
+    const mode = "backend";
+    const harness = attachGatewayHarness({
+      connId: `conn-${mode}`,
+      connectNonce: `nonce-${mode}`,
+    });
+    harness.sendConnect("connect", {
+      ...BACKEND_CONNECT_PARAMS,
+      client: { ...BACKEND_CONNECT_PARAMS.client, mode, displayName: "synthetic-poller" },
+    });
+    await harness.runWhenIdle();
+    expect(harness.frames).toContainEqual(expect.objectContaining({ id: "connect", ok: true }));
+    const connections = harness.logWsControl.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith("client connected "));
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toContain(`conn=conn-${mode}`);
+    expect(connections[0]).toContain("client=gateway-client name=synthetic-poller");
+    expect(connections[0]).toContain(`mode=${mode} role=operator`);
+  });
+
   it("prewarms cold session history for an admitted operator without delaying hello", async () => {
     const prewarm = createGatewayHarnessGate();
     const prewarmStarted = createGatewayHarnessGate();
@@ -987,9 +1008,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
       );
 
-      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
-        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
-      );
+      const connections = first.harness.logWsControl.info.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes(" connected "));
+      expect(connections).toHaveLength(1);
+      expect(connections[0]).toContain("client connected conn=conn-trusted-proxy-user-first");
+      expect(connections[0]).toContain("user=alice@example.com");
     });
   });
 
