@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
@@ -14,22 +14,36 @@ import {
   type OpenAIResponsesCompactionOutput,
 } from "./openai-responses-compaction-window.js";
 import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
-const model = {
+const model = createModel({
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
+const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
+const inputMessage = (text: string) => ({
+  type: "message" as const,
+  role: "user" as const,
+  status: "completed" as const,
+  content: [{ type: "input_text" as const, text }],
+});
+const outputMessage = (text: string, id?: string) => ({
+  type: "message" as const,
+  role: "assistant" as const,
+  status: "completed" as const,
+  ...(id ? { id } : {}),
+  content: [{ type: "output_text" as const, text, annotations: [] }],
+});
+const capture = (
+  owner: AssistantMessage,
+  item: Parameters<typeof captureOpenAIResponsesCompaction>[1],
+  boundary: number | "retained-users",
+  output: OpenAIResponsesCompactionOutput,
+) => captureOpenAIResponsesCompaction(owner, item, boundary, model, replayMetadata, output);
 
 function createAssistant(
   content: string | AssistantMessage["content"],
@@ -115,12 +129,7 @@ describe("Responses retained-user compaction replay", () => {
           { type: "input_file", file_id: "file_pdf", filename: "source.pdf", detail: "high" },
         ],
       },
-      {
-        type: "message",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
-      },
+      outputMessage("Retained answer."),
       {
         type: "compaction",
         id: "cmp_retained",
@@ -133,14 +142,7 @@ describe("Responses retained-user compaction replay", () => {
     if (item?.type !== "compaction") {
       throw new Error("missing test compaction");
     }
-    captureOpenAIResponsesCompaction(
-      owner,
-      item,
-      "retained-users",
-      model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      output,
-    );
+    capture(owner, item, "retained-users", output);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
     const saved: AssistantMessage = JSON.parse(JSON.stringify(owner));
     expect(saved.providerReplay).not.toHaveProperty("replayIndex");
@@ -152,41 +154,17 @@ describe("Responses retained-user compaction replay", () => {
   it("replays compact-endpoint assistants without dangling provider item IDs after reload", () => {
     // Captured compact endpoint shape; text, item IDs, and encrypted bytes are redacted.
     const output = [
-      {
-        type: "message",
-        role: "user",
-        status: "completed",
-        content: [{ type: "input_text", text: "first" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        id: "msg_first",
-        status: "completed",
-        content: [{ type: "output_text", text: "first answer", annotations: [] }],
-      },
-      {
-        type: "message",
-        role: "user",
-        status: "completed",
-        content: [{ type: "input_text", text: "second" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        id: "msg_second",
-        status: "completed",
-        content: [{ type: "output_text", text: "second answer", annotations: [] }],
-      },
+      inputMessage("first"),
+      outputMessage("first answer", "msg_first"),
+      inputMessage("second"),
+      outputMessage("second answer", "msg_second"),
       { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
     ] satisfies OpenAIResponsesCompactionOutput;
     const owner = createAssistant("covered");
-    captureOpenAIResponsesCompaction(
+    capture(
       owner,
       { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
       "retained-users",
-      model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
       output,
     );
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload.
@@ -211,99 +189,81 @@ describe("Responses retained-user compaction replay", () => {
     expect(isOpenAIResponsesCompactionOutput(next, model)).toBe(true);
   });
 
-  it.each([
-    { scenario: "retained-users", retainedUsers: true, fullHistory: false, laterUser: false },
-  ])(
-    "preserves the compacted prefix and current context across tool rounds ($scenario)",
-    ({ scenario, retainedUsers, fullHistory, laterUser }) => {
-      const owner = createAssistant([], compactionState("openai-responses-compaction"));
-      if (retainedUsers) {
-        const item = {
-          type: "compaction" as const,
-          id: "cmp_retained",
-          encrypted_content: "opaque-retained",
-          created_by: "compactor",
-        };
-        captureOpenAIResponsesCompaction(
-          owner,
-          item,
-          "retained-users",
-          model,
-          buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-          [
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: "active request before compaction" }],
-            },
-            item,
-          ],
-        );
-      }
-      const messages: Context["messages"] = [
-        { role: "user", content: "active request before compaction", timestamp: 1 },
-        owner,
-      ];
-      if (laterUser) {
-        messages.push({ role: "user", content: "new request after compaction", timestamp: 2 });
-      }
-      const carrier = {
+  it("preserves the compacted prefix and current context across tool rounds", () => {
+    const owner = createAssistant([], compactionState("openai-responses-compaction"));
+    const item = {
+      type: "compaction" as const,
+      id: "cmp_retained",
+      encrypted_content: "opaque-retained",
+      created_by: "compactor",
+    };
+    capture(owner, item, "retained-users", [
+      {
+        type: "message",
         role: "user",
-        content: "OpenClaw runtime context:\ncurrent request metadata",
-        timestamp: 3,
-        runtimeContext: {},
-      } satisfies Context["messages"][number];
-      const replayMode = fullHistory ? "full-history" : "checkpoint";
-      const prefix = convert({ messages }, replayMode);
-      let input = convert({ messages: [...messages, carrier] }, replayMode);
-      expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
-      expect(input.at(-1), scenario).toMatchObject({
-        role: "developer",
-        content: [{ type: "input_text", text: carrier.content }],
-      });
+        content: [{ type: "input_text", text: "active request before compaction" }],
+      },
+      item,
+    ]);
+    const messages: Context["messages"] = [
+      { role: "user", content: "active request before compaction", timestamp: 1 },
+      owner,
+    ];
+    const carrier = {
+      role: "user",
+      content: "OpenClaw runtime context:\ncurrent request metadata",
+      timestamp: 3,
+      runtimeContext: {},
+    } satisfies Context["messages"][number];
+    const prefix = convert({ messages });
+    let input = convert({ messages: [...messages, carrier] });
+    expect(input.slice(0, prefix.length)).toEqual(prefix);
+    expect(input.at(-1)).toMatchObject({
+      role: "developer",
+      content: [{ type: "input_text", text: carrier.content }],
+    });
 
-      for (const round of [1, 2]) {
-        const callId = `call_${round}`;
-        const itemId = `fc_${round}`;
-        messages.push(
-          createAssistant([
-            { type: "toolCall", id: `${callId}|${itemId}`, name: "lookup", arguments: {} },
-          ]),
-          {
-            role: "toolResult",
-            toolCallId: `${callId}|${itemId}`,
-            toolName: "lookup",
-            content: [{ type: "text", text: `result ${round}` }],
-            isError: false,
-            timestamp: round + 3,
-          },
-        );
-        const nextInput = convert({ messages: [...messages, carrier] }, replayMode);
-        const continued = resolveResponsesContinuationRequest(
-          {
-            lastRequest: { model: model.id, store: true, input },
-            lastResponseId: `resp_${round}`,
-            lastResponseItems: [
-              {
-                type: "function_call",
-                id: itemId,
-                call_id: callId,
-                name: "lookup",
-                arguments: "{}",
-                status: "completed",
-              },
-            ],
-          },
-          { model: model.id, store: true, input: nextInput },
-        );
-        expect(continued.continuationStatus, `${scenario} round ${round}`).toBe("continued");
-        expect(continued.request.input).toEqual([
-          { type: "function_call_output", call_id: callId, output: `result ${round}` },
-        ]);
-        input = nextInput;
-      }
-    },
-  );
+    for (const round of [1, 2]) {
+      const callId = `call_${round}`;
+      const itemId = `fc_${round}`;
+      messages.push(
+        createAssistant([
+          { type: "toolCall", id: `${callId}|${itemId}`, name: "lookup", arguments: {} },
+        ]),
+        {
+          role: "toolResult",
+          toolCallId: `${callId}|${itemId}`,
+          toolName: "lookup",
+          content: [{ type: "text", text: `result ${round}` }],
+          isError: false,
+          timestamp: round + 3,
+        },
+      );
+      const nextInput = convert({ messages: [...messages, carrier] });
+      const continued = resolveResponsesContinuationRequest(
+        {
+          lastRequest: { model: model.id, store: true, input },
+          lastResponseId: `resp_${round}`,
+          lastResponseItems: [
+            {
+              type: "function_call",
+              id: itemId,
+              call_id: callId,
+              name: "lookup",
+              arguments: "{}",
+              status: "completed",
+            },
+          ],
+        },
+        { model: model.id, store: true, input: nextInput },
+      );
+      expect(continued.continuationStatus, `round ${round}`).toBe("continued");
+      expect(continued.request.input).toEqual([
+        { type: "function_call_output", call_id: callId, output: `result ${round}` },
+      ]);
+      input = nextInput;
+    }
+  });
 
   it.each([
     { state: "ready", output: "not JSON" },
@@ -342,16 +302,7 @@ describe("Responses retained-user compaction replay", () => {
       type: "compaction" as const,
       encrypted_content: "a".repeat(COMPACTION_WINDOW_MAX_BYTES / 2),
     };
-    expect(() =>
-      captureOpenAIResponsesCompaction(
-        owner,
-        item,
-        1,
-        model,
-        buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-        [item],
-      ),
-    ).toThrow("exceeds 16 MiB");
+    expect(() => capture(owner, item, 1, [item])).toThrow("exceeds 16 MiB");
     expect(owner.providerReplay).toBe(previous);
     expect(
       readOpenAIResponsesCompactionWindow({
@@ -388,62 +339,44 @@ describe("Responses retained-user compaction replay", () => {
       buildOpenAIResponsesCompactionReplayPlan([savedOwner], route, replayIdentity),
     ).toThrow(CompactionReplayRefreshRequiredError);
     // The same SDK metadata is valid on the native route that retains it.
-    captureOpenAIResponsesCompaction(
-      owner,
-      item,
-      1,
-      model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      [item],
-    );
+    capture(owner, item, 1, [item]);
     expect(
       buildOpenAIResponsesCompactionReplayPlan([owner], model, replayIdentity).compactedWindow,
     ).toEqual([item]);
   });
 
-  it.each(["escaped plaintext"])(
-    "keeps imported %s over the envelope limit as a refresh barrier",
-    (kind) => {
-      const data = kind === "duplicated opaque" ? "a".repeat(9 * 1024 * 1024) : "opaque-retained";
-      const output = JSON.stringify([
-        ...(kind === "escaped plaintext"
-          ? [
-              {
-                type: "message",
-                role: "user",
-                content: [{ type: "input_text", text: '"'.repeat(5 * 1024 * 1024) }],
-              },
-            ]
-          : []),
-        { type: "compaction", id: "cmp_retained", encrypted_content: data },
-      ]);
-      const replay = {
-        ...compactionState("openai-responses-retained-compaction"),
-        data,
-        compactedWindow: { state: "ready", output },
-      };
-      expect(Buffer.byteLength(data)).toBeLessThan(COMPACTION_WINDOW_MAX_BYTES);
-      expect(Buffer.byteLength(output)).toBeLessThan(COMPACTION_WINDOW_MAX_BYTES);
-      if (kind === "escaped plaintext") {
-        expect(Buffer.byteLength(data) + Buffer.byteLength(output)).toBeLessThan(
-          COMPACTION_WINDOW_MAX_BYTES,
-        );
-      }
-      expect(Buffer.byteLength(JSON.stringify(replay))).toBeGreaterThan(
-        COMPACTION_WINDOW_MAX_BYTES,
-      );
-      const accepted = readOpenAIResponsesCompactionWindow(replay, model) !== undefined;
-      expect(accepted).toBe(false);
-      expect(() =>
-        buildOpenAIResponsesCompactionReplayPlan(
-          [
-            createAssistant("older", compactionState("openai-responses-compaction")),
-            createAssistant("oversized import", replay),
-          ],
-          model,
-          replayIdentity,
-        ),
-      ).toThrow(CompactionReplayRefreshRequiredError);
-    },
-  );
+  it("keeps imported escaped plaintext over the envelope limit as a refresh barrier", () => {
+    const data = "opaque-retained";
+    const output = JSON.stringify([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: '"'.repeat(5 * 1024 * 1024) }],
+      },
+      { type: "compaction", id: "cmp_retained", encrypted_content: data },
+    ]);
+    const replay = {
+      ...compactionState("openai-responses-retained-compaction"),
+      data,
+      compactedWindow: { state: "ready", output },
+    };
+    expect(Buffer.byteLength(data)).toBeLessThan(COMPACTION_WINDOW_MAX_BYTES);
+    expect(Buffer.byteLength(output)).toBeLessThan(COMPACTION_WINDOW_MAX_BYTES);
+    expect(Buffer.byteLength(data) + Buffer.byteLength(output)).toBeLessThan(
+      COMPACTION_WINDOW_MAX_BYTES,
+    );
+    expect(Buffer.byteLength(JSON.stringify(replay))).toBeGreaterThan(COMPACTION_WINDOW_MAX_BYTES);
+    const accepted = readOpenAIResponsesCompactionWindow(replay, model) !== undefined;
+    expect(accepted).toBe(false);
+    expect(() =>
+      buildOpenAIResponsesCompactionReplayPlan(
+        [
+          createAssistant("older", compactionState("openai-responses-compaction")),
+          createAssistant("oversized import", replay),
+        ],
+        model,
+        replayIdentity,
+      ),
+    ).toThrow(CompactionReplayRefreshRequiredError);
+  });
 });

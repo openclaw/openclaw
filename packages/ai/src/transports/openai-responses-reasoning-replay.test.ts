@@ -1,23 +1,23 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
-const model = {
+const model = createModel({
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
+const thinking = (item: object) => ({
+  type: "thinking" as const,
+  thinking: "",
+  thinkingSignature: JSON.stringify(item),
+});
 
 function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -53,11 +53,7 @@ describe("OpenAI Responses reasoning replay", () => {
         const input = convert({
           messages: [
             createAssistant([
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: JSON.stringify({ type: "reasoning", id, summary: [] }),
-              },
+              thinking({ type: "reasoning", id, summary: [] }),
               { type: "toolCall", id: "call_probe|fc_probe", name: "probe", arguments: {} },
             ]),
           ],
@@ -76,10 +72,8 @@ describe("OpenAI Responses reasoning replay", () => {
     "$name omits orphan function item ids without changing paired transcript ids",
     ({ convert }) => {
       const reasoning = {
-        type: "thinking" as const,
-        thinking: "",
-        thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_tool", summary: [] }),
-        openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+        ...thinking({ type: "reasoning", id: "rs_tool", summary: [] }),
+        openclawReasoningReplay: metadata,
       };
       const toolCall = {
         type: "toolCall" as const,
@@ -114,40 +108,19 @@ describe("OpenAI Responses reasoning replay", () => {
       };
       const original = structuredClone(context);
       const input = convert(context);
-      expect(input.filter((item) => item.type === "function_call")).toEqual([
-        {
-          type: "function_call",
-          id: "fc_one",
-          call_id: "call_one",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          id: "fc_two",
-          call_id: "call_two",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_orphan",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_invalid",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_late",
-          name: "probe",
-          arguments: '{"input":"synthetic"}',
-        },
-      ]);
+      expect(input.filter((item) => item.type === "function_call")).toEqual(
+        ["one", "two", "orphan", "invalid", "late"].map((suffix, index) =>
+          Object.assign(
+            {
+              type: "function_call",
+              call_id: `call_${suffix}`,
+              name: "probe",
+              arguments: '{"input":"synthetic"}',
+            },
+            index < 2 ? { id: `fc_${suffix}` } : {},
+          ),
+        ),
+      );
       expect(input.find((item) => item.type === "function_call_output")).toMatchObject({
         call_id: "call_one",
         output: "Done",
@@ -167,13 +140,8 @@ describe("OpenAI Responses reasoning replay", () => {
           ...(encryptedContent === undefined ? {} : { encrypted_content: encryptedContent }),
         };
         const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
-          openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(
-            model,
-            replayIdentity,
-          ),
+          ...thinking(item),
+          openclawReasoningReplay: metadata,
         };
         const input = convert({ messages: [createAssistant([block])] });
         expect(input).toEqual(encryptedContent ? [item] : []);
@@ -189,7 +157,6 @@ describe("OpenAI Responses reasoning replay", () => {
   it.each(responseConverters)(
     "$name removes standalone reasoning when replay identity strips its ciphertext",
     ({ name, convert }) => {
-      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
       const item = {
         type: "reasoning",
         id: "rs_foreign",
@@ -207,9 +174,7 @@ describe("OpenAI Responses reasoning replay", () => {
         { ...metadata, authProfileHash: "other-auth" },
       ]) {
         const block = {
-          type: "thinking" as const,
-          thinking: "",
-          thinkingSignature: JSON.stringify(item),
+          ...thinking(item),
           ...(replayMetadata === undefined ? {} : { openclawReasoningReplay: replayMetadata }),
         };
         const input = convert({ messages: [createAssistant([block])] });

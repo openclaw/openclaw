@@ -1,27 +1,23 @@
 import { zstdDecompressSync } from "node:zlib";
-import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../agent-core/src/harness/messages.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleOpenAICodexResponses } from "../providers/openai-chatgpt-responses.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 
 const initialHost = getAiTransportHost();
-const model = {
+const model = createModel({
   id: "gpt-5.4",
   name: "Synthetic ChatGPT",
   api: "openai-chatgpt-responses",
-  provider: "openai",
   baseUrl: "https://chatgpt.com/backend-api/codex",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model;
+});
 const options = {
   apiKey: `eyJhbGciOiJub25lIn0.${Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } }),
@@ -224,14 +220,7 @@ describe.each([
       model: model.id,
       stopReason: "stop",
       timestamp: 3,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
     };
     captureOpenAIResponsesCompaction(
       owner,

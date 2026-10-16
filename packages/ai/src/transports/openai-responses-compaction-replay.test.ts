@@ -11,6 +11,7 @@ import {
   normalizeResponsesFailedEvent,
   summarizeResponsesPayload,
 } from "./openai-responses-debug.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -18,18 +19,11 @@ import {
 } from "./openai-responses-stream-internal.js";
 import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
-const model = {
+const model = createModel({
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
 function createOutput(): AssistantMessage {
@@ -88,23 +82,13 @@ async function processEvents(
 }
 
 function replayTypes(output: AssistantMessage): string[] {
-  return convertResponsesMessages(
-    model,
-    { messages: [output] },
-    new Set(["openai"]),
-    replayIdentity,
-  ).flatMap((item) => (typeof item.type === "string" ? [item.type] : []));
+  return convertTransport({ messages: [output] }).flatMap((item) =>
+    typeof item.type === "string" ? [item.type] : [],
+  );
 }
 
-const responseConverters = [
-  {
-    name: "provider-owned",
-    convert: (
-      context: Context,
-      identity: { sessionId?: string; authProfileId?: string } = replayIdentity,
-    ) => convertProviderResponsesMessages(model, context, new Set(["openai"]), identity),
-  },
-] as const;
+const convertProvider = (context: Context) =>
+  convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity);
 
 const convertTransport = (
   context: Context,
@@ -128,8 +112,23 @@ function responseMessage(id: string, text: string) {
   };
 }
 
+const compaction = (id: string, encrypted_content: string) => ({
+  type: "compaction",
+  id,
+  encrypted_content,
+});
+const itemEvent = (output_index: number, item: object, phase = "done") => ({
+  type: `response.output_item.${phase}`,
+  output_index,
+  item,
+});
+const completed = (id: string, output: object[] = []) => ({
+  type: "response.completed",
+  response: { id, status: "completed", output },
+});
+
 describe("OpenAI Responses compaction replay", () => {
-  it.each(responseConverters)("$name skips invalid reasoning signatures", ({ convert }) => {
+  it("provider-owned skips invalid reasoning signatures", () => {
     const invalidSignatures = [
       ["truncated JSON", '{"type":"reasoning"'],
       ["null", "null"],
@@ -138,7 +137,7 @@ describe("OpenAI Responses compaction replay", () => {
     ] as const;
 
     for (const [caseName, thinkingSignature] of invalidSignatures) {
-      const input = convert({
+      const input = convertProvider({
         messages: [
           createAssistant([
             { type: "thinking", thinking: "invalid", thinkingSignature },
@@ -187,19 +186,9 @@ describe("OpenAI Responses compaction replay", () => {
 
     await processEvents(
       [
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_terminal_idless_changed",
-            status: "completed",
-            output: [
-              {
-                type: "compaction",
-                encrypted_content: "opaque-terminal-idless-new",
-              },
-            ],
-          },
-        },
+        completed("resp_terminal_idless_changed", [
+          { type: "compaction", encrypted_content: "opaque-terminal-idless-new" },
+        ]),
       ],
       output,
     );
@@ -212,58 +201,24 @@ describe("OpenAI Responses compaction replay", () => {
     });
     expect(output.providerReplay).not.toHaveProperty("id");
     expect(
-      convertResponsesMessages(
-        model,
-        { messages: [output] },
-        new Set(["openai"]),
-        replayIdentity,
-      ).find((item) => item.type === "compaction"),
+      convertTransport({ messages: [output] }).find((item) => item.type === "compaction"),
     ).toEqual({ type: "compaction", encrypted_content: "opaque-terminal-idless-new" });
   });
 
   it("orders reasoning, compaction, and message by normalized replay content", async () => {
     const output = await processEvents([
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { type: "reasoning", id: "rs_before", summary: [], content: [] },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          type: "reasoning",
-          id: "rs_before",
-          summary: [{ type: "summary_text", text: "thought" }],
-          content: [],
-          encrypted_content: "opaque-reasoning",
-        },
-      },
-      {
-        type: "response.output_item.added",
-        output_index: 1,
-        item: { type: "compaction", id: "cmp_middle", encrypted_content: "opaque-middle" },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: { type: "compaction", id: "cmp_middle", encrypted_content: "opaque-middle" },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 2,
-        item: {
-          type: "message",
-          id: "msg_after",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "answer", annotations: [] }],
-        },
-      },
-      {
-        type: "response.completed",
-        response: { id: "resp_ordered", status: "completed", output: [] },
-      },
+      itemEvent(0, { type: "reasoning", id: "rs_before", summary: [], content: [] }, "added"),
+      itemEvent(0, {
+        type: "reasoning",
+        id: "rs_before",
+        summary: [{ type: "summary_text", text: "thought" }],
+        content: [],
+        encrypted_content: "opaque-reasoning",
+      }),
+      itemEvent(1, compaction("cmp_middle", "opaque-middle"), "added"),
+      itemEvent(1, compaction("cmp_middle", "opaque-middle")),
+      itemEvent(2, responseMessage("msg_after", "answer")),
+      completed("resp_ordered"),
     ]);
 
     expect(output.providerReplay?.replayIndex).toBe(1);
@@ -274,63 +229,32 @@ describe("OpenAI Responses compaction replay", () => {
     const first = responseMessage("msg_before_terminal", "first answer");
     const second = responseMessage("msg_after_terminal", "second answer");
     const output = await processEvents([
-      { type: "response.output_item.done", output_index: 0, item: first },
-      { type: "response.output_item.done", output_index: 2, item: second },
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_terminal_between",
-          status: "completed",
-          output: [
-            first,
-            {
-              type: "compaction",
-              id: "cmp_between_completed",
-              encrypted_content: "opaque-between-completed",
-            },
-            second,
-          ],
-        },
-      },
+      itemEvent(0, first),
+      itemEvent(2, second),
+      completed("resp_terminal_between", [
+        first,
+        compaction("cmp_between_completed", "opaque-between-completed"),
+        second,
+      ]),
     ]);
 
     expect(output.content).toHaveLength(2);
     expect(output.providerReplay?.replayIndex).toBe(1);
     expect(replayTypes(output)).toEqual(["compaction", "message"]);
-    expect(
-      JSON.stringify(
-        convertResponsesMessages(
-          model,
-          { messages: [output] },
-          new Set(["openai"]),
-          replayIdentity,
-        ),
-      ),
-    ).not.toContain("first answer");
+    expect(JSON.stringify(convertTransport({ messages: [output] }))).not.toContain("first answer");
   });
 
   it("uses the collapsed message index as the terminal compaction boundary", async () => {
     const first = responseMessage("msg_snapshot_first", "answer");
     const cumulative = responseMessage("msg_snapshot_second", "answer extended");
     const output = await processEvents([
-      { type: "response.output_item.done", output_index: 0, item: first },
-      { type: "response.output_item.done", output_index: 2, item: cumulative },
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_terminal_collapsed",
-          status: "completed",
-          output: [
-            first,
-            {
-              type: "compaction",
-              id: "cmp_before_collapsed_snapshot",
-              encrypted_content: "opaque-before-collapsed",
-            },
-            cumulative,
-          ],
-        },
-      },
+      itemEvent(0, first),
+      itemEvent(2, cumulative),
+      completed("resp_terminal_collapsed", [
+        first,
+        compaction("cmp_before_collapsed_snapshot", "opaque-before-collapsed"),
+        cumulative,
+      ]),
     ]);
 
     expect(output.content).toEqual([
@@ -340,82 +264,79 @@ describe("OpenAI Responses compaction replay", () => {
     expect(replayTypes(output)).toEqual(["compaction", "message"]);
   });
 
-  it.each(responseConverters)(
-    "$name keeps instructions, owner output after compaction, and later messages",
-    ({ convert }) => {
-      const prefixCall = createAssistant([
+  it("provider-owned keeps instructions, owner output after compaction, and later messages", () => {
+    const prefixCall = createAssistant([
+      {
+        type: "toolCall",
+        id: "call_prefix|fc_prefix",
+        name: "lookup",
+        arguments: { prefix: true },
+      },
+    ]);
+    const owner = createAssistant(
+      [
+        { type: "text", text: "owner text before compaction" },
+        {
+          type: "thinking",
+          thinking: "reasoning after compaction",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_after_compaction",
+            summary: [],
+          }),
+        },
+        { type: "text", text: "owner text after compaction" },
         {
           type: "toolCall",
-          id: "call_prefix|fc_prefix",
+          id: "call_after|fc_after",
           name: "lookup",
-          arguments: { prefix: true },
+          arguments: { after: true },
         },
-      ]);
-      const owner = createAssistant(
-        [
-          { type: "text", text: "owner text before compaction" },
-          {
-            type: "thinking",
-            thinking: "reasoning after compaction",
-            thinkingSignature: JSON.stringify({
-              type: "reasoning",
-              id: "rs_after_compaction",
-              summary: [],
-            }),
-          },
-          { type: "text", text: "owner text after compaction" },
-          {
-            type: "toolCall",
-            id: "call_after|fc_after",
-            name: "lookup",
-            arguments: { after: true },
-          },
-        ],
-        compactionState(model, { replayIndex: 1 }),
-      );
-      const laterAssistant = createAssistant([{ type: "text", text: "later assistant" }]);
+      ],
+      compactionState(model, { replayIndex: 1 }),
+    );
+    const laterAssistant = createAssistant([{ type: "text", text: "later assistant" }]);
 
-      const input = convert({
-        systemPrompt: "current system instructions",
-        messages: [
-          { role: "user", content: "prefix user", timestamp: 1 },
-          createAssistant([{ type: "text", text: "prefix assistant" }]),
-          prefixCall,
-          makeTextToolResult("call_prefix|fc_prefix", "lookup", "prefix tool result", false, 2),
-          owner,
-          makeTextToolResult("call_after|fc_after", "lookup", "after tool result", false, 3),
-          { role: "user", content: "later user", timestamp: 4 },
-          laterAssistant,
-          { role: "user", content: "active current user prompt", timestamp: 5 },
-        ],
-      });
+    const input = convertProvider({
+      systemPrompt: "current system instructions",
+      messages: [
+        { role: "user", content: "prefix user", timestamp: 1 },
+        createAssistant([{ type: "text", text: "prefix assistant" }]),
+        prefixCall,
+        makeTextToolResult("call_prefix|fc_prefix", "lookup", "prefix tool result", false, 2),
+        owner,
+        makeTextToolResult("call_after|fc_after", "lookup", "after tool result", false, 3),
+        { role: "user", content: "later user", timestamp: 4 },
+        laterAssistant,
+        { role: "user", content: "active current user prompt", timestamp: 5 },
+      ],
+    });
 
-      expect(input.map((item) => item.type)).toEqual([
-        "message",
-        "compaction",
-        "reasoning",
-        "message",
-        "function_call",
-        "function_call_output",
-        "message",
-        "message",
-        "message",
-      ]);
-      expect(input[0]).toMatchObject({ type: "message", role: "developer" });
-      expect(input[1]).toMatchObject({ type: "compaction", id: "cmp_replay" });
-      const encoded = JSON.stringify(input);
-      expect(encoded).toContain("current system instructions");
-      expect(encoded).toContain("owner text after compaction");
-      expect(encoded).toContain("after tool result");
-      expect(encoded).toContain("later user");
-      expect(encoded).toContain("later assistant");
-      expect(encoded).toContain("active current user prompt");
-      expect(encoded).not.toContain("prefix user");
-      expect(encoded).not.toContain("prefix assistant");
-      expect(encoded).not.toContain("prefix tool result");
-      expect(encoded).not.toContain("owner text before compaction");
-    },
-  );
+    expect(input.map((item) => item.type)).toEqual([
+      "message",
+      "compaction",
+      "reasoning",
+      "message",
+      "function_call",
+      "function_call_output",
+      "message",
+      "message",
+      "message",
+    ]);
+    expect(input[0]).toMatchObject({ type: "message", role: "developer" });
+    expect(input[1]).toMatchObject({ type: "compaction", id: "cmp_replay" });
+    const encoded = JSON.stringify(input);
+    expect(encoded).toContain("current system instructions");
+    expect(encoded).toContain("owner text after compaction");
+    expect(encoded).toContain("after tool result");
+    expect(encoded).toContain("later user");
+    expect(encoded).toContain("later assistant");
+    expect(encoded).toContain("active current user prompt");
+    expect(encoded).not.toContain("prefix user");
+    expect(encoded).not.toContain("prefix assistant");
+    expect(encoded).not.toContain("prefix tool result");
+    expect(encoded).not.toContain("owner text before compaction");
+  });
 
   it("leaves the full transcript unchanged when compaction is incompatible", () => {
     const older = createAssistant(
@@ -462,21 +383,15 @@ describe("OpenAI Responses compaction replay", () => {
     }
   });
 
-  it.each([["base route", { baseUrlHash: "0000000000000000" }]])(
-    "does not replay across an incompatible %s",
-    (_name, overrides) => {
-      const assistant = createOutput();
-      assistant.providerReplay = compactionState(model, overrides);
-      const input = convertResponsesMessages(
-        model,
-        { messages: [{ role: "user", content: "first", timestamp: 1 }, assistant] },
-        new Set(["openai"]),
-        replayIdentity,
-      );
+  it("does not replay across an incompatible base route", () => {
+    const assistant = createOutput();
+    assistant.providerReplay = compactionState(model, { baseUrlHash: "0000000000000000" });
+    const input = convertTransport({
+      messages: [{ role: "user", content: "first", timestamp: 1 }, assistant],
+    });
 
-      expect(input.some((item) => item.type === "compaction")).toBe(false);
-    },
-  );
+    expect(input.some((item) => item.type === "compaction")).toBe(false);
+  });
 
   it("ignores a newer foreign-route suppression tombstone", () => {
     const compatible = createAssistant(
