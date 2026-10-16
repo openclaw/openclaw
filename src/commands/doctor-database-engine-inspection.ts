@@ -11,13 +11,14 @@ import {
   selectDatabaseEngine,
 } from "../infra/database-engine/registry.js";
 import { resolveStatePortRoots } from "../infra/database-engine/state-port.js";
+import type { DatabaseEngineFamily, DatabaseEngineId } from "../infra/database-engine/types.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine, type BackupEngine } from "../snapshot/database-backup.js";
-import type { ObservedDatabaseEngines } from "./doctor-database-engine.js";
 
 type Input = { config: OpenClawConfig; stateDir: string; env: NodeJS.ProcessEnv };
+export type ObservedDatabaseEngines = Partial<Record<DatabaseEngineFamily, DatabaseEngineId[]>>;
 export type DoctorDatabaseEngineInspection = {
   observed: ObservedDatabaseEngines;
   stateRoots: { path: string; physical: BackupEngine }[];

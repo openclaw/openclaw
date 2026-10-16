@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
-import type { DatabaseEngineFamily, DatabaseEngineId } from "../infra/database-engine/types.js";
-import type { DoctorDatabaseEngineInspection } from "./doctor-database-engine-inspection.js";
-
-export type ObservedDatabaseEngines = Partial<Record<DatabaseEngineFamily, DatabaseEngineId[]>>;
+import type {
+  DoctorDatabaseEngineInspection,
+  ObservedDatabaseEngines,
+} from "./doctor-database-engine-inspection.js";
 type InspectionOptions = { env?: NodeJS.ProcessEnv };
 
 function collectDatabaseEngineHealthFindings(

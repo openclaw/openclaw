@@ -26,6 +26,7 @@ import {
   withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
 import {
+  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
@@ -624,7 +625,9 @@ export async function snapshotUpdateCandidateState(
     let snapshotSource = file;
     const { capturePostgresBackup, readBackupEngine } =
       await import("../snapshot/database-backup.js");
-    if (readBackupEngine(file).engine === "postgres") {
+    const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
+    // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
+    if (userVersion === 0 && readBackupEngine(file).engine === "postgres") {
       const directory = `${target}.postgres`;
       await capturePostgresBackup({
         sourcePath: file,
