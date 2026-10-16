@@ -1,5 +1,11 @@
+import { writeSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
 
 const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -24,6 +30,7 @@ afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
+  vi.mocked(writeSync).mockReset();
   prepare.mockReset();
   prepareCopy.mockReset();
   createToken.mockReset();
@@ -47,7 +54,35 @@ async function expectWorkerFailure(
     mode,
     "/synthetic/database.sqlite",
   ];
-  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  let captured = "";
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    // Node's unknown-handle Writable acknowledges sync-child output without delivering bytes.
+    if (mode !== "sync") {
+      captured += String(chunk);
+    }
+    return true;
+  });
+  vi.mocked(writeSync).mockImplementation(
+    (
+      file: number,
+      data: string | NodeJS.ArrayBufferView,
+      offset?: number | null,
+      length?: number | BufferEncoding | null,
+    ) => {
+      if (file !== 1) {
+        throw new Error("Unexpected descriptor in worker output fixture");
+      }
+      const bytes =
+        typeof data === "string"
+          ? Buffer.from(data, typeof length === "string" ? length : undefined)
+          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      const start = typeof data === "string" ? 0 : (offset ?? 0);
+      const size = typeof length === "number" ? length : bytes.length;
+      const chunk = bytes.subarray(start, start + size);
+      captured += chunk.toString();
+      return chunk.length;
+    },
+  );
   if (mode === "staging-create" || mode === "staging-create-legacy") {
     createToken.mockImplementationOnce(() => {
       throw error;
@@ -68,7 +103,7 @@ async function expectWorkerFailure(
     ok: false,
     message: `${prefix}${message}`,
   });
-  expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
+  expect(captured).toBe(stdout);
   expect(process.exitCode).toBe(1);
   const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
     await import("./sqlite-readonly-worker-protocol.js");

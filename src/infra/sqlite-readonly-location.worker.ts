@@ -46,6 +46,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
+import { writeSqliteWorkerResponse } from "./sqlite-worker-stdout.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
@@ -414,11 +415,15 @@ if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
   if (process.argv[3] === "session" && process.send) {
     runSession();
   } else {
-    void inspect(process.argv.slice(3)).then((result) => {
+    void inspect(process.argv.slice(3)).then(async (result) => {
       if (!result.ok) {
         process.exitCode = 1;
       }
-      process.stdout.write(JSON.stringify(result));
+      if (process.argv[3] === "sync") {
+        await writeSqliteWorkerResponse(result);
+      } else {
+        process.stdout.write(JSON.stringify(result));
+      }
     });
   }
 }

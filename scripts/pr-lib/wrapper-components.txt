@@ -1205,6 +1205,7 @@ src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-request-custody.ts
 src/infra/sqlite-writer-admission-client.ts
 src/infra/sqlite-worker-state-context.ts
+src/infra/sqlite-worker-stdout.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
 src/infra/stable-node-path.ts

@@ -56,6 +56,25 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.runIf(process.platform === "linux")(
+  "preserves a large diagnostic across nonblocking worker stdout",
+  () => {
+    // JSON escaping makes this reply larger than a normal pipe/socket buffer,
+    // while the argv path remains below Linux's per-argument limit.
+    const pathname = `${tempDirs.make("sqlite-large-diagnostic-")}/${"\u0001".repeat(90_000)}`;
+    let failure: unknown;
+    try {
+      runSqliteReadOnlyWorkerSync(pathname, undefined, "file-generation");
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(pathname);
+    expect((failure as Error).message).toContain("ENAMETOOLONG");
+  },
+);
+
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
   vi.mocked(spawn).mockClear();
@@ -245,6 +264,40 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
       })),
     ),
   ).toBe(MAX_TIMER_TIMEOUT_MS);
+});
+
+describe("argument-fed synchronous SQLite workers", () => {
+  it.each(["EPERM", "ENOBUFS"])("retains %s despite status 0 and valid JSON", (code) => {
+    const error = Object.assign(new Error(`spawnSync ${code}`), { code });
+    const stdout = '{"ok":true,"location":"private.sqlite"}';
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1,
+      output: [null, stdout, ""],
+      stdout,
+      stderr: "",
+      status: 0,
+      signal: null,
+      error,
+    });
+
+    expect(() => runSqliteReadOnlyWorkerSync("source.sqlite", undefined)).toThrow(
+      expect.objectContaining({ cause: error }),
+    );
+  });
+
+  it("rejects an empty response even when the child exits successfully", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+    expect(() => runSqliteReadOnlyWorkerSync("source.sqlite", undefined)).toThrow(
+      "returned no JSON result",
+    );
+  });
 });
 
 it("preserves an intermittent failed launch without parsing absent worker output", async () => {
