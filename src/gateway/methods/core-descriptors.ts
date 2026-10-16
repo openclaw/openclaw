@@ -193,6 +193,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.detail", "skills", "operator.read", "<=2026.7"],
   ["skills.securityVerdicts", "skills", "operator.read", "<=2026.7"],
   ["skills.skillCard", "skills", "operator.read", "<=2026.7"],
+  ["skills.files.get", "skills", "operator.read", "2026.10"],
   ["skills.bins", "skills", "node", "<=2026.7"],
   ["skills.upload.begin", "skills", "operator.admin", "<=2026.7"],
   ["skills.upload.chunk", "skills", "operator.admin", "<=2026.7"],
