@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
 import type { CliStreamJsonOutputLimits } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -83,6 +84,44 @@ export function measureClaudePartialMessage(
       : JSON.stringify({ estimated_tokens: estimatedTokens }).length) +
     Math.max(0, rawLine.length - JSON.stringify(parsed).length)
   );
+}
+
+// Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`, and the
+// parser keeps nothing from it but that id for progress: the subagent's answer reaches
+// the parent through the Agent tool result. Charging those records their size let a
+// 19-subagent research turn spend the 8 MiB budget on output it never kept and lose its
+// reply. A fixed per-record allowance keeps subagent floods bounded by the same budget.
+const CLAUDE_SUBAGENT_RECORD_CHARS = 64;
+
+/** Fixed charge for one forwarded subagent record; undefined for parent-lane records. */
+export function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | undefined {
+  const parentToolUseId = parsed.parent_tool_use_id;
+  if (
+    typeof parentToolUseId !== "string" ||
+    !parentToolUseId.trim() ||
+    parentToolUseId.length > 128
+  ) {
+    return undefined;
+  }
+  return CLAUDE_SUBAGENT_RECORD_CHARS;
+}
+
+/** Budget charge for one Claude stream-json line, and whether it is a partial-message frame. */
+export function chargeClaudeStreamJsonLine(
+  record: Record<string, unknown> | undefined,
+  rawLine: string,
+): { chars: number; partialMessage: boolean } {
+  const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
+  const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
+  const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
+  // Neither media omission nor token-envelope discounts may erase wire whitespace.
+  const chars =
+    subagentChars ??
+    partialChars ??
+    (normalized
+      ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+      : rawLine.length);
+  return { chars, partialMessage: partialChars !== undefined };
 }
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
