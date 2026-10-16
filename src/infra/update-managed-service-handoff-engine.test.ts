@@ -136,6 +136,9 @@ itUnix.for(["transfer", "cancel"] as const)(
       stdio: [mode === "cancel" ? "pipe" : "ignore", "ignore", "pipe"],
     });
     let stderr = "";
+    if (!parent.stderr) {
+      throw new Error("Parent stderr pipe is unavailable");
+    }
     parent.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
