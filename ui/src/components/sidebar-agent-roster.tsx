@@ -129,20 +129,21 @@ export function SidebarAgentRoster(props: RosterProps) {
   const queryCollapsed = createMemo<ReadonlySet<string> | null>((previous) =>
     presented() ? collapsed() : (previous ?? null),
   );
+  // Owner publications must not tear down the query accessor on the same host.
+  const hostIdentity = createMemo(() => props.host);
+  // The synchronous owner publishes through its own frame, not this child's dependencies.
+  const readCollapsed = () => untrack(queryCollapsed);
+  createEffect(hostIdentity, (host) => {
+    host.readRosterCollapsedAgentIds = readCollapsed;
+    return () => {
+      if (host.readRosterCollapsedAgentIds === readCollapsed) {
+        host.readRosterCollapsedAgentIds = null;
+        host.requestUpdate();
+      }
+    };
+  });
   createEffect(
-    () => props.host,
-    (host) => {
-      host.readRosterCollapsedAgentIds = queryCollapsed;
-      return () => {
-        if (host.readRosterCollapsedAgentIds === queryCollapsed) {
-          host.readRosterCollapsedAgentIds = null;
-          host.requestUpdate();
-        }
-      };
-    },
-  );
-  createEffect(
-    () => [props.host, queryCollapsed()] as const,
+    () => [hostIdentity(), queryCollapsed()] as const,
     ([host, ids]) => {
       if (ids) {
         host.sessionData.requestSessionDataUpdate();
