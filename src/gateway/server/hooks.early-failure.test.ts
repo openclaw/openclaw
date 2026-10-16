@@ -33,30 +33,26 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../s
 
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
-  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
+  config: vi.fn<() => OpenClawConfig>(),
   captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
     agentId,
     sessionKey,
     sessionId: "captured-session",
     generation: "captured-generation",
   })),
-  enqueueSessionEvent: vi.fn((_text: string, _options: Record<string, unknown>) => ({
+  enqueue: vi.fn((_text: string, _options: Record<string, unknown>) => ({
     accepted: Promise.resolve({ ok: true }),
     settled: Promise.resolve({ status: "completed" }),
   })),
-  runCronIsolatedAgentTurn: vi.fn(),
+  run: vi.fn(),
 }));
 
-vi.mock("../../config/io.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-}));
-vi.mock("../../cron/isolated-agent.js", () => ({
-  runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
-}));
+vi.mock("../../config/io.js", () => ({ getRuntimeConfig: mocks.config }));
+vi.mock("../../cron/isolated-agent.js", () => ({ runCronIsolatedAgentTurn: mocks.run }));
 // mock-isolation: Keep ordinary reply execution outside the hook admission fixture.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
-  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
+  enqueueSessionEventForHost: mocks.enqueue,
 }));
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
@@ -68,13 +64,20 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => ({
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
   await import("./hooks.js");
 
+const waitForIdle = () => vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+const eventTexts = () => mocks.enqueue.mock.calls.map(([text]) => text);
+const acceptedRun = { ok: true, runId: expect.any(String) };
+const unavailable = {
+  status: "skipped" as const,
+  error: "model provider unavailable",
+  admissionDisposition: "rejected" as const,
+};
+
 function mockStartedRun(result: RunCronAgentTurnResult) {
-  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-    async (params: { onExecutionStarted?: () => void }) => {
-      params.onExecutionStarted?.();
-      return result;
-    },
-  );
+  mocks.run.mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+    params.onExecutionStarted?.();
+    return result;
+  });
 }
 
 const privateRunData = {
@@ -104,7 +107,7 @@ function createPluginHookDispatcher(options: { admissionTimeoutMs?: number } = {
 }
 
 function queueHookRunner(onStart = vi.fn()) {
-  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+  mocks.run.mockImplementationOnce(
     async (params: { lane: string; onExecutionStarted?: () => void }) =>
       await enqueueCommandInLane(params.lane, async () => {
         params.onExecutionStarted?.();
@@ -148,11 +151,11 @@ async function postAgentHook(
   };
   const handler = createHandler(options.admissionTimeoutMs, hooksConfig, logHooks);
   if (options.rejectInitialConfig !== false) {
-    mocks.getRuntimeConfig.mockImplementationOnce(() => {
+    mocks.config.mockImplementationOnce(() => {
       throw new Error("required system config unavailable");
     });
   }
-  mocks.getRuntimeConfig.mockReturnValue(config);
+  mocks.config.mockReturnValue(config);
   const response = await post(handler, options.mapping ? "/hooks/terminal" : "/hooks/agent", {
     message: "Dispatch",
     name: "Recovery",
@@ -199,9 +202,7 @@ describe("gateway hook early-failure recovery", () => {
   ] as const)(
     "redacts and bounds $outcome diagnostics for the log reader and $style console sink",
     async ({ outcome, style }) => {
-      applyLoggingConfig({
-        redactPatterns: [String.raw`PRIVATE\[[^\]]+\]`],
-      });
+      applyLoggingConfig({ redactPatterns: [String.raw`PRIVATE\[[^\]]+\]`] });
       const logPath = logPathTracker.nextPath();
       setLoggerOverride({
         level: "info",
@@ -224,17 +225,15 @@ describe("gateway hook early-failure recovery", () => {
         model: `${"m".repeat(499)}🦞end`,
         outputText: "private output",
       };
-      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-        async (params: { onExecutionStarted?: () => void }) => {
-          if (outcome !== "skipped") {
-            params.onExecutionStarted?.();
-          }
-          if (outcome === "throw") {
-            throw new Error(diagnostic);
-          }
-          return result;
-        },
-      );
+      mocks.run.mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        if (outcome !== "skipped") {
+          params.onExecutionStarted?.();
+        }
+        if (outcome === "throw") {
+          throw new Error(diagnostic);
+        }
+        return result;
+      });
       const response = await postAgentHook(false, {
         rejectInitialConfig: false,
         logger: createSubsystemLogger("gateway/hooks"),
@@ -248,7 +247,7 @@ describe("gateway hook early-failure recovery", () => {
           deliver: true,
         },
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForIdle();
       expect(response.status).toBe(outcome === "skipped" ? 502 : 200);
       expect(response.body).toMatchObject({ ok: outcome !== "skipped", runId: expect.any(String) });
       expect(response.logHooks.warn).toHaveBeenCalledOnce();
@@ -287,17 +286,16 @@ describe("gateway hook early-failure recovery", () => {
       expect.soft(message).toContain("tail end");
       expect(message).toMatch(/^hook agent run completed /);
       expect(message.length).toBeLessThanOrEqual(500);
-      expect(message).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}]/u);
-      expect(message).not.toMatch(/\p{Surrogate}/u);
+      expect(message).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}\p{Surrogate}]/u);
       expect(fileLine).not.toMatch(/fake-secret-value|PRIVATE\[|x{20}|private output|Dispatch/);
       for (const value of Object.values(meta ?? {})) {
         if (typeof value !== "string") {
           continue;
         }
         expect(value.length).toBeLessThanOrEqual(500);
-        expect(value).not.toMatch(/\p{Surrogate}/u);
-        expect(value).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}]/u);
-        expect(value).not.toMatch(/fake-secret-value|PRIVATE\[|x{20}|private output/);
+        expect(value).not.toMatch(
+          /[\p{Cc}\p{Zl}\p{Zp}\p{Surrogate}]|fake-secret-value|PRIVATE\[|x{20}|private output/u,
+        );
       }
       expect(meta?.[outcome === "delivery" ? "deliveryError" : "summary"]).toContain("tail end");
       expect(meta?.name).toContain("PRIVAT");
@@ -319,7 +317,7 @@ describe("gateway hook early-failure recovery", () => {
         expect(line).toContain(message);
       }
       const events = outcome === "delivery" ? 0 : 1;
-      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueue).toHaveBeenCalledTimes(events);
       expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );
@@ -337,10 +335,10 @@ describe("gateway hook early-failure recovery", () => {
       error: "hook agent run failed before entering the agent runner",
       runId: expect.any(String),
     });
-    expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(mocks.enqueue).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueue).toHaveBeenCalledWith(
       "Hook Recovery (error): Error: required system config unavailable",
       expect.objectContaining({
         agentId: "hooks",
@@ -349,7 +347,7 @@ describe("gateway hook early-failure recovery", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
   });
 
   it.each(["startTurn", "runTurn"] as const)(
@@ -378,7 +376,7 @@ describe("gateway hook early-failure recovery", () => {
         close: vi.fn(async () => {}),
       } satisfies AcpRuntime;
 
-      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      mocks.run.mockImplementationOnce(
         async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
           await releasePreparation.promise;
           const streamOptions = {
@@ -414,8 +412,8 @@ describe("gateway hook early-failure recovery", () => {
         releasePreparation.resolve();
       }
 
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+      await waitForIdle();
+      expect(mocks.run).toHaveBeenCalledOnce();
       expect(startTurn).not.toHaveBeenCalled();
       expect(runTurn).not.toHaveBeenCalled();
     },
@@ -432,7 +430,7 @@ describe("gateway hook early-failure recovery", () => {
           allowedSessionKeyPrefixes: ["hook:http:"],
         },
       };
-      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.config.mockReturnValue(config);
       applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
       const onStart = queueHookRunner();
       const { dispatcher, logHooks } = createPluginHookDispatcher({ admissionTimeoutMs: 100 });
@@ -445,11 +443,11 @@ describe("gateway hook early-failure recovery", () => {
       const result = await dispatcher.dispatchHookAgentTurn(unsafePluginTurn, "imap");
       // Drain a closed lane after the regression fails; expired admission still fences execution.
       applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(createConfig(false)));
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForIdle();
 
-      expect(result).toEqual({ ok: true, runId: expect.any(String) });
+      expect(result).toEqual(acceptedRun);
       expect(onStart).toHaveBeenCalledOnce();
-      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledWith(
+      expect(mocks.run).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "hooks",
           sessionKey: pluginHookTurn.sessionKey,
@@ -486,16 +484,16 @@ describe("gateway hook early-failure recovery", () => {
   );
 
   it("announces successful plugin hook turns through the ordinary event owner", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
+    mocks.config.mockReturnValue(createConfig(false));
     mockStartedRun({ status: "ok", summary: "New email summarized" });
     const { dispatcher } = createPluginHookDispatcher();
 
     await expect(
       dispatcher.dispatchHookAgentTurn({ ...pluginHookTurn, deliver: true }, "imap"),
-    ).resolves.toEqual({ ok: true, runId: expect.any(String) });
+    ).resolves.toEqual(acceptedRun);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
+      expect(mocks.enqueue).toHaveBeenCalledWith(
         "Hook IMAP fastmail: New email summarized",
         expect.objectContaining({
           agentId: "hooks",
@@ -528,14 +526,14 @@ describe("gateway hook early-failure recovery", () => {
         reason ??
         "sessionKey must start with hook: and contain no whitespace or control characters",
     });
-    expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
     "bounds plugin work by cron capacity and fences expired admission=%s",
     async (expire) => {
       const config = { agents: createConfig(false).agents };
-      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.config.mockReturnValue(config);
       applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
       const releaseCron = createDeferred();
       const cronRuns = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
@@ -560,18 +558,15 @@ describe("gateway hook early-failure recovery", () => {
         }
         await expect(admission).resolves.toEqual(
           expire
-            ? {
-                ok: false,
-                reason: "hook agent run did not start before admission timeout",
-              }
-            : { ok: true, runId: expect.any(String) },
+            ? { ok: false, reason: "hook agent run did not start before admission timeout" }
+            : acceptedRun,
         );
       } finally {
         releaseCron.resolve();
         applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(createConfig(false)));
         await Promise.all(cronRuns);
         await admission;
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await waitForIdle();
       }
       expect(onStart).toHaveBeenCalledTimes(expire ? 0 : 1);
       expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
@@ -583,8 +578,8 @@ describe("gateway hook early-failure recovery", () => {
 
   it("serializes HTTP and plugin turns together while replaying plugin idempotency keys", async () => {
     const releaseHttpRun = createDeferred();
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn
+    mocks.config.mockReturnValue(createConfig(false));
+    mocks.run
       .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
         params.onExecutionStarted?.();
         await releaseHttpRun.promise;
@@ -610,14 +605,14 @@ describe("gateway hook early-failure recovery", () => {
     const pluginTurn = { ...pluginHookTurn, idempotencyKey: "message-42" };
     const firstPluginRun = dispatcher.dispatchHookAgentTurn(pluginTurn, "imap");
     const duplicatePluginRun = dispatcher.dispatchHookAgentTurn(pluginTurn, "imap");
-    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+    expect(mocks.run).toHaveBeenCalledOnce();
 
     releaseHttpRun.resolve();
     const [first, duplicate] = await Promise.all([firstPluginRun, duplicatePluginRun]);
-    expect(first).toEqual({ ok: true, runId: expect.any(String) });
+    expect(first).toEqual(acceptedRun);
     expect(duplicate).toEqual(first);
     await expect(dispatcher.dispatchHookAgentTurn(pluginTurn, "imap")).resolves.toEqual(first);
-    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+    expect(mocks.run).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -666,10 +661,7 @@ async function post(
   const req = Object.assign(Readable.from([JSON.stringify(payload)]), {
     method: "POST",
     url: path,
-    headers: {
-      authorization: "Bearer hook-secret",
-      "content-type": "application/json",
-    },
+    headers: { authorization: "Bearer hook-secret", "content-type": "application/json" },
     socket: { remoteAddress: "127.0.0.1" },
   }) as unknown as IncomingMessage;
   let responseBody = "";
@@ -692,10 +684,10 @@ describe("hook background admission", () => {
   });
 
   it("admits slow fan-out items past the bounded deadline instead of canceling them", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.config.mockReturnValue(config);
     // Execution starts well after the 20ms bounded admission deadline,
     // mirroring cold concurrent workspace prep.
-    mocks.runCronIsolatedAgentTurn.mockImplementation(
+    mocks.run.mockImplementation(
       async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
         await delay(60);
         expect(params.abortSignal?.aborted).toBe(false);
@@ -715,16 +707,12 @@ describe("hook background admission", () => {
     expect(response.res.statusCode).toBe(200);
     const body = JSON.parse(response.body()) as { runIds?: string[] };
     expect(body.runIds).toHaveLength(2);
-    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
+    expect(mocks.run).toHaveBeenCalledTimes(2);
   });
 
   it("announces a pre-execution fan-out failure once across producer redeliveries", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.runCronIsolatedAgentTurn.mockResolvedValue({
-      status: "skipped" as const,
-      error: "model provider unavailable",
-      admissionDisposition: "rejected" as const,
-    });
+    mocks.config.mockReturnValue(config);
+    mocks.run.mockResolvedValue(unavailable);
     const handler = createHandler(100);
     const redelivered = { messages: [{ id: "alert1", from: "a@example.com", subject: "Alert" }] };
 
@@ -736,8 +724,8 @@ describe("hook background admission", () => {
       messages: [{ id: "alert2", from: "b@example.com", subject: "Other" }],
     });
 
-    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
-    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+    expect(mocks.run).toHaveBeenCalledTimes(4);
+    expect(eventTexts()).toEqual([
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
@@ -745,8 +733,8 @@ describe("hook background admission", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
     try {
       expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
-      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
-      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.run).toHaveBeenCalledTimes(5);
+      expect(eventTexts()).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
@@ -757,13 +745,9 @@ describe("hook background admission", () => {
   });
 
   it("announces an execution failure after an earlier redelivery failed admission", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.runCronIsolatedAgentTurn
-      .mockResolvedValueOnce({
-        status: "skipped" as const,
-        error: "model provider unavailable",
-        admissionDisposition: "rejected" as const,
-      })
+    mocks.config.mockReturnValue(config);
+    mocks.run
+      .mockResolvedValueOnce(unavailable)
       .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
         params.onExecutionStarted?.();
         return { status: "error" as const, error: "execution failed" };
@@ -775,7 +759,7 @@ describe("hook background admission", () => {
     expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(eventTexts()).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (error): execution failed",
       ]),
@@ -783,9 +767,9 @@ describe("hook background admission", () => {
   });
 
   it("keeps the bounded admission cancel for direct agent hooks", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.config.mockReturnValue(config);
     let sawAbort = false;
-    mocks.runCronIsolatedAgentTurn.mockImplementation(
+    mocks.run.mockImplementation(
       async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
         await delay(60);
         sawAbort = params.abortSignal?.aborted === true;
@@ -805,100 +789,67 @@ describe("hook background admission", () => {
     expect(sawAbort).toBe(true);
   });
 
-  it.each([{ deliverySuppressionReason: "empty", replyDisposition: "empty" }] as const)(
-    "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
-    async ({ deliverySuppressionReason, replyDisposition }) => {
-      mocks.getRuntimeConfig.mockReturnValue(config);
-      mockStartedRun({
-        status: "ok" as const,
-        delivered: false,
-        deliveryAttempted: true,
-        deliverySuppressionReason,
-        replyDisposition,
-        ...privateRunData,
-      });
-      const handler = createHandler(100);
-
-      const response = await post(handler, "/hooks/agent", {
+  it.each(["suppression", "delivery failure", "throw"] as const)(
+    "returns only public completion fields after %s",
+    async (outcome) => {
+      mocks.config.mockReturnValue(config);
+      if (outcome === "throw") {
+        mocks.run.mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          throw new Error("private execution diagnostic");
+        });
+      } else {
+        mockStartedRun({
+          status: "ok",
+          delivered: false,
+          deliveryAttempted: true,
+          ...privateRunData,
+          ...(outcome === "suppression"
+            ? { deliverySuppressionReason: "empty" as const, replyDisposition: "empty" as const }
+            : {
+                replyDisposition: "visible" as const,
+                deliveryError: `line\nAuthorization: Bearer fake-secret-value-that-must-not-leak\n${"x".repeat(600)} tail`,
+              }),
+        });
+      }
+      const response = await post(createHandler(100), "/hooks/agent", {
         message: "Direct",
         name: "Observed",
         waitForCompletion: true,
+        ...(outcome === "delivery failure" ? { deliver: false } : {}),
       });
-
       expect(response.res.statusCode).toBe(200);
-      expect(JSON.parse(response.body())).toEqual({
-        ok: true,
-        runId: expect.any(String),
-        completion: {
-          status: "ok",
-          replyDisposition,
-          delivered: false,
-          deliveryAttempted: true,
-          deliverySuppressionReason,
-        },
-      });
+      const body = JSON.parse(response.body());
+      if (outcome === "suppression") {
+        expect(body).toEqual({
+          ...acceptedRun,
+          completion: {
+            status: "ok",
+            replyDisposition: "empty",
+            delivered: false,
+            deliveryAttempted: true,
+            deliverySuppressionReason: "empty",
+          },
+        });
+      } else if (outcome === "throw") {
+        expect(body).toEqual({
+          ...acceptedRun,
+          completion: { status: "error", replyDisposition: "empty" },
+        });
+      } else {
+        expect(body).toMatchObject({
+          completion: {
+            status: "ok",
+            replyDisposition: "visible",
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: "delivery-failed",
+          },
+        });
+        expect(JSON.stringify(body)).not.toMatch(
+          /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
+        );
+      }
     },
   );
-
-  it("returns categorical delivery failure without private run data", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    const secret = "fake-secret-value-that-must-not-leak";
-    mockStartedRun({
-      status: "ok" as const,
-      replyDisposition: "visible" as const,
-      delivered: false,
-      deliveryAttempted: true,
-      deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
-      ...privateRunData,
-    });
-    const handler = createHandler(100);
-
-    const response = await post(handler, "/hooks/agent", {
-      message: "Direct",
-      name: "Observed",
-      deliver: false,
-      waitForCompletion: true,
-    });
-
-    const body = JSON.parse(response.body()) as {
-      completion: { deliveryError: string };
-    };
-    expect(response.res.statusCode).toBe(200);
-    expect(body).toMatchObject({
-      completion: {
-        status: "ok",
-        replyDisposition: "visible",
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "delivery-failed",
-      },
-    });
-    expect(JSON.stringify(body)).not.toMatch(
-      /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
-    );
-  });
-
-  it("settles an admitted waiter when the isolated runner throws", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        throw new Error("private execution diagnostic");
-      },
-    );
-    const handler = createHandler(100);
-
-    const response = await post(handler, "/hooks/agent", {
-      message: "Direct",
-      name: "Observed",
-      waitForCompletion: true,
-    });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(JSON.parse(response.body())).toEqual({
-      ok: true,
-      runId: expect.any(String),
-      completion: { status: "error", replyDisposition: "empty" },
-    });
-  });
 });

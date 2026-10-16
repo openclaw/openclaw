@@ -1,7 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement as awaitGate,
+  createDeferred,
+} from "../../../test/helpers/promise.js";
 import type {
   SessionEventOutcome,
   SessionEventReceipt,
@@ -66,6 +69,10 @@ function receipt(overrides: Partial<SessionEventReceipt> = {}): SessionEventRece
     settled: Promise.resolve(completed),
     ...overrides,
   };
+}
+
+function expectResponse(response: Awaited<ReturnType<typeof post>>, status: number, body: object) {
+  expect(response).toMatchObject({ status, body });
 }
 
 function fixture(dispatcher?: ReturnType<typeof createGatewayHookDispatcher>) {
@@ -141,7 +148,7 @@ async function post(
   });
   const res = { statusCode: 200, setHeader: vi.fn(), end } as unknown as ServerResponse;
   expect(await handler(req, res)).toBe(true);
-  return { status: res.statusCode, body, end };
+  return { status: res.statusCode, body: JSON.parse(body), end };
 }
 
 beforeEach(() => {
@@ -177,8 +184,7 @@ describe("authenticated immediate hook wake admission", () => {
       mocks.enqueue.mockReturnValue(receipt({ settled: settled.promise }));
       const { handler, warn } = fixture();
       const response = await post(handler);
-      expect(response.status).toBe(200);
-      expect(JSON.parse(response.body)).toMatchObject({ ok: true, eventOutcome: "queued" });
+      expectResponse(response, 200, { ok: true, eventOutcome: "queued" });
       expect(warn).not.toHaveBeenCalled();
       expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
         "Wake notification",
@@ -201,58 +207,52 @@ describe("authenticated immediate hook wake admission", () => {
     },
   );
 
-  it.each(["capture", "acceptance"] as const)(
-    "returns 503 after failed %s without leaving a pending event",
-    async (phase) => {
-      if (phase === "capture") {
-        mocks.capture.mockRejectedValueOnce(new Error("session storage unavailable"));
-      } else {
-        mocks.enqueue.mockReturnValueOnce(
-          receipt({
-            accepted: Promise.resolve({ ok: false, error: "session storage unavailable" }),
-          }),
-        );
-      }
-      const response = await post(fixture().handler);
-      expect(response.status).toBe(503);
-      expect(JSON.parse(response.body)).toMatchObject({
-        ok: false,
-        error: "session storage unavailable",
-      });
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
-      expect(mocks.capture).toHaveBeenCalledOnce();
-      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
-    },
-  );
-
-  it.each(["capture", "acceptance"] as const)(
-    "rejects a config replacement during %s without recapturing the destination",
-    async (phase) => {
+  it.each([
+    { phase: "capture", revoked: false },
+    { phase: "acceptance", revoked: false },
+    { phase: "capture", revoked: true },
+    { phase: "acceptance", revoked: true },
+  ])(
+    "rejects $phase failure or config revocation ($revoked) without retargeting",
+    async ({ phase, revoked }) => {
       const reached = createDeferred();
       const release = createDeferred();
+      const error = "session storage unavailable";
       if (phase === "capture") {
         mocks.capture.mockImplementationOnce(async () => {
           reached.resolve();
           await release.promise;
+          if (!revoked) {
+            throw new Error(error);
+          }
           return target;
         });
       } else {
         mocks.enqueue.mockImplementationOnce(() => {
           reached.resolve();
-          return receipt({ accepted: release.promise.then(() => ({ ok: true })) });
+          return receipt({
+            accepted: release.promise.then(() =>
+              revoked ? { ok: true as const } : { ok: false as const, error },
+            ),
+          });
         });
       }
       const { handler, revoke } = fixture();
-      const responsePromise = post(handler);
+      const pending = post(handler);
       await reached.promise;
-      revoke();
+      if (revoked) {
+        revoke();
+      }
       release.resolve();
-      const response = await responsePromise;
-      expect(response.status).toBe(409);
-      expect(JSON.parse(response.body)).toMatchObject({
-        error: "hook configuration changed; retry request",
-      });
-      expect(response.end).toHaveBeenCalledOnce();
+      const response = await pending;
+      expectResponse(
+        response,
+        revoked ? 409 : 503,
+        revoked ? { error: "hook configuration changed; retry request" } : { ok: false, error },
+      );
+      if (revoked) {
+        expect(response.end).toHaveBeenCalledOnce();
+      }
       expect(mocks.capture).toHaveBeenCalledOnce();
       expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
       expect(peekSystemEvents(sessionKey)).toEqual([]);
@@ -292,11 +292,7 @@ describe("authenticated immediate hook wake admission", () => {
         return response;
       });
       try {
-        await awaitGateBeforeSettlement(
-          handoffReached.promise,
-          immediate,
-          "Immediate wake returned without adopting the deferred occurrence",
-        );
+        await awaitGate(handoffReached.promise, immediate, "Wake returned before adoption");
         expect(responded).toBe(false);
         expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
           "Wake notification",
@@ -313,7 +309,7 @@ describe("authenticated immediate hook wake admission", () => {
       }
       const response = await immediate;
       expect(response.status).toBe(accepted ? 200 : 503);
-      expect(JSON.parse(response.body)).toMatchObject(
+      expect(response.body).toMatchObject(
         accepted
           ? { ok: true, eventOutcome: "coalesced" }
           : { ok: false, error: "admission refused" },
@@ -326,29 +322,35 @@ describe("authenticated immediate hook wake admission", () => {
     },
   );
 
-  it.each([true, false])(
-    "joins concurrent immediate requests to one admission decision (accepted: %s)",
-    async (accepted) => {
-      const { handler } = fixture();
+  it.each([
+    { accepted: true, revoke: false },
+    { accepted: false, revoke: false },
+    { accepted: true, revoke: true },
+  ])(
+    "joins one decision (accepted=$accepted, joining authority revoked=$revoke)",
+    async ({ accepted, revoke }) => {
+      const dispatcher = revoke
+        ? createGatewayHookDispatcher({
+            deps: {} as never,
+            logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+          })
+        : undefined;
+      const original = fixture(dispatcher);
+      const joining = revoke ? fixture(dispatcher) : original;
       const handoff = controlledOwnedHandoff();
-      const first = post(handler);
+      const first = post(original.handler);
       let second: ReturnType<typeof post> | undefined;
       try {
-        await awaitGateBeforeSettlement(
-          handoff.submitted.promise,
-          first,
-          "First wake never submitted",
-        );
-        second = post(handler);
-        await awaitGateBeforeSettlement(
-          handoff.joined.promise,
-          second,
-          "Coalesced wake returned before joining the original acceptance",
-        );
+        await awaitGate(handoff.submitted.promise, first, "Wake not submitted");
+        second = post(joining.handler);
+        await awaitGate(handoff.joined.promise, second, "Join returned before acceptance");
         expect(mocks.enqueue).toHaveBeenCalledOnce();
         expect(handoff.cancel).not.toHaveBeenCalled();
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
         expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([]);
+        if (revoke) {
+          joining.revoke();
+        }
       } finally {
         handoff.acceptance.resolve(
           accepted ? { ok: true } : { ok: false, error: "admission refused" },
@@ -357,68 +359,39 @@ describe("authenticated immediate hook wake admission", () => {
       }
       const responses = await Promise.all([first, second]);
       expect(responses.map((response) => response.status)).toEqual(
-        accepted ? [200, 200] : [503, 503],
+        revoke ? [200, 409] : accepted ? [200, 200] : [503, 503],
       );
-      expect(responses.map((response) => JSON.parse(response.body))).toMatchObject(
-        accepted
-          ? [
-              { ok: true, eventOutcome: "queued" },
-              { ok: true, eventOutcome: "coalesced" },
-            ]
-          : [
-              { ok: false, error: "admission refused" },
-              { ok: false, error: "admission refused" },
-            ],
-      );
+      if (!revoke) {
+        expect(responses.map((response) => response.body)).toMatchObject(
+          accepted
+            ? [
+                { ok: true, eventOutcome: "queued" },
+                { ok: true, eventOutcome: "coalesced" },
+              ]
+            : [
+                { ok: false, error: "admission refused" },
+                { ok: false, error: "admission refused" },
+              ],
+        );
+      }
       expect(mocks.enqueue).toHaveBeenCalledOnce();
       if (accepted) {
         expect(handoff.cancel).not.toHaveBeenCalled();
+        if (revoke) {
+          const retained = peekSystemEventEntries(sessionKey);
+          expect(retained).toHaveLength(1);
+          const occurrence = retained[0];
+          if (!occurrence) {
+            throw new Error("expected the original occurrence");
+          }
+          expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
+        }
       } else {
         expect(handoff.cancel).toHaveBeenCalledOnce();
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       }
     },
   );
-
-  it("does not cancel the original wake when a joining request loses its config authority", async () => {
-    const dispatcher = createGatewayHookDispatcher({
-      deps: {} as never,
-      logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
-    });
-    const original = fixture(dispatcher);
-    const joining = fixture(dispatcher);
-    const handoff = controlledOwnedHandoff();
-    const first = post(original.handler);
-    let second: ReturnType<typeof post> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        handoff.submitted.promise,
-        first,
-        "First wake never submitted",
-      );
-      second = post(joining.handler);
-      await awaitGateBeforeSettlement(
-        handoff.joined.promise,
-        second,
-        "Joining request returned before original admission",
-      );
-      joining.revoke();
-    } finally {
-      handoff.acceptance.resolve({ ok: true });
-      await Promise.all([first, second]);
-    }
-    const responses = await Promise.all([first, second]);
-    expect(responses.map((response) => response.status)).toEqual([200, 409]);
-    expect(handoff.cancel).not.toHaveBeenCalled();
-    expect(mocks.enqueue).toHaveBeenCalledOnce();
-    const retained = peekSystemEventEntries(sessionKey);
-    expect(retained).toHaveLength(1);
-    const occurrence = retained[0];
-    if (!occurrence) {
-      throw new Error("expected the original occurrence");
-    }
-    expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
-  });
 
   it("refuses a foreign-owned occurrence without consuming or cancelling it", async () => {
     const occurrence = enqueueRequiredSystemEventEntry("Wake notification", { sessionKey });
@@ -432,8 +405,7 @@ describe("authenticated immediate hook wake admission", () => {
     }
     try {
       const response = await post(fixture().handler);
-      expect(response.status).toBe(503);
-      expect(JSON.parse(response.body)).toMatchObject({
+      expectResponse(response, 503, {
         ok: false,
         error: "Hook wake acceptance is owned by another dispatcher",
       });
@@ -452,8 +424,8 @@ describe("authenticated immediate hook wake admission", () => {
     const duplicate = await post(handler, "next-heartbeat");
     expect(first.status).toBe(200);
     expect(duplicate.status).toBe(200);
-    expect(JSON.parse(first.body)).toMatchObject({ eventOutcome: "queued" });
-    expect(JSON.parse(duplicate.body)).toMatchObject({ eventOutcome: "coalesced" });
+    expect(first.body).toMatchObject({ eventOutcome: "queued" });
+    expect(duplicate.body).toMatchObject({ eventOutcome: "coalesced" });
     expect(peekSystemEvents(sessionKey)).toEqual(["Wake notification"]);
     expect(mocks.capture).not.toHaveBeenCalled();
     expect(mocks.enqueue).not.toHaveBeenCalled();

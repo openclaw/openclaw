@@ -19,7 +19,8 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 vi.mock("../../infra/worker-cpu.js", () => ({ getTrackedWorkerCpuSources: vi.fn() }));
 
-const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
+let activeMonitor: ReturnType<typeof createGatewayEventLoopHealthMonitor> | undefined;
+const host = vi.mocked(cpus);
 let now = 10_000;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let revision = 0;
@@ -41,14 +42,11 @@ beforeEach(() => {
   vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({ workers, revision }));
   mainThreadUsage.mockReset().mockImplementation(() => ({ user: now * 250, system: 0 }));
   vi.spyOn(process, "threadCpuUsage").mockImplementation(mainThreadUsage);
-  vi.mocked(cpus)
-    .mockReset()
-    .mockImplementation(() => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
+  host.mockReset().mockImplementation(() => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
 });
 afterEach(() => {
-  for (const monitor of monitors.splice(0)) {
-    monitor.stop();
-  }
+  activeMonitor?.stop();
+  activeMonitor = undefined;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -60,7 +58,7 @@ async function createMonitor() {
     cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
     eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
-  monitors.push(monitor);
+  activeMonitor = monitor;
   await setImmediate();
   return monitor;
 }
@@ -91,26 +89,26 @@ describe("CPU breakdown sampling", () => {
     if (runtime === "Bun") {
       expect(workerUsage).not.toHaveBeenCalled();
     }
-    const counts = [workerUsage.mock.calls.length, vi.mocked(cpus).mock.calls.length];
+    const counts = [workerUsage.mock.calls.length, host.mock.calls.length];
     for (let index = 0; index < 50; index++) {
       expect(monitor.snapshot()).toBe(snapshot);
       monitor.persistentDegradationSnapshot();
     }
-    expect([workerUsage.mock.calls.length, vi.mocked(cpus).mock.calls.length]).toEqual(counts);
+    expect([workerUsage.mock.calls.length, host.mock.calls.length]).toEqual(counts);
   });
 
   it("keeps collection failures unavailable and requires fresh windows on recovery", async () => {
     mainThreadUsage.mockImplementation(() => {
       throw new Error("unsupported");
     });
-    vi.mocked(cpus).mockReturnValue([]);
+    host.mockReturnValue([]);
     workerUsage.mockRejectedValue(new Error("worker exited"));
     const monitor = await createMonitor();
     await sample();
     expect(monitor.snapshot()).toMatchObject({ cpuCoreRatio: 2, cpuBreakdown: {} });
     expect(Object.keys(monitor.snapshot()!.cpuBreakdown!)).toEqual([]);
     mainThreadUsage.mockImplementation(() => ({ user: now * 250, system: 0 }));
-    vi.mocked(cpus).mockImplementation(() => [hostCpu(now, now)]);
+    host.mockImplementation(() => [hostCpu(now, now)]);
     workerUsage.mockImplementation(async () => ({ user: now * 500, system: 0 }));
     await sample();
     expect(monitor.snapshot()?.cpuBreakdown).toEqual({ hostCpuCount: 1 });
@@ -124,32 +122,24 @@ describe("CPU breakdown sampling", () => {
     });
   });
 
-  it.each(["counter rollback", "topology change", "no ticks", "invalid ticks", "throw"])(
-    "does not fabricate idle host utilization after %s",
-    async (failure) => {
-      const monitor = await createMonitor();
-      if (failure === "counter rollback") {
-        vi.mocked(cpus).mockReturnValue([hostCpu(0, 0), hostCpu(0, 0)]);
-      }
-      if (failure === "topology change") {
-        vi.mocked(cpus).mockReturnValue([hostCpu(now + 1_000, 0)]);
-      }
-      if (failure === "no ticks") {
-        vi.mocked(cpus).mockReturnValue([hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
-      }
-      if (failure === "invalid ticks") {
-        vi.mocked(cpus).mockReturnValue([hostCpu(Number.NaN, 0)]);
-      }
-      if (failure === "throw") {
-        vi.mocked(cpus).mockImplementation(() => {
-          throw new Error("unavailable");
-        });
-      }
-      await sample();
-      expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBeUndefined();
-      expect(monitor.snapshot()?.cpuCoreRatio).toBe(2);
-    },
-  );
+  it.each([
+    ["counter rollback", () => [hostCpu(0, 0), hostCpu(0, 0)]],
+    ["topology change", () => [hostCpu(now + 1_000, 0)]],
+    ["no ticks", () => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]],
+    ["invalid ticks", () => [hostCpu(Number.NaN, 0)]],
+    [
+      "throw",
+      () => {
+        throw new Error("unavailable");
+      },
+    ],
+  ] as const)("does not fabricate idle host utilization after %s", async (_failure, read) => {
+    const monitor = await createMonitor();
+    host.mockImplementation(read);
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBeUndefined();
+    expect(monitor.snapshot()?.cpuCoreRatio).toBe(2);
+  });
 
   it("invalidates worker rates across churn, including workers that start and exit between samples", async () => {
     const monitor = await createMonitor();

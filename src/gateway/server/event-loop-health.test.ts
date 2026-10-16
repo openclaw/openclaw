@@ -93,8 +93,7 @@ function createMonitorHarness(params?: {
     nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
   };
   const sample = async (elapsedMs = 20) => {
-    nowMs += elapsedMs;
-    nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
+    elapseWithoutSampling(elapsedMs);
     await clock.advanceTo(nowMs + wallOffsetMs);
   };
   return {
@@ -139,11 +138,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.cpuUsage).toHaveBeenCalledTimes(reads);
     await harness.sample(1);
     const idleSample = harness.monitor.snapshot();
-    expect(idleSample).toMatchObject({
-      intervalMs: 9_000,
-      delayP99Ms: 0,
-      degraded: false,
-    });
+    expect(idleSample).toMatchObject({ intervalMs: 9_000, delayP99Ms: 0, degraded: false });
     expect(idleSample?.delayMaxMs).toBe(0);
     idle = false;
     await harness.samples(500);
@@ -169,11 +164,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       harness.elapseWithoutSampling(12_000);
       nativeDelay.max = 20_000_000;
       await harness.sample();
-      harness.expectHealth({
-        degraded: true,
-        delayMaxMs: 2_020,
-        reasons: ["event_loop_delay"],
-      });
+      harness.expectHealth({ degraded: true, delayMaxMs: 2_020, reasons: ["event_loop_delay"] });
     } finally {
       stallMonitor.mockRestore();
     }
@@ -186,10 +177,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     await harness.sample();
     await harness.samples(389);
     const stalledSample = harness.monitor.snapshot();
-    expect(stalledSample).toMatchObject({
-      degraded: true,
-      reasons: ["event_loop_delay"],
-    });
+    expect(stalledSample).toMatchObject({ degraded: true, reasons: ["event_loop_delay"] });
     expect(stalledSample?.delayMaxMs).toBe(1_200);
     await harness.samples(50);
     harness.expectHealth({ intervalMs: 1_000, degraded: false });
@@ -246,26 +234,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     }
   });
 
-  it("does not turn reads without samples into healthy observations", async () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
-    harness.elapseWithoutSampling(1_200);
-    for (let index = 0; index < 100; index++) {
-      expect(harness.monitor.snapshot()).toBeUndefined();
-      expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-    }
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
-    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
-    await harness.sample();
-    const snapshot = harness.monitor.snapshot();
-    expect(snapshot).toMatchObject({
-      degraded: true,
-      intervalMs: 1_220,
-      reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
-    });
-    expect(snapshot?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
-    expect(snapshot?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
-  });
-
   it("waits for delay co-evidence before reporting load saturation", async () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     await harness.samples(49);
@@ -302,29 +270,41 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.stall(30, false);
     await harness.samples(50);
-    harness.expectHealth({
-      delayMaxMs: 30,
-      reasons: ["event_loop_utilization", "cpu"],
-    });
+    harness.expectHealth({ delayMaxMs: 30, reasons: ["event_loop_utilization", "cpu"] });
   });
 
-  it.each([false, true])(
-    "preserves overdue delay across reads with prior window=%s",
-    async (priorWindow) => {
-      const harness = createMonitorHarness();
-      await harness.samples(priorWindow ? 50 : 4);
-      const previous = harness.monitor.snapshot();
-      harness.elapseWithoutSampling(1_200);
-      for (let index = 0; index < 100; index++) {
-        expect(harness.monitor.snapshot()).toBe(previous);
+  it.each([0, 4, 50])("keeps overdue reads passive after %s samples", async (priorSamples) => {
+    const loaded = priorSamples === 0;
+    const harness = createMonitorHarness(loaded ? { cpuMsPerWallMs: 1, utilization: 1 } : {});
+    await harness.samples(priorSamples);
+    const previous = harness.monitor.snapshot();
+    harness.elapseWithoutSampling(1_200);
+    for (let index = 0; index < 100; index++) {
+      expect(harness.monitor.snapshot()).toBe(previous);
+      if (loaded) {
+        expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
       }
-      await harness.sample();
-      const current = harness.monitor.snapshot();
-      expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
-      expect(current).toMatchObject({ degraded: true, reasons: ["event_loop_delay"] });
-      expect(harness.monitor.snapshot()).toBe(current);
-    },
-  );
+    }
+    if (loaded) {
+      expect(previous).toBeUndefined();
+      expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
+      expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
+    }
+    await harness.sample();
+    const current = harness.monitor.snapshot();
+    expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
+    if (loaded) {
+      expect(current?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
+      harness.expectHealth({
+        degraded: true,
+        intervalMs: 1_220,
+        reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
+      });
+    } else {
+      harness.expectHealth({ degraded: true, reasons: ["event_loop_delay"] });
+    }
+    expect(harness.monitor.snapshot()).toBe(current);
+  });
 
   it("tracks persistent degradation at completed samples and clears on recovery", async () => {
     const harness = createMonitorHarness();
@@ -391,9 +371,7 @@ describe("event-loop measurement telemetry", () => {
 
     const events: DiagnosticEventPayload[] = [];
     const subscribe = () =>
-      onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-        exclude: ["log.record"],
-      });
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), { exclude: ["log.record"] });
     const stop = subscribe();
     expect(harness.monitor.snapshot()).toBe(first);
     expect(harness.clock.armedAtMs).toBe(12_000);
