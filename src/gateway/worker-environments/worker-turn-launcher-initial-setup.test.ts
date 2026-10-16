@@ -341,6 +341,7 @@ describe("initial worker setup admission", () => {
         }
         if (change === "abort") {
           controller.abort(new Error("operator cancelled input"));
+          await expect(run).rejects.toThrow(/aborted/);
         }
         if (change === "incarnation") {
           await patchSessionEntryCore(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
@@ -350,9 +351,6 @@ describe("initial worker setup admission", () => {
         }
         if (change === "runtime") {
           rotateAgentEventLifecycleGeneration();
-        }
-        if (change === "abort") {
-          await expect(run).rejects.toThrow(/aborted/);
         }
         fixture.finish.resolve();
         await fixture.operation.catch(() => undefined);
