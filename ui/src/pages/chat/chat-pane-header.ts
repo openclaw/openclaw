@@ -581,10 +581,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
-      onOpenDetails:
-        detailsControl === undefined
-          ? undefined
-          : (source) => this.headerDetailsRef.value?.open(source),
+      conversationVisible: detailsControl?.conversationVisible,
+      onToggleConversation:
+        currentLayout && detailsControl?.externalTrigger
+          ? () => this.toggleConversationPanel(currentLayout)
+          : undefined,
       runAction: subagentStop,
       presence: viewers?.length
         ? solidContent(PaneHeaderPresence, { staticUsers: viewers, personActivity })
@@ -646,6 +647,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,
               onOpenCommandPalette: this.onHeaderCommandPalette,
+              onOpenDetails:
+                detailsControl === undefined
+                  ? undefined
+                  : (source: HTMLElement) => this.headerDetailsRef.value?.open(source),
               onSettingsChange: this.onHeaderSettingsChange,
               onAction: this.onHeaderAction,
             })

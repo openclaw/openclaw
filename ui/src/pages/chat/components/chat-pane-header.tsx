@@ -81,6 +81,8 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   renameDisabledReason?: string;
   runningSubagentCount?: number;
   detailsControl?: PaneDetailsProps;
+  conversationVisible?: boolean;
+  onToggleConversation?: () => void;
   runAction?: unknown;
   presence?: unknown;
   sharingControl?: unknown;
@@ -418,6 +420,20 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
         </div>
         <div class="chat-pane__header-trailing">
+          <Show when={props.onToggleConversation}>
+            <button
+              type="button"
+              class="btn btn--ghost chat-pane__chat-toggle"
+              aria-pressed={props.conversationVisible ? "true" : "false"}
+              title={t(
+                props.conversationVisible ? "chat.sidePanel.hideChat" : "chat.sidePanel.showChat",
+              )}
+              onClick={() => props.onToggleConversation?.()}
+            >
+              <Icon name="messageSquare" />
+              <span>{t("chat.sidePanel.conversation")}</span>
+            </button>
+          </Show>
           <Show when={props.detailsControl !== undefined}>
             <PaneDetails {...props.detailsControl!} />
           </Show>

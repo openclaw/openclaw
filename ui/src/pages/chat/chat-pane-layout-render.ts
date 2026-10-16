@@ -191,9 +191,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ? {
           chat: paneChatProps,
           mobile: this.mergedChrome && !this.onBackToSubagents,
-          presentation: this.mergedChrome
-            ? panePresentation
-            : (paneChatProps.transcriptVisible ?? this.presented),
+          presentation: panePresentation,
+          conversationVisible,
+          externalTrigger:
+            (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") !== "conversation",
           setRef: (details) => {
             this.headerDetailsRef.value = details;
           },
