@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { formatCronSourcePromptPrefix } from "../cron/source-prompt-prefix.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -81,6 +82,10 @@ it("batches automation names across history reads after rename and deletion with
               kind: "internal_system",
               sourceTool: "cron",
               jobId: index === 1 ? "report-\ud800" : current.id,
+              sourcePromptPrefix: formatCronSourcePromptPrefix({
+                id: index === 1 ? "report-\ud800" : current.id,
+                name: current.name,
+              }),
               runId: "completed-run",
               sourceSessionKey: `agent:main:cron:${current.id}:run:completed-run`,
             },
@@ -167,7 +172,13 @@ it("batches automation names across history reads after rename and deletion with
         senderSession: {
           sessionKey: current.provenance.sourceSessionKey,
           agentId: "main",
-          label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
+          // Deleted cron jobs keep the name recorded by their run; inter-session sources have none.
+          label:
+            index % jobCount === 0
+              ? (name ?? "Automation")
+              : name
+                ? `${name} ${index}`
+                : `Report ${index}`,
         },
       }));
       for (const messageId of [undefined, "forwarded-result"]) {

@@ -24,6 +24,7 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
+import { formatCronSourcePromptPrefix } from "../source-prompt-prefix.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -499,7 +500,7 @@ export async function prepareCronRunContext(params: {
       const message = currentConversationContext
         ? `${currentConversationContext}\n\n${turnMessage}`
         : turnMessage;
-      const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
+      const sourcePromptPrefix = formatCronSourcePromptPrefix(input.job);
       const base = `${sourcePromptPrefix} ${message}`.trim();
       const isExternalHook =
         hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);

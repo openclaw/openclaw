@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { readCronSourcePromptPrefixName } from "../cron/source-prompt-prefix.js";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
@@ -608,18 +609,22 @@ function readForwardedSender(message: Record<string, unknown>) {
   const sourceSessionKey = provenance?.sourceSessionKey;
   const parsed = parseAgentSessionKey(sourceSessionKey);
   const agentId = parsed?.agentId;
-  const jobId = isCronRunMessage(message)
-    ? provenance?.jobId
-    : parsed?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
-  return { sourceSessionKey, agentId, jobId };
+  const cronRun = isCronRunMessage(message);
+  const jobId = cronRun ? provenance?.jobId : parsed?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
+  const recordedJobName =
+    cronRun && jobId
+      ? readCronSourcePromptPrefixName(provenance?.sourcePromptPrefix, jobId)
+      : undefined;
+  return { sourceSessionKey, agentId, jobId, recordedJobName };
 }
 
 function resolveForwardedSenderSession(
   message: Record<string, unknown>,
   resolveCronJobName: (jobId: string) => string | undefined,
 ): { sessionKey?: string; agentId?: string; label?: string } | undefined {
-  const { sourceSessionKey, agentId, jobId } = readForwardedSender(message);
-  const label = jobId ? (resolveCronJobName(jobId) ?? "Automation") : undefined;
+  const { sourceSessionKey, agentId, jobId, recordedJobName } = readForwardedSender(message);
+  // The current name wins after renames; deleted jobs keep the name from their run.
+  const label = jobId ? (resolveCronJobName(jobId) ?? recordedJobName ?? "Automation") : undefined;
   return sourceSessionKey
     ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}), ...(label ? { label } : {}) }
     : undefined;
