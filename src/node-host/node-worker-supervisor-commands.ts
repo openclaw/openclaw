@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type {
   SessionsProcessesListResult,
@@ -71,6 +72,25 @@ import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const log = createSubsystemLogger("node/worker");
+
+// Real-process proof seam, inert unless a test hands the spawned node-host this path. The
+// file's text becomes the failure of the next status call; removing the file consumes it once.
+const TEST_STATUS_FAILURE_FILE_ENV = "OPENCLAW_TEST_NODE_WORKER_STATUS_FAILURE_FILE";
+
+function failStatusOnceForTest(launchId: string) {
+  const file = process.env[TEST_STATUS_FAILURE_FILE_ENV];
+  if (!file) {
+    return;
+  }
+  let detail: string;
+  try {
+    detail = fs.readFileSync(file, "utf8");
+    fs.unlinkSync(file);
+  } catch {
+    return;
+  }
+  throw new Error(`${detail} launchId=${launchId}`);
+}
 
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
 const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
@@ -247,6 +267,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         return undefined;
       }
       const input = parseNodeWorkerLookupInput(paramsJSON);
+      failStatusOnceForTest(input.launchId);
       return supervisor
         .status(
           input.launchId,
