@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { ModelCatalogEntry } from "../api/types.ts";
 import type { DraftEnvironment } from "../pages/new-session/discovery.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -33,53 +34,47 @@ function deviceEnvironment(
   return { id, type: "node", label, status: "available", sessionHost: true, ...details };
 }
 
+function runtimeModel(
+  id: string,
+  name: string,
+  provider: string,
+  runtime: Omit<
+    NonNullable<ModelCatalogEntry["agentRuntime"]>,
+    "source" | "cloudPlacementSupported"
+  >,
+): ModelCatalogEntry {
+  return {
+    available: true,
+    id,
+    name,
+    provider,
+    agentRuntime: { ...runtime, cloudPlacementSupported: true, source: "model" },
+  };
+}
+
 suite.define(() => {
   it("offers paired devices to every model whose runtime explicitly supports them", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "anthropic/claude-sonnet-4-6",
         models: [
-          {
-            available: true,
-            id: "claude-sonnet-4-6",
-            name: "Claude Sonnet 4.6",
-            provider: "anthropic",
-            agentRuntime: {
-              id: "openclaw",
-              cloudPlacementSupported: true,
-              devicePlacementSupported: true,
-              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-              source: "model",
+          runtimeModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic", {
+            id: "openclaw",
+            devicePlacementSupported: true,
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          }),
+          runtimeModel("gpt-5.6-sol", "GPT-5.6 Sol", "openai", {
+            id: "codex",
+            devicePlacementSupported: true,
+            devicePlacement: {
+              requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+              consumesWorkerSlot: false,
             },
-          },
-          {
-            available: true,
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
-            provider: "openai",
-            agentRuntime: {
-              id: "codex",
-              cloudPlacementSupported: true,
-              devicePlacementSupported: true,
-              devicePlacement: {
-                requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-                consumesWorkerSlot: false,
-              },
-              source: "model",
-            },
-          },
-          {
-            available: true,
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
-            provider: "anthropic",
-            agentRuntime: {
-              id: "cloud-only",
-              cloudPlacementSupported: true,
-              devicePlacementSupported: false,
-              source: "model",
-            },
-          },
+          }),
+          runtimeModel("claude-opus-4-6", "Claude Opus 4.6", "anthropic", {
+            id: "cloud-only",
+            devicePlacementSupported: false,
+          }),
         ],
         methodResponses: {
           "environments.list": {
@@ -283,14 +278,10 @@ suite.define(() => {
         label = "Build runner",
       ) => ({
         environments: [
-          {
-            id: "node:alpha-device",
-            type: "node",
-            label,
+          deviceEnvironment("node:alpha-device", label, {
             status,
-            sessionHost: true,
             workerSlots: { total: 4, available },
-          },
+          }),
         ],
         profiles: [],
       });

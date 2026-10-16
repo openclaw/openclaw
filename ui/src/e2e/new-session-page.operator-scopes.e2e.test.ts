@@ -1,5 +1,10 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import type {
+  ControlUiMockGatewayScenario,
+  MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -17,8 +22,13 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 
-async function openDraft(
+type Draft = { page: Page; gateway: MockGatewayControls };
+const writeScopes = ["operator.read", "operator.write"];
+const adminScopes = ["operator.admin", ...writeScopes];
+
+async function withDraft(
   operatorScopes: string[],
+  run: (draft: Draft) => Promise<void>,
   featureMethods = [
     "chat.metadata",
     "chat.startup",
@@ -27,72 +37,106 @@ async function openDraft(
     "sessions.dispatch",
   ],
 ) {
-  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-  const page = await context.newPage();
-  const gateway = await installMockGateway(page, {
-    featureMethods,
-    operatorScopes,
-    methodResponses: {
-      "environments.list": {
-        environments: [
-          {
-            id: "node:writer-runner",
-            type: "node",
-            label: "Writer runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 1, available: 1 },
-          },
-        ],
-        profiles: [{ id: "aws", providerId: "crabbox" }],
+  return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    const gateway = await installMockGateway(page, {
+      featureMethods,
+      operatorScopes,
+      methodResponses: {
+        "environments.list": {
+          environments: [
+            {
+              id: "node:writer-runner",
+              type: "node",
+              label: "Writer runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            },
+          ],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "projects.list": { projects: [] },
+        "worktrees.branches": { branches: [], repositoryStatus: "git" },
+        "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
       },
-      "projects.list": { projects: [] },
-      "worktrees.branches": { branches: [], repositoryStatus: "git" },
-      "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
-    },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await page.locator(".new-session-page__message").fill("scope proof");
+    await run({ gateway, page });
   });
-  await page.goto(`${suite.server.baseUrl}new`);
-  await page.locator(".new-session-page__message").fill("scope proof");
-  return { context, gateway, page };
+}
+
+function folderScenario(scenario: ControlUiMockGatewayScenario): ControlUiMockGatewayScenario {
+  return {
+    workspaceGit: true,
+    operatorScopes: writeScopes,
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "fs.listDir",
+      "sessions.create",
+      "worktrees.branches",
+    ],
+    ...scenario,
+    methodResponses: {
+      "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
+      ...scenario.methodResponses,
+    },
+  };
 }
 
 suite.define(() => {
-  it("keeps read-scoped operators out of new-session entry and submission paths", async () => {
-    const { context, gateway, page } = await openDraft(
-      ["operator.read"],
-      ["chat.metadata", "chat.startup", "projects.list", "sessions.create", "sessions.dispatch"],
-    );
-    try {
-      const sidebarCreate = page.locator(".sidebar-rail .sidebar-new-session");
-      const submit = page.getByRole("button", { name: "Start session" });
-      const incognito = page.getByRole("switch", { name: "Incognito" });
-
-      await pollDisabled(sidebarCreate).toBe(true);
-      await pollDisabled(submit).toBe(true);
-      await pollDisabled(incognito).toBe(true);
-      expect(await incognito.getAttribute("title")).toBe(
-        "This action requires operator.admin access.",
+  it.each(["read-only", "missing-method", "disconnected"] as const)(
+    "blocks new-session entry and submission when %s",
+    async (reason) => {
+      await withDraft(
+        reason === "read-only" ? ["operator.read"] : adminScopes,
+        async ({ gateway, page }) => {
+          try {
+            if (reason === "disconnected") {
+              await gateway.setOnline(false);
+              await gateway.closeLatest(1001, "new-session scope proof");
+              await expect
+                .poll(() => evaluateControlUiContext(page, (app) => app.gateway.snapshot.phase))
+                .toBe("reconnecting");
+            } else {
+              await pollDisabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
+            }
+            const submit = page.getByRole("button", { name: "Start session" });
+            await pollDisabled(submit).toBe(true);
+            if (reason === "read-only") {
+              const incognito = page.getByRole("switch", { name: "Incognito" });
+              await pollDisabled(incognito).toBe(true);
+              expect(await incognito.getAttribute("title")).toBe(
+                "This action requires operator.admin access.",
+              );
+            }
+            await submit.click({ force: true });
+            if (reason === "read-only") {
+              const requests = await gateway.getRequests("projects.list");
+              expect(requests).toHaveLength(1);
+              expect(requests[0]?.params).toEqual({});
+            }
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+          } finally {
+            if (reason === "disconnected") {
+              await gateway.setOnline(true);
+            }
+          }
+        },
+        reason === "missing-method" ? ["chat.metadata", "chat.startup"] : undefined,
       );
-      await submit.click({ force: true });
-      const projectRequests = await gateway.getRequests("projects.list");
-      expect(projectRequests).toHaveLength(1);
-      expect(projectRequests[0]?.params).toEqual({});
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
-  });
+    },
+  );
 
   it("allows write-scoped Fast Mode creation while keeping incognito admin-only", async () => {
-    const { context, gateway, page } = await openDraft(["operator.read", "operator.write"]);
-    try {
+    await withDraft(writeScopes, async ({ gateway, page }) => {
       await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({
         params: {},
       });
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
-
       await pollEnabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
       await pollEnabled(submit).toBe(true);
       await pollDisabled(incognito).toBe(true);
@@ -114,54 +158,36 @@ suite.define(() => {
       );
       await pollAttribute(fastMode, "aria-checked").toBe("true");
       await submit.click();
-
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", fastMode: true, message: "scope proof" },
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("creates a Full-access session when the connected operator has admin scope", async () => {
-    const { context, gateway, page } = await openDraft([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-    ]);
-    try {
+    await withDraft(adminScopes, async ({ gateway, page }) => {
       const permission = page.locator('[data-chat-permission-select="true"]');
       await permission.click();
       await page.locator('[data-chat-permission-option="full"]').click();
       await pollAttribute(permission, "data-chat-select-value").toBe("full");
       await page.getByRole("button", { name: "Start session" }).click();
-
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "scope proof", permissionMode: "full" },
       });
       await expect.poll(() => page.url()).toContain("/chat/");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("rejects a retained Full-access selection after reconnecting without admin scope", async () => {
-    const { context, gateway, page } = await openDraft([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-    ]);
-    try {
+    await withDraft(adminScopes, async ({ gateway, page }) => {
       const permission = page.locator('[data-chat-permission-select="true"]');
       await permission.click();
       await page.locator('[data-chat-permission-option="full"]').click();
       await pollAttribute(permission, "data-chat-select-value").toBe("full");
-
-      await gateway.setOperatorScopes(["operator.read", "operator.write"]);
+      await gateway.setOperatorScopes(writeScopes);
       await gateway.closeLatest(1001, "permission scope downgraded");
       await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
-
       const submit = page.getByRole("button", { name: "Start session" });
       await pollDisabled(submit).toBe(true);
       expect(await permission.getAttribute("data-chat-select-value")).toBe("full");
@@ -173,14 +199,11 @@ suite.define(() => {
         .toBe("Full access requires operator.admin access.");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").press("Enter");
-
       await pollLocatorText(
         page.locator('.new-session-page__blocked-submit[role="status"]'),
       ).toContain("This action requires operator.admin access.");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("lets read-scoped operators search projects without exposing clone actions", async () => {
@@ -221,37 +244,35 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const workspace = "/home/peter/openclaw";
       const contained = `${workspace}/packages/app`;
-      const gateway = await installMockGateway(page, {
-        workspace,
-        workspaceGit: true,
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "fs.listDir",
-          "sessions.create",
-          "worktrees.branches",
-        ],
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "fs.listDir": {
-            path: workspace,
-            home: "/home/peter",
-            entries: [{ name: "packages", path: `${workspace}/packages` }],
+      const gateway = await installMockGateway(
+        page,
+        folderScenario({
+          workspace,
+          methodResponses: {
+            "fs.listDir": {
+              path: workspace,
+              home: "/home/peter",
+              entries: [{ name: "packages", path: `${workspace}/packages` }],
+            },
+            "sessions.list": {
+              count: 2,
+              defaults: SESSION_LIST_DEFAULTS,
+              path: "",
+              sessions: [
+                { key: "agent:main:inside", kind: "direct", updatedAt: 2, execCwd: contained },
+                {
+                  key: "agent:main:outside",
+                  kind: "direct",
+                  updatedAt: 1,
+                  execCwd: "/private/repo",
+                },
+              ],
+              ts: Date.now(),
+            },
+            "sessions.create": { key: "agent:main:write-workspace" },
           },
-          "sessions.list": {
-            count: 2,
-            defaults: SESSION_LIST_DEFAULTS,
-            path: "",
-            sessions: [
-              { key: "agent:main:inside", kind: "direct", updatedAt: 2, execCwd: contained },
-              { key: "agent:main:outside", kind: "direct", updatedAt: 1, execCwd: "/private/repo" },
-            ],
-            ts: Date.now(),
-          },
-          "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
-          "sessions.create": { key: "agent:main:write-workspace" },
-        },
-      });
+        }),
+      );
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
@@ -275,16 +296,14 @@ suite.define(() => {
   it("explains when browsing outside the workspace requires admin scope", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const workspace = "/home/peter/openclaw";
-      const gateway = await installMockGateway(page, {
-        workspace,
-        workspaceGit: true,
-        featureMethods: ["chat.metadata", "chat.startup", "fs.listDir", "worktrees.branches"],
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "fs.listDir": { path: workspace, home: "/home/peter", entries: [] },
-          "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
-        },
-      });
+      const gateway = await installMockGateway(
+        page,
+        folderScenario({
+          workspace,
+          featureMethods: ["chat.metadata", "chat.startup", "fs.listDir", "worktrees.branches"],
+          methodResponses: { "fs.listDir": { path: workspace, home: "/home/peter", entries: [] } },
+        }),
+      );
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
@@ -326,43 +345,36 @@ suite.define(() => {
       const workspaceAlias = "/var/folders/openclaw/workspace-alias";
       const canonicalWorkspace = "/private/var/folders/openclaw/workspace";
       const canonicalFolder = `${canonicalWorkspace}/packages`;
-      const gateway = await installMockGateway(page, {
-        workspace: workspaceAlias,
-        workspaceGit: true,
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "fs.listDir",
-          "sessions.create",
-          "worktrees.branches",
-        ],
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "fs.listDir": {
-            cases: [
-              {
-                match: { path: workspaceAlias },
-                response: {
-                  path: canonicalWorkspace,
-                  home: "/Users/peter",
-                  entries: [{ name: "packages", path: canonicalFolder }],
+      const gateway = await installMockGateway(
+        page,
+        folderScenario({
+          workspace: workspaceAlias,
+          methodResponses: {
+            "fs.listDir": {
+              cases: [
+                {
+                  match: { path: workspaceAlias },
+                  response: {
+                    path: canonicalWorkspace,
+                    home: "/Users/peter",
+                    entries: [{ name: "packages", path: canonicalFolder }],
+                  },
                 },
-              },
-              {
-                match: { path: canonicalFolder },
-                response: {
-                  path: canonicalFolder,
-                  parent: canonicalWorkspace,
-                  home: "/Users/peter",
-                  entries: [],
+                {
+                  match: { path: canonicalFolder },
+                  response: {
+                    path: canonicalFolder,
+                    parent: canonicalWorkspace,
+                    home: "/Users/peter",
+                    entries: [],
+                  },
                 },
-              },
-            ],
+              ],
+            },
+            "sessions.create": { key: "agent:main:symlinked-workspace" },
           },
-          "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
-          "sessions.create": { key: "agent:main:symlinked-workspace" },
-        },
-      });
+        }),
+      );
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
@@ -387,24 +399,17 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const workspace = "/home/peter/openclaw";
       const typedFolder = "/private/repo";
-      const gateway = await installMockGateway(page, {
-        workspace,
-        workspaceGit: true,
-        deferredMethods: ["sessions.create"],
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "fs.listDir",
-          "sessions.create",
-          "worktrees.branches",
-        ],
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "fs.listDir": { path: workspace, home: "/home/peter", entries: [] },
-          "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
-          "sessions.create": { key: "agent:main:typed-folder" },
-        },
-      });
+      const gateway = await installMockGateway(
+        page,
+        folderScenario({
+          workspace,
+          deferredMethods: ["sessions.create"],
+          methodResponses: {
+            "fs.listDir": { path: workspace, home: "/home/peter", entries: [] },
+            "sessions.create": { key: "agent:main:typed-folder" },
+          },
+        }),
+      );
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-project-trigger").click();
       await page.getByRole("button", { name: "Browse folders" }).click();
@@ -432,63 +437,14 @@ suite.define(() => {
   });
 
   it("allows admin-scoped incognito creation with exact dynamic parameters", async () => {
-    const { context, gateway, page } = await openDraft([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-    ]);
-    try {
+    await withDraft(adminScopes, async ({ gateway, page }) => {
       const incognito = page.getByRole("switch", { name: "Incognito" });
       await pollEnabled(incognito).toBe(true);
       await incognito.click();
       await page.getByRole("button", { name: "Start session" }).click();
-
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { incognito: true, message: "scope proof" },
       });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("blocks creation when the connected Gateway explicitly omits sessions.create", async () => {
-    const { context, gateway, page } = await openDraft(
-      ["operator.admin", "operator.read", "operator.write"],
-      ["chat.metadata", "chat.startup"],
-    );
-    try {
-      await pollDisabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
-      const submit = page.getByRole("button", { name: "Start session" });
-      await pollDisabled(submit).toBe(true);
-      await submit.click({ force: true });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("blocks creation while the Gateway is disconnected", async () => {
-    const { context, gateway, page } = await openDraft([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-    ]);
-    try {
-      await gateway.setOnline(false);
-      await gateway.closeLatest(1001, "new-session scope proof");
-      await expect
-        .poll(() =>
-          evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
-        )
-        .toBe("reconnecting");
-
-      const submit = page.getByRole("button", { name: "Start session" });
-      await pollDisabled(submit).toBe(true);
-      await submit.click({ force: true });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await gateway.setOnline(true);
-      await context.close();
-    }
+    });
   });
 });

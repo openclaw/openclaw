@@ -76,38 +76,19 @@ export const NEW_SESSION_MODEL_CATALOG = [
 
 export const WORKSPACE = "/home/peter/openclaw";
 
-export function createCloudAgentsListResponse() {
+function workspaceAgents(id: string, name: string) {
   return {
-    agents: [
-      {
-        id: "cloud",
-        identity: { name: "Cloud" },
-        name: "Cloud",
-        workspace: WORKSPACE,
-        workspaceGit: true,
-      },
-    ],
-    defaultId: "cloud",
+    agents: [{ id, identity: { name }, name, workspace: WORKSPACE, workspaceGit: true }],
+    defaultId: id,
     mainKey: "main",
     scope: "agent",
   };
 }
 
+export const createCloudAgentsListResponse = () => workspaceAgents("cloud", "Cloud");
+
 export const LOCAL_GIT_WORKSPACE_RESPONSES = {
-  "agents.list": {
-    agents: [
-      {
-        id: "main",
-        identity: { name: "Main" },
-        name: "Main",
-        workspace: WORKSPACE,
-        workspaceGit: true,
-      },
-    ],
-    defaultId: "main",
-    mainKey: "main",
-    scope: "agent",
-  },
+  "agents.list": workspaceAgents("main", "Main"),
   "worktrees.branches": {
     branches: [{ kind: "local", name: "main" }],
     defaultBranch: "main",
@@ -250,12 +231,10 @@ export function createdSessionListResult(sessionKey: string) {
     path: "",
     sessions: [
       {
-        contextTokens: null,
+        ...SESSION_LIST_DEFAULTS,
         displayName: "Created session",
         key: sessionKey,
         kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
         totalTokens: 0,
         updatedAt: Date.now(),
       },
@@ -374,11 +353,9 @@ export async function waitForCommittedNewSessionDraft(
   expectedAttachments: number | readonly string[],
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
-  const scopeKey = JSON.stringify([
-    params.get("agent")?.trim() ?? "",
-    params.get("catalog")?.trim() ?? "",
-    params.get("group")?.trim() ?? "",
-  ]);
+  const scopeKey = JSON.stringify(
+    ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
+  );
   await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
 }
 
@@ -405,9 +382,8 @@ export async function navigateInApp(
 ) {
   await evaluateControlUiContext(
     page,
-    (context, { targetRouteId, targetSearch }) =>
-      context.navigate(targetRouteId, { search: targetSearch }),
-    { targetRouteId: routeId, targetSearch: search },
+    (context, target) => context.navigate(target.routeId, { search: target.search }),
+    { routeId, search },
   );
 }
 

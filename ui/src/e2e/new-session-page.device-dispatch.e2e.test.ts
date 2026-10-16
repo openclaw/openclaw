@@ -1,5 +1,6 @@
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import {
@@ -45,9 +46,36 @@ const offlineRunner = () => ({
 });
 const deviceEnvironments = () => [pairedRunner(), offlineRunner()];
 
+async function rememberDestination(
+  page: Page,
+  preference: { kind: string; id?: string },
+  agentId = "main",
+  isolated = true,
+) {
+  const url = new URL(suite.server.baseUrl);
+  const gatewayUrl = `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}`;
+  const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+  await page.addInitScript(
+    ({ key, workspace, where, agent, worktree }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({ agents: { [agent]: { workspace, folder: workspace, where, worktree } } }),
+      );
+    },
+    {
+      key: storageKey,
+      workspace: WORKSPACE,
+      where: preference,
+      agent: agentId,
+      worktree: isolated,
+    },
+  );
+}
+
 suite.define(() => {
   it("groups environments and selects Auto before named devices", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const trigger = page.locator("#new-session-where-trigger");
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.admin", "operator.read", "operator.write"],
         workspace: WORKSPACE,
@@ -61,7 +89,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await trigger.click();
       const picker = page.locator(".new-session-page__where-popover");
       const destinations = picker.locator(".new-session-page__environment-list");
       await expect
@@ -89,7 +117,7 @@ suite.define(() => {
       expect(await auto.getAttribute("aria-pressed")).toBe("false");
       expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
       await auto.click();
-      const trigger = page.locator("#new-session-where-trigger");
+
       await pollAttribute(trigger, "data-auto-device").toBe("true");
       await trigger.click();
       await pollAttribute(auto, "aria-pressed").toBe("true");
@@ -343,25 +371,13 @@ suite.define(() => {
             };
           });
         }
-        const appUrl = new URL(suite.server.baseUrl);
-        const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
-        const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+
         const sessionKey = "agent:main:restored-remote-destination";
         const catalog = {
           environments: deviceEnvironments(),
           profiles: [{ id: "aws", providerId: "crabbox" }],
         };
-        await page.addInitScript(
-          ({ key, workspace, where }) => {
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                agents: { main: { workspace, folder: workspace, where, worktree: true } },
-              }),
-            );
-          },
-          { key: storageKey, workspace: WORKSPACE, where: preference },
-        );
+        await rememberDestination(page, preference);
         const gateway = await installMockGateway(page, {
           heldMethods: ["environments.list"],
           operatorScopes: ["operator.read", "operator.write", "operator.admin"],
@@ -433,21 +449,8 @@ suite.define(() => {
     "keeps a remembered $name blocked until the user explicitly switches to Local",
     async ({ preference, status, availableSlots, attribute, value, reason }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-        const appUrl = new URL(suite.server.baseUrl);
-        const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
-        const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
         const sessionKey = "agent:main:explicit-local-choice";
-        await page.addInitScript(
-          ({ key, workspace, where }) => {
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                agents: { main: { workspace, folder: workspace, where, worktree: true } },
-              }),
-            );
-          },
-          { key: storageKey, workspace: WORKSPACE, where: preference },
-        );
+        await rememberDestination(page, preference);
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.read", "operator.write"],
           workspace: WORKSPACE,
@@ -497,28 +500,8 @@ suite.define(() => {
 
   it("restores the selected agent's own destination instead of inheriting another agent's device", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const appUrl = new URL(suite.server.baseUrl);
-      const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
-      const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
       const sessionKey = "agent:research:local-after-agent-switch";
-      await page.addInitScript(
-        ({ key, workspace }) => {
-          localStorage.setItem(
-            key,
-            JSON.stringify({
-              agents: {
-                research: {
-                  workspace,
-                  folder: workspace,
-                  where: { kind: "local" },
-                  worktree: false,
-                },
-              },
-            }),
-          );
-        },
-        { key: storageKey, workspace: WORKSPACE },
-      );
+      await rememberDestination(page, { kind: "local" }, "research", false);
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.read", "operator.write"],
         workspace: WORKSPACE,

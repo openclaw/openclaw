@@ -128,6 +128,8 @@ suite.define(() => {
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
+            const draftInput = page.locator(".new-session-page__message");
+            const modelPicker = page.locator('[data-chat-model-select="true"]');
             await page.addInitScript(createControlUiMockSameOriginGatewayScript());
             const storageKey =
               "openclaw.new-session.preferences.v1:" +
@@ -143,23 +145,16 @@ suite.define(() => {
             const gateway = await installMockGateway(page, {
               agentModel: "openai/gpt-4.1",
               models: [
-                {
-                  id: "gpt-4.1",
+                { id: "gpt-4.1", name: "GPT-4.1" },
+                { id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
+              ].map((model) =>
+                Object.assign(model, {
                   provider: "openai",
-                  name: "GPT-4.1",
                   reasoning: true,
                   thinkingLevels,
                   supportsFastMode: true,
-                },
-                {
-                  id: "gpt-4.1-mini",
-                  provider: "openai",
-                  name: "GPT-4.1 mini",
-                  reasoning: true,
-                  thinkingLevels,
-                  supportsFastMode: true,
-                },
-              ],
+                }),
+              ),
               ...(source === "identity"
                 ? { presenceUsers: [{ self: true, id: "sample-user", name: "Sample User" }] }
                 : {}),
@@ -231,9 +226,7 @@ suite.define(() => {
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
             }
-            await pollText(page.locator('[data-chat-model-select="true"]')).toContain(
-              configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini",
-            );
+            await pollText(modelPicker).toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
             if (source === "browser" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page.screenshot({
                 path: path.join(suite.artifactDir, configuredDefaults ? "after.png" : "before.png"),
@@ -255,7 +248,7 @@ suite.define(() => {
               if (source === "browser") {
                 // A draft with no explicit model choice has exactly the pre-change row
                 // format: content and blobs, without the optional modelSelection field.
-                await page.locator(".new-session-page__message").fill("Unsent before upgrade");
+                await draftInput.fill("Unsent before upgrade");
                 await page.locator(".agent-chat__file-input").setInputFiles({
                   name: "upgrade-notes.txt",
                   mimeType: "text/plain",
@@ -279,33 +272,27 @@ suite.define(() => {
                 await page.goto(suite.server.baseUrl + "legacy-draft-seed");
                 await page.evaluate(draftStorage, "seed-old");
                 await page.goto(suite.server.baseUrl + "new");
-                await pollValue(page.locator(".new-session-page__message")).toBe(
-                  "Unsent before upgrade",
-                );
+                await pollValue(draftInput).toBe("Unsent before upgrade");
                 await pollText(page.locator(".chat-attachment-file__name")).toContain(
                   "upgrade-notes.txt",
                 );
                 await pollAttribute(effort, "data-chat-thinking-value").toBe("");
                 await pollText(effort).toContain("High");
               }
-              await page.locator('[data-chat-model-select="true"]').click();
+              await modelPicker.click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
               await page.locator('[data-chat-model-option="openai/gpt-4.1-mini"]').click();
               await effort.click();
               await page.locator('[data-chat-thinking-slider="true"]').fill("0");
               await page.keyboard.press("Escape");
-              await page.locator(".new-session-page__message").fill("Resume this draft");
+              await draftInput.fill("Resume this draft");
               await expect.poll(() => page.evaluate(draftStorage, "read-selection")).toBe("low");
               await page.reload();
               await pollAttribute(effort, "data-chat-thinking-value").toBe("low");
-              await pollValue(page.locator(".new-session-page__message")).toBe("Resume this draft");
-              await pollText(page.locator('[data-chat-model-select="true"]')).toContain(
-                "GPT-4.1 mini",
-              );
+              await pollValue(draftInput).toBe("Resume this draft");
+              await pollText(modelPicker).toContain("GPT-4.1 mini");
             }
-            await page
-              .locator(".new-session-page__message")
-              .fill("Start with the selected defaults");
+            await draftInput.fill("Start with the selected defaults");
             await page.getByRole("button", { name: "Start session", exact: true }).click();
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
@@ -331,7 +318,7 @@ suite.define(() => {
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
-              await pollText(page.locator('[data-chat-model-select="true"]')).not.toContain("mini");
+              await pollText(modelPicker).not.toContain("mini");
               await page.keyboard.press("ControlOrMeta+K");
               const palette = page.locator("openclaw-command-palette");
               const prompt = palette.locator(".cmd-palette__input");
