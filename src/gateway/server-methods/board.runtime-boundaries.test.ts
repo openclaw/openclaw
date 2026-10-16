@@ -6,7 +6,7 @@ import {
   PROTOCOL_VERSION,
   type BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -135,7 +135,9 @@ describe("board gateway runtime boundaries", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("serves board.data.read while a transcript-only database writer is held", async () => {
+  it("serves board.data.read while a transcript-only database writer is held", async ({
+    signal,
+  }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const sessionKey = "agent:main:session";
     replaceSessionEntrySync(
@@ -172,7 +174,7 @@ describe("board gateway runtime boundaries", () => {
     await entered.promise;
     const read = invoke("board.data.read", { ticket, bindingId: "sessions.list" });
     try {
-      const response = await withTestTimeout(read, 5_000, "Board read waited for the writer");
+      const response = await withinTest(read, signal);
       expect(database.db.isTransaction).toBe(true);
       expect(response).toHaveBeenCalledWith(true, { sessions: [] });
     } finally {

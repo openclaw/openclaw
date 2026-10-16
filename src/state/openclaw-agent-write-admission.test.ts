@@ -9,7 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  withTestTimeout,
+  withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -38,7 +38,9 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async () => {
+it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async ({
+  signal,
+}) => {
   const options = {
     agentId: "main",
     path: path.join(tempDirs.make("board-admission-"), "agent.sqlite"),
@@ -74,7 +76,7 @@ it("overlaps Board reads with transcript writes while retaining exclusive mutati
     order.push("following read");
   });
   try {
-    await withTestTimeout(readEntered.promise, 5_000, "Board reader waited for transcript writer");
+    await withinTest(readEntered.promise, signal);
     releaseWriter.resolve();
     await writer;
     expect(order).toEqual(["transcript"]);
