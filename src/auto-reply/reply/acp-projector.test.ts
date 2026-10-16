@@ -255,49 +255,28 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
-  it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
-    const { deliveries, projector } = createLiveToolLifecycleHarness();
+  it.each([
+    { title: "List files", text: "Tool Call: List files · status=in_progress" },
+    {
+      title:
+        "Run an intentionally long command title that truncates before lifecycle status is visible",
+      text: expect.stringContaining("Tool Call"),
+    },
+  ])(
+    "dedupes lifecycle updates without dropping the terminal update: $title",
+    async ({ title, text }) => {
+      const { deliveries, projector } = createLiveToolLifecycleHarness();
+      await emitTool(projector, { title });
+      await emitTool(projector, { tag: "tool_call_update", title });
+      await emitTool(projector, { tag: "tool_call_update", status: "completed", title });
+      await emitTool(projector, { tag: "tool_call_update", status: "completed", title });
 
-    await emitTool(projector, { title: "List files" });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      title: "List files",
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      status: "completed",
-      title: "List files",
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      status: "completed",
-      title: "List files",
-    });
-
-    expect(deliveries.length).toBe(2);
-    expect(deliveries[0]).toEqual({
-      kind: "tool",
-      text: "Tool Call: List files · status=in_progress",
-    });
-    expectToolCallSummary(deliveries[1]);
-  });
-
-  it("keeps terminal tool updates even when rendered summaries are truncated", async () => {
-    const { deliveries, projector } = createLiveToolLifecycleHarness();
-
-    const longTitle =
-      "Run an intentionally long command title that truncates before lifecycle status is visible";
-    await emitTool(projector, { title: longTitle });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      status: "completed",
-      title: longTitle,
-    });
-
-    expect(deliveries.length).toBe(2);
-    expectToolCallSummary(deliveries[0]);
-    expectToolCallSummary(deliveries[1]);
-  });
+      expect(deliveries).toEqual([
+        { kind: "tool", text },
+        { kind: "tool", text: expect.stringContaining("Tool Call") },
+      ]);
+    },
+  );
 
   it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
     const { deliveries, projector } = createStreamHarness("live", {

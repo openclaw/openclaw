@@ -1,18 +1,10 @@
 import type { AcpElicitationRequest } from "@openclaw/acp-core/runtime/types";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentHarnessQuestionGatewayCall } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 
-const gatewayCallMock = vi.hoisted(() =>
-  vi.fn<
-    (
-      method: string,
-      opts: unknown,
-      params: GatewayRequest,
-      extra?: { signal?: AbortSignal },
-    ) => Promise<unknown>
-  >(),
-);
+const gatewayCallMock = vi.hoisted(() => vi.fn<AgentHarnessQuestionGatewayCall>());
 
 vi.mock("../../agents/tools/gateway.js", () => ({ callGatewayTool: gatewayCallMock }));
 
@@ -21,21 +13,16 @@ import { createAcpElicitationHandler } from "./acp-elicitation-handler.js";
 type GatewayRequest = {
   id: string;
   questions: { questionId: string }[];
-  sessionKey?: string;
-  runId?: string;
 };
 
-function formRequest(
-  properties: Record<string, unknown>,
-  required: string[] = [],
-): AcpElicitationRequest {
+function formRequest(properties: Record<string, unknown>): AcpElicitationRequest {
   return {
     mode: "form",
     sessionId: "acp-session",
     toolCallId: "tool-call",
     message: "ACP needs input",
-    requestedSchema: { type: "object", properties, required },
-  } as AcpElicitationRequest;
+    requestedSchema: { type: "object", properties, required: Object.keys(properties) },
+  };
 }
 
 const urlRequest: AcpElicitationRequest = {
@@ -47,32 +34,26 @@ const urlRequest: AcpElicitationRequest = {
   url: "https://example.com/login",
 };
 
-function createFixture() {
-  const delivered: string[] = [];
-  const handler = createAcpElicitationHandler({
-    sourceSessionKey: "agent:main:source",
-    targetSessionKey: "agent:codex:acp:target",
-    outerRequestId: "outer-turn",
-    agentId: "main",
-    runId: "run-1",
-    delivery: {
-      deliver: vi.fn(async (_kind, payload) => {
-        if (payload.text) {
-          delivered.push(payload.text);
-        }
-        return true;
-      }),
-    },
-    isActive: () => true,
-  });
-  return {
-    delivered,
-    handler: (
-      request: AcpElicitationRequest,
-      requestId: Parameters<typeof handler>[1]["requestId"],
-      signal = new AbortController().signal,
-    ) => handler(request, { requestId, signal }),
-  };
+const delivered: string[] = [];
+const handler = createAcpElicitationHandler({
+  sourceSessionKey: "agent:main:source",
+  targetSessionKey: "agent:codex:acp:target",
+  outerRequestId: "outer-turn",
+  agentId: "main",
+  runId: "run-1",
+  delivery: {
+    deliver: vi.fn(async (_kind, payload) => {
+      if (payload.text) {
+        delivered.push(payload.text);
+      }
+      return true;
+    }),
+  },
+  isActive: () => true,
+});
+
+function context(requestId: string | number, signal = new AbortController().signal) {
+  return { requestId, signal };
 }
 
 function answerGateway(
@@ -82,7 +63,8 @@ function answerGateway(
   ) => Record<string, string[]> | Promise<Record<string, string[]>>,
 ): GatewayRequest[] {
   const ordered: GatewayRequest[] = [];
-  gatewayCallMock.mockImplementation(async (method, _opts, params, extra) => {
+  gatewayCallMock.mockImplementation(async (method, _opts, rawParams, extra) => {
+    const params = rawParams as GatewayRequest;
     if (method === "question.request") {
       ordered.push(params);
       return { id: params.id };
@@ -107,31 +89,23 @@ function answerGateway(
 
 beforeEach(() => {
   gatewayCallMock.mockReset();
+  delivered.length = 0;
 });
 
 it("rejects accessor-backed request objects without invoking the accessor", async () => {
-  let reads = 0;
+  const getSchema = vi.fn(() => ({ type: "object", properties: { value: { type: "string" } } }));
   const request = Object.defineProperty(formRequest({}), "requestedSchema", {
     enumerable: true,
-    get() {
-      reads += 1;
-      return { type: "object", properties: { value: { type: "string" } } };
-    },
+    get: getSchema,
   });
-  const { delivered, handler } = createFixture();
-
-  const response = await handler(request, "accessor");
-
-  expect(response.action).toBe("decline");
-  expect(reads).toBe(0);
+  expect((await handler(request, context("accessor"))).action).toBe("decline");
+  expect(getSchema).not.toHaveBeenCalled();
   expect(delivered.join("\n")).toContain("malformed");
 });
 
 it("uses outer, scope, session, and tool-call correlation in Gateway records", async () => {
   const requests = answerGateway((questions) => ({ [questions[0]!.questionId]: ["Continue"] }));
-  const { handler } = createFixture();
-
-  await handler(urlRequest, 1);
+  await handler(urlRequest, context(1));
   await handler(
     {
       mode: "url",
@@ -140,7 +114,7 @@ it("uses outer, scope, session, and tool-call correlation in Gateway records", a
       elicitationId: "login-2",
       url: "https://example.com/login",
     },
-    2,
+    context(2),
   );
 
   expect(requests).toHaveLength(2);
@@ -161,8 +135,7 @@ it("cancels an aborted request and rejects a late Gateway answer", async () => {
       }),
   );
   const controller = new AbortController();
-  const { handler } = createFixture();
-  const response = handler(urlRequest, "abort", controller.signal);
+  const response = handler(urlRequest, context("abort", controller.signal));
   await vi.waitFor(() => expect(requests).toHaveLength(1));
 
   controller.abort();
@@ -172,15 +145,11 @@ it("cancels an aborted request and rejects a late Gateway answer", async () => {
 
 it("keeps explicitly marked Codex secrets out of Gateway question records", async () => {
   gatewayCallMock.mockRejectedValue(new Error("secret must not reach Gateway questions"));
-  const { delivered, handler } = createFixture();
   const response = handler(
-    formRequest(
-      {
-        token: { type: "string", title: "Token", _meta: { codex: { isSecret: true } } },
-      },
-      ["token"],
-    ),
-    "secret",
+    formRequest({
+      token: { type: "string", title: "Token", _meta: { codex: { isSecret: true } } },
+    }),
+    context("secret"),
   );
   await vi.waitFor(() => expect(delivered.join("\n")).toContain("may show your reply"));
 
@@ -204,9 +173,8 @@ it("asks before accepting an ACP form elicitation with an empty schema", async (
     await answerSubmitted.promise;
     return { [questions[0]!.questionId]: ["Allow"] };
   });
-  const { delivered, handler } = createFixture();
   const controller = new AbortController();
-  const response = handler(formRequest({}), "empty-form", controller.signal);
+  const response = handler(formRequest({}), context("empty-form", controller.signal));
   const settled = vi.fn();
   void response.then(settled);
   try {

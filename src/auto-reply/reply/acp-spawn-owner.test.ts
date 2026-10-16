@@ -40,10 +40,12 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 
+const channelAccount = { channel: "discord", accountId: "default" };
+
 it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"] as const)(
   "dispatches %s ACP sessions without confusing the configured owner and harness storage",
-  async (kind) => {
-    await withOpenClawTestState(
+  (kind) =>
+    withOpenClawTestState(
       { label: "acp-spawn-owner", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const backendId = "synthetic-owner";
@@ -114,8 +116,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
         let manager = getAcpSessionManager();
         let binding: SessionBindingRecord | null = null;
         const adapter = {
-          channel: "discord",
-          accountId: "default",
+          ...channelAccount,
           listBySession: () => (binding ? [binding] : []),
           resolveByConversation: () => binding,
         };
@@ -168,17 +169,12 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
             targetKind: "session",
             status: "active",
             boundAt: 1,
-            conversation: {
-              channel: "discord",
-              accountId: "default",
-              conversationId: "owner-room",
-            },
+            conversation: { ...channelAccount, conversationId: "owner-room" },
           };
           const { route } = inspectRuntimeConversationBindingRoute({
             route: {
               agentId: "main",
-              channel: "discord",
-              accountId: "default",
+              ...channelAccount,
               sessionKey: "agent:main:source",
               mainSessionKey: "agent:main:main",
               lastRoutePolicy: "session",
@@ -187,8 +183,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
             inspection: { status: "available", binding },
           });
           const ctx = buildChannelInboundEventContext({
-            channel: "discord",
-            accountId: "default",
+            ...channelAccount,
             messageId: "owner-" + kind,
             from: "synthetic-user",
             sender: { id: "synthetic-user" },
@@ -247,7 +242,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
         } finally {
           dispatcher.markComplete();
           await dispatcher.waitForIdle();
-          unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+          unregisterSessionBindingAdapter({ ...channelAccount, adapter });
           await disposeAcpSessionManagerInstance(manager, "test-complete");
           testing.resetAcpSessionManagerForTests();
           unregisterAcpRuntimeBackend(backendId);
@@ -258,6 +253,5 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           resetInboundDedupe();
         }
       },
-    );
-  },
+    ),
 );

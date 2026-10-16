@@ -170,15 +170,15 @@ describe("runReplyAgent media path normalization", () => {
       { type: "image" as const, data: "first", mimeType: "image/jpeg" },
       { type: "image" as const, data: "second", mimeType: "image/png" },
     ];
-    const followupRun = createMediaFollowupRun({ prompt: "compare these" });
-    followupRun.images = images;
-    followupRun.currentInboundContext = {
-      text: "Replied message: Which color for the invitation?",
-    };
-    followupRun.media = [
-      { path: "/tmp/first.jpg", contentType: "image/jpeg" },
-      { path: "/tmp/second.png", contentType: "image/png" },
-    ];
+    const followupRun = createMediaFollowupRun({
+      prompt: "compare these",
+      images,
+      currentInboundContext: { text: "Replied message: Which color for the invitation?" },
+      media: [
+        { path: "/tmp/first.jpg", contentType: "image/jpeg" },
+        { path: "/tmp/second.png", contentType: "image/png" },
+      ],
+    });
 
     await runReplyAgent(await makeSteerParams({ followupRun }));
 
