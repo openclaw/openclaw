@@ -5,7 +5,8 @@ import { parseZalouserTextStyles } from "./text-styles.js";
 import { sendZaloTextMessage } from "./zalo-js.js";
 import { TextStyle } from "./zca-constants.js";
 
-vi.mock("./zalo-js.js", () => ({
+vi.mock("./zalo-js.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zalo-js.js")>()),
   sendZaloTextMessage: vi.fn(),
 }));
 

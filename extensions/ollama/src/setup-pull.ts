@@ -32,11 +32,11 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
 async function readOllamaPullChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
+  // Stream cleanup owns cancellation; cancelling here lets EOF win the timeout race.
   return await raceWithTimeout(
     () => reader.read(),
     OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS,
     () => {
-      void reader.cancel().catch(() => undefined);
       throw new Error(
         `Ollama pull stalled: no data received for ${Math.round(OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS / 1000)}s`,
       );

@@ -262,7 +262,9 @@ export const zalouserMessageActions: ChannelMessageActionAdapter = {
         remove: params.remove === true,
       });
     } catch (error) {
-      throw new Error(formatErrorMessage(error) || "Failed to react on Zalo message");
+      throw new Error(formatErrorMessage(error) || "Failed to react on Zalo message", {
+        cause: error,
+      });
     }
     return textResult(
       params.remove === true

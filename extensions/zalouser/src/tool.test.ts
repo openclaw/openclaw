@@ -12,7 +12,8 @@ import {
   sendZaloLink,
 } from "./zalo-js.js";
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
 }));

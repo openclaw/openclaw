@@ -3,7 +3,10 @@ import { createChildAdapter } from "./child.js";
 import { createStubChild, readyChildAdapter } from "./child.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock("../../spawn-utils.js", () => ({ spawnAndWait: spawnMock }));
+vi.mock("../../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
+  spawnAndWait: spawnMock,
+}));
 const start = readyChildAdapter(createChildAdapter);
 afterEach(() => vi.unstubAllEnvs());
 

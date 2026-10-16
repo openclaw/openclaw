@@ -12,7 +12,10 @@ const sanitizeHostExecEnvMock = vi.fn<typeof hostEnvSecurity.sanitizeHostExecEnv
 const spawnMock = vi.fn<typeof ownedStdio.createOwnedStdioProcess>();
 const { spawnAndWaitMock } = vi.hoisted(() => ({ spawnAndWaitMock: vi.fn() }));
 
-vi.mock("../process/spawn-utils.js", () => ({ spawnAndWait: spawnAndWaitMock }));
+vi.mock("../process/spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/spawn-utils.js")>()),
+  spawnAndWait: spawnAndWaitMock,
+}));
 
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {

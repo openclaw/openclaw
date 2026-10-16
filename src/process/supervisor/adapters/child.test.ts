@@ -28,8 +28,12 @@ const { spawnMock, signalMock, decoderMock, relayMock } = vi.hoisted(() => ({
     vi.fn<typeof import("../../../infra/windows-encoding.js").createWindowsOutputDecoder>(),
   relayMock: vi.fn(),
 }));
-vi.mock("../../spawn-utils.js", () => ({ spawnAndWait: spawnMock }));
-vi.mock("../../kill-tree.js", () => ({
+vi.mock("../../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
+  spawnAndWait: spawnMock,
+}));
+vi.mock("../../kill-tree.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../kill-tree.js")>()),
   signalProcessTree: signalMock,
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));

@@ -9,7 +9,7 @@ import {
   retireDeliveredChatOutboxRecovery,
   restoreChatOutboxRecovery,
 } from "./outbox-recovery.ts";
-import type { StoredComposerSession, StoredComposerState } from "./outbox-store-codec.ts";
+import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import {
   readStoredOutboxStore,
   storageTargetForComposer,
@@ -427,13 +427,13 @@ it.each(
           : key === ownedKey &&
             ((stage === "stage" && staging) || (stage === "publish" && !staging));
       if (matches) {
-        return fail(() => set(key, value));
+        fail(() => set(key, value));
       }
       set(key, value);
     });
     const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
       if (key === f.source.key && stage === "retire-remove") {
-        return fail(() => remove(key));
+        fail(() => remove(key));
       }
       remove(key);
     });

@@ -87,7 +87,8 @@ export const sendZaloSeenEventMock = zaloJsMocks.sendZaloSeenEventMock;
 export const sendZaloReactionMock = zaloJsMocks.sendZaloReactionMock;
 export const sendZaloTypingEventMock = zaloJsMocks.sendZaloTypingEventMock;
 
-vi.mock("./zalo-js.js", () => ({
+vi.mock("./zalo-js.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zalo-js.js")>()),
   checkZaloAuthenticated: zaloJsMocks.checkZaloAuthenticatedMock,
   getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,

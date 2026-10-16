@@ -172,6 +172,8 @@ export async function sendZaloTextWithApi(
       }),
     };
   } catch (error) {
-    throw new Error(formatErrorMessage(error) || "Failed to send Zalouser message");
+    throw new Error(formatErrorMessage(error) || "Failed to send Zalouser message", {
+      cause: error,
+    });
   }
 }

@@ -76,7 +76,7 @@ export async function sendMessageZalouser(
         createAcceptedChannelDeliveryResult({ results: accepted }),
       );
     }
-    throw new Error(formatErrorMessage(error));
+    throw new Error(formatErrorMessage(error), { cause: error });
   }
 
   if (!lastResult) {

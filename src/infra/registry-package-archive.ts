@@ -35,7 +35,7 @@ export async function fetchRegistryPackageManifest(params: {
     }
     return { ...metadata, tarball };
   } catch (error) {
-    throw new Error(`Registry package manifest failed: ${String(error)}`);
+    throw new Error(`Registry package manifest failed: ${String(error)}`, { cause: error });
   }
 }
 
@@ -91,7 +91,7 @@ export async function downloadRegistryPackageArchive(params: {
     if (archivePath) {
       await fs.rm(archivePath, { force: true });
     }
-    throw new Error(`Registry package archive failed: ${String(error)}`);
+    throw new Error(`Registry package archive failed: ${String(error)}`, { cause: error });
   } finally {
     await cancelUnreadResponseBody(response);
     cleanup();
