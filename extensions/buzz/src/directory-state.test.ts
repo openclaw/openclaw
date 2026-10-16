@@ -23,26 +23,19 @@ function event(params: Partial<Event> & Pick<Event, "kind" | "pubkey">): Event {
   };
 }
 
-function membership(members: Array<[string, string?]>): BuzzRoomMembership {
+function membership(members: string[]): BuzzRoomMembership {
   return {
     roomId: ROOM_ID,
     createdAt: 1_700_000_000,
     eventId: "1".repeat(64),
     publisherPublicKey: "d".repeat(64),
-    members: new Set(members.map(([publicKey]) => publicKey)),
-    roles: new Map(
-      members
-        .filter((entry): entry is [string, string] => Boolean(entry[1]))
-        .map(([publicKey, role]) => [publicKey, role]),
-    ),
+    members: new Set(members),
+    roles: new Map(),
   };
 }
 
 function profileState(
-  members: Array<[string, string?]> = [
-    [BOT_PUBLIC_KEY, "bot"],
-    [ALICE_PUBLIC_KEY, "member"],
-  ],
+  members: string[] = [BOT_PUBLIC_KEY, ALICE_PUBLIC_KEY],
   profileLimit?: number,
 ): BuzzDirectoryState {
   const state = new BuzzDirectoryState({
@@ -91,24 +84,24 @@ describe("Buzz directory state", () => {
         }),
       ),
     ).toBe(true);
-    expect(preferred.listPeers({})).toEqual([
-      expect.objectContaining({
+    expect(preferred.listPeers({})).toMatchObject([
+      {
         id: ALICE_PUBLIC_KEY,
         name: "Alice",
         handle: "alice@example.com",
         avatarUrl: "https://example.com/alice.png",
-      }),
+      },
     ]);
 
     const fallback = profileState();
     fallback.applyProfileEvent(
       profile({ name: "Fallback", image: "https://example.com/fallback.png" }),
     );
-    expect(fallback.listPeers({})).toEqual([
-      expect.objectContaining({
+    expect(fallback.listPeers({})).toMatchObject([
+      {
         name: "Fallback",
         avatarUrl: "https://example.com/fallback.png",
-      }),
+      },
     ]);
 
     const emptyPrimary = profileState();
@@ -119,11 +112,7 @@ describe("Buzz directory state", () => {
   });
 
   it("keeps stable public-key ids while applying current profiles and room metadata", () => {
-    const state = profileState([
-      [BOT_PUBLIC_KEY, "bot"],
-      [ALICE_PUBLIC_KEY, "member"],
-      [BOB_PUBLIC_KEY, "member"],
-    ]);
+    const state = profileState([BOT_PUBLIC_KEY, ALICE_PUBLIC_KEY, BOB_PUBLIC_KEY]);
     state.applyProfileEvent(
       profile({ display_name: "Alice", picture: "https://example.com/alice.png" }),
     );
@@ -131,20 +120,20 @@ describe("Buzz directory state", () => {
 
     expect(state.resolveSenderName(ALICE_PUBLIC_KEY)).toBe("Alice");
     expect(state.resolveSenderName(BOB_PUBLIC_KEY)).toBe("cccccccc...cccccc");
-    expect(state.listPeers({ query: "ali" })).toEqual([
-      expect.objectContaining({
+    expect(state.listPeers({ query: "ali" })).toMatchObject([
+      {
         kind: "user",
         id: ALICE_PUBLIC_KEY,
         name: "Alice",
         avatarUrl: "https://example.com/alice.png",
-      }),
+      },
     ]);
-    expect(state.listGroups({})).toEqual([
-      expect.objectContaining({
+    expect(state.listGroups({})).toMatchObject([
+      {
         kind: "group",
         id: `buzz:${ROOM_ID}`,
         name: "Engineering",
-      }),
+      },
     ]);
     expect(
       state.listGroupMembers({ groupId: `buzz:${ROOM_ID}`, limit: 2 }).map((entry) => entry.id),
@@ -168,20 +157,11 @@ describe("Buzz directory state", () => {
     expect(state.activeRoomIds()).toEqual([ROOM_ID]);
     expect(state.isRoomArchived(ROOM_ID)).toBe(false);
     expect(state.listPeers({})).not.toEqual([]);
-    expect(state.listGroups({})).toEqual([
-      expect.objectContaining({ id: `buzz:${ROOM_ID}`, name: "Restored room" }),
-    ]);
+    expect(state.listGroups({})).toMatchObject([{ id: `buzz:${ROOM_ID}`, name: "Restored room" }]);
   });
 
   it("uses deterministic latest-event ordering and bounded profile selection", () => {
-    const state = profileState(
-      [
-        [BOT_PUBLIC_KEY, "bot"],
-        [BOB_PUBLIC_KEY, "member"],
-        [ALICE_PUBLIC_KEY, "member"],
-      ],
-      2,
-    );
+    const state = profileState([BOT_PUBLIC_KEY, BOB_PUBLIC_KEY, ALICE_PUBLIC_KEY], 2);
 
     expect(state.profilePublicKeys()).toEqual([BOT_PUBLIC_KEY, ALICE_PUBLIC_KEY]);
     expect(
@@ -204,12 +184,9 @@ describe("Buzz directory state", () => {
     const state = profileState(undefined, 0);
 
     expect(state.profilePublicKeys()).toEqual([]);
-    expect(state.self()).toEqual(expect.objectContaining({ id: BOT_PUBLIC_KEY, name: "OpenClaw" }));
-    expect(state.listPeers({})).toEqual([
-      expect.objectContaining({
-        id: ALICE_PUBLIC_KEY,
-        name: `${ALICE_PUBLIC_KEY.slice(0, 8)}...${ALICE_PUBLIC_KEY.slice(-6)}`,
-      }),
+    expect(state.self()).toMatchObject({ id: BOT_PUBLIC_KEY, name: "OpenClaw" });
+    expect(state.listPeers({})).toMatchObject([
+      { id: ALICE_PUBLIC_KEY, name: "bbbbbbbb...bbbbbb" },
     ]);
   });
 });
