@@ -162,14 +162,10 @@ type PublishedAdmission = {
 function snapshotWriteScopes(
   current: Admission["writeScopes"],
   previous: WriteScopeBuckets = EMPTY_WRITE_SCOPE_BUCKETS,
-  keys: Iterable<string> = current.keys(),
+  keys?: readonly string[],
 ): WriteScopeBuckets {
   let buckets = previous;
-  for (const key of keys) {
-    const value = current.get(key);
-    if (!value) {
-      continue;
-    }
+  const visit = (value: ScopedWriteRevision, key: string) => {
     let hash = 0;
     for (let index = 0; index < key.length; index++) {
       hash = (hash * 31 + key.charCodeAt(index)) | 0;
@@ -180,7 +176,7 @@ function snapshotWriteScopes(
       current.delete(key);
     }
     if (retired ? !previous[index]!.has(key) : previous[index]!.get(key) === value) {
-      continue;
+      return;
     }
     if (buckets === previous) {
       buckets = previous.slice();
@@ -193,6 +189,16 @@ function snapshotWriteScopes(
     } else {
       buckets[index]!.set(key, value);
     }
+  };
+  if (keys) {
+    for (const key of keys) {
+      const value = current.get(key);
+      if (value) {
+        visit(value, key);
+      }
+    }
+  } else {
+    current.forEach(visit);
   }
   return buckets;
 }
