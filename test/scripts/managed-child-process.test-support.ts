@@ -1,4 +1,5 @@
-import { ChildProcess } from "node:child_process";
+import { ChildProcess, type SpawnSyncReturns } from "node:child_process";
+import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 
@@ -22,11 +23,39 @@ export function createSyntheticChild(
   return {
     child,
     exit,
+    waitForOutputClose: () =>
+      Promise.all(
+        [child.stdout, child.stderr]
+          .filter((pipe) => pipe !== null)
+          .map((pipe) => once(pipe, "close")),
+      ),
+    destroyOutput: () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    },
     close: () => {
       exit();
       child.emit("close", 0, null);
     },
   };
+}
+
+export function psResult(
+  stdout = "",
+  overrides: Partial<SpawnSyncReturns<string>> = {},
+): SpawnSyncReturns<string> {
+  return { pid: 12346, output: [], status: 0, signal: null, stdout, stderr: "", ...overrides };
+}
+
+export function captureOutput(child: ChildProcess) {
+  const output = { stdout: "", stderr: "" };
+  child.stdout?.on("data", (chunk) => {
+    output.stdout += String(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
+    output.stderr += String(chunk);
+  });
+  return output;
 }
 
 export function runFixtureCommand(options: Omit<Parameters<typeof runManagedCommand>[0], "bin">) {
