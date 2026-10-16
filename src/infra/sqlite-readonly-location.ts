@@ -16,7 +16,7 @@ import { copySqliteFile } from "./sqlite-file-copy.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
-  adoptPreparedLocation,
+  publishPreparedCopy,
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
@@ -29,6 +29,7 @@ import {
   readSqliteSchemaHeader,
   readSqliteSchemaHeaderFromSnapshot,
 } from "./sqlite-schema-header.js";
+import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 import {
   createSnapshotAttemptReporter,
   MAX_SNAPSHOT_ATTEMPTS,
@@ -288,17 +289,6 @@ function recoverPrivateJournalCopy(snapshotPath: string): void {
   syncPrivateSnapshot(snapshotPath);
 }
 
-function publishPreparedCopy(directory: string): PreparedSqliteReadOnlyLocation {
-  const location = path.join(directory, "database.sqlite");
-  for (const suffix of ["-wal", "-shm", "-journal", ""]) {
-    const staged = `${location}.partial${suffix}`;
-    if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
-    }
-  }
-  return adoptPreparedLocation(location, directory);
-}
-
 type CopyRequest = {
   sourcePath: string;
   targetPath: string;
@@ -313,6 +303,7 @@ function* createStableReadOnlyCopyInTempDirectory(
     ? path.dirname(existingTempDir)
     : resolvePrivateSqliteSnapshotStagingRoot(),
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   let tempDir = existingTempDir;
   try {
@@ -370,7 +361,11 @@ function* createStableReadOnlyCopyInTempDirectory(
     } else {
       yield { sourcePath: pathname, targetPath: firstPath, expectedSourceIdentity };
       assertExpectedSidecars(pathname, sidecars);
-      const mainUnchanged = sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
+      // A generation owner can bind the private bytes to its earlier source digest
+      // instead. Publication must verify that digest before any native open.
+      const mainUnchanged =
+        expectedSourceContent !== undefined ||
+        sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
         throw new SqliteSourceChangedError(
@@ -384,12 +379,22 @@ function* createStableReadOnlyCopyInTempDirectory(
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
       throw new SqliteSourceChangedError(`SQLite journal mode changed while copying: ${pathname}`);
     }
+    // A captured recovery-free digest cannot authorize newly observed recovery
+    // data. Refuse before any private native open rather than dropping the binding.
+    if (
+      expectedSourceContent &&
+      (sidecars.journal || (sidecars.wal && fs.statSync(`${snapshotPath}-wal`).size !== 0))
+    ) {
+      throw new SqliteSourceChangedError(
+        `SQLite recovery data appeared after generation capture: ${pathname}`,
+      );
+    }
     if (sidecars.journal) {
       // Journal filenames can coexist without activity. Let SQLite resolve the
       // verified private family; source recovery and sidecars remain untouched.
       recoverPrivateJournalCopy(snapshotPath);
     }
-    return publishPreparedCopy(tempDir);
+    return publishPreparedCopy(tempDir, expectedSourceContent);
   } catch (error) {
     const stagingError = tempDir
       ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
@@ -596,6 +601,7 @@ function* prepareArtifactPreservingCopy(
   pathname: string,
   stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
   const canonicalPath = fs.realpathSync.native(pathname);
   let lastChange: Error | undefined;
@@ -610,6 +616,7 @@ function* prepareArtifactPreservingCopy(
         undefined,
         stagingRoot,
         expectedSourceIdentity,
+        expectedSourceContent,
       );
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
@@ -631,9 +638,15 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
   stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  expectedSourceContent?: SqliteFileContent,
 ): PreparedSqliteReadOnlyLocation {
   return copyPreparedLocationSync(
-    prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity),
+    prepareArtifactPreservingCopy(
+      pathname,
+      stagingRoot,
+      expectedSourceIdentity,
+      expectedSourceContent,
+    ),
   );
 }
 
