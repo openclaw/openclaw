@@ -8,11 +8,8 @@ import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
@@ -172,7 +169,9 @@ defineSolidBridge<Props, Methods>(
         </Show>
         <div id={contentId} class="chat-files-panel__content">
           <div class="chat-files-panel__page" hidden={rendered().activeId !== null}>
-            <LitContent render={() => rendered().browser} />
+            <span class="lit-content" style={{ display: "contents" }}>
+              <LitContent value={rendered().browser} />
+            </span>
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
@@ -202,7 +201,9 @@ defineSolidBridge<Props, Methods>(
                       })()}
                     </div>
                   ) : (
-                    <LitContent render={renderDetail} />
+                    <span class="lit-content" style={{ display: "contents" }}>
+                      <LitContent value={renderDetail()} />
+                    </span>
                   )}
                 </div>
               );
