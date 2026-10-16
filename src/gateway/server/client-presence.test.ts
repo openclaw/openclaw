@@ -32,6 +32,7 @@ vi.mock("./ws-connection/message-handler.js", () => ({
 
 describe("live person presence timing", () => {
   it("qualifies presence sender provenance only from an authenticated profile", () => {
+    const validUser = (user: unknown) => Value.Check(PresenceEntrySchema, { ts: 1, user });
     const authenticatedUserId = "same-id";
     const fallback = buildAuthenticatedPresenceUser({ authenticatedUserId });
     expect(fallback).toEqual({ id: authenticatedUserId, email: authenticatedUserId });
@@ -48,19 +49,16 @@ describe("live person presence timing", () => {
       id: authenticatedUserId,
       identity: { type: "profile", id: authenticatedUserId },
     });
-    expect(Value.Check(PresenceEntrySchema, { ts: 1, user: profile })).toBe(true);
+    expect(validUser(profile)).toBe(true);
     expect(
-      Value.Check(PresenceEntrySchema, {
-        ts: 1,
-        user: {
-          ...fallback,
-          identity: {
-            type: "observation",
-            id: authenticatedUserId,
-            pluginId: null,
-            accountId: null,
-            senderKind: "unknown",
-          },
+      validUser({
+        ...fallback,
+        identity: {
+          type: "observation",
+          id: authenticatedUserId,
+          pluginId: null,
+          accountId: null,
+          senderKind: "unknown",
         },
       }),
     ).toBe(false);
@@ -86,7 +84,16 @@ describe("live person presence timing", () => {
     vi.useRealTimers();
   });
 
-  async function connect(email: string | undefined, profileId = "timing-person") {
+  async function connect(
+    email: string | undefined,
+    profileId = "timing-person",
+    options: {
+      raw?: boolean;
+      scope?: string;
+      nativeClient?: "openclaw-tui" | "openclaw-macos";
+      deferAdmission?: boolean;
+    } = {},
+  ) {
     const { socket } = attachGatewayWsForTest({
       attach: attachGatewayWsConnectionHandler,
       clients,
@@ -112,17 +119,29 @@ describe("live person presence timing", () => {
         minProtocol: 1,
         maxProtocol: 1,
         role: "operator",
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        scopes: options.scope ? [options.scope] : undefined,
+        client: {
+          id: options.nativeClient ?? "openclaw-control-ui",
+          version: "test",
+          platform: "test",
+          mode: options.nativeClient ? "ui" : "webchat",
+        },
       },
+      internal: options.scope ? { authenticatedControlUi: true } : undefined,
       authenticatedUserId: email,
-      authenticatedUserProfile: {
-        profileId,
-        displayName: "Timing Person",
-        avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: options.raw
+        ? undefined
+        : {
+            profileId,
+            displayName: "Timing Person",
+            avatarRevision: "1",
+            hasAvatar: false,
+            updatedAt: 1,
+          },
     };
+    if (!options.deferAdmission) {
+      expect(handler.setClient(client)).toBe(true);
+    }
     return { client, handler, socket, email };
   }
 
@@ -131,11 +150,6 @@ describe("live person presence timing", () => {
   }
 
   type Connection = Awaited<ReturnType<typeof connect>>;
-
-  function connectionTimes(connection: Connection) {
-    const entry = row(connection);
-    return [...personTimes(entry), entry?.connectionLastActivityAt];
-  }
 
   function close(socket: (typeof sockets)[number]) {
     socket.readyState = 3;
@@ -146,7 +160,8 @@ describe("live person presence timing", () => {
     return connection.handler.setClient(connection.client);
   }
 
-  function activity(connection: Connection) {
+  function activity(connection: Connection, at = Date.now()) {
+    vi.setSystemTime(at);
     return recordClientPresenceActivity(clients, connection.client);
   }
 
@@ -170,27 +185,18 @@ describe("live person presence timing", () => {
     expect(sidecars).toHaveLength(1);
     changes.mockClear();
     const browser = await connect("person@presence.test", "presence-person");
-    expect(setClient(browser)).toBe(true);
     expect(changes).not.toHaveBeenCalled();
 
     browser.client.internal = { authenticatedControlUi: true };
     close(browser.socket);
 
-    const readOnly = await connect("person@presence.test", "presence-person");
-    readOnly.client.internal = { authenticatedControlUi: true };
-    readOnly.client.connect.scopes = ["operator.read"];
-    expect(setClient(readOnly)).toBe(true);
+    await connect("person@presence.test", "presence-person", { scope: "operator.read" });
     expect(changes).not.toHaveBeenCalled();
 
-    const verified = await connect("person@presence.test", "presence-person");
-    verified.client.internal = { authenticatedControlUi: true };
-    verified.client.connect.scopes = ["operator.sessions.write"];
-    expect(setClient(verified)).toBe(true);
+    const writer = { scope: "operator.sessions.write" };
+    const verified = await connect("person@presence.test", "presence-person", writer);
     expect(changes).toHaveBeenLastCalledWith(true);
-    const overlapping = await connect("other@presence.test", "other-person");
-    overlapping.client.internal = { authenticatedControlUi: true };
-    overlapping.client.connect.scopes = ["operator.sessions.write"];
-    expect(setClient(overlapping)).toBe(true);
+    const overlapping = await connect("other@presence.test", "other-person", writer);
     const response = registerGatewayPolicyResponse("config.patch", verified.client, vi.fn())!;
     response.hold();
     const revocation = { reason: "test", code: 1008, message: "revoked" };
@@ -205,44 +211,12 @@ describe("live person presence timing", () => {
     sidecars[0]!.stop();
   });
 
-  it("retains the oldest online interval across overlapping sockets but not a full reconnect", async () => {
-    const first = await connect("first@timing.test");
-    const t = Date.now();
-    expect(setClient(first)).toBe(true);
-    expect(personTimes(row(first))).toEqual([t, undefined]);
-
-    vi.setSystemTime(t + 1_000);
-    const second = await connect("second@timing.test");
-    expect(setClient(second)).toBe(true);
-    expect(activity(second)).toBe(true);
-    expect(row(first)?.connectionLastActivityAt).toBeUndefined();
-    expectRow(second, { connectionId: second.client.connId, connectionLastActivityAt: t + 1_000 });
-    close(first.socket);
-
-    vi.setSystemTime(t + 2_000);
-    const third = await connect("third@timing.test");
-    expect(setClient(third)).toBe(true);
-    expect(connectionTimes(third)).toEqual([t, t + 1_000, undefined]);
-    vi.setSystemTime(t + 2_500);
-    expect(activity(third)).toBe(false);
-    expect(row(third)?.connectionLastActivityAt).toBe(t + 2_500);
-    expectRow(second, { lastActivityAt: t + 2_500, connectionLastActivityAt: t + 1_000 });
-    for (const connection of [second, third]) {
-      close(connection.socket);
-    }
-    vi.setSystemTime(t + 3_000);
-    const fresh = await connect("fresh@timing.test");
-    expect(setClient(fresh)).toBe(true);
-    expect(connectionTimes(fresh)).toEqual([t + 3_000, undefined, undefined]);
-  });
-
   it.each(["profile", "raw"] as const)(
     "separates colliding presence namespaces when %s connects first",
     async (firstNamespace) => {
       const id = "synthetic-shared-id";
-      const profile = await connect("profile@namespace.test", id);
-      const raw = await connect(id);
-      delete raw.client.authenticatedUserProfile;
+      const profile = await connect("profile@namespace.test", id, { deferAdmission: true });
+      const raw = await connect(id, undefined, { raw: true, deferAdmission: true });
       const [first, second] =
         firstNamespace === "profile" ? ([profile, raw] as const) : ([raw, profile] as const);
       const t = Date.now();
@@ -254,24 +228,31 @@ describe("live person presence timing", () => {
       expect.soft(row(profile)?.onlineSince).toBe(profileStarted);
       expect.soft(row(raw)?.onlineSince).toBe(rawStarted);
 
-      vi.setSystemTime(t + 2_000);
-      expect(activity(raw)).toBe(true);
+      expect(activity(raw, t + 2_000)).toBe(true);
       expect.soft(row(profile)?.lastActivityAt).toBeUndefined();
-      vi.setSystemTime(t + 3_000);
-      expect(activity(profile)).toBe(true);
+      expect(row(profile)?.connectionLastActivityAt).toBeUndefined();
+      expect(activity(profile, t + 3_000)).toBe(true);
       expect.soft(personTimes(row(raw))).toEqual([rawStarted, t + 2_000]);
 
       vi.setSystemTime(t + 4_000);
       const overlap = await connect("overlap@namespace.test", id);
-      setClient(overlap);
-      close(profile.socket);
       expect.soft(personTimes(row(overlap))).toEqual([profileStarted, t + 3_000]);
+      expect(row(overlap)?.connectionLastActivityAt).toBeUndefined();
+      expect(activity(overlap, t + 4_500)).toBe(false);
+      expectRow(profile, { lastActivityAt: t + 4_500, connectionLastActivityAt: t + 3_000 });
+      expectRow(overlap, {
+        connectionId: overlap.client.connId,
+        connectionLastActivityAt: t + 4_500,
+      });
+      close(profile.socket);
+      expect(activity(overlap, t + 4_750)).toBe(false);
+      expect.soft(personTimes(row(overlap))).toEqual([profileStarted, t + 4_750]);
       close(overlap.socket);
 
       vi.setSystemTime(t + 5_000);
       const reconnected = await connect("reconnected@namespace.test", id);
-      setClient(reconnected);
       expect.soft(personTimes(row(reconnected))).toEqual([t + 5_000, undefined]);
+      expect(row(reconnected)?.connectionLastActivityAt).toBeUndefined();
       expect.soft(personTimes(row(raw))).toEqual([rawStarted, t + 2_000]);
     },
   );
@@ -280,17 +261,14 @@ describe("live person presence timing", () => {
     "keeps later activity separate after raw tabs qualify (%s acts first)",
     async (firstNamespace) => {
       const id = "qualification-shared-id";
-      const raw = await connect(id, id);
-      const qualified = await connect(id, id);
+      const raw = await connect(id, id, { raw: true });
+      const qualified = await connect(id, id, { deferAdmission: true });
       const profile = qualified.client.authenticatedUserProfile;
-      delete raw.client.authenticatedUserProfile;
       delete qualified.client.authenticatedUserProfile;
       const t = Date.now();
-      setClient(raw);
       vi.setSystemTime(t + 1_000);
       setClient(qualified);
-      vi.setSystemTime(t + 2_000);
-      activity(raw);
+      activity(raw, t + 2_000);
       const liveRows = (isProfile: boolean) =>
         listSystemPresence().filter(
           (entry) =>
@@ -306,13 +284,11 @@ describe("live person presence timing", () => {
       qualified.client.authenticatedUserProfile = profile;
       const [first, second] =
         firstNamespace === "profile" ? ([qualified, raw] as const) : ([raw, qualified] as const);
-      vi.setSystemTime(t + 3_000);
       // Activity can be the first presence operation after the profile snapshot changes.
-      expect(activity(first)).toBe(firstNamespace === "profile");
+      expect(activity(first, t + 3_000)).toBe(firstNamespace === "profile");
       refreshClientPresence(clients, second.client);
       expect.soft(personTimes(liveRows(firstNamespace !== "profile")[0])).toEqual([t, t + 2_000]);
-      vi.setSystemTime(t + 4_000);
-      expect(activity(second)).toBe(false);
+      expect(activity(second, t + 4_000)).toBe(false);
       refreshClientPresence(clients, first.client);
       expect.soft(personTimes(liveRows(firstNamespace === "profile")[0])).toEqual([t, t + 3_000]);
       expect.soft(personTimes(liveRows(firstNamespace !== "profile")[0])).toEqual([t, t + 4_000]);
@@ -320,11 +296,12 @@ describe("live person presence timing", () => {
   );
 
   it("keeps heartbeat freshness and cache eviction independent of person timing", async () => {
-    const first = await connect("heartbeat@timing.test", "heartbeat-person");
-    first.client.connect.client.id = "openclaw-tui";
-    first.client.connect.client.mode = "ui";
+    const tui = { clientId: "openclaw-tui", mode: "ui" };
+    const mac = { clientId: "openclaw-macos", mode: "ui" };
+    const first = await connect("heartbeat@timing.test", "heartbeat-person", {
+      nativeClient: "openclaw-tui",
+    });
     const t = Date.now();
-    setClient(first);
     activity(first);
     vi.setSystemTime(t + 10_000);
     first.socket.emit("pong");
@@ -334,8 +311,7 @@ describe("live person presence timing", () => {
       lastInputSeconds: 0,
     });
     expectRow(first, {
-      clientId: "openclaw-tui",
-      mode: "ui",
+      ...tui,
       ts: t + 10_000,
       onlineSince: t,
       lastActivityAt: t,
@@ -355,14 +331,12 @@ describe("live person presence timing", () => {
         connectionLastActivityAt: t,
       },
     ]);
-    const overlap = await connect("eviction@timing.test", "heartbeat-person");
-    overlap.client.connect.client.id = "openclaw-macos";
-    overlap.client.connect.client.mode = "ui";
-    setClient(overlap);
-    expectRow(first, { clientId: "openclaw-tui", mode: "ui", connectionLastActivityAt: t });
+    const overlap = await connect("eviction@timing.test", "heartbeat-person", {
+      nativeClient: "openclaw-macos",
+    });
+    expectRow(first, { ...tui, connectionLastActivityAt: t });
     expectRow(overlap, {
-      clientId: "openclaw-macos",
-      mode: "ui",
+      ...mac,
       onlineSince: t,
       lastActivityAt: t,
     });
@@ -370,10 +344,9 @@ describe("live person presence timing", () => {
     vi.setSystemTime(t + 400_000);
     expect(row(overlap)).toBeUndefined();
     expect(activity(overlap)).toBe(true);
-    expectRow(first, { clientId: "openclaw-tui", mode: "ui" });
+    expectRow(first, tui);
     expectRow(overlap, {
-      clientId: "openclaw-macos",
-      mode: "ui",
+      ...mac,
       onlineSince: t,
       lastActivityAt: t + 400_000,
       connectionLastActivityAt: t + 400_000,
@@ -381,7 +354,9 @@ describe("live person presence timing", () => {
   });
 
   it("keeps delayed identity timing on its accepted socket without reviving closed clients", async () => {
-    const delayed = await connect("pending@timing.test", "delayed-person");
+    const delayed = await connect("pending@timing.test", "delayed-person", {
+      deferAdmission: true,
+    });
     const profile = delayed.client.authenticatedUserProfile;
     delete delayed.client.authenticatedUserProfile;
     delayed.client.authenticatedGitHubIdentitySync = async () => ({
@@ -406,7 +381,6 @@ describe("live person presence timing", () => {
 
   it("rejects copied, invalidated, closing, and unregistered clients without changing activity", async () => {
     const live = await connect("exact@timing.test", "exact-person");
-    setClient(live);
     expect(recordClientPresenceActivity(clients, { ...live.client })).toBe(false);
     live.client.invalidated = true;
     expect(activity(live)).toBe(false);
@@ -416,7 +390,7 @@ describe("live person presence timing", () => {
     expect(activity(live)).toBe(false);
     expect(snapshotClientPresence(clients)).toEqual([]);
     expect(row(live)?.lastActivityAt).toBeUndefined();
-    const rejected = await connect("rejected@timing.test");
+    const rejected = await connect("rejected@timing.test", undefined, { deferAdmission: true });
     rejected.socket.emit("close", 1000, Buffer.alloc(0));
     expect(setClient(rejected)).toBe(false);
     expect(rejected.client.personPresence).toBeUndefined();
@@ -426,7 +400,7 @@ describe("live person presence timing", () => {
   it.each(["ephemeral", "unidentified", "node"])(
     "does not create person timing for %s clients",
     async (kind) => {
-      const connection = await connect(`${kind}@timing.test`);
+      const connection = await connect(`${kind}@timing.test`, undefined, { deferAdmission: true });
       if (kind === "ephemeral") {
         delete connection.client.presenceKey;
       } else if (kind === "node") {

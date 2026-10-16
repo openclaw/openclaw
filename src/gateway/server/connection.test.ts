@@ -43,12 +43,9 @@ it.each(["written", "failed"] as const)(
             throw error;
           }
         };
-        let readyState = 1;
         let finishHello: ((error?: Error) => void) | undefined;
-        const socket: GatewayConnectionTransport = {
-          get readyState() {
-            return readyState;
-          },
+        const socket = Object.assign(incoming, {
+          readyState: 1,
           bufferedAmount: 0,
           send: (
             encoded: string | Buffer,
@@ -65,11 +62,11 @@ it.each(["written", "failed"] as const)(
               callback?.();
             }
           },
-          close: (code = 1000, reason = "") => {
-            if (readyState === 3) {
+          close(code = 1000, reason = "") {
+            if (this.readyState === 3) {
               return;
             }
-            readyState = 3;
+            this.readyState = 3;
             const error = new Error("transport closed", { cause: { code, reason } });
             transportClosed.resolve(error);
             const pending = finishHello;
@@ -77,11 +74,10 @@ it.each(["written", "failed"] as const)(
             pending?.(error);
             incoming.emit("close", code, Buffer.from(reason));
           },
-          terminate: () => socket.close(1006),
-          on: incoming.on.bind(incoming),
-          off: incoming.off.bind(incoming),
-          once: incoming.once.bind(incoming),
-        };
+          terminate() {
+            this.close(1006);
+          },
+        }) satisfies GatewayConnectionTransport;
         const releasePreauth = vi.fn();
         const refreshHealthSnapshot = vi.fn(async (): Promise<HealthSummary> => {
           healthRefreshStarted.resolve();
@@ -141,26 +137,14 @@ it.each(["written", "failed"] as const)(
             payload: { capabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] },
           });
           const connect = (id: string) =>
-            Buffer.from(
-              JSON.stringify({
-                type: "req",
-                id,
-                method: "connect",
-                params: {
-                  minProtocol: PROTOCOL_VERSION,
-                  maxProtocol: PROTOCOL_VERSION,
-                  client: {
-                    id: "gateway-client",
-                    version: "dev",
-                    platform: "test",
-                    mode: "backend",
-                  },
-                  role: "operator",
-                  scopes: [],
-                  auth: { token: "test-token" },
-                },
-              }),
-            );
+            Buffer.from(`{
+              "type":"req", "id":"${id}", "method":"connect",
+              "params": {
+                "minProtocol":${PROTOCOL_VERSION}, "maxProtocol":${PROTOCOL_VERSION},
+                "client":{"id":"gateway-client","version":"dev","platform":"test","mode":"backend"},
+                "role":"operator", "scopes":[], "auth":{"token":"test-token"}
+              }
+            }`);
 
           incoming.emit("message", connect("connect-1"));
           incoming.emit("message", connect("connect-2"));
@@ -192,12 +176,12 @@ it.each(["written", "failed"] as const)(
           expect(clients.size).toBe(0);
           expect(client.connectionSignal?.aborted).toBe(true);
           expect(releasePreauth).toHaveBeenCalledOnce();
-          expect(requestContext.unsubscribeAllSessionEvents).toHaveBeenCalledExactlyOnceWith(
-            client.connId,
-          );
-          expect(requestContext.terminalSessions.handleDisconnect).toHaveBeenCalledExactlyOnceWith(
-            client.connId,
-          );
+          for (const cleanup of [
+            requestContext.unsubscribeAllSessionEvents,
+            requestContext.terminalSessions.handleDisconnect,
+          ]) {
+            expect(cleanup).toHaveBeenCalledExactlyOnceWith(client.connId);
+          }
           if (delivery === "failed") {
             expect(refreshHealthSnapshot).not.toHaveBeenCalled();
           }
