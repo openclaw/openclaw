@@ -10,6 +10,24 @@ import type { ApplicationContext } from "./context.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
+function createPreferenceShell(
+  prefs: Record<string, string>,
+  theme: Pick<ApplicationContext["theme"], "refresh"> &
+    Partial<Pick<ApplicationContext["theme"], "recordServerSelection" | "serverSelection">>,
+  scope = "ws://locale.test",
+) {
+  const state = { configSnapshot: { config: { ui: { prefs } }, hash: scope } };
+  const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
+  const context = {
+    gateway: { connection: { gatewayUrl: scope }, snapshot: { phase: "connected", client: {} } },
+    theme,
+    runtimeConfig,
+  } as unknown as ApplicationContext;
+  const shell = createShellOwner() as unknown as ShellServerPreferencesState;
+  shell.runtime = { context };
+  return { shell, state, runtimeConfig };
+}
+
 type ShellServerPreferencesState = {
   runtime: { context: ApplicationContext };
   shellGateway: ShellGatewayOwner;
@@ -31,24 +49,11 @@ describe("OpenClaw shell locale preferences", () => {
   it("keeps a retained device-local locale instead of realigning to the rejected server value", async () => {
     const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
     const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
-    const state = {
-      configSnapshot: {
-        config: { ui: { prefs: { locale: "de" } } },
-        hash: "locale-config-hash",
-      },
-    };
-    const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const refreshTheme = vi.fn();
-    const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://locale.test" },
-        snapshot: { phase: "connected", client: {} },
-      },
-      theme: { refresh: refreshTheme },
-      runtimeConfig,
-    } as unknown as ApplicationContext;
-    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
-    shell.runtime = { context };
+    const { shell, runtimeConfig } = createPreferenceShell(
+      { locale: "de" },
+      { refresh: refreshTheme },
+    );
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
     refreshTheme.mockClear();
@@ -64,24 +69,12 @@ describe("OpenClaw shell locale preferences", () => {
 
   it("publishes authored theme changes when the local mirror needs no patch", async () => {
     patchSettings({ gatewayUrl: "ws://theme.test" });
-    const state = {
-      configSnapshot: {
-        config: { ui: { prefs: { theme: "custom" } } },
-        hash: "theme-custom",
-      },
-    };
-    const runtimeConfig = { state } as unknown as ApplicationContext["runtimeConfig"];
     const recordServerSelection = vi.fn();
-    const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://theme.test" },
-        snapshot: { phase: "connected", client: {} },
-      },
-      theme: { recordServerSelection, refresh: vi.fn(), serverSelection: null },
-      runtimeConfig,
-    } as unknown as ApplicationContext;
-    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
-    shell.runtime = { context };
+    const { shell, state, runtimeConfig } = createPreferenceShell(
+      { theme: "custom" },
+      { recordServerSelection, refresh: vi.fn(), serverSelection: null },
+      "ws://theme.test",
+    );
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
     expect(recordServerSelection).toHaveBeenLastCalledWith("custom", "ws://theme.test");
@@ -105,7 +98,26 @@ async function loadPreferenceRealm() {
   const reconcile = await import("./server-prefs-reconcile.ts");
   const intent = await import("./server-prefs-intent.ts");
   const fixtures = await import("./server-prefs.test-support.ts");
-  return { prefs, settings, reconcile, intent, fixtures };
+  return {
+    prefs,
+    settings,
+    reconcile,
+    intent,
+    writer: (request: Parameters<typeof fixtures.createServerPrefsWriter>[0], scope: string) =>
+      fixtures.createServerPrefsWriter(request, scope, true, { ok: true }, false),
+    refresh: (
+      writer: ReturnType<typeof fixtures.createServerPrefsWriter>,
+      scope: string,
+      configObject = {},
+    ) =>
+      reconcile.refreshProfileAppearancePrefs({
+        client: writer.state.client!,
+        profileId: "profile-a",
+        scope,
+        configObject,
+        onApplied: vi.fn(),
+      }),
+  };
 }
 
 describe("profile preference ACK publication across browser realms", () => {
@@ -159,23 +171,11 @@ describe("profile preference ACK publication across browser realms", () => {
         });
       const a = await loadPreferenceRealm();
       const aRequest = requestFor(true);
-      const aWriter = a.fixtures.createServerPrefsWriter(
-        aRequest,
-        scope,
-        true,
-        { ok: true },
-        false,
-      );
+      const aWriter = a.writer(aRequest, scope);
       let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
       try {
         a.settings.patchSettings({ gatewayUrl: scope });
-        await a.reconcile.refreshProfileAppearancePrefs({
-          client: aWriter.state.client!,
-          profileId,
-          scope,
-          configObject: config,
-          onApplied: vi.fn(),
-        });
+        await a.refresh(aWriter, scope, config);
         const aAfterCommit = vi.fn(() =>
           a.reconcile.applyServerUiPrefs(config, { scope, profileId, onApplied: vi.fn() }),
         );
@@ -191,13 +191,7 @@ describe("profile preference ACK publication across browser realms", () => {
         await aCommitted.promise;
         b = await loadPreferenceRealm();
         const bRequest = requestFor(false);
-        const bWriter = b.fixtures.createServerPrefsWriter(
-          bRequest,
-          scope,
-          true,
-          { ok: true },
-          false,
-        );
+        const bWriter = b.writer(bRequest, scope);
         const wantedB = {
           sidebarEntries: identical ? wantedA.sidebarEntries : empty ? [] : ["route:plugins"],
         };
@@ -208,13 +202,7 @@ describe("profile preference ACK publication across browser realms", () => {
             expectedEntries: { [pinsKey]: server[pinsKey] },
           });
         }
-        await b.reconcile.refreshProfileAppearancePrefs({
-          client: bWriter.state.client!,
-          profileId,
-          scope,
-          configObject: config,
-          onApplied: vi.fn(),
-        });
+        await b.refresh(bWriter, scope, config);
         if (identical) {
           b.reconcile.applyServerUiPrefs(
             { ui: { prefs: { locale: "de" } } },
@@ -306,17 +294,11 @@ describe("profile preference ACK publication across browser realms", () => {
       Object.assign(server, (params as { entries: Record<string, unknown> }).entries);
       return { status: "ok" };
     });
-    const writer = a.fixtures.createServerPrefsWriter(request, scope, true, { ok: true }, false);
+    const writer = a.writer(request, scope);
     let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
     try {
       a.settings.patchSettings({ gatewayUrl: scope });
-      await a.reconcile.refreshProfileAppearancePrefs({
-        client: writer.state.client!,
-        profileId,
-        scope,
-        configObject: {},
-        onApplied: vi.fn(),
-      });
+      await a.refresh(writer, scope);
       const before = a.settings.loadSettings(scope);
       const desired = a.settings.patchSettings({
         sidebarEntries: ["route:usage", "route:cron"],
@@ -333,20 +315,8 @@ describe("profile preference ACK publication across browser realms", () => {
         status: "ok",
         entries: structuredClone(server),
       }));
-      const bWriter = b.fixtures.createServerPrefsWriter(
-        bRequest,
-        scope,
-        true,
-        { ok: true },
-        false,
-      );
-      await b.reconcile.refreshProfileAppearancePrefs({
-        client: bWriter.state.client!,
-        profileId,
-        scope,
-        configObject: {},
-        onApplied: vi.fn(),
-      });
+      const bWriter = b.writer(bRequest, scope);
+      await b.refresh(bWriter, scope);
       commit.resolve();
       await vi.dynamicImportSettled();
       expect(a.settings.loadSettings(scope)).toMatchObject({

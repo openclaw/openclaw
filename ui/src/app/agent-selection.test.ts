@@ -112,6 +112,26 @@ function agentRoster(
   };
 }
 
+function defaultSelection(assistantAgentId = "Main") {
+  const gateway = createGateway(assistantAgentId);
+  const roster = createRoster();
+  const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+  return { gateway, roster, selection };
+}
+
+function selectionFixture(assistantAgentId: string | null = "Main") {
+  const gateway = createGateway(assistantAgentId);
+  const roster = createRoster();
+  const preferences = createPreferences();
+  return {
+    gateway,
+    roster,
+    preferences,
+    select: (persistence = preferences.persistence) =>
+      createAgentSelectionCapability(gateway.gateway, roster.roster, persistence, preferences),
+  };
+}
+
 describe("agent selection", () => {
   installSettingsStorageLifecycle();
   beforeEach(() => {
@@ -155,15 +175,9 @@ describe("agent selection", () => {
   );
 
   it("restores each gateway's own pre-team scope after switching away and back", () => {
-    const harness = createGateway();
-    const preferences = createPreferences();
+    const { gateway: harness, preferences, select } = selectionFixture();
     harness.gateway.subscribe(() => preferences.refresh(harness.gateway.connection.gatewayUrl));
-    const selection = createAgentSelectionCapability(
-      harness.gateway,
-      createRoster().roster,
-      preferences.persistence,
-      preferences,
-    );
+    const selection = select();
     selection.setScope("research");
     preferences.setMode("roster");
     selection.set("writer");
@@ -190,21 +204,11 @@ describe("agent selection", () => {
       preferences,
     );
     expect(selection.state).toEqual({ selectedId: "research", scopeId: null });
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "research" }],
-    });
+    roster.publish(agentRoster("main", ["main", "research"]));
     selection.setScope("research");
     const listener = vi.fn();
     selection.subscribe(listener);
-    roster.publish({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    });
+    roster.publish(agentRoster("main"));
     expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
     expect(listener).toHaveBeenLastCalledWith({ selectedId: "main", scopeId: null });
     preferences.setMode("chip");
@@ -238,21 +242,9 @@ describe("agent selection", () => {
   it.each(["roster"] as const)(
     "clears selection and remembered %s scope when the loaded roster becomes empty",
     (mode) => {
-      const gateway = createGateway("main");
-      const roster = createRoster();
-      const preferences = createPreferences();
-      const selection = createAgentSelectionCapability(
-        gateway.gateway,
-        roster.roster,
-        preferences.persistence,
-        preferences,
-      );
-      const result: AgentsListResult = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "shared" }],
-      };
+      const { gateway, roster, preferences, select } = selectionFixture("main");
+      const selection = select();
+      const result = { ...agentRoster("main"), agents: [{ id: "shared" }] };
       roster.publish(result);
       selection.set("shared");
       preferences.setMode(mode);
@@ -275,9 +267,7 @@ describe("agent selection", () => {
   );
 
   it("clears system page scopes when the typed roster becomes known", () => {
-    const gateway = createGateway("OpenClaw");
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(gateway.gateway, roster.roster);
+    const { roster, selection } = defaultSelection("OpenClaw");
 
     expect(selection.state).toEqual({ selectedId: "openclaw", scopeId: "openclaw" });
     roster.publish({
@@ -302,9 +292,7 @@ describe("agent selection", () => {
   it.each(["filter", "sidebar mode"])(
     "publishes %s intent before notifying scope observers",
     (action) => {
-      const gateway = createGateway(null);
-      const roster = createRoster();
-      const preferences = createPreferences();
+      const { gateway, roster, preferences } = selectionFixture(null);
       const selection = createAgentSelectionCapability(
         gateway.gateway,
         roster.roster,
@@ -330,9 +318,7 @@ describe("agent selection", () => {
   );
 
   it("adopts a changed default after the reconnect null phase", () => {
-    const harness = createGateway("Main");
-    const roster = createRoster();
-    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
+    const { gateway: harness, roster, selection } = defaultSelection();
     roster.publish(agentRoster("main"));
     const client = { request() {} } as unknown as GatewayBrowserClient;
 
@@ -346,8 +332,7 @@ describe("agent selection", () => {
   });
 
   it("establishes explicit ownership before notifying selection subscribers", () => {
-    const harness = createGateway("Main");
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    const { gateway: harness, selection } = defaultSelection();
     const client = { request() {} } as unknown as GatewayBrowserClient;
     selection.subscribe((state) => {
       if (state.selectedId === "research") {
@@ -403,12 +388,7 @@ describe("configured Settings agent selection", () => {
   const configuredRoster = (
     agents: AgentsListResult["agents"],
     defaultId = "main",
-  ): AgentsListResult => ({
-    defaultId,
-    mainKey: "main",
-    scope: "per-sender",
-    agents,
-  });
+  ): AgentsListResult => ({ defaultId, mainKey: "main", scope: "per-sender", agents });
   const createSettingsSelection = (
     gateway: ReturnType<typeof createGateway>,
     roster: ReturnType<typeof createRoster>,
