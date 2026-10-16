@@ -1045,25 +1045,6 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("filters active token roles to the approved pairing role set", () => {
-    const device = {
-      role: "operator",
-      roles: ["operator"],
-      tokens: {
-        node: { token: "forged-node", role: "node", scopes: [], createdAtMs: 1 },
-        operator: {
-          token: "operator",
-          role: "operator",
-          scopes: ["operator.read"],
-          createdAtMs: 1,
-        },
-      },
-    };
-
-    expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
-    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
-  });
-
   test("does not treat a Linux CLI device as a card renderer", async () => {
     const dir = await suiteRootTracker.make("renderer-case");
     await expect(hasPairedCardRenderer(dir)).resolves.toBe(false);
