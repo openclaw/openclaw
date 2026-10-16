@@ -27,6 +27,18 @@ function overlapCenter(first: Box, second: Box) {
   const bottom = Math.min(first.y + first.height, second.y + second.height);
   return { x: (left + right) / 2, y: (top + bottom) / 2 };
 }
+function nest(classes: string, content: string) {
+  return classes
+    .split(" > ")
+    .reduceRight((child, className) => `<div class="${className}">${child}</div>`, content);
+}
+const conversation = (content: string) =>
+  nest("chat-main__conversation-frame > chat-main__conversation", content);
+const composerFooter = (input: string, context = "") =>
+  nest(
+    "chat-footer > agent-chat__composer-shell",
+    `${context}<div class="agent-chat__input">${input}</div>`,
+  );
 
 // Playwright types generic trace records as string dictionaries, while Chromium
 // sends structured arguments. Validate the records this regression relies on.
@@ -56,22 +68,15 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       // Keep the grid/flex chain: a directly sized conversation cannot reproduce
       // the intermediate height-query changes during flex measurement.
       await page.setContent(`<style>${readUiCss()}</style>
-        <section class="chat">
-          <div class="chat-workbench"><div class="chat-workbench__main">
-            <div class="chat-split-container"><div class="chat-main">
-              <div class="chat-main__conversation-column">
-                <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
-                  <div class="chat-thread">${"<p>Earlier message</p>".repeat(20)}</div>
-                  <div class="chat-footer"><div class="agent-chat__composer-shell">
-                    <div class="agent-chat__input agent-chat__input--chat">
-                      <div class="agent-chat__composer-combobox"><textarea></textarea></div>
-                    </div>
-                  </div></div>
-                </div></div>
-              </div>
-            </div></div>
-          </div></div>
-        </section>`);
+        <section class="chat">${nest(
+          "chat-workbench > chat-workbench__main > chat-split-container > chat-main > chat-main__conversation-column",
+          conversation(
+            `<div class="chat-thread">${"<p>Earlier message</p>".repeat(20)}</div>${nest(
+              "chat-footer > agent-chat__composer-shell > agent-chat__input agent-chat__input--chat > agent-chat__composer-combobox",
+              "<textarea></textarea>",
+            )}`,
+          ),
+        )}</section>`);
       await waitForLayoutSettled(page, ".chat-main__conversation, .chat-footer");
       const before = await getRect(page, ".chat-main__conversation");
       expect(before.height).toBeGreaterThan(320);
@@ -163,20 +168,18 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     await withBrowserPage(openBrowserPage(390, 844), async (page) => {
       // New Session can load composer styles before Chat's lazy layout stylesheet.
       await page.setContent(`<style>${readUiCss()}${readStyleSheet("ui/src/styles/chat/layout.css")}</style>
-        <section class="chat"><div class="chat-main__conversation-frame"><div class="chat-main__conversation">
-          <div class="chat-footer">
-            <div class="agent-chat__composer-shell">
-              <div class="chat-footer__context">
+        <section class="chat">${conversation(
+          composerFooter(
+            "Composer",
+            `<div class="chat-footer__context">
                 <div class="chat-inline-approval">Approval</div>
                 <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
                 <div class="session-suggestions">Suggestion</div>
                 <div class="chat-swarm">Parallel task</div>
                 <openclaw-plugin-contributions><button data-plugin-action>Plugin action</button></openclaw-plugin-contributions>
-              </div>
-              <div class="agent-chat__input">Composer</div>
-            </div>
-          </div>
-        </div></div></section>`);
+              </div>`,
+          ),
+        )}</section>`);
       const composer = await getRect(page, ".agent-chat__input");
       for (const selector of [
         ".chat-prs",
@@ -202,9 +205,9 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
-            <div class="chat-thread-inner chat-thread-inner--virtual">
-              <div class="chat-virtual-sizer">
-                <div class="chat-virtual-block">
+            ${nest(
+              "chat-thread-inner chat-thread-inner--virtual > chat-virtual-sizer > chat-virtual-block",
+              `
                   <div class="chat-virtual-row" data-focused-row>
                     <div class="chat-group assistant chat-group--with-footer">
                       <div class="chat-group-messages"><div class="chat-bubble">Message</div></div>
@@ -220,9 +223,8 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                   <div class="chat-virtual-row" style="height: 40px;">
                     <div>The next message begins here.</div>
                   </div>
-                </div>
-              </div>
-            </div>
+            `,
+            )}
           </div>
         </body></html>`,
       );
@@ -312,29 +314,23 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                 <div class="sidebar-region__header">
                   <header class="chat-pane__header">Session</header>
                 </div>
-                  <div class="sidebar-region__primary" data-region="main">
-                    <section class="chat">
-                      <div class="chat-main">
-                        <div class="chat-main__conversation-column">
-                          <div class="chat-topbar-notices"></div>
-                          <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
+                  <div class="sidebar-region__primary" data-region="main"><section class="chat">
+                    ${nest(
+                      "chat-main > chat-main__conversation-column",
+                      `<div class="chat-topbar-notices"></div>${conversation(`
                             <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
                             <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
-                            <div class="chat-footer">
-                            <div class="agent-chat__composer-shell">
-                              <div class="chat-footer__context">
+                            ${composerFooter(
+                              "Composer",
+                              `<div class="chat-footer__context">
                             ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
                               <openclaw-plugin-contributions></openclaw-plugin-contributions>
                               <div class="agent-chat__composer-notices"></div>
-                              </div>
-                              <div class="agent-chat__input">Composer</div>
-                            </div>
-                            </div>
-                          </div></div>
-                        </div>
-                      </div>
-                    </section>
-                  </div>
+                              </div>`,
+                            )}
+                          `)}`,
+                    )}
+                  </section></div>
               </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">

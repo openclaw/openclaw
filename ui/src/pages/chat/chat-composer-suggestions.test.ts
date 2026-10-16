@@ -70,6 +70,12 @@ const optionNames = (container: HTMLElement) =>
   );
 const activeId = (container: HTMLElement) =>
   getComposerTextarea(container).getAttribute("aria-activedescendant");
+const menu = (container: HTMLElement, suffix = "slash-menu-listbox") =>
+  container.querySelector(`#chat-single-${suffix}`);
+function expectComposerName(textarea: HTMLTextAreaElement) {
+  expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
+  expectAbsent(textarea, "role");
+}
 
 describe("chat composer suggestion accessibility", () => {
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
@@ -83,7 +89,7 @@ describe("chat composer suggestion accessibility", () => {
 
     inputDraftAtEnd(container, "Polish this with $pro:");
     await waitForSolid(() => {
-      const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
+      const listbox = menu(container, "skill-menu-listbox");
       const renderedTextarea = getComposerTextarea(container);
       expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
       expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
@@ -100,7 +106,7 @@ describe("chat composer suggestion accessibility", () => {
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
     const textarea = getComposerTextarea(container);
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
+    const listbox = menu(container);
     const initialActiveId = activeId(container);
 
     expectAbsent(wrapper, "role", "aria-expanded", "aria-haspopup", "aria-controls");
@@ -125,7 +131,7 @@ describe("chat composer suggestion accessibility", () => {
 
     const nextActiveId = expectDefined(activeId(container), "active descendant");
     const activeOption = container.querySelector(`#${nextActiveId}`);
-    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
+    const status = menu(container, "slash-active-announcement");
 
     expect(nextActiveId).not.toBe("");
     expect(nextActiveId).not.toBe(initialActiveId);
@@ -181,24 +187,14 @@ describe("chat composer suggestion accessibility", () => {
     const harness = createReactiveDraftHarness();
     const textarea = getComposerTextarea(harness.container);
     const initialPlaceholder = textarea.placeholder;
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
+    expectComposerName(textarea);
 
     harness.renderCurrent({
-      attachments: [
-        {
-          id: "image",
-          fileName: "sample.png",
-          mimeType: "image/png",
-          previewUrl: "blob:sample-image",
-          sizeBytes: 3,
-        },
-      ],
+      attachments: [{ id: "image", mimeType: "image/png", previewUrl: "blob:sample-image" }],
     });
     expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
     expect(textarea.placeholder).not.toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
+    expectComposerName(textarea);
 
     harness.renderCurrent({ attachments: [] });
     expect(textarea.placeholder).toBe(initialPlaceholder);
@@ -217,7 +213,7 @@ describe("chat composer suggestion accessibility", () => {
       const harness = createSlashRerenderHarness();
       const container = harness.inputAndRender(harness.container, "/clear");
 
-      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
+      const status = menu(container, "slash-active-announcement");
       expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
     } finally {
       clearCommand.descriptionKey = originalDescriptionKey;
@@ -233,9 +229,7 @@ describe("chat composer suggestion accessibility", () => {
     async ({ command, dismissed }) => {
       const refresh = createDeferred();
       const { container } = createReactiveDraftHarness({
-        ...(dismissed
-          ? {}
-          : thinkingSession(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])),
+        ...(dismissed ? {} : thinkingSession(["low", "ultra"])),
         onSlashIntent: () => refresh.promise,
       });
       inputDraft(container, `/${command}`);
@@ -254,17 +248,7 @@ describe("chat composer suggestion accessibility", () => {
         if (dismissed) {
           expect(container.querySelector(".slash-menu")).toBeNull();
         } else {
-          expect(optionNames(container)).toEqual([
-            "default",
-            "off",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra",
-          ]);
+          expect(optionNames(container)).toEqual(["default", "low", "ultra"]);
         }
       });
     },

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -15,6 +15,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -41,14 +42,10 @@ const requestError = (code: string, message: string, retryable: boolean) =>
 describe("shared chat history transient recovery", () => {
   it.each([
     {
-      message:
-        "Agent main has not completed startup inspection and preparation.\nSessions remain unavailable until background inspection finishes.",
+      message: "Startup inspection pending: /private/agent.sqlite",
       details: {
-        agentId: "main",
-        paths: ["/private/state/agents/main/openclaw-agent.sqlite"],
+        paths: ["/private/agent.sqlite"],
         code: "agent-database-inspection-pending",
-        reason: "Agent main has not completed startup inspection and preparation.",
-        repairHint: "Run Doctor if inspection cannot complete.",
       },
       retryable: true,
       retryAfterMs: 250,
@@ -70,7 +67,6 @@ describe("shared chat history transient recovery", () => {
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {
-      vi.useFakeTimers();
       const method = startup ? "chat.startup" : "chat.history";
       const request = vi.fn().mockRejectedValue(timeout(method));
       const messages = [{ role: "assistant", content: "Cached transcript" }];
@@ -142,7 +138,6 @@ describe("shared chat history transient recovery", () => {
   ])(
     "preserves manual retry policy for $error.name after $elapsedMs ms",
     async ({ error, retryable, elapsedMs }) => {
-      vi.useFakeTimers();
       const state = makeChatHost({
         requestHandlers: {
           "chat.history": () => {
@@ -160,7 +155,6 @@ describe("shared chat history transient recovery", () => {
   );
 
   it("does not publish an old pane timeout over the newly loaded conversation", async () => {
-    vi.useFakeTimers();
     const request = rejectedTimeout();
     const state = makeChatHost({ requestHandlers: { "chat.history": request } });
     const loading = loadChatHistory(state, { deferBranches: true });
@@ -182,7 +176,6 @@ describe("shared chat history transient recovery", () => {
   });
 
   it("retries a missing WebSocket response through the browser client's real request deadline", async () => {
-    vi.useFakeTimers();
     stubWindowGlobals();
     vi.stubGlobal("WebSocket", MockWebSocket);
     // No RNG means no paired identity; this fixture exercises RPC deadlines, not signing.
@@ -231,7 +224,6 @@ describe("shared chat history transient recovery", () => {
   it.each([false, true])(
     "expires readers before a long server hint (staggered=%s)",
     async (staggered) => {
-      vi.useFakeTimers();
       const request = vi.fn().mockRejectedValue(
         new GatewayRequestError({
           code: "UNAVAILABLE",
@@ -264,7 +256,6 @@ describe("shared chat history transient recovery", () => {
   );
 
   it("never retries a timed-out read once all pane owners have changed", async () => {
-    vi.useFakeTimers();
     const request = rejectedTimeout();
     const client = createTestGatewayClient(request);
     let current = true;
@@ -278,7 +269,6 @@ describe("shared chat history transient recovery", () => {
   });
 
   it("retries one timed-out read for current panes and preserves the shared request", async () => {
-    vi.useFakeTimers();
     const request = vi
       .fn()
       .mockRejectedValueOnce(timeout())
