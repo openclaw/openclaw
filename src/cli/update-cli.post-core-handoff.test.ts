@@ -81,6 +81,22 @@ describe("update-cli", () => {
     mockPackageInstallAtCaseDir,
   } = createUpdateCliFixture();
 
+  const profileEnv = (profile: string, state: string, port: string) => ({
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+    OPENCLAW_GATEWAY_PORT: port,
+  });
+  function closeChild(child: EventEmitter, code: number | null = 0, signal: string | null = null) {
+    child.emit("exit", code, signal);
+    child.emit("close", code, signal);
+  }
+  function exitingChild() {
+    const child = new EventEmitter();
+    queueMicrotask(() => closeChild(child));
+    return child;
+  }
+
   const continueFreshPostCore = () =>
     continuePostCoreUpdateInFreshProcess({
       root: "/tmp/openclaw-updated-root",
@@ -111,10 +127,7 @@ describe("update-cli", () => {
     primeServiceCommand(
       [nodeExecutable, path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
       {
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: managedState,
-        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19222",
+        ...profileEnv("work", managedState, "19222"),
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
         [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(unrelatedGatewayFixturePid),
@@ -144,26 +157,13 @@ describe("update-cli", () => {
       handedRecords = JSON.parse(
         fsSync.readFileSync(env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH ?? "", "utf-8"),
       );
-      const child = new EventEmitter() as EventEmitter & { once: EventEmitter["once"] };
-      queueMicrotask(() => {
-        child.emit("exit", 0, null);
-        child.emit("close", 0, null);
-      });
-      return child;
+      return exitingChild();
     });
 
-    await withEnvAsync(
-      {
-        OPENCLAW_PROFILE: "personal",
-        OPENCLAW_STATE_DIR: personalState,
-        OPENCLAW_CONFIG_PATH: path.join(personalState, "openclaw.json"),
-        OPENCLAW_GATEWAY_PORT: "19111",
-      },
-      async () => {
-        await updateCommand({ yes: true, timeout: "1800" });
-        expect(process.env.OPENCLAW_PROFILE).toBe("personal");
-      },
-    );
+    await withEnvAsync(profileEnv("personal", personalState, "19111"), async () => {
+      await updateCommand({ yes: true, timeout: "1800" });
+      expect(process.env.OPENCLAW_PROFILE).toBe("personal");
+    });
 
     const handoff = spawnCall();
     const handoffEnv = requireValue(handoff?.[2]?.env, "post-core environment");
@@ -174,12 +174,15 @@ describe("update-cli", () => {
     ).toBe("cli");
     expect(handoff?.[0]).toBe(process.execPath);
     expect(handoff?.[1]).toEqual([updatedEntrypoint, "update", "--yes", "--timeout", "1800"]);
-    expect(handoff?.[2]?.stdio).toBe("inherit");
-    expect(handoff?.[2]?.env).toMatchObject({
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_POST_CORE: "1",
-      OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+    expect(handoff?.[2]).toMatchObject({
+      stdio: "inherit",
+      env: {
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        ...profileEnv("work", managedState, "19222"),
+      },
     });
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(completionCommandCall()?.[1]).toMatchObject({ env: { OPENCLAW_PROFILE: "personal" } });
@@ -187,12 +190,6 @@ describe("update-cli", () => {
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
     expect(freshRestartCalls()).toHaveLength(1);
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
-    expect(spawnCall()?.[2]?.env).toMatchObject({
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_STATE_DIR: managedState,
-      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-      OPENCLAW_GATEWAY_PORT: "19222",
-    });
     expect(spawnCall()?.[2]?.env?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
     expect(spawnCall()?.[2]?.env?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
     expect(handedConfig).toEqual({ sourceConfig: managedConfig, authoredConfig: managedConfig });
@@ -249,8 +246,7 @@ describe("update-cli", () => {
       },
     );
 
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(serviceRestart).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, serviceRestart);
     expect(spawnCall()?.[2]?.env).toMatchObject({
       OPENCLAW_PROFILE: "personal",
       OPENCLAW_STATE_DIR: personalState,
@@ -263,18 +259,10 @@ describe("update-cli", () => {
     const stdoutPipe = vi.fn();
     const stderrPipe = vi.fn();
     spawn.mockImplementationOnce(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        once: EventEmitter["once"];
-        stdout: { pipe: typeof stdoutPipe };
-        stderr: { pipe: typeof stderrPipe };
-      };
-      child.stdout = { pipe: stdoutPipe };
-      child.stderr = { pipe: stderrPipe };
-      queueMicrotask(() => {
-        child.emit("exit", 0, null);
-        child.emit("close", 0, null);
+      return Object.assign(exitingChild(), {
+        stdout: { pipe: stdoutPipe },
+        stderr: { pipe: stderrPipe },
       });
-      return child;
     });
 
     await updateCommand({ json: true, restart: false });
@@ -374,16 +362,11 @@ describe("update-cli", () => {
           "utf-8",
         );
       });
-      const child = new EventEmitter() as EventEmitter & {
-        kill: () => boolean;
-        once: EventEmitter["once"];
-      };
-      child.kill = vi.fn(() => {
-        queueMicrotask(() => {
-          child.emit("exit", null, "SIGTERM");
-          child.emit("close", null, "SIGTERM");
-        });
-        return true;
+      const child = Object.assign(new EventEmitter(), {
+        kill: vi.fn(() => {
+          queueMicrotask(() => closeChild(child, null, "SIGTERM"));
+          return true;
+        }),
       });
       return child;
     });
@@ -468,10 +451,7 @@ describe("update-cli", () => {
             error: "pre-plugin Doctor failed before convergence",
           }),
         );
-        queueMicrotask(() => {
-          child.emit("exit", 1, null);
-          child.emit("close", 1, null);
-        });
+        queueMicrotask(() => closeChild(child, 1));
         return child;
       });
 
@@ -520,8 +500,7 @@ describe("update-cli", () => {
     vi.mocked(runExec).mockImplementationOnce(async (command, args) => {
       expect(command).toMatch(/taskkill\.exe$/);
       expect(args).toEqual(["/PID", "4242", "/T", "/F"]);
-      child.emit("exit", null, "SIGTERM");
-      child.emit("close", null, "SIGTERM");
+      closeChild(child, null, "SIGTERM");
       helperStarted.resolve();
       await releaseHelper.promise;
       helperSettled = true;
@@ -595,8 +574,7 @@ describe("update-cli", () => {
         if (race !== "close-before-read") {
           child.kill.mockImplementation(() => {
             queueMicrotask(() => {
-              child.emit("exit", overlapping ? null : 0, overlapping ? "SIGTERM" : null);
-              child.emit("close", overlapping ? null : 0, overlapping ? "SIGTERM" : null);
+              closeChild(child, overlapping ? null : 0, overlapping ? "SIGTERM" : null);
             });
             if (race === "termination-error") {
               throw new Error("signal delivery failed after result commit");
@@ -622,8 +600,7 @@ describe("update-cli", () => {
             }),
           ]);
           if (!overlapping) {
-            child.emit("exit", null, "SIGTERM");
-            child.emit("close", null, "SIGTERM");
+            closeChild(child, null, "SIGTERM");
           }
           releaseRead.resolve();
         }

@@ -86,6 +86,33 @@ describe("update-cli", () => {
     useFileBackedConfig,
   } = createUpdateCliFixture();
 
+  const readText = (file: string) => fs.readFile(file, "utf8");
+  const expectText = (file: string) => expect(readText(file)).resolves;
+  const manifestPath = (root: string) => path.join(root, "package.json");
+  async function readVersion(root: string) {
+    const manifest: { version: string } = JSON.parse(await readText(manifestPath(root)));
+    return manifest.version;
+  }
+  const launcherNames = ["openclaw", "openclaw.cmd", "openclaw.ps1"];
+  async function writeLaunchers(dir: string, label: string) {
+    await fs.mkdir(dir, { recursive: true });
+    await Promise.all(
+      launcherNames.map((name) => fs.writeFile(path.join(dir, name), `${label} ${name}\n`, "utf8")),
+    );
+  }
+  async function expectLaunchers(dir: string, label: string) {
+    for (const name of launcherNames) {
+      await expectText(path.join(dir, name)).toBe(`${label} ${name}\n`);
+    }
+  }
+  function expectDoctorEnv() {
+    expect(doctorCommandCall()?.[1].env).toMatchObject({
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: "1",
+    });
+  }
+
   it.each([
     {
       name: "explicit git package spec",
@@ -161,14 +188,8 @@ describe("update-cli", () => {
     const candidateVersion = "2026.5.14";
     const packageEntry = path.join(pkgRoot, "dist", "index.js");
     const launcherDir = path.join(tempDir, "bin");
-    const launcherNames = ["openclaw", "openclaw.cmd", "openclaw.ps1"];
     await fs.writeFile(packageEntry, "old package entry\n", "utf8");
-    await fs.mkdir(launcherDir, { recursive: true });
-    await Promise.all(
-      launcherNames.map((name) =>
-        fs.writeFile(path.join(launcherDir, name), `old ${name}\n`, "utf8"),
-      ),
-    );
+    await writeLaunchers(launcherDir, "old");
     const originalPackageIdentity = await fs.stat(pkgRoot);
     const callerConfig = path.join(tempDir, "caller.json");
     const managedConfig = path.join(tempDir, "managed.json");
@@ -183,12 +204,7 @@ describe("update-cli", () => {
     >("../config/backup-rotation.js");
     createPreUpdateConfigSnapshotMock.mockImplementation(createPreUpdateConfigSnapshot);
     mockFileBackedPathExists();
-    readPackageVersion.mockImplementation(async (packageRoot: string) => {
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-      ) as { version?: string };
-      return manifest.version ?? null;
-    });
+    readPackageVersion.mockImplementation(readVersion);
     let backupAtDoctorEntry: string | undefined;
     let doctorStarted = false;
     mockNpmGlobalCommands(nodeModules, async (argv, options) => {
@@ -199,27 +215,15 @@ describe("update-cli", () => {
           entrySource: "candidate package entry\n",
           inventory: true,
         });
-        const stagedLauncherDir = path.join(stagePrefix, "bin");
-        await fs.mkdir(stagedLauncherDir, { recursive: true });
-        await Promise.all(
-          launcherNames.map((name) =>
-            fs.writeFile(path.join(stagedLauncherDir, name), `candidate ${name}\n`, "utf8"),
-          ),
-        );
+        await writeLaunchers(path.join(stagePrefix, "bin"), "candidate");
       }
       if (argv[1] !== entryPath || argv[2] !== "doctor") {
         return undefined;
       }
       doctorStarted = true;
-      await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).resolves.toContain(
-        `"version":"${candidateVersion}"`,
-      );
-      await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("candidate package entry\n");
-      for (const name of launcherNames) {
-        await expect(fs.readFile(path.join(launcherDir, name), "utf8")).resolves.toBe(
-          `candidate ${name}\n`,
-        );
-      }
+      await expectText(manifestPath(pkgRoot)).toContain(`"version":"${candidateVersion}"`);
+      await expectText(packageEntry).toBe("candidate package entry\n");
+      await expectLaunchers(launcherDir, "candidate");
       const doctorEnv = typeof options === "number" ? undefined : options.env;
       expect(doctorEnv?.OPENCLAW_CONFIG_PATH).toBe(managedConfig);
       backupAtDoctorEntry = await fs
@@ -251,22 +255,19 @@ describe("update-cli", () => {
 
     expect(doctorStarted).toBe(true);
     expect(backupAtDoctorEntry).toBe(managedBytes);
-    await expect(fs.readFile(`${managedConfig}.pre-update`, "utf8")).resolves.toBe(managedBytes);
-    await expect(fs.readFile(callerConfig, "utf8")).resolves.toBe(callerBytes);
-    await expect(fs.readFile(`${callerConfig}.pre-update`, "utf8")).resolves.toBe(
-      existingCallerBackup,
-    );
-    expect(result.status).toBe("error");
-    expect(result.after?.version).toBe(candidateVersion);
-    expect(result.recovery).toMatchObject({
-      serviceRestartSafe: false,
-      reason: "runtime-verification-failed",
+    await expectText(`${managedConfig}.pre-update`).toBe(managedBytes);
+    await expectText(callerConfig).toBe(callerBytes);
+    await expectText(`${callerConfig}.pre-update`).toBe(existingCallerBackup);
+    expect(result).toMatchObject({
+      status: "error",
+      after: { version: candidateVersion },
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     });
     const retained = requireValue(transaction, "retained package transaction");
-    expect(
-      JSON.parse(await fs.readFile(path.join(retained.backupRoot, "package.json"), "utf8")),
-    ).toMatchObject({ version: "2026.4.21" });
-    await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("candidate package entry\n");
+    expect(JSON.parse(await readText(manifestPath(retained.backupRoot)))).toMatchObject({
+      version: "2026.4.21",
+    });
+    await expectText(packageEntry).toBe("candidate package entry\n");
     const assertCurrent = () => {};
     const rollback = await retained.rollback(assertCurrent);
     expect(rollback.exitCode).toBe(0);
@@ -274,20 +275,14 @@ describe("update-cli", () => {
     const doctorStep = result.steps.find((step) => step.name === "openclaw doctor");
     expect(doctorStep?.exitCode).toBe(1);
     expect(doctorStep?.advisory).toBeUndefined();
-    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).resolves.toContain(
-      '"version":"2026.4.21"',
-    );
-    await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("old package entry\n");
+    await expectText(manifestPath(pkgRoot)).toContain('"version":"2026.4.21"');
+    await expectText(packageEntry).toBe("old package entry\n");
     const restoredPackageIdentity = await fs.stat(pkgRoot);
     expect({ dev: restoredPackageIdentity.dev, ino: restoredPackageIdentity.ino }).toEqual({
       dev: originalPackageIdentity.dev,
       ino: originalPackageIdentity.ino,
     });
-    for (const name of launcherNames) {
-      await expect(fs.readFile(path.join(launcherDir, name), "utf8")).resolves.toBe(
-        `old ${name}\n`,
-      );
-    }
+    await expectLaunchers(launcherDir, "old");
     expect(
       (await fs.readdir(nodeModules)).filter((entry) =>
         [
@@ -351,12 +346,7 @@ describe("update-cli", () => {
       tempDir,
       "2026.4.20",
     );
-    readPackageVersion.mockImplementation(async (root: string) => {
-      const manifest: { version: string } = JSON.parse(
-        await fs.readFile(path.join(root, "package.json"), "utf8"),
-      );
-      return manifest.version;
-    });
+    readPackageVersion.mockImplementation(readVersion);
     primeNpmChannelTag("latest", VERSION);
     mockFileBackedPathExists();
     mockNpmGlobalCommands(nodeModules, async (argv, options) => {
@@ -387,18 +377,7 @@ describe("update-cli", () => {
 
     const doctorCall = doctorCommandCall();
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
-    ).toBe("1");
+    expectDoctorEnv();
     const postCoreCall = spawnCall();
     expect(postCoreCall?.[0]).toBe(process.execPath);
     expect(postCoreCall?.[1]).toEqual([
@@ -416,14 +395,13 @@ describe("update-cli", () => {
     const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
     expect(jsonOutput?.status).toBe("ok");
-    expect(doctorStep?.exitCode).toBe(0);
-    // Keep the established advisory shape; complete ledger warnings travel on the step.
+    expect(doctorStep).toMatchObject({
+      exitCode: 0,
+      warnings: [warning],
+    });
     expect(doctorStep?.advisory).toEqual({
       kind: "package-post-install-doctor",
       message: expect.stringContaining("recoverable update-time repair warning"),
-    });
-    expect(doctorStep).toMatchObject({
-      warnings: [warning],
     });
     expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
     expect(doctorStep?.stderrTail).toContain(warning);
@@ -510,9 +488,7 @@ describe("update-cli", () => {
     ) {
       if (source === stagedShim) {
         injections += 1;
-        expect(
-          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).version,
-        ).toBe("2026.8.1");
+        expect(await readVersion(pkgRoot)).toBe("2026.8.1");
         throw new Error("staged shim copy failed");
       }
       await copy.call(this, destination, source, options);
@@ -554,13 +530,11 @@ describe("update-cli", () => {
         .filter(([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"))
         .map(([argv]) => path.basename(requireValue(argv[1], "lifecycle script"))),
     ).toEqual([]);
-    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-      '"version":"2026.7.1"',
-    );
+    await expectText(manifestPath(pkgRoot)).toContain('"version":"2026.7.1"');
     const logs = getLogOutput();
     expect(logs).toContain("package-swap");
     expect(logs).toContain("staged shim copy failed");
-    await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
+    await expectText(targetShim).toBe("old shim\n");
     expect(freshRestartCalls()).toEqual([]);
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(logs).not.toContain(
@@ -582,14 +556,7 @@ describe("update-cli", () => {
     primeServiceCommand([nodeExecutable, foreignEntry, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    readPackageVersion.mockImplementation(
-      async (packageRoot: string) =>
-        (
-          JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")) as {
-            version: string;
-          }
-        ).version,
-    );
+    readPackageVersion.mockImplementation(readVersion);
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
     mockNpmGlobalRoot(nodeModules);
@@ -601,20 +568,9 @@ describe("update-cli", () => {
     const doctorCall = doctorCommandCall();
     expect(doctorCall?.[0][0]).toBe(nodeExecutable);
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
+    expectDoctorEnv();
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,
-    ).toBe("1");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
     ).toBe("1");
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_SERVICE_REPAIR_POLICY,
