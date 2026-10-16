@@ -202,10 +202,11 @@ describe("desktop panel audio wiring", () => {
     async (reason) => {
       const resume = reason === "unmount-pending" ? createDeferred() : undefined;
       if (resume) {
+        const resumePromise = resume.promise;
         vi.stubGlobal(
           "AudioContext",
           class extends AudioContextMock {
-            override resume = vi.fn(() => resume.promise);
+            override resume = vi.fn(() => resumePromise);
           },
         );
       }
