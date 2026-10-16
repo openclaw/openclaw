@@ -453,6 +453,19 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
+        // Startup admits live grants before its provider cleanup finishes asynchronously.
+        await expect
+          .poll(
+            async () => ({
+              emails: provider.emails(),
+              expiredGrant: await grants.lookup(expired.email),
+            }),
+            { timeout: 2_000 },
+          )
+          .toEqual({
+            emails: [active.email, retainedGuest.email, unmanaged],
+            expiredGrant: undefined,
+          });
         expect(provider.emails()).toEqual([active.email, retainedGuest.email, unmanaged]);
         expect(provider.writes).toEqual(["PUT"]);
         const qualified = expectDefined(
