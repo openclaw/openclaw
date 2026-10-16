@@ -136,6 +136,14 @@ export const SESSION_LIST_DEFAULTS = {
 
 type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
 
+export const pollText = (locator: Locator) => expect.poll(() => locator.textContent());
+export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
+export const pollCount = (locator: Locator) => expect.poll(() => locator.count());
+export const pollDisabled = (locator: Locator) => expect.poll(() => locator.isDisabled());
+export const pollEnabled = (locator: Locator) => expect.poll(() => locator.isEnabled());
+export const pollAttribute = (locator: Locator, name: string) =>
+  expect.poll(() => locator.getAttribute(name));
+
 export function pollLocatorText(locator: Locator): LocatorTextPoll {
   return expect.poll(
     async () => {
@@ -279,56 +287,23 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   return startupStatus;
 }
 
-export async function captureUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "cloud-worker-session"),
-    fileName,
-    presentation,
-  );
+function proofCapture(directory: string) {
+  return async (
+    owner: { readonly artifactDir: string },
+    page: Page,
+    fileName: string,
+    presentation?: NewSessionProofSurface,
+  ) => {
+    if (captureUiProofEnabled) {
+      await captureProof(page, path.join(owner.artifactDir, directory), fileName, presentation);
+    }
+  };
 }
 
-export async function captureProjectUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "project-registry"),
-    fileName,
-    presentation,
-  );
-}
-
-export async function captureNewSessionComposerUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "new-session-slash-menu"),
-    fileName,
-    presentation,
-  );
-}
+export const captureUiProof = proofCapture("cloud-worker-session");
+export const captureProjectUiProof = proofCapture("project-registry");
+export const captureNewSessionComposerUiProof = proofCapture("new-session-slash-menu");
+export const captureDeviceRuntimeUiProof = proofCapture("device-runtime-gating");
 
 export async function captureEnvironmentMetadataUiProof(
   owner: { readonly artifactDir: string },
@@ -342,23 +317,6 @@ export async function captureEnvironmentMetadataUiProof(
     page,
     path.join(owner.artifactDir, "environment-metadata"),
     `${proofName}.png`,
-  );
-}
-
-export async function captureDeviceRuntimeUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  fileName: string,
-  presentation?: NewSessionProofSurface,
-) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await captureProof(
-    page,
-    path.join(owner.artifactDir, "device-runtime-gating"),
-    fileName,
-    presentation,
   );
 }
 

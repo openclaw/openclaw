@@ -1,10 +1,14 @@
 import { expect, it } from "vitest";
+import type { DraftEnvironment } from "../pages/new-session/discovery.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
 } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  pollText,
+  pollEnabled,
+  pollDisabled,
   WORKSPACE,
   captureDeviceRuntimeUiProof,
   captureEnvironmentMetadataUiProof,
@@ -19,95 +23,90 @@ const updateIssue = {
   action: "update-and-reconnect",
   updateCommand: "openclaw update",
   headlessReconnectCommand: "openclaw node restart",
-};
+} as const;
+
+function deviceEnvironment(
+  id: string,
+  label: string,
+  details: Partial<Omit<DraftEnvironment, "id" | "type" | "label">> = {},
+): DraftEnvironment {
+  return { id, type: "node", label, status: "available", sessionHost: true, ...details };
+}
 
 suite.define(() => {
   it("offers paired devices to every model whose runtime explicitly supports them", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      agentModel: "anthropic/claude-sonnet-4-6",
-      models: [
-        {
-          available: true,
-          id: "claude-sonnet-4-6",
-          name: "Claude Sonnet 4.6",
-          provider: "anthropic",
-          agentRuntime: {
-            id: "openclaw",
-            cloudPlacementSupported: true,
-            devicePlacementSupported: true,
-            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-            source: "model",
-          },
-        },
-        {
-          available: true,
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          agentRuntime: {
-            id: "codex",
-            cloudPlacementSupported: true,
-            devicePlacementSupported: true,
-            devicePlacement: {
-              requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-              consumesWorkerSlot: false,
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        agentModel: "anthropic/claude-sonnet-4-6",
+        models: [
+          {
+            available: true,
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "anthropic",
+            agentRuntime: {
+              id: "openclaw",
+              cloudPlacementSupported: true,
+              devicePlacementSupported: true,
+              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+              source: "model",
             },
-            source: "model",
           },
-        },
-        {
-          available: true,
-          id: "claude-opus-4-6",
-          name: "Claude Opus 4.6",
-          provider: "anthropic",
-          agentRuntime: {
-            id: "cloud-only",
-            cloudPlacementSupported: true,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        },
-      ],
-      methodResponses: {
-        "environments.list": {
-          environments: [
-            {
-              id: "node:build-mac",
-              type: "node",
-              label: "Build Mac",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 0 },
-              capabilities: ["codex.exec-server.stdio.v1"],
-              invocableCommands: ["codex.exec-server.stdio.v1"],
-              requiredNodeCommand: {
-                command: "codex.exec-server.stdio.v1",
-                state: "invocable",
+          {
+            available: true,
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            agentRuntime: {
+              id: "codex",
+              cloudPlacementSupported: true,
+              devicePlacementSupported: true,
+              devicePlacement: {
+                requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+                consumesWorkerSlot: false,
               },
+              source: "model",
             },
-            {
-              id: "node:restricted-mac",
-              type: "node",
-              label: "Restricted Mac",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 1 },
-              capabilities: ["codex.exec-server.stdio.v1"],
-              invocableCommands: [],
-              requiredNodeCommand: {
-                command: "codex.exec-server.stdio.v1",
-                state: "unauthorized",
-              },
+          },
+          {
+            available: true,
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            provider: "anthropic",
+            agentRuntime: {
+              id: "cloud-only",
+              cloudPlacementSupported: true,
+              devicePlacementSupported: false,
+              source: "model",
             },
-          ],
-          profiles: [],
+          },
+        ],
+        methodResponses: {
+          "environments.list": {
+            environments: [
+              deviceEnvironment("node:build-mac", "Build Mac", {
+                workerSlots: { total: 2, available: 0 },
+                capabilities: ["codex.exec-server.stdio.v1"],
+                invocableCommands: ["codex.exec-server.stdio.v1"],
+                requiredNodeCommand: {
+                  command: "codex.exec-server.stdio.v1",
+                  state: "invocable",
+                },
+              }),
+              deviceEnvironment("node:restricted-mac", "Restricted Mac", {
+                workerSlots: { total: 2, available: 1 },
+                capabilities: ["codex.exec-server.stdio.v1"],
+                invocableCommands: [],
+                requiredNodeCommand: {
+                  command: "codex.exec-server.stdio.v1",
+                  state: "unauthorized",
+                },
+              }),
+            ],
+            profiles: [],
+          },
         },
-      },
-    });
-
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("models.list");
       await gateway.waitForRequest("environments.list");
@@ -116,7 +115,6 @@ suite.define(() => {
       const device = where.locator('[data-value="device:build-mac"]');
       const restrictedDevice = where.locator('[data-value="device:restricted-mac"]');
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-
       await whereTrigger.click();
       await device.waitFor();
       expect(await device.isDisabled()).toBe(true);
@@ -126,13 +124,12 @@ suite.define(() => {
       expect(await restrictedDevice.isEnabled()).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
       await page.keyboard.press("Escape");
-
       await modelSelect.click();
       await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
-      await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
+      await pollText(modelSelect).toContain("GPT-5.6 Sol");
       await whereTrigger.click();
-      await expect.poll(() => device.isEnabled()).toBe(true);
-      await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
+      await pollEnabled(device).toBe(true);
+      await pollDisabled(restrictedDevice).toBe(true);
       await expect
         .poll(async () =>
           (await gateway.getRequests("environments.list")).map((request) => request.params),
@@ -149,109 +146,66 @@ suite.define(() => {
         "02-codex-zero-slot-enabled-denied-command-disabled.png",
       );
       await page.keyboard.press("Escape");
-
       await modelSelect.click();
       await selectChatModelOption(
         page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]'),
       );
-      await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
+      await pollText(modelSelect).toContain("Claude Opus 4.6");
       await whereTrigger.click();
-      await expect.poll(() => device.isDisabled()).toBe(true);
+      await pollDisabled(device).toBe(true);
       expect(await device.locator(".session-menu__description").count()).toBe(0);
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
       await captureDeviceRuntimeUiProof(suite, page, "03-cloud-only-device-disabled.png");
       await page.keyboard.press("Escape");
-
       await modelSelect.click();
       await selectChatModelOption(
         page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
       );
       await whereTrigger.click();
-      await expect.poll(() => device.isDisabled()).toBe(true);
-      await expect.poll(() => restrictedDevice.isEnabled()).toBe(true);
+      await pollDisabled(device).toBe(true);
+      await pollEnabled(restrictedDevice).toBe(true);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("renders authoritative device eligibility and exact live capacity", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [
-            { id: "gateway", type: "local", status: "available", sessionHost: true },
-            {
-              id: "node:alpha-device",
-              type: "node",
-              label: "Build runner",
-              status: "available",
-              platform: "darwin",
-              sessionHost: true,
-              workerSlots: { total: 4, available: 2 },
-              capabilities: ["camera.snap", "screen.record"],
-            },
-            {
-              id: "node:beta-device",
-              type: "node",
-              label: "Build runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 1 },
-            },
-            {
-              id: "node:saturated",
-              type: "node",
-              label: "Already busy runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 0 },
-            },
-            {
-              id: "node:missing-capacity",
-              type: "node",
-              label: "Capacity unknown",
-              status: "available",
-              sessionHost: true,
-            },
-            {
-              id: "node:offline",
-              type: "node",
-              label: "Offline runner",
-              status: "unavailable",
-              sessionHost: true,
-              lastConnectedAtMs: 1_000,
-              lastDisconnectedAtMs: 4_000,
-            },
-            {
-              id: "node:disabled",
-              type: "node",
-              label: "Hosting disabled",
-              status: "available",
-              sessionHost: false,
-            },
-            {
-              id: "node:outdated",
-              type: "node",
-              label: "Outdated runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 1, available: 1 },
-              issues: [updateIssue],
-            },
-          ],
-          profiles: [{ id: "ephemeral", providerId: "crabbox", trust: "disposable" }],
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": {
+            environments: [
+              { id: "gateway", type: "local", status: "available", sessionHost: true },
+              deviceEnvironment("node:alpha-device", "Build runner", {
+                platform: "darwin",
+                workerSlots: { total: 4, available: 2 },
+                capabilities: ["camera.snap", "screen.record"],
+              }),
+              deviceEnvironment("node:beta-device", "Build runner", {
+                workerSlots: { total: 2, available: 1 },
+              }),
+              deviceEnvironment("node:saturated", "Already busy runner", {
+                workerSlots: { total: 2, available: 0 },
+              }),
+              deviceEnvironment("node:missing-capacity", "Capacity unknown"),
+              deviceEnvironment("node:offline", "Offline runner", {
+                status: "unavailable",
+                lastConnectedAtMs: 1_000,
+                lastDisconnectedAtMs: 4_000,
+              }),
+              deviceEnvironment("node:disabled", "Hosting disabled", { sessionHost: false }),
+              deviceEnvironment("node:outdated", "Outdated runner", {
+                workerSlots: { total: 1, available: 1 },
+                issues: [updateIssue],
+              }),
+            ],
+            profiles: [{ id: "ephemeral", providerId: "crabbox", trust: "disposable" }],
+          },
         },
-      },
-    });
-
-    try {
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const place = page.locator(".oc-popover.new-session-page__where-popover");
@@ -259,19 +213,18 @@ suite.define(() => {
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
       await captureEnvironmentMetadataUiProof(suite, page);
-
       expect(await row("alpha-device").isEnabled()).toBe(true);
       const details = (id: string) =>
         row(id).locator("xpath=ancestor::openclaw-tooltip[1]").locator('[slot="content"]');
       await row("alpha-device").hover();
-      await expect.poll(() => details("alpha-device").textContent()).toContain("macOS");
+      await pollText(details("alpha-device")).toContain("macOS");
       expect(await details("alpha-device").textContent()).toContain("2 of 4 session slots in use");
       expect(await row("alpha-device").locator(".session-menu__description").count()).toBe(0);
       expect(await row("saturated").isDisabled()).toBe(true);
       await row("saturated").hover();
-      await expect
-        .poll(() => details("saturated").textContent())
-        .toContain("No worker slots are available. Wait for a slot or pick another device.");
+      await pollText(details("saturated")).toContain(
+        "No worker slots are available. Wait for a slot or pick another device.",
+      );
       expect(
         await details("saturated").locator(".new-session-page__capacity-caption").count(),
       ).toBe(0);
@@ -285,7 +238,6 @@ suite.define(() => {
       ).not.toBe("OPENCLAW-TOOLTIP");
       expect(await row("disabled").isDisabled()).toBe(true);
       expect(await row("outdated").isDisabled()).toBe(true);
-
       const selectedRow = row("alpha-device");
       const selectionLayout = () =>
         selectedRow.evaluate((element) =>
@@ -316,7 +268,6 @@ suite.define(() => {
       expect(await selectedRow.locator(".session-menu__check svg").isVisible()).toBe(true);
       expect(await selectionLayout()).toEqual(beforeSelection);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
-
       const beforeRefresh = (await gateway.getRequests("environments.list")).length;
       await gateway.emitGatewayEvent("presence", {
         presence: [{ instanceId: "other-browser", mode: "webchat", roles: ["operator"] }],
@@ -326,7 +277,6 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh);
       expect(await selectedRow.isEnabled()).toBe(true);
-
       const catalog = (
         status: "available" | "unavailable",
         available: number,
@@ -357,7 +307,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
       }
       expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh + 1);
-      await expect.poll(() => selectedRow.isDisabled()).toBe(true);
+      await pollDisabled(selectedRow).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "04-device-refresh-focus.png");
       expect(
         await selectedControl.evaluate((element) => ({
@@ -376,7 +326,7 @@ suite.define(() => {
           catalog("available", 2, `Build runner ${cycle}`),
         );
         await gateway.waitForRequest("environments.list", { after: beforeRefresh + cycle });
-        await expect.poll(() => selectedRow.textContent()).toContain(`Build runner ${cycle}`);
+        await pollText(selectedRow).toContain(`Build runner ${cycle}`);
         expect(await gateway.getRequests("environments.list")).toHaveLength(
           beforeRefresh + cycle + 1,
         );
@@ -391,14 +341,10 @@ suite.define(() => {
       }
       await gateway.resolveDeferred("environments.list", catalog("available", 0));
       await selectedRow.hover();
-      await expect
-        .poll(() => details("alpha-device").textContent())
-        .toContain("No worker slots are available");
+      await pollText(details("alpha-device")).toContain("No worker slots are available");
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       expect(await selectedControl.evaluate((element) => element.isConnected)).toBe(true);
       await selectedControl.dispose();
-
-      // Nodes without a worker-supervisor proof still publish connection presence.
       for (const connected of [false, true]) {
         const previousRequests = (await gateway.getRequests("environments.list")).length;
         await gateway.setMethodResponse(
@@ -416,7 +362,7 @@ suite.define(() => {
           ],
         });
         await gateway.waitForRequest("environments.list", { after: previousRequests });
-        await expect.poll(() => selectedRow.isEnabled()).toBe(connected);
+        await pollEnabled(selectedRow).toBe(connected);
       }
       for (const sessionHost of [false, true]) {
         const previousRequests = (await gateway.getRequests("environments.list")).length;
@@ -425,10 +371,8 @@ suite.define(() => {
         await gateway.setMethodResponse("environments.list", next);
         await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
         await gateway.waitForRequest("environments.list", { after: previousRequests });
-        await expect.poll(() => selectedRow.isEnabled()).toBe(sessionHost);
+        await pollEnabled(selectedRow).toBe(sessionHost);
       }
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

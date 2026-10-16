@@ -10,7 +10,14 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { installMockGateway, waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
+import {
+  pollAttribute,
+  pollText,
+  pollValue,
+  pollEnabled,
+  installMockGateway,
+  waitForCommittedChatRoute,
+} from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -18,6 +25,92 @@ const suite = createControlUiE2eSuite({
 });
 const thinkingLevels = ["low", "medium", "high"].map((id) => ({ id, label: id }));
 const preference = { model: "openai/gpt-4.1-mini", thinkingLevel: "low", fastMode: true };
+
+// Serialized into the browser: keep all IndexedDB dependencies inside this function.
+async function draftStorage(action: "read-old" | "seed-old" | "read-selection") {
+  const read = <T>(request: IDBRequest<T>) =>
+    new Promise<T>((resolve, reject) => {
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("IndexedDB request failed")),
+        { once: true },
+      );
+    });
+  const db = await read(indexedDB.open("openclaw-control-ui"));
+  try {
+    if (action === "seed-old") {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction("composerDrafts", "readwrite");
+        const store = transaction.objectStore("composerDrafts");
+        const request = store.getAll();
+        request.addEventListener(
+          "success",
+          () => {
+            const old = request.result.find((row) => row.text === "Unsent before upgrade");
+            if (!old) {
+              transaction.abort();
+              return;
+            }
+            // Exact pre-change serializer fields (60d9d1042375f014944b94006f4b1c2b2f5af9c0).
+            store.put({
+              key: old.key,
+              ownerKey: old.ownerKey,
+              gatewayOwner: old.gatewayOwner,
+              recoveryScope: old.recoveryScope,
+              scopeKey: old.scopeKey,
+              revision: old.revision,
+              writeId: old.writeId,
+              updatedAt: old.updatedAt,
+              text: "Unsent before upgrade",
+              attachments: [
+                {
+                  blob: new Blob(["Keep these attachment bytes"], { type: "text/plain" }),
+                  mimeType: "text/plain",
+                  origin: "file",
+                  fileName: "upgrade-notes.txt",
+                  sizeBytes: 27,
+                },
+              ],
+            });
+          },
+          { once: true },
+        );
+        transaction.addEventListener("complete", () => resolve(), { once: true });
+        transaction.addEventListener(
+          "abort",
+          () => reject(transaction.error ?? new Error("Legacy fixture missing")),
+          { once: true },
+        );
+        transaction.addEventListener(
+          "error",
+          () => reject(transaction.error ?? new Error("Legacy fixture failed")),
+          { once: true },
+        );
+      });
+      return;
+    }
+    const rows: {
+      text: string;
+      modelSelection?: { thinkingLevel?: string };
+      attachments: { blob: Blob }[];
+    }[] = await read(db.transaction("composerDrafts").objectStore("composerDrafts").getAll());
+    const row = rows.find(
+      (value) =>
+        value.text === (action === "read-old" ? "Unsent before upgrade" : "Resume this draft"),
+    );
+    if (action === "read-selection") {
+      return row?.modelSelection?.thinkingLevel;
+    }
+    return {
+      text: row?.text,
+      hasModelSelection: row ? Object.hasOwn(row, "modelSelection") : null,
+      attachmentText: await row?.attachments[0]?.blob.text(),
+    };
+  } finally {
+    db.close();
+  }
+}
 
 suite.define(() => {
   it.each([
@@ -130,17 +223,17 @@ suite.define(() => {
             );
             await page.goto(suite.server.baseUrl + "new");
             const effort = page.locator('[data-chat-thinking-select="true"]');
-            await expect
-              .poll(() => effort.getAttribute("data-chat-thinking-value"))
-              .toBe(configuredDefaults ? "" : "low");
+            await pollAttribute(effort, "data-chat-thinking-value").toBe(
+              configuredDefaults ? "" : "low",
+            );
             if (configuredDefaults) {
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
             }
-            await expect
-              .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
-              .toContain(configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini");
+            await pollText(page.locator('[data-chat-model-select="true"]')).toContain(
+              configuredDefaults ? "GPT-4.1" : "GPT-4.1 mini",
+            );
             if (source === "browser" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               await page.screenshot({
                 path: path.join(suite.artifactDir, configuredDefaults ? "after.png" : "before.png"),
@@ -169,51 +262,7 @@ suite.define(() => {
                   buffer: Buffer.from("Keep these attachment bytes"),
                 });
                 await expect
-                  .poll(() =>
-                    page.evaluate(async () => {
-                      const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                        const request = indexedDB.open("openclaw-control-ui");
-                        request.addEventListener("success", () => resolve(request.result), {
-                          once: true,
-                        });
-                        request.addEventListener(
-                          "error",
-                          () => reject(request.error ?? new Error("IndexedDB request failed")),
-                          { once: true },
-                        );
-                      });
-                      try {
-                        const rows = await new Promise<
-                          {
-                            text: string;
-                            modelSelection?: unknown;
-                            attachments: { blob: Blob }[];
-                          }[]
-                        >((resolve, reject) => {
-                          const request = db
-                            .transaction("composerDrafts")
-                            .objectStore("composerDrafts")
-                            .getAll();
-                          request.addEventListener("success", () => resolve(request.result), {
-                            once: true,
-                          });
-                          request.addEventListener(
-                            "error",
-                            () => reject(request.error ?? new Error("IndexedDB request failed")),
-                            { once: true },
-                          );
-                        });
-                        const row = rows.find((value) => value.text === "Unsent before upgrade");
-                        return {
-                          text: row?.text,
-                          hasModelSelection: row ? Object.hasOwn(row, "modelSelection") : null,
-                          attachmentText: await row?.attachments[0]?.blob.text(),
-                        };
-                      } finally {
-                        db.close();
-                      }
-                    }),
-                  )
+                  .poll(() => page.evaluate(draftStorage, "read-old"))
                   .toEqual({
                     text: "Unsent before upgrade",
                     hasModelSelection: false,
@@ -228,85 +277,16 @@ suite.define(() => {
                   }),
                 );
                 await page.goto(suite.server.baseUrl + "legacy-draft-seed");
-                await page.evaluate(async () => {
-                  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                    const request = indexedDB.open("openclaw-control-ui");
-                    request.addEventListener("success", () => resolve(request.result), {
-                      once: true,
-                    });
-                    request.addEventListener(
-                      "error",
-                      () => reject(request.error ?? new Error("IndexedDB request failed")),
-                      { once: true },
-                    );
-                  });
-                  try {
-                    await new Promise<void>((resolve, reject) => {
-                      const transaction = db.transaction("composerDrafts", "readwrite");
-                      const store = transaction.objectStore("composerDrafts");
-                      const request = store.getAll();
-                      request.addEventListener(
-                        "success",
-                        () => {
-                          const old = request.result.find(
-                            (row) => row.text === "Unsent before upgrade",
-                          );
-                          if (!old) {
-                            transaction.abort();
-                            return;
-                          }
-                          // Matches writeDurableComposerDraft at the pre-change base:
-                          // 60d9d1042375f014944b94006f4b1c2b2f5af9c0.
-                          store.put({
-                            key: old.key,
-                            ownerKey: old.ownerKey,
-                            gatewayOwner: old.gatewayOwner,
-                            recoveryScope: old.recoveryScope,
-                            scopeKey: old.scopeKey,
-                            revision: old.revision,
-                            writeId: old.writeId,
-                            updatedAt: old.updatedAt,
-                            text: "Unsent before upgrade",
-                            attachments: [
-                              {
-                                blob: new Blob(["Keep these attachment bytes"], {
-                                  type: "text/plain",
-                                }),
-                                mimeType: "text/plain",
-                                origin: "file",
-                                fileName: "upgrade-notes.txt",
-                                sizeBytes: 27,
-                              },
-                            ],
-                          });
-                        },
-                        { once: true },
-                      );
-                      transaction.addEventListener("complete", () => resolve(), { once: true });
-                      transaction.addEventListener(
-                        "abort",
-                        () => reject(transaction.error ?? new Error("Legacy fixture missing")),
-                        { once: true },
-                      );
-                      transaction.addEventListener(
-                        "error",
-                        () => reject(transaction.error ?? new Error("Legacy fixture failed")),
-                        { once: true },
-                      );
-                    });
-                  } finally {
-                    db.close();
-                  }
-                });
+                await page.evaluate(draftStorage, "seed-old");
                 await page.goto(suite.server.baseUrl + "new");
-                await expect
-                  .poll(() => page.locator(".new-session-page__message").inputValue())
-                  .toBe("Unsent before upgrade");
-                await expect
-                  .poll(() => page.locator(".chat-attachment-file__name").textContent())
-                  .toContain("upgrade-notes.txt");
-                await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
-                await expect.poll(() => effort.textContent()).toContain("High");
+                await pollValue(page.locator(".new-session-page__message")).toBe(
+                  "Unsent before upgrade",
+                );
+                await pollText(page.locator(".chat-attachment-file__name")).toContain(
+                  "upgrade-notes.txt",
+                );
+                await pollAttribute(effort, "data-chat-thinking-value").toBe("");
+                await pollText(effort).toContain("High");
               }
               await page.locator('[data-chat-model-select="true"]').click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
@@ -315,55 +295,13 @@ suite.define(() => {
               await page.locator('[data-chat-thinking-slider="true"]').fill("0");
               await page.keyboard.press("Escape");
               await page.locator(".new-session-page__message").fill("Resume this draft");
-              await expect
-                .poll(() =>
-                  page.evaluate(async () => {
-                    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                      const request = indexedDB.open("openclaw-control-ui");
-                      request.addEventListener("success", () => resolve(request.result), {
-                        once: true,
-                      });
-                      request.addEventListener(
-                        "error",
-                        () => reject(request.error ?? new Error("IndexedDB request failed")),
-                        { once: true },
-                      );
-                    });
-                    try {
-                      return await new Promise<unknown>((resolve, reject) => {
-                        const request = db
-                          .transaction("composerDrafts")
-                          .objectStore("composerDrafts")
-                          .getAll();
-                        request.addEventListener(
-                          "success",
-                          () =>
-                            resolve(
-                              request.result.find((row) => row.text === "Resume this draft")
-                                ?.modelSelection?.thinkingLevel,
-                            ),
-                          { once: true },
-                        );
-                        request.addEventListener(
-                          "error",
-                          () => reject(request.error ?? new Error("IndexedDB request failed")),
-                          { once: true },
-                        );
-                      });
-                    } finally {
-                      db.close();
-                    }
-                  }),
-                )
-                .toBe("low");
+              await expect.poll(() => page.evaluate(draftStorage, "read-selection")).toBe("low");
               await page.reload();
-              await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
-              await expect
-                .poll(() => page.locator(".new-session-page__message").inputValue())
-                .toBe("Resume this draft");
-              await expect
-                .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
-                .toContain("GPT-4.1 mini");
+              await pollAttribute(effort, "data-chat-thinking-value").toBe("low");
+              await pollValue(page.locator(".new-session-page__message")).toBe("Resume this draft");
+              await pollText(page.locator('[data-chat-model-select="true"]')).toContain(
+                "GPT-4.1 mini",
+              );
             }
             await page
               .locator(".new-session-page__message")
@@ -389,13 +327,11 @@ suite.define(() => {
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);
               await page.goto(suite.server.baseUrl + "new");
-              await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
+              await pollAttribute(effort, "data-chat-thinking-value").toBe("");
               await expect
                 .poll(async () => (await effort.textContent())?.toLowerCase())
                 .toContain("high");
-              await expect
-                .poll(() => page.locator('[data-chat-model-select="true"]').textContent())
-                .not.toContain("mini");
+              await pollText(page.locator('[data-chat-model-select="true"]')).not.toContain("mini");
               await page.keyboard.press("ControlOrMeta+K");
               const palette = page.locator("openclaw-command-palette");
               const prompt = palette.locator(".cmd-palette__input");
@@ -404,7 +340,7 @@ suite.define(() => {
                 name: "Start new session in background",
                 exact: true,
               });
-              await expect.poll(() => start.isEnabled()).toBe(true);
+              await pollEnabled(start).toBe(true);
               await start.click();
               const paletteRequest = await gateway.waitForRequest("sessions.create");
               expect(paletteRequest.params).not.toHaveProperty("model");

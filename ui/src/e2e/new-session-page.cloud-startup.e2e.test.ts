@@ -3,6 +3,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
+  pollDisabled,
+  pollAttribute,
+  pollCount,
+  pollValue,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -18,47 +23,44 @@ import {
 } from "./new-session-page.test-support.ts";
 const suite = createNewSessionPageE2eSuite();
 
+function cloudResponses(overrides: Record<string, unknown>) {
+  return {
+    "agents.list": createCloudAgentsListResponse(),
+    "environments.list": { environments: [], profiles: [{ id: "aws", providerId: "crabbox" }] },
+    "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+    ...overrides,
+  };
+}
+
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "local",
-              identity: { name: "Local" },
-              name: "Local",
-              workspace: "/home/peter/local",
-              workspaceGit: false,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-      },
-    });
-
-    try {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        methodResponses: cloudResponses({
+          "agents.list": {
+            agents: [
+              {
+                id: "cloud",
+                identity: { name: "Cloud" },
+                name: "Cloud",
+                workspace: WORKSPACE,
+                workspaceGit: true,
+              },
+              {
+                id: "local",
+                identity: { name: "Local" },
+                name: "Local",
+                workspace: "/home/peter/local",
+                workspaceGit: false,
+              },
+            ],
+            defaultId: "cloud",
+            mainKey: "main",
+            scope: "agent",
+          },
+        }),
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
@@ -67,30 +69,23 @@ suite.define(() => {
         .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-
+      await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
       await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
       const profileRequests = (await gateway.getRequests("environments.list")).length;
       await replaceGatewayClient(page);
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(true);
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(true);
       await trigger.click();
-      await expect
-        .poll(() =>
-          page
-            .locator(".oc-popover.new-session-page__where-popover")
-            .locator('[data-value="cloud:aws"]')
-            .isDisabled(),
-        )
-        .toBe(true);
+      await pollDisabled(
+        page
+          .locator(".oc-popover.new-session-page__where-popover")
+          .locator('[data-value="cloud:aws"]'),
+      ).toBe(true);
       await page.keyboard.press("Escape");
-
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
@@ -98,11 +93,9 @@ suite.define(() => {
         .filter({ hasText: "Local" })
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+      await pollAttribute(trigger, "data-cloud-profile").toBeNull();
+      await pollCount(page.locator("#new-session-checkout-trigger")).toBe(0);
+    });
   });
 
   it("restores an unconfirmed cloud turn after reload and checks delivery without replay", async () => {
@@ -113,17 +106,7 @@ suite.define(() => {
     const message = "resume this cloud task after reload";
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
-      methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+      methodResponses: cloudResponses({
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
           ok: true,
@@ -154,7 +137,7 @@ suite.define(() => {
           sessionId: "session-reload-recovery",
           sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
         },
-      },
+      }),
     });
 
     try {
@@ -244,7 +227,7 @@ suite.define(() => {
       await checkDelivery.waitFor({ state: "visible" });
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       const followUp = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => followUp.isDisabled()).toBe(false);
+      await pollDisabled(followUp).toBe(false);
       await followUp.fill("Wait behind the unconfirmed initial turn");
       await followUp.press("Enter");
       await page
@@ -285,9 +268,9 @@ suite.define(() => {
         },
       ]);
       await checkDelivery.click();
-      await expect.poll(() => checkDelivery.count()).toBe(0);
-      await expect.poll(() => retainedTurn.count()).toBe(1);
-      await expect.poll(() => retainedTurn.locator(".chat-send-status").count()).toBe(0);
+      await pollCount(checkDelivery).toBe(0);
+      await pollCount(retainedTurn).toBe(1);
+      await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
       expect(await gateway.waitForRequest("chat.send")).toMatchObject({
         params: { sessionKey, message: "Wait behind the unconfirmed initial turn" },
       });
@@ -301,35 +284,22 @@ suite.define(() => {
   });
 
   it("reconciles an accepted turn added while disconnected without locking the new-session page", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-        "chat.history": {
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: "restore after reconnect" }],
-              __openclaw: { idempotencyKey: "message-offline-recovery:user" },
-            },
-          ],
-          sessionId: "session-offline-recovery",
-        },
-      },
-    });
-
-    try {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspaceGit: true,
+        methodResponses: cloudResponses({
+          "chat.history": {
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "restore after reconnect" }],
+                __openclaw: { idempotencyKey: "message-offline-recovery:user" },
+              },
+            ],
+            sessionId: "session-offline-recovery",
+          },
+        }),
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const recoveryIdentity = await evaluateControlUiContext(page, async (application) => {
@@ -352,7 +322,6 @@ suite.define(() => {
           `${frame(legacyScope)}:${frame(sessionKey)}`;
         return { gatewayUrl, legacyScope, storageKey };
       });
-
       await gateway.setOnline(false);
       await expect
         .poll(() =>
@@ -377,7 +346,6 @@ suite.define(() => {
           }),
         );
       }, recoveryIdentity);
-
       await gateway.setOnline(true);
       expect(await gateway.waitForRequest("chat.history")).toMatchObject({
         params: { sessionKey: "agent:cloud:offline-recovery", limit: 1000 },
@@ -393,22 +361,16 @@ suite.define(() => {
         .toHaveLength(0);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await pollValue(page.locator(".new-session-page__message")).toBe("");
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(false);
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(false);
       await gateway.setOnline(false);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(true);
-    } finally {
-      await context.close();
-    }
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(true);
+    });
   });
 });
