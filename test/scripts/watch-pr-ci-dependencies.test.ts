@@ -25,13 +25,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function writePackage(root: string, name: string, value: string, version = "1.0.0") {
+function writeJson(file: string, value: unknown) {
+  writeFileSync(file, JSON.stringify(value));
+}
+
+function writePackage(
+  root: string,
+  name: string,
+  value: string,
+  version = "1.0.0",
+  exports: string | Record<string, string> = "./index.mjs",
+) {
   const directory = join(root, "node_modules", name);
   mkdirSync(directory, { recursive: true });
-  writeFileSync(
-    join(directory, "package.json"),
-    JSON.stringify({ name, version, type: "module", exports: "./index.mjs" }),
-  );
+  writeJson(join(directory, "package.json"), { name, version, type: "module", exports });
   writeFileSync(join(directory, "index.mjs"), `export default ${JSON.stringify(value)};\n`);
 }
 
@@ -91,14 +98,7 @@ it.each([
         throw new Error(`Unexpected Git command: ${command}`);
       }
     }
-    return {
-      status,
-      stdout,
-      stderr: "",
-      pid: 0,
-      output: [],
-      signal: null,
-    };
+    return { status, stdout, stderr: "", pid: 0, output: [], signal: null };
   });
   const notice = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv(
@@ -153,15 +153,12 @@ it("checks fallback versions before loading through the watcher child and preser
     );
     expect(origin.status, origin.stderr).toBe(0);
   }
-  writeFileSync(
-    join(checkout, "package.json"),
-    JSON.stringify({
-      dependencies: { "fixture-pkg": "1.0.0" },
-      devDependencies: { "dev-pkg": "1.0.0" },
-      optionalDependencies: { "@fixture/scoped": "1.0.0" },
-      imports: { "#source": "./scripts/local-source.mjs" },
-    }),
-  );
+  writeJson(join(checkout, "package.json"), {
+    dependencies: { "fixture-pkg": "1.0.0" },
+    devDependencies: { "dev-pkg": "1.0.0" },
+    optionalDependencies: { "@fixture/scoped": "1.0.0" },
+    imports: { "#source": "./scripts/local-source.mjs" },
+  });
   for (const file of [
     "tsx-cli-shim.mjs",
     "local-check-runtime.mts",
@@ -174,21 +171,11 @@ it("checks fallback versions before loading through the watcher child and preser
   writePackage(tooling, "fixture-pkg", "tooling");
   writePackage(root, "fixture-pkg", "stale ancestor", "0.0.0-stale");
   writePackage(tooling, "dev-pkg", "dev");
-  writePackage(tooling, "@fixture/scoped", "scoped");
-  writeFileSync(
-    join(tooling, "node_modules/@fixture/scoped/package.json"),
-    JSON.stringify({
-      name: "@fixture/scoped",
-      version: "1.0.0",
-      type: "module",
-      exports: { "./subpath": "./index.mjs" },
-    }),
-  );
-  writePackage(tooling, "local-pkg", "fallback");
-  writeFileSync(
-    join(tooling, "node_modules/local-pkg/package.json"),
-    JSON.stringify({ type: "module", exports: { ".": "./index.mjs", "./private": "./index.mjs" } }),
-  );
+  writePackage(tooling, "@fixture/scoped", "scoped", "1.0.0", { "./subpath": "./index.mjs" });
+  writePackage(tooling, "local-pkg", "fallback", "1.0.0", {
+    ".": "./index.mjs",
+    "./private": "./index.mjs",
+  });
   writePackage(join(checkout, "scripts"), "local-pkg", "local");
   writeFileSync(join(tooling, "relative.mjs"), 'export default "wrong";\n');
   writeFileSync(join(checkout, "scripts/local-source.mjs"), 'export default "source";\n');
@@ -249,7 +236,7 @@ console.log("fallback and local resolution OK");
       const manifestPath = join(checkout, "package.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       delete manifest.dependencies["fixture-pkg"];
-      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeJson(manifestPath, manifest);
       rmSync(join(root, "node_modules/fixture-pkg"), { recursive: true });
     }
     const rejected = run();

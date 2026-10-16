@@ -15,6 +15,26 @@ import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
 import { runWatcher, sha } from "./watch-pr-ci.test-support.js";
 
+function expectRun(
+  result: Awaited<ReturnType<typeof runWatcher>>,
+  status: number,
+  present: string,
+  absent?: string,
+) {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
+  expect(result.stdout).toContain(present);
+  if (absent !== undefined) {
+    expect(result.stdout).not.toContain(absent);
+  }
+}
+
+function readCalls(file: string): string[][] {
+  return readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
   evidence: {
@@ -213,10 +233,7 @@ console.log(JSON.stringify(value));
     );
     return {
       ...result,
-      calls: readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as string[]),
+      calls: readCalls(callsPath),
     };
   });
 }
@@ -304,10 +321,7 @@ console.log(JSON.stringify(value));
     );
     return {
       ...result,
-      calls: readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as string[]),
+      calls: readCalls(callsPath),
     };
   });
 }
@@ -432,8 +446,7 @@ esac
         { OCTOPOOL_FRESH: "0" },
       );
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("ATTACHED run=201");
+      expectRun(result, 0, "ATTACHED run=201");
       expect(result.stdout).toContain("GREEN");
     },
   );
@@ -481,15 +494,11 @@ console.log(JSON.stringify(value));
         sha,
         ["--completion", "ci-run"],
       );
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain(`STATUS run=queued conclusion=pending ${progress}`);
+      expectRun(result, 16, `STATUS run=queued conclusion=pending ${progress}`);
       expect(result.stdout).toContain("TIMEOUT completion=ci-run");
       expect(result.stdout).not.toContain("\nGREEN");
       expect(result.stdout).not.toContain("\nFAILING");
-      const calls = readFileSync(callsPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as string[]);
+      const calls = readCalls(callsPath);
       expect(
         calls.filter((args) => args.includes("repos/openclaw/openclaw/pulls/42")),
       ).toHaveLength(2);
@@ -666,12 +675,8 @@ console.log(JSON.stringify(value));
           notifierPath,
           inheritedNotifier ? { ...process.env, OPENCLAW_PR_LOCK_NOTIFY_FD: "3" } : undefined,
         );
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect(result.stdout).toContain(output);
-        const calls = readFileSync(callsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as string[]);
+        expectRun(result, exitCode, output);
+        const calls = readCalls(callsPath);
         expect(calls.some((args) => args[0] === "pr" || args.includes("graphql"))).toBe(false);
         expect(calls.some((args) => args.some((arg) => arg.includes("/commits/")))).toBe(false);
         if (phase === "attach" && exitCode !== 0) {
@@ -765,9 +770,7 @@ console.log(JSON.stringify(value));
         runStatus: "completed",
         detailContexts,
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain("rollup detail evidence is incomplete");
-      expect(result.stdout).not.toContain("\nGREEN");
+      expectRun(result, 16, "rollup detail evidence is incomplete", "\nGREEN");
     });
 
     it.concurrent.each([
@@ -835,8 +838,7 @@ console.log(JSON.stringify(value));
       "reobserves $label after the attached run succeeds",
       async ({ afterRun, exitCode, output }) => {
         const result = await replaySummary({ state: "SUCCESS", runStatus: "completed", afterRun });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect(result.stdout).toContain(output);
+        expectRun(result, exitCode, output);
         if (exitCode !== 0) {
           expect(result.stdout).not.toContain("\nGREEN");
         } else {
@@ -864,8 +866,7 @@ console.log(JSON.stringify(value));
           { total_count: 101, check_runs: [restCheck(101)] },
         ],
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("\nGREEN");
+      expectRun(result, 0, "\nGREEN");
       expect(result.stdout.match(/WARN GraphQL quota exhausted/g)).toHaveLength(1);
       expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       const checks = result.calls.filter((call) => call[1]?.includes("/check-runs?"));
@@ -882,9 +883,7 @@ console.log(JSON.stringify(value));
       "gh: Bad Gateway (HTTP 502)",
     ])("keeps bounded GraphQL retries for %s", async (graphqlError) => {
       const result = await replayRestRollup({ graphqlError });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain("RETRY phase=watch");
-      expect(result.stdout).not.toContain("using REST");
+      expectRun(result, 16, "RETRY phase=watch", "using REST");
       expect(result.stdout).not.toContain("\nGREEN");
       expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(3);
       expect(result.calls.some((call) => call[1]?.includes("/commits/"))).toBe(false);
@@ -907,9 +906,7 @@ console.log(JSON.stringify(value));
           },
         ],
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(15);
-      expect(result.stdout).toContain("FAILING checks=last required status");
-      expect(result.stdout).not.toContain("\nGREEN");
+      expectRun(result, 15, "FAILING checks=last required status", "\nGREEN");
       expect(result.calls.some((call) => call[1]?.endsWith("/status?per_page=100&page=2"))).toBe(
         true,
       );
@@ -953,9 +950,7 @@ console.log(JSON.stringify(value));
       const result = await replayRestRollup({
         checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain("STATUS rollup=pending");
-      expect(result.stdout).not.toContain("\nGREEN");
+      expectRun(result, 16, "STATUS rollup=pending", "\nGREEN");
     });
     const workflow = {
       id: 201,
@@ -1065,9 +1060,7 @@ console.log(JSON.stringify(value));
       "rejects $label without accepting partial success",
       async ({ label: _label, ...fixture }) => {
         const result = await replayRestRollup(fixture);
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-        expect(result.stdout).toContain("RETRY phase=watch");
-        expect(result.stdout).not.toContain("\nGREEN");
+        expectRun(result, 16, "RETRY phase=watch", "\nGREEN");
         expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       },
     );
@@ -1101,8 +1094,7 @@ console.log(JSON.stringify(value));
             },
           ],
         });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-        expect(result.stdout).toContain("\nGREEN");
+        expectRun(result, 0, "\nGREEN");
       },
     );
 
@@ -1232,7 +1224,7 @@ console.log(JSON.stringify(value));
       base: { ref: baseRef, sha: "b".repeat(40) },
     });
 
-    it.each<{
+    type OwnershipScenario = {
       label: string;
       status?: string;
       conclusion?: string | null;
@@ -1258,36 +1250,26 @@ console.log(JSON.stringify(value));
       completion?: "ci-run";
       exitCode?: number;
       output?: string;
-    }>([
-      {
-        label: "queued replacement",
-        status: "queued",
-        conclusion: null,
-        exitCode: 16,
-        output: "TIMEOUT",
-      },
-      {
-        label: "running replacement",
-        status: "in_progress",
-        conclusion: null,
-        exitCode: 16,
-        output: "TIMEOUT",
-      },
-      { label: "successful replacement", exitCode: 0, output: "GREEN" },
-      {
-        label: "ci-run slow final run",
-        completion: "ci-run",
-        slowFinalRun: true,
-        exitCode: 16,
-        output: "TIMEOUT",
-      },
-      {
-        label: "ci-run slow watch PR read",
-        completion: "ci-run",
-        slowWatchPr: true,
-        exitCode: 16,
-        output: "TIMEOUT",
-      },
+    };
+    function ownership(
+      label: string,
+      details: Omit<OwnershipScenario, "label"> = {},
+    ): OwnershipScenario {
+      return { label, ...details };
+    }
+    function green(label: string, details: Omit<OwnershipScenario, "label"> = {}) {
+      return ownership(label, { ...details, exitCode: 0, output: "GREEN" });
+    }
+    function timeout(label: string, details: Omit<OwnershipScenario, "label"> = {}) {
+      return ownership(label, { ...details, exitCode: 16, output: "TIMEOUT" });
+    }
+
+    it.each<OwnershipScenario>([
+      timeout("queued replacement", { status: "queued", conclusion: null }),
+      timeout("running replacement", { status: "in_progress", conclusion: null }),
+      green("successful replacement"),
+      timeout("ci-run slow final run", { completion: "ci-run", slowFinalRun: true }),
+      timeout("ci-run slow watch PR read", { completion: "ci-run", slowWatchPr: true }),
       ...[33, 65].map((oldRunCount) => ({
         label: `${oldRunCount}-run authoritative SUCCESS`,
         oldRunCount,
@@ -1298,17 +1280,13 @@ console.log(JSON.stringify(value));
         exitCode: 0,
         output: "GREEN",
       })),
-      {
-        label: "65-run refreshed SUCCESS",
+      green("65-run refreshed SUCCESS", {
         oldRunCount: 65,
         olderRunOutsidePage: true,
         afterMetadataState: "SUCCESS",
         expectedMetadataReads: 32,
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "65-run SUCCESS with failed attached run",
+      }),
+      ownership("65-run SUCCESS with failed attached run", {
         oldRunCount: 65,
         olderRunOutsidePage: true,
         rollupState: "SUCCESS",
@@ -1316,7 +1294,7 @@ console.log(JSON.stringify(value));
         conclusion: "failure",
         expectedMetadataReads: 0,
         output: "FAILING checks=CI workflow (failure)",
-      },
+      }),
       ...[32, 33, 65].map((oldRunCount) => ({
         label: `${oldRunCount}-run metadata progress`,
         oldRunCount,
@@ -1324,60 +1302,52 @@ console.log(JSON.stringify(value));
         exitCode: 0,
         output: "GREEN",
       })),
-      {
-        label: "33-run unknown association",
+      ownership("33-run unknown association", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         previousPatch: { pull_requests: [] },
         expectedMetadataReads: 32,
-      },
-      {
-        label: "33-run foreign association",
+      }),
+      ownership("33-run foreign association", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         previousPatch: { pull_requests: [association(43)] },
         expectedMetadataReads: 32,
-      },
-      {
-        label: "33-run failed attached run",
+      }),
+      ownership("33-run failed attached run", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         conclusion: "failure",
         expectedMetadataReads: 32,
         output: "FAILING checks=CI workflow (failure)",
-      },
-      {
-        label: "33-run moved head",
+      }),
+      ownership("33-run moved head", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         afterMetadata: { headRefOid: "c".repeat(40) },
         expectedMetadataReads: 32,
         exitCode: 11,
         output: "HEAD-MOVED",
-      },
-      {
-        label: "33-run deferred unknown association",
+      }),
+      ownership("33-run deferred unknown association", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         lastPreviousPatch: { pull_requests: [] },
-      },
-      {
-        label: "33-run deferred foreign association",
+      }),
+      ownership("33-run deferred foreign association", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         lastPreviousPatch: { pull_requests: [association(43)] },
-      },
-      {
-        label: "33-run independent failed check",
+      }),
+      ownership("33-run independent failed check", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         newCheckName: "new required job",
         newCheckConclusion: "FAILURE",
         expectedMetadataReads: 32,
         output: "FAILING checks=new required job",
-      },
-      {
-        label: "33-run new failure during metadata",
+      }),
+      ownership("33-run new failure during metadata", {
         oldRunCount: 33,
         olderRunOutsidePage: true,
         afterMetadata: {
@@ -1392,56 +1362,42 @@ console.log(JSON.stringify(value));
         },
         expectedMetadataReads: 32,
         output: "FAILING checks=new required check",
-      },
-      {
-        label: "21-run same-PR replacement",
-        olderRunOutsidePage: true,
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "21-run same-PR cancellation replacement",
+      }),
+      green("21-run same-PR replacement", { olderRunOutsidePage: true }),
+      green("21-run same-PR cancellation replacement", {
         olderRunOutsidePage: true,
         oldConclusion: "CANCELLED",
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "21-run unknown older association",
+      }),
+      ownership("21-run unknown older association", {
         olderRunOutsidePage: true,
         previousPatch: { pull_requests: [] },
-      },
-      {
-        label: "21-run foreign older association",
+      }),
+      ownership("21-run foreign older association", {
         olderRunOutsidePage: true,
         previousPatch: { pull_requests: [association(43)] },
-      },
+      }),
       ...[
-        { label: "wrong returned run", previousPatch: { id: 99 } },
-        { label: "wrong returned head", previousPatch: { head_sha: "c".repeat(40) } },
-        { label: "wrong returned suite", previousPatch: { check_suite_id: 999 } },
-        { label: "wrong returned event", previousPatch: { event: "pull_request_target" } },
-        { label: "wrong returned workflow", previousPatch: { workflow_id: 20 } },
-        {
-          label: "moved head",
+        ownership("wrong returned run", { previousPatch: { id: 99 } }),
+        ownership("wrong returned head", { previousPatch: { head_sha: "c".repeat(40) } }),
+        ownership("wrong returned suite", { previousPatch: { check_suite_id: 999 } }),
+        ownership("wrong returned event", { previousPatch: { event: "pull_request_target" } }),
+        ownership("wrong returned workflow", { previousPatch: { workflow_id: 20 } }),
+        ownership("moved head", {
           afterMetadata: { headRefOid: "c".repeat(40) },
           exitCode: 11,
           output: "HEAD-MOVED",
-        },
-        {
-          label: "closed PR",
+        }),
+        ownership("closed PR", {
           afterMetadata: { state: "CLOSED" },
           exitCode: 10,
           output: "PR-CLOSED",
-        },
-        {
-          label: "conflicting PR",
+        }),
+        ownership("conflicting PR", {
           afterMetadata: { mergeable: false },
           exitCode: 14,
           output: "CONFLICTING-MID-WAIT",
-        },
-        {
-          label: "new failing check",
+        }),
+        ownership("new failing check", {
           afterMetadata: {
             statusCheckRollup: {
               state: "FAILURE",
@@ -1453,134 +1409,102 @@ console.log(JSON.stringify(value));
             },
           },
           output: "FAILING checks=new required check",
-        },
-        { label: "slow metadata", slowMetadata: true, exitCode: 16, output: "TIMEOUT" },
-        { label: "slow final run", slowFinalRun: true, exitCode: 16, output: "TIMEOUT" },
-        {
-          label: "running replacement",
-          status: "in_progress",
-          conclusion: null,
-          exitCode: 16,
-          output: "TIMEOUT",
-        },
+        }),
+        timeout("slow metadata", { slowMetadata: true }),
+        timeout("slow final run", { slowFinalRun: true }),
+        timeout("running replacement", { status: "in_progress", conclusion: null }),
       ].map((entry) =>
         Object.assign(entry, { label: `21-run ${entry.label}`, olderRunOutsidePage: true }),
       ),
-      {
-        label: "same-PR unique cancellation replacement",
+      green("same-PR unique cancellation replacement", {
         oldConclusion: "CANCELLED",
         newCheckName: "new matrix shard",
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "unassociated unique cancellation replacement",
+      }),
+      ownership("unassociated unique cancellation replacement", {
         oldConclusion: "CANCELLED",
         newCheckName: "new matrix shard",
         runPatch: { pull_requests: [] },
-      },
-      {
-        label: "another PR's unique cancellation replacement",
+      }),
+      ownership("another PR's unique cancellation replacement", {
         oldConclusion: "CANCELLED",
         newCheckName: "new matrix shard",
         runPatch: { pull_requests: [association(43)] },
         expectedRun: 100,
-      },
-      {
-        label: "unique target cancellation with unbound newer checks",
+      }),
+      ownership("unique target cancellation with unbound newer checks", {
         oldConclusion: "CANCELLED",
         checkEvent: "pull_request_target",
         newCheckName: "new matrix shard",
-      },
-      {
-        label: "unique target cancellation with unbound newer run metadata",
+      }),
+      ownership("unique target cancellation with unbound newer run metadata", {
         oldConclusion: "CANCELLED",
         checkEvent: "pull_request_target",
-      },
-      {
-        label: "same-name replacement from a different event",
+      }),
+      ownership("same-name replacement from a different event", {
         checkEvent: "pull_request_target",
         newCheckName: "old matrix shard",
         newCheckEvent: "pull_request",
-      },
-      {
-        label: "same-name replacement with an unknown event",
+      }),
+      ownership("same-name replacement with an unknown event", {
         checkEvent: "pull_request_target",
         newCheckName: "old matrix shard",
         newCheckEvent: null,
-      },
-      {
-        label: "same-name same-event target replacement",
+      }),
+      green("same-name same-event target replacement", {
         oldConclusion: "CANCELLED",
         checkEvent: "pull_request_target",
         newCheckName: "old matrix shard",
-        exitCode: 0,
-        output: "GREEN",
-      },
+      }),
 
-      {
-        label: "failed replacement",
+      ownership("failed replacement", {
         conclusion: "failure",
         output: "FAILING checks=CI workflow (failure)",
-      },
-      {
-        label: "another PR with the same head and a different base",
+      }),
+      ownership("another PR with the same head and a different base", {
         runPatch: { pull_requests: [association(43, "release/2026.9")] },
         expectedRun: 100,
-      },
-      { label: "missing replacement association", runPatch: { pull_requests: undefined } },
-      { label: "empty replacement association", runPatch: { pull_requests: [] } },
-      {
-        label: "ambiguous replacement association",
+      }),
+      ownership("missing replacement association", { runPatch: { pull_requests: undefined } }),
+      ownership("empty replacement association", { runPatch: { pull_requests: [] } }),
+      ownership("ambiguous replacement association", {
         runPatch: { pull_requests: [association(), association(43)] },
-      },
-      {
-        label: "malformed replacement association",
+      }),
+      ownership("malformed replacement association", {
         runPatch: { pull_requests: [association(), { number: "43", head: { sha } }] },
-      },
-      { label: "empty prior association", previousPatch: { pull_requests: [] } },
-      {
-        label: "another PR's prior graph",
+      }),
+      ownership("empty prior association", { previousPatch: { pull_requests: [] } }),
+      ownership("another PR's prior graph", {
         previousPatch: { pull_requests: [association(43, "release/2026.9")] },
-      },
-      {
-        label: "ambiguous prior association",
+      }),
+      ownership("ambiguous prior association", {
         previousPatch: { pull_requests: [association(), association(43)] },
-      },
-      { label: "different replacement event", runPatch: { event: "workflow_dispatch" } },
-      { label: "different replacement head", runPatch: { head_sha: "c".repeat(40) } },
-      {
-        label: "different association head",
+      }),
+      ownership("different replacement event", { runPatch: { event: "workflow_dispatch" } }),
+      ownership("different replacement head", { runPatch: { head_sha: "c".repeat(40) } }),
+      ownership("different association head", {
         runPatch: { pull_requests: [{ ...association(), head: { sha: "c".repeat(40) } }] },
-      },
-      { label: "different prior event", previousPatch: { event: "workflow_dispatch" } },
-      { label: "different prior head", previousPatch: { head_sha: "c".repeat(40) } },
-      { label: "different workflow", runPatch: { workflow_id: 20 } },
-      { label: "missing replacement suite", runPatch: { check_suite_id: undefined } },
-      { label: "missing prior suite", previousPatch: { check_suite_id: undefined } },
-      { label: "mismatched prior check suite", checkSuiteId: 999 },
-      { label: "missing prior check suite", checkSuiteId: null },
-      {
-        label: "same PR rerun after its base changed",
+      }),
+      ownership("different prior event", { previousPatch: { event: "workflow_dispatch" } }),
+      ownership("different prior head", { previousPatch: { head_sha: "c".repeat(40) } }),
+      ownership("different workflow", { runPatch: { workflow_id: 20 } }),
+      ownership("missing replacement suite", { runPatch: { check_suite_id: undefined } }),
+      ownership("missing prior suite", { previousPatch: { check_suite_id: undefined } }),
+      ownership("mismatched prior check suite", { checkSuiteId: 999 }),
+      ownership("missing prior check suite", { checkSuiteId: null }),
+      green("same PR rerun after its base changed", {
         runPatch: { pull_requests: [association(42, "release/2026.9")] },
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "existing ci-run completion policy",
+      }),
+      green("existing ci-run completion policy", {
         runPatch: { pull_requests: [association(43, "release/2026.9")] },
         completion: "ci-run",
-        exitCode: 0,
-        output: "GREEN",
-      },
-      {
-        label: "pending ci-run completion policy",
+      }),
+      ownership("pending ci-run completion policy", {
         status: "in_progress",
         conclusion: null,
         completion: "ci-run",
         exitCode: 16,
         output: "TIMEOUT completion=ci-run",
-      },
+      }),
     ])(
       "preserves replacement ownership for $label",
       async ({
@@ -1763,14 +1687,10 @@ console.log(JSON.stringify(value));
           );
           return {
             ...watched,
-            calls: readFileSync(calls, "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line) as string[]),
+            calls: readCalls(calls),
           };
         });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-        expect(result.stdout).toContain(`ATTACHED run=${expectedRun}`);
+        expectRun(result, exitCode, `ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
         expect(result.calls.some((call) => call[0] === "pr")).toBe(false);
         expect(result.calls.some((call) => call.includes("graphql"))).toBe(completion !== "ci-run");
@@ -1890,9 +1810,7 @@ console.log(JSON.stringify(value));
         delayFirstAlias: true,
         clock: "wall",
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain("pending=1");
-      expect(result.stdout).not.toContain("GREEN");
+      expectRun(result, 16, "pending=1", "GREEN");
       const calls: string[][] = result.calls
         .trim()
         .split("\n")
@@ -1921,9 +1839,7 @@ console.log(JSON.stringify(value));
       afterAliasScan.data.repository.pullRequest.state = "OPEN";
       Object.assign(afterAliasScan.data.repository.pullRequest, patch);
       const result = await replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).toContain(output);
-      expect(result.stdout).not.toContain("GREEN");
+      expectRun(result, exitCode, output, "GREEN");
     });
 
     it.each([
@@ -2015,8 +1931,7 @@ console.log(JSON.stringify(value));
         contexts.nodes.push(older);
         contexts.totalCount += 1;
         const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-        expect(result.stdout).toContain("GREEN");
+        expectRun(result, 0, "GREEN");
       },
     );
 
@@ -2026,15 +1941,12 @@ console.log(JSON.stringify(value));
         runViewSnapshots: [fixture.run, fixture.run, { status: "in_progress", conclusion: null }],
         watchTimeout: 5,
       });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-      expect(result.stdout).toContain("STATUS rollup=green github_rollup=FAILURE pending=0");
-      expect(result.stdout).not.toContain("GREEN");
+      expectRun(result, 16, "STATUS rollup=green github_rollup=FAILURE pending=0", "GREEN");
     });
 
     it("keeps the captured merged PR closed", async () => {
       const result = await replayPlaceholder(structuredClone(placeholderFixture), { merged: true });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(10);
-      expect(result.stdout).toContain("PR-CLOSED state=MERGED");
+      expectRun(result, 10, "PR-CLOSED state=MERGED");
       expect(result.calls).not.toContain("/actions/");
     });
 

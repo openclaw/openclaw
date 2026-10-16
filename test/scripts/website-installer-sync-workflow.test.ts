@@ -1,4 +1,3 @@
-// Website Installer Sync Workflow tests cover website installer sync workflow script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -11,31 +10,48 @@ const { detectInstallSmokeScope } = await import("../../scripts/ci-changed-scope
 
 const WORKFLOW_PATH = ".github/workflows/website-installer-sync.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+const config = parse(workflow) as {
+  jobs: Record<
+    string,
+    {
+      if?: string;
+      steps: {
+        id?: string;
+        name?: string;
+        if?: string;
+        run?: string;
+        with?: { script?: string };
+      }[];
+    }
+  >;
+};
+function stepRun(job: string, name: string) {
+  const run = config.jobs[job]?.steps.find((step) => step.name === name)?.run;
+  if (!run) {
+    throw new Error(`Missing installer step: ${job}/${name}`);
+  }
+  return run;
+}
+function shell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("/bin/bash", ["-e", "-o", "pipefail", "-c", script], {
+    cwd: root,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: root, BASH_ENV: "", ENV: "", ...env },
+  });
+}
 
 describe("website installer sync workflow", () => {
-  const workflow = readFileSync(WORKFLOW_PATH, "utf8");
-
   it.each([
     { job: "static", step: "Shell syntax", prefix: "dist/installers" },
     { job: "sync-website", step: "Verify website with synced installers", prefix: "public" },
   ])("parses both shell artifacts in $job before continuing", ({ job, step, prefix }) => {
-    const config = parse(workflow) as {
-      jobs: Record<string, { steps: { name: string; run?: string }[] }>;
-    };
-    const run = config.jobs[job]?.steps.find((entry) => entry.name === step)?.run;
-    if (!run) {
-      throw new Error(`Missing installer syntax step: ${job}/${step}`);
-    }
+    const run = stepRun(job, step);
     const root = tempDirs.make("installer-workflow-syntax-");
     const directory = path.join(root, prefix);
     mkdirSync(directory, { recursive: true });
     const installers = ["install.sh", "install-cli.sh"];
-    const verify = () =>
-      spawnSync("/bin/bash", ["-e", "-o", "pipefail", "-c", `shellcheck() { exit 0; }\n${run}`], {
-        cwd: root,
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, HOME: root, BASH_ENV: "", ENV: "" },
-      });
+    const verify = () => shell(root, `shellcheck() { exit 0; }\n${run}`);
     for (const installer of installers) {
       writeFileSync(path.join(directory, installer), "#!/bin/bash\ntrue\n");
     }
@@ -75,36 +91,17 @@ describe("website installer sync workflow", () => {
       installs: true,
     },
   ])("prepares $name Fedora prerequisites before creating the installer user", (scenario) => {
-    const config = parse(workflow) as {
-      jobs: Record<string, { steps: { name: string; run?: string }[] }>;
-    };
-    const run = config.jobs["fedora-installer"]?.steps.find(
-      (step) => step.name === "install.sh on Fedora",
-    )?.run;
-    if (!run) {
-      throw new Error("Missing Fedora installer step");
-    }
     const root = tempDirs.make("fedora-workflow-prerequisites-");
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-e",
-        "-o",
-        "pipefail",
-        "-c",
-        `timeout() { shift 2; "$@"; }
+    const result = shell(
+      root,
+      `timeout() { shift 2; "$@"; }
 docker() { /bin/bash -se; }
 rpm() { [[ "$*" == "-q sudo shadow-utils" ]] || return 64; return ${scenario.packageStatus}; }
 dnf() { [[ "$*" == "install -y -q sudo shadow-utils" ]] || return 64; printf 'install\\n'; return ${scenario.installStatus}; }
 useradd() { printf 'create-user\\n'; exit 0; }
 export -f timeout docker rpm dnf useradd
-${run}`,
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { PATH: root, HOME: root, BASH_ENV: "", ENV: "", INSTALL_USER: "non-root" },
-      },
+${stepRun("fedora-installer", "install.sh on Fedora")}`,
+      { PATH: root, INSTALL_USER: "non-root" },
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(scenario.expectedStatus);
@@ -117,31 +114,15 @@ ${run}`,
   it.each(["root", "non-root"])(
     "retains DNF diagnostics after a killed %s Fedora container",
     (user) => {
-      const config = parse(workflow) as {
-        jobs: Record<string, { steps: { name: string; if?: string; run?: string }[] }>;
-      };
       const steps = config.jobs["fedora-installer"]?.steps ?? [];
-      const run = steps.find((step) => step.name === "install.sh on Fedora")?.run;
-      if (!run) {
-        throw new Error("Missing Fedora installer step");
-      }
       const root = tempDirs.make("fedora-workflow-diagnostics-");
       const env = {
-        PATH: process.env.PATH,
-        HOME: root,
         RUNNER_TEMP: root,
-        BASH_ENV: "",
-        ENV: "",
         INSTALL_USER: user,
       };
-      const install = spawnSync(
-        "/bin/bash",
-        [
-          "-e",
-          "-o",
-          "pipefail",
-          "-c",
-          `timeout() { shift 2; "$@"; }
+      const install = shell(
+        root,
+        `timeout() { shift 2; "$@"; }
 docker() {
   for argument in "$@"; do
     if [[ "$argument" == *:/var/log ]]; then
@@ -152,24 +133,17 @@ docker() {
   done
   return 137
 }
-${run}`,
-        ],
-        { cwd: root, encoding: "utf8", env },
+${stepRun("fedora-installer", "install.sh on Fedora")}`,
+        env,
       );
       expect(install.status, install.stderr).toBe(137);
-      const diagnostics = spawnSync(
-        "/bin/bash",
-        [
-          "-e",
-          "-o",
-          "pipefail",
-          "-c",
-          `sudo() { "$@"; }\n${steps
-            .filter((step) => step.if === "failure()")
-            .map((step) => step.run ?? "")
-            .join("\n")}`,
-        ],
-        { cwd: root, encoding: "utf8", env },
+      const diagnostics = shell(
+        root,
+        `sudo() { "$@"; }\n${steps
+          .filter((step) => step.if === "failure()")
+          .map((step) => step.run ?? "")
+          .join("\n")}`,
+        env,
       );
       expect(diagnostics.status, diagnostics.stderr).toBe(0);
       expect(diagnostics.stdout).toContain("librepo: fixture mirror connection stalled");
@@ -251,16 +225,7 @@ ${run}`,
 });
 
 describe("installer platform admission", () => {
-  const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
-    jobs: Record<
-      string,
-      {
-        if?: string;
-        steps: { id?: string; name?: string; if?: string; with?: { script?: string } }[];
-      }
-    >;
-  };
-  const script = workflow.jobs.scope?.steps.find((step) => step.id === "scope")?.with?.script;
+  const script = config.jobs.scope?.steps.find((step) => step.id === "scope")?.with?.script;
   if (!script) {
     throw new Error("Missing installer platform selection");
   }
@@ -319,11 +284,11 @@ ${script}
     const jobs = Object.fromEntries(
       [...unixJobs, "windows-installer", "static"].map((job) => [
         job,
-        evaluate(workflow.jobs[job]!.if!),
+        evaluate(config.jobs[job]!.if!),
       ]),
     );
     const staticSteps = Object.fromEntries(
-      workflow.jobs
+      config.jobs
         .static!.steps.filter((step) => step.if)
         .map((step) => [step.name, evaluate(step.if!)]),
     );
@@ -388,7 +353,7 @@ ${script}
     expect(result.staticSteps["Shell syntax"]).toBe(scenario.unix);
     expect(result.staticSteps["PowerShell syntax"]).toBe(scenario.windows);
     expect(result.jobs.static).toBe(true);
-    expect(result.evaluate(workflow.jobs["windows-installer"]!.if!, true)).toBe(false);
+    expect(result.evaluate(config.jobs["windows-installer"]!.if!, true)).toBe(false);
   });
 
   it.each(["push", "workflow_dispatch"])("keeps full %s validation", async (event) => {
