@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LogService, setMatrixConsoleLogging } from "./logger.js";
 
 const runtimeLogger = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   getMatrixRuntime: () => ({ logging: { getChildLogger: () => runtimeLogger } }),
 }));
 

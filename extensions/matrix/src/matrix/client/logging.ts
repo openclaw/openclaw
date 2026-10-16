@@ -64,7 +64,7 @@ function configureMatrixJsSdkRootLogger(): void {
     const methodFactory = logger.methodFactory;
     matrixJsSdkRootLoggerSnapshot = {
       level: logger.getLevel?.(),
-      methodFactory: function (methodName, logLevel, loggerName) {
+      methodFactory(methodName, logLevel, loggerName) {
         const log = methodFactory.call(this, methodName, logLevel, loggerName);
         return function (this: unknown, ...args: unknown[]) {
           // SDK children copy this factory, so quiet must be checked at emission.
