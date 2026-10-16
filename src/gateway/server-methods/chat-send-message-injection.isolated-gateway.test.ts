@@ -8,6 +8,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
@@ -36,33 +37,11 @@ installQueueRuntimeErrorSilencer();
 const SESSION_KEY = "agent:main:main";
 const SOURCE_TURN_ID = "source-failclosed-1";
 
-type DispatchInboundParams = {
-  dispatcher: {
-    sendFinalReply: (payload: { text: string }) => boolean;
-    markComplete: () => void;
-    waitForIdle: () => Promise<void>;
-  };
-};
-
-const dispatchCapture = { calls: 0 };
-
 type ChatWirePayload = {
   runId?: string;
   state?: string;
   message?: { text?: string; content?: unknown };
 };
-
-function visibleMessageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const rec = message as Record<string, unknown>;
-  const text = (block: unknown) =>
-    block && typeof block === "object" ? (block as Record<string, unknown>).text : undefined;
-  return [rec.text, ...(Array.isArray(rec.content) ? rec.content.map(text) : [])]
-    .filter((part): part is string => typeof part === "string")
-    .join(" ");
-}
 
 let ws: WebSocket;
 let sessionStoreDir: string | undefined;
@@ -76,22 +55,18 @@ function clearLiveOperation(cause: string) {
   if (liveOperation) {
     try {
       forceClearReplyOperation(liveOperation, cause);
-    } catch {
-      // Best-effort cleanup of an operation left behind by a failed test.
-    }
+    } catch {}
     liveOperation = undefined;
   }
 }
 
 beforeEach(() => {
   dispatchInboundMessageMock.mockReset();
-  dispatchCapture.calls = 0;
   dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
-    const p = params as DispatchInboundParams;
-    dispatchCapture.calls += 1;
-    p.dispatcher.sendFinalReply({ text: "after-fix follow-up reply" });
-    p.dispatcher.markComplete();
-    await p.dispatcher.waitForIdle();
+    const { dispatcher } = params as Parameters<typeof dispatchInboundMessage>[0];
+    dispatcher.sendFinalReply({ text: "after-fix follow-up reply" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
     return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
   });
 });
@@ -113,17 +88,12 @@ afterEach(async () => {
 
 async function seedActiveTurn(params: {
   sessionKey?: string;
-  sessionId?: string;
-  runId?: string;
   terminalRunId: string;
   sourceTurnId?: string;
   deliverySourceRunId?: string;
 }) {
-  const {
-    sessionKey = SESSION_KEY,
-    sessionId = "session-steer",
-    runId = "live-run-steer",
-  } = params;
+  const { sessionKey = SESSION_KEY } = params;
+  const sessionId = "session-steer";
   // One suite Gateway keeps one physical store; retained populated stores collide in discovery.
   sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
   testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
@@ -137,11 +107,7 @@ async function seedActiveTurn(params: {
       },
     },
   });
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    resetTriggered: false,
-  });
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   liveOperation = operation;
   const fingerprint = "isolated-steer-authority";
   operation.bindToolAuthoritySnapshot({
@@ -157,7 +123,7 @@ async function seedActiveTurn(params: {
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
-    runId,
+    runId: "live-run-steer",
     toolAuthorityFingerprint: fingerprint,
     cancel: () => {},
     isStreaming: () => false,
@@ -222,7 +188,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         expect(queueMessage.mock.calls[0]?.[0]).toContain(
           "Synthetic steer awaiting the active run boundary.",
         );
-        expect(dispatchCapture.calls).toBe(0);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         clock = durationMs;
         commit.resolve();
         expect(await withinTest(reported.promise, signal)).toMatchObject({
@@ -230,7 +196,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           durationMs,
           details: { stage: "steer" },
         });
-        expect(dispatchCapture.calls).toBe(0);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       } finally {
         commit.resolve();
         now.mockRestore();
@@ -262,8 +228,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       const queueMessage = await seedActiveTurn(scenario);
       const resolved = createDeferred();
 
-      // Resetting this seam uses the production dispatcher and delivery owner;
-      // only the reply source is controlled. Observe its final on the real socket.
+      // Exercise the production dispatcher; only its reply source is controlled.
       dispatchInboundMessageMock.mockReset();
       const resolveReply = vi.fn<Parameters<typeof mockGetReplyFromConfigOnce>[0]>(async () => {
         resolved.resolve();
@@ -316,7 +281,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           expect.objectContaining({ Body: message }),
           expect.objectContaining({ runId, messageInjectionDisposition: "rejected" }),
         ]);
-        expect(dispatchCapture.calls).toBe(0);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
         await withinTest(finalReceived.promise, signal);
         await getSessionWorkAdmissionRelease({
@@ -328,8 +293,10 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         ws.ping();
         await withinTest(pong, signal);
         const finals = chatFrames.filter((frame) => frame.state === "final");
-        expect(finals.length).toBe(1);
-        expect(visibleMessageText(finals[0]?.message)).toContain(replyText);
+        expect(finals).toHaveLength(1);
+        expect(finals[0]).toMatchObject({
+          message: { content: [{ text: expect.stringContaining(replyText) }] },
+        });
       } finally {
         ws.off("message", onChatFrame);
       }

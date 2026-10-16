@@ -129,12 +129,13 @@ export function useBrowserFollowupFixture() {
     } else {
       await seedTranscript();
     }
+    const memoryLocation = { agentId: scope.agentId, path: scope.storePath };
     const readTranscript = () => {
       if (!memoryIncognito) {
         return loadTranscriptEventsSync(scope);
       }
       const snapshot = memorySessionActorOwners
-        .read({ agentId: scope.agentId, path: scope.storePath })
+        .read(memoryLocation)
         ?.readStorage(
           scope.sessionKey,
           { type: "session.history.hydrate", input: { sessionId: scope.sessionId } },
@@ -227,6 +228,7 @@ export function useBrowserFollowupFixture() {
         sessionMutationCommitGuard?: () => void;
       },
       p = params,
+      handler = handleChatSend,
     ) => {
       const request = {
         req: { type: "req", id: p.idempotencyKey, method: "chat.send", params: p },
@@ -242,12 +244,12 @@ export function useBrowserFollowupFixture() {
           req: { ...request.req, expectedProfileId: binding.expectedProfileId },
           signal: binding.signal,
           sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handleChatSend },
+          extraHandlers: { "chat.send": handler },
         });
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },
-          () => handleChatSend(request),
+          () => handler(request),
         );
       }
       return respond;
@@ -265,10 +267,7 @@ export function useBrowserFollowupFixture() {
       await finishDispatch();
       dispatchInboundMessageMock.mockReset();
       if (memoryIncognito) {
-        memorySessionActorOwners.closeSession(
-          { agentId: scope.agentId, path: scope.storePath },
-          scope.sessionKey,
-        );
+        memorySessionActorOwners.closeSession(memoryLocation, scope.sessionKey);
       }
     };
     return {
