@@ -184,7 +184,7 @@ it("keeps the latest visible assistant preview across user followups and clears 
     });
     for (let pass = 0; pass < 2; pass++) {
       const published = observeSessionRowBackfill([target.sessionKey]);
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const projection = await createTestProjection({ cfg, modelCatalog: [] });
       try {
         await withinTest(published, signal);
         expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
