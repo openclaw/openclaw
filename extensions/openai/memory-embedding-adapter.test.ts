@@ -1,4 +1,3 @@
-// Openai tests cover memory embedding adapter plugin behavior.
 import {
   resolveRemoteEmbeddingBearerClient,
   type MemoryEmbeddingProvider,
@@ -7,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createOpenAiEmbeddingProvider: vi.fn(),
-  runOpenAiEmbeddingBatches: vi.fn(async () => new Map([["0", [1, 0]]])),
+  runOpenAiEmbeddingBatches: vi.fn(
+    async (_options: { requests: { body: Record<string, unknown> }[] }) => new Map([["0", [1, 0]]]),
+  ),
 }));
 
 vi.mock("./embedding-provider.js", () => ({
@@ -27,6 +28,28 @@ const provider: MemoryEmbeddingProvider = {
   embed: async () => [1, 0],
   embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
+
+const model = "text-embedding-3-small";
+function createAdapter(providerId = "openai", modelId = model) {
+  return openAiMemoryEmbeddingProviderAdapter.create({
+    config: {},
+    provider: providerId,
+    model: modelId,
+    fallback: "none",
+  });
+}
+
+async function createWithClient(
+  client: Awaited<ReturnType<typeof resolveRemoteEmbeddingBearerClient>>,
+  providerId = "openai",
+  modelId = model,
+) {
+  mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+    provider,
+    client: { ...client, model: modelId },
+  });
+  return createAdapter(providerId, modelId);
+}
 
 describe("OpenAI memory embedding adapter", () => {
   afterEach(() => {
@@ -56,20 +79,16 @@ describe("OpenAI memory embedding adapter", () => {
         provider: "openai",
         defaultBaseUrl: "https://api.openai.com/v1",
         options: {
-          config: { models: {} } as never,
+          config: { models: {} },
           model: "text-embedding-3-small",
           remote: { apiKey: "fixture-secret" },
         },
       });
-      mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
-        provider,
-        client: { ...client, model: "text-embedding-3-small" },
-      });
-      const result = await openAiMemoryEmbeddingProviderAdapter.create({
-        config: {} as never,
-        provider: "openai",
-        model: "text-embedding-3-small",
-        fallback: "none",
+      const result = await createWithClient(client);
+      expect(client.headers).toMatchObject({
+        Authorization: "Bearer fixture-secret",
+        version,
+        "User-Agent": `openclaw/${version}`,
       });
       return { headers: client.headers, cacheKeyData: result.runtime?.cacheKeyData };
     };
@@ -77,16 +96,6 @@ describe("OpenAI memory embedding adapter", () => {
     const previous = await createForVersion("2026.7.1");
     const current = await createForVersion("2026.7.2");
 
-    expect(previous.headers).toMatchObject({
-      Authorization: "Bearer fixture-secret",
-      version: "2026.7.1",
-      "User-Agent": "openclaw/2026.7.1",
-    });
-    expect(current.headers).toMatchObject({
-      Authorization: "Bearer fixture-secret",
-      version: "2026.7.2",
-      "User-Agent": "openclaw/2026.7.2",
-    });
     expect(current.cacheKeyData).toEqual(previous.cacheKeyData);
     expect(current.cacheKeyData).toMatchObject({
       provider: "openai",
@@ -101,23 +110,17 @@ describe("OpenAI memory embedding adapter", () => {
   });
 
   it.each([
-    {
-      name: "proxy",
-      providerId: "bailian-embedding",
-      baseUrl: "https://embeddings.example/v1",
-      headerName: "X-Api-Key",
-      rotatedHeaderName: "x-aPI-kEY",
-    },
-    {
-      name: "Azure OpenAI",
-      providerId: "openai",
-      baseUrl: "https://qa-resource.openai.azure.com/openai/v1",
-      headerName: "api-key",
-      rotatedHeaderName: "Api-Key",
-    },
+    ["proxy", "bailian-embedding", "https://embeddings.example/v1", "X-Api-Key", "x-aPI-kEY"],
+    [
+      "Azure OpenAI",
+      "openai",
+      "https://qa-resource.openai.azure.com/openai/v1",
+      "api-key",
+      "Api-Key",
+    ],
   ])(
-    "keeps rotated $name credentials out of tenant-specific embedding cache identity",
-    async ({ providerId, baseUrl, headerName, rotatedHeaderName }) => {
+    "keeps rotated %s credentials out of tenant-specific embedding cache identity",
+    async (_name, providerId, baseUrl, headerName, rotatedHeaderName) => {
       const createForTenant = async (
         tenant: string,
         proxyApiKey: string,
@@ -127,7 +130,7 @@ describe("OpenAI memory embedding adapter", () => {
           provider: providerId,
           defaultBaseUrl: baseUrl,
           options: {
-            config: { models: {} } as never,
+            config: { models: {} },
             model: "text-embedding-v3",
             remote: {
               baseUrl,
@@ -147,16 +150,7 @@ describe("OpenAI memory embedding adapter", () => {
           [proxyHeaderName]: proxyApiKey,
           "X-Deployment": tenant,
         });
-        mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
-          provider,
-          client: { ...client, model: "text-embedding-v3" },
-        });
-        return await openAiMemoryEmbeddingProviderAdapter.create({
-          config: {} as never,
-          provider: providerId,
-          model: "text-embedding-v3",
-          fallback: "none",
-        });
+        return createWithClient(client, providerId, "text-embedding-v3");
       };
 
       const first = await createForTenant("tenant-a", "proxy-key-before-rotation");
@@ -187,12 +181,7 @@ describe("OpenAI memory embedding adapter", () => {
   );
 
   it("sends document input_type in OpenAI batch embedding requests", async () => {
-    const result = await openAiMemoryEmbeddingProviderAdapter.create({
-      config: {} as never,
-      provider: "openai",
-      model: "text-embedding-3-small",
-      fallback: "none",
-    });
+    const result = await createAdapter();
 
     await result.runtime?.batchEmbed?.({
       agentId: "main",
@@ -204,20 +193,10 @@ describe("OpenAI memory embedding adapter", () => {
       debug: () => {},
     });
 
-    const batchCalls = mocks.runOpenAiEmbeddingBatches.mock.calls as unknown as Array<
-      [
-        {
-          requests: Array<{
-            body: Record<string, unknown>;
-          }>;
-        },
-      ]
-    >;
-    const [batchOptions] = batchCalls[0] ?? [];
-    expect(batchOptions?.requests).toHaveLength(1);
-    const request = batchOptions?.requests[0];
-    expect(request?.body).toEqual({
-      model: "text-embedding-3-small",
+    const requests = mocks.runOpenAiEmbeddingBatches.mock.calls[0]?.[0].requests;
+    expect(requests).toHaveLength(1);
+    expect(requests?.[0].body).toEqual({
+      model,
       input: "doc one",
       dimensions: 512,
       input_type: "document",
@@ -226,7 +205,7 @@ describe("OpenAI memory embedding adapter", () => {
 
   it("defaults provider id to openai when the caller leaves it unset", async () => {
     await openAiMemoryEmbeddingProviderAdapter.create({
-      config: {} as never,
+      config: {},
       model: "text-embedding-3-small",
       fallback: "none",
     });
