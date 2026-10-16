@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LitContent } from "../../lit/solid-content.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
@@ -26,6 +25,7 @@ vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
 }));
 
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 
 afterEach(() => {
   cleanupSolid();
@@ -48,7 +48,9 @@ describe("chat pane lazy sidebar failures", () => {
     let renderCurrent: () => void = () => {};
     mountSolid(
       () => {
-        const [content, setContent] = createSignal<unknown>(undefined, { ownedWrite: true });
+        const [content, setContent] = createSignal<
+          ReturnType<typeof renderSidebarRegion> | undefined
+        >(undefined, { ownedWrite: true });
         renderCurrent = () => {
           setContent(() =>
             renderSidebarRegion({
@@ -80,7 +82,7 @@ describe("chat pane lazy sidebar failures", () => {
           );
         };
         renderCurrent();
-        return <LitContent value={content()} />;
+        return <Show when={content()}>{(current) => <SidebarRegionView {...current()} />}</Show>;
       },
       { container },
     );

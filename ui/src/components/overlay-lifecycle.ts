@@ -577,7 +577,9 @@ export function createOverlay(
     if (phase === "closing" && !opened && next) {
       return;
     }
-    surface.inert = !next;
+    if (surface.inert !== !next) {
+      surface.inert = !next;
+    }
     if (next === opened) {
       return;
     }

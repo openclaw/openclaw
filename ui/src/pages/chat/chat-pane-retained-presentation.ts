@@ -15,7 +15,6 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
@@ -32,7 +31,6 @@ import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
-import { ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -437,11 +435,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected renderResetConfirmation() {
     if (!this.resetConfirmation) {
-      return emptyLegacyContent;
+      return null;
     }
-    return solidContent(ChatBoardResetConfirmation, {
-      onResolve: (confirmed: boolean) => this.settleResetConfirmation(confirmed),
-    });
+    return { onResolve: (confirmed: boolean) => this.settleResetConfirmation(confirmed) };
   }
 
   protected override activeChanged(active: boolean): void {

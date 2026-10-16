@@ -210,6 +210,7 @@ const bunCompatibleScopedOwners = new Map([
         "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
+        "src/state/openclaw-state-lease.retention.test.ts",
       ],
     },
   ],
@@ -306,8 +307,6 @@ const nodeRequiredFiles = new Set([
   "src/gateway/session-utils.fs.display-position.test.ts",
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
-  // Follow up: use the Node subreaper owner under Bun so detached descendants are reaped.
-  "test/helpers/openclaw-test-instance.test.ts",
   // Bun throws ENOTDIR despite statSync's throwIfNoEntry: false option.
   "src/state/openclaw-database-preflight.startup-prepared.test.ts",
   // Bun Worker termination leaves unmanaged fs.openSync descriptors open.
@@ -345,8 +344,6 @@ const unitRequiresNode = (file: string) =>
       !file.startsWith("src/security/")) ||
     file === "packages/normalization-core/src/grapheme.test.ts"
   );
-// State-lease retention stays with its separate infra owner on Node: the completed
-// worker-heartbeat case still retains caller async context on the pinned Bun fork.
 const runtimePartitions = new Map<
   string,
   {

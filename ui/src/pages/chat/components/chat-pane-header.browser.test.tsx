@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   openChatLayoutMenu,
   selectChatLayoutAction,
@@ -56,7 +55,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             icon: "copy",
             available: true,
             content: null,
-            loading: solidContent(() => null, {}),
+            loading: { variant: "files", label: "Loading" },
             empty: { description: "" },
           },
           {
@@ -65,7 +64,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             icon: "copy",
             available: true,
             content: null,
-            loading: solidContent(() => null, {}),
+            loading: { variant: "files", label: "Loading" },
             empty: { description: "" },
           },
         ],

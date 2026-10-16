@@ -1669,6 +1669,7 @@ src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
+src/process/supervisor/darwin-bun-process-census.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts

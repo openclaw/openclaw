@@ -269,6 +269,60 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  it.each<{
+    name: string;
+    patch?: Record<string, unknown>;
+    omitStartup?: boolean;
+    startupExitCode?: number;
+    succeeds: boolean;
+  }>([
+    { name: "completed startup with cleanup advisory", succeeds: true },
+    { name: "missing advisory", patch: { advisory: undefined }, succeeds: false },
+    { name: "wrong advisory", patch: { advisory: { kind: "other" } }, succeeds: false },
+    { name: "another cleanup step", patch: { name: "candidate-doctor-cleanup" }, succeeds: false },
+    { name: "cleanup execution failure", patch: { exitCode: 13 }, succeeds: false },
+    { name: "cleanup timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "cleanup signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed cleanup", patch: { killed: true }, succeeds: false },
+    { name: "truncated cleanup output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "cleanup failure facts",
+      patch: { failureFacts: [{ code: "cleanup-failed" }] },
+      succeeds: false,
+    },
+    { name: "missing primary startup", omitStartup: true, succeeds: false },
+    { name: "failed primary startup", startupExitCode: 1, succeeds: false },
+  ])(
+    "classifies $name without hiding failed core steps",
+    ({ patch, omitStartup, startupExitCode = 0, succeeds }) => {
+      const report = {
+        status: "ok",
+        after: { version: "2026.10.3" },
+        steps: [
+          ...(omitStartup
+            ? []
+            : [{ name: "candidate-gateway-startup", exitCode: startupExitCode }]),
+          {
+            name: "candidate-gateway-startup-cleanup",
+            exitCode: null,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message:
+                "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
+            },
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      };
+      const result = runJsonAssertion("assert-successful-update-json", report, "2026.10.3");
+      expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+      if (!succeeds) {
+        expect(result.stderr).toContain("successful update contained a failed core step");
+      }
+    },
+  );
+
   it.each([
     { name: "completed informational inspection", patch: {}, succeeds: true },
     { name: "warning", patch: { doctorLintFindings: [{ severity: "warning" }] }, succeeds: false },

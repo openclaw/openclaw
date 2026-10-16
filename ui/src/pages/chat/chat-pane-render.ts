@@ -22,14 +22,12 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
-import { PaneBootLayout } from "./chat-pane-layout-view.tsx";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createChatPaneQueuedEditProps,
@@ -72,8 +70,6 @@ import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-const bootLayout = solidContent(PaneBootLayout, {});
-
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.requestUpdate();
 
@@ -84,7 +80,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
   render(readProviderReview?: () => ChatProviderReviewOwner) {
     const state = this.state;
     if (!state) {
-      return { layout: bootLayout, capabilityDialogs: undefined, providerReviewSource: undefined };
+      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
     }
     const selectionConnectionGeneration = this.connectionGeneration;
     const selectedSession = selectedChatSessionRow(state);

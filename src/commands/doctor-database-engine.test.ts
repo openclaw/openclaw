@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import {
   collectDatabaseEngineHealthFindings,
   noteDatabaseEngines,
@@ -10,7 +11,15 @@ vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
   note: vi.fn(),
 }));
 
-beforeEach(() => vi.mocked(note).mockClear());
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  ensureSqliteLibrarySelected: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(note).mockClear();
+  vi.mocked(ensureSqliteLibrarySelected).mockReturnValue({ source: "runtime" });
+});
 
 describe("Doctor database engines", () => {
   it("reports default SQLite store families without an experimental warning", () => {
@@ -75,5 +84,38 @@ describe("Doctor database engines", () => {
       "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",
     );
     expect(collectDatabaseEngineHealthFindings(cfg)).toHaveLength(1);
+  });
+
+  it.each(["bundled", "env", "discovered"] as const)(
+    "reports the %s SQLite library independently of Gateway service inspection",
+    (source) => {
+      vi.mocked(ensureSqliteLibrarySelected).mockReturnValue({
+        source,
+        path: "/isolated/runtime/lib/libsqlite3.dylib",
+        version: "3.53.4",
+        extensionLoadingSupported: true,
+      });
+      noteDatabaseEngines({});
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "SQLite (doctor process): /isolated/runtime/lib/libsqlite3.dylib (3.53.4, extension loading enabled)",
+        ),
+        "Database engines",
+      );
+    },
+  );
+
+  it("explains a SQLite override ignored by the current runtime", () => {
+    vi.mocked(ensureSqliteLibrarySelected).mockReturnValue({
+      source: "runtime",
+      ignoredOverride: "OPENCLAW_SQLITE_LIBRARY requires Bun on macOS",
+    });
+    noteDatabaseEngines({});
+    expect(note).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "SQLite (doctor process): OPENCLAW_SQLITE_LIBRARY requires Bun on macOS; override ignored",
+      ),
+      "Database engines",
+    );
   });
 });

@@ -7,9 +7,8 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
-import { SessionMenuSettings } from "./session-menu-settings.ts";
+import { createSessionMenuSettings } from "./session-menu-settings.ts";
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
@@ -87,7 +86,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-type SessionMenuActionsHost = SolidControllerHost & HTMLElement;
+type SessionMenuActionsHost = HTMLElement & { readonly updateComplete: Promise<boolean> };
 
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
@@ -130,8 +129,11 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
-    this.advanced = new SessionMenuSettings(host, {
-      context: () => this.context,
+    this.advanced = createSessionMenuSettings({
+      context: () => {
+        this.gateway?.read();
+        return this.context;
+      },
       readState: () => this.readState(),
       runAction: (action) => this.runAction(action),
     });

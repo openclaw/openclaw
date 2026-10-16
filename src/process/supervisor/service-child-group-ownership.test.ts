@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-const { census, definitelyDead, directory, readStat, darwinCommand } = vi.hoisted(() => ({
-  census: vi.fn(),
-  definitelyDead: vi.fn(),
-  directory: vi.fn(),
-  readStat: vi.fn(),
-  darwinCommand: vi.fn(),
+const { census, definitelyDead, directory, readStat, darwinCommand, nativeDarwinCensus } =
+  vi.hoisted(() => ({
+    census: vi.fn(),
+    nativeDarwinCensus: vi.fn(),
+    definitelyDead: vi.fn(),
+    directory: vi.fn(),
+    readStat: vi.fn(),
+    darwinCommand: vi.fn(),
+  }));
+vi.mock("./darwin-bun-process-census.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./darwin-bun-process-census.js")>()),
+  readDarwinBunProcessCensus: nativeDarwinCensus,
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
 vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: readStat }));
@@ -16,6 +22,7 @@ import {
 } from "./service-child-group-ownership.js";
 
 const owner = process.pid;
+const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let rows: Map<number, string | Error>;
 let commands: Map<number, string | Error>;
@@ -25,10 +32,12 @@ function stat(pid: number, group: number, state = "S", name = "worker", ppid = 1
 }
 
 beforeEach(() => {
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   census.mockReset().mockReturnValue({ error: new Error("ps is unavailable") });
   definitelyDead.mockReset().mockReturnValue(false);
   darwinCommand.mockReset();
+  nativeDarwinCensus.mockReset().mockReturnValue([]);
   rows = new Map([[owner, stat(owner, owner)]]);
   commands = new Map([[owner, "openclaw-doctor\0"]]);
   identities = new Map();
@@ -47,6 +56,11 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  if (bunDescriptor) {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {
@@ -214,4 +228,31 @@ it("does not turn native Darwin inspection failures into an empty census", () =>
   expect(() => [...readProcessGroupMembers(1_000, { readDarwinCommand: darwinCommand })]).toThrow(
     "native process inspection unavailable",
   );
+});
+
+it("uses the native census in Darwin Bun when sandboxed ps cannot execute", () => {
+  mockProcessPlatform("darwin");
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+  nativeDarwinCensus.mockReturnValue([
+    { pid: owner, ppid: 1, pgid: owner, state: "R", uid: 501 },
+    { pid: owner + 1, ppid: owner, pgid: owner, state: "Z", uid: 501 },
+  ]);
+  expect(hasLiveOwnedProcessGroupMembers()).toBe(false);
+  darwinCommand.mockReturnValue({ argv: ["openclaw", "doctor"] });
+  expect([...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toEqual([
+    {
+      pid: owner,
+      pgid: owner,
+      state: "R",
+      command: { ppid: 1, argv: ["openclaw", "doctor"], uid: 501 },
+    },
+    {
+      pid: owner + 1,
+      pgid: owner,
+      state: "Z",
+      command: { ppid: owner, argv: [], uid: 501 },
+    },
+  ]);
+  expect(census).not.toHaveBeenCalled();
+  expect(darwinCommand).toHaveBeenCalledExactlyOnceWith(owner, 501);
 });

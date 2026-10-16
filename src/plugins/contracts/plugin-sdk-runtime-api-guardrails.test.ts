@@ -176,7 +176,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { resolveSlackAppToken, resolveSlackBotToken } from "./src/token.js";',
     'export { resolveSlackChannelAllowlist, type SlackChannelLookup, type SlackChannelResolution } from "./src/resolve-channels.js";',
     'export { resolveSlackUserAllowlist, type SlackUserLookup, type SlackUserResolution } from "./src/resolve-users.js";',
-    'export { registerSlackPluginHttpRoutes } from "./src/http/plugin-routes.js";',
     'export { setSlackRuntime } from "./src/runtime.js";',
   ],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "telegram", relativePath: "runtime-api.ts" })]:

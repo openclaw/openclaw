@@ -90,7 +90,7 @@ export function settingsRow(page: Page, title: string): Locator {
   });
 }
 
-export function proofCapture(directory: () => string, enabled: boolean) {
+function proofCapture(directory: () => string, enabled: boolean) {
   return async (surface: Page | Locator, name: string, fullPage = false) => {
     if (enabled) {
       await surface.screenshot({

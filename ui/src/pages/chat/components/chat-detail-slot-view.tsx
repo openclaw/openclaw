@@ -1,35 +1,35 @@
 import { createMemo } from "solid-js";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
 import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
-import type { ChatPageHost } from "../chat-state-host.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
-import type { ChatProps } from "../chat-view.tsx";
 import { openSlot } from "../sidebar-layout.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { ChatToolOutput } from "./chat-tool-output.ts";
 
-type Props = {
-  chat: ChatProps;
-  content: SidebarContent;
-  host: ChatPageHost;
-  requestUpdate: () => void;
-};
-
-function ChatDetailSlot(props: Props) {
+export function ChatDetailSlot(props: ChatDetailSlotProps) {
   const panelLoad = createMemo(() =>
-    props.content.kind === "tool-output"
+    props.content.kind === "tool-output" ||
+    props.content.kind === "loading" ||
+    props.content.kind === "unavailable"
       ? undefined
       : ensureLazySidebarElement("detail-panel", props.requestUpdate),
   );
   return (
     <>
-      {props.content.kind === "tool-output" ? (
+      {props.content.kind === "loading" ? (
+        <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
+      ) : props.content.kind === "unavailable" ? (
+        <div class="callout danger review-unavailable" role="alert">
+          <strong>{t("chat.detailPanel.unavailable")}</strong>
+          <span>{props.content.message}</span>
+        </div>
+      ) : props.content.kind === "tool-output" ? (
         <ChatToolOutput
           class="chat-sidebar"
           content={props.content}
@@ -40,7 +40,7 @@ function ChatDetailSlot(props: Props) {
         panelLoad() === null ? (
           <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
         ) : (
-          <LitContent value={panelLoad()} />
+          <LazyViewError {...panelLoad()!} />
         )
       ) : (
         <openclaw-chat-detail-panel
@@ -92,8 +92,4 @@ function ChatDetailSlot(props: Props) {
       )}
     </>
   );
-}
-
-export function renderChatDetailSlot(params: Props) {
-  return solidContent(ChatDetailSlot, params);
 }

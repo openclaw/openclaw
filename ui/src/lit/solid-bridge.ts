@@ -43,7 +43,7 @@ type ComponentProps<Props, Methods> = Partial<Props> &
     children?: JSX.Element;
   };
 
-/** Interim tag owner: delete with the last Lit caller at the Solid cutover. */
+/** One native custom-element host for imperative and Solid callers. */
 export function defineSolidBridge<Props extends object, Methods extends object = object>(
   tag: string,
   content: (

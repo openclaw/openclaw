@@ -1,6 +1,6 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
@@ -311,7 +311,8 @@ export function ContextNotice(props: ContextNoticeProps) {
   return (
     <Show when={Boolean(model() || currentGroup())}>
       {(_visible) => {
-        const pickerRef = createChatPickerOverlay();
+        const [open, setOpen] = createSignal(false);
+        const pickerRef = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <div class="context-usage" style={colors()}>
             <details ref={pickerRef}>
@@ -339,72 +340,74 @@ export function ContextNotice(props: ContextNoticeProps) {
                 </svg>
               </summary>
               <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
-                <section
-                  class="context-usage__popover"
-                  aria-label={t("chat.composer.contextUsage.title")}
-                >
-                  <Show when={model()}>
-                    {(context) => (
-                      <>
-                        <div class="context-usage__header">
-                          <span class="context-usage__title">
-                            {t(
-                              context().fromLastPrompt
-                                ? "chat.composer.contextUsage.promptBudget"
-                                : "chat.composer.contextUsage.contextWindow",
+                <Show when={open()}>
+                  <section
+                    class="context-usage__popover"
+                    aria-label={t("chat.composer.contextUsage.title")}
+                  >
+                    <Show when={model()}>
+                      {(context) => (
+                        <>
+                          <div class="context-usage__header">
+                            <span class="context-usage__title">
+                              {t(
+                                context().fromLastPrompt
+                                  ? "chat.composer.contextUsage.promptBudget"
+                                  : "chat.composer.contextUsage.contextWindow",
+                              )}
+                            </span>
+                            <strong class="context-usage__context-value">
+                              {context().detail} · {context().approximate ? "~" : ""}
+                              {context().pct}%
+                            </strong>
+                          </div>
+                          <div
+                            class="context-usage__bar"
+                            role="progressbar"
+                            aria-label={summary()}
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            aria-valuenow={context().pct}
+                          >
+                            <span style={{ width: `${context().pct}%` }} />
+                          </div>
+                          <div class="context-usage__section-label">
+                            {t("chat.composer.contextUsage.latestRunTokens")}
+                          </div>
+                          <dl class="context-usage__stats">
+                            {renderContextStat(
+                              t("usage.breakdown.input"),
+                              formatStat(context().input),
                             )}
-                          </span>
-                          <strong class="context-usage__context-value">
-                            {context().detail} · {context().approximate ? "~" : ""}
-                            {context().pct}%
-                          </strong>
-                        </div>
-                        <div
-                          class="context-usage__bar"
-                          role="progressbar"
-                          aria-label={summary()}
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                          aria-valuenow={context().pct}
-                        >
-                          <span style={{ width: `${context().pct}%` }} />
-                        </div>
-                        <div class="context-usage__section-label">
-                          {t("chat.composer.contextUsage.latestRunTokens")}
-                        </div>
-                        <dl class="context-usage__stats">
-                          {renderContextStat(
-                            t("usage.breakdown.input"),
-                            formatStat(context().input),
-                          )}
-                          {renderContextStat(
-                            t("usage.breakdown.output"),
-                            formatStat(context().output),
-                          )}
-                          {showCosts() ? renderEstimate(context().cost) : null}
-                        </dl>
-                      </>
-                    )}
-                  </Show>
-                  <Show when={hasProviderCosts() ? providerCosts() : null}>
-                    {(costs) => (
-                      <>
-                        <div class="context-usage__section-label">
-                          {t("usage.breakdown.costByType")}
-                        </div>
-                        <dl class="context-usage__stats">
-                          {renderCostStat(t("usage.breakdown.input"), costs().input)}
-                          {renderCostStat(t("usage.breakdown.output"), costs().output)}
-                          {renderCostStat(t("usage.breakdown.cacheRead"), costs().cacheRead)}
-                          {renderCostStat(t("usage.breakdown.cacheWrite"), costs().cacheWrite)}
-                        </dl>
-                      </>
-                    )}
-                  </Show>
-                  <Show when={currentGroup()}>
-                    {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
-                  </Show>
-                </section>
+                            {renderContextStat(
+                              t("usage.breakdown.output"),
+                              formatStat(context().output),
+                            )}
+                            {showCosts() ? renderEstimate(context().cost) : null}
+                          </dl>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={hasProviderCosts() ? providerCosts() : null}>
+                      {(costs) => (
+                        <>
+                          <div class="context-usage__section-label">
+                            {t("usage.breakdown.costByType")}
+                          </div>
+                          <dl class="context-usage__stats">
+                            {renderCostStat(t("usage.breakdown.input"), costs().input)}
+                            {renderCostStat(t("usage.breakdown.output"), costs().output)}
+                            {renderCostStat(t("usage.breakdown.cacheRead"), costs().cacheRead)}
+                            {renderCostStat(t("usage.breakdown.cacheWrite"), costs().cacheWrite)}
+                          </dl>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={currentGroup()}>
+                      {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+                    </Show>
+                  </section>
+                </Show>
               </div>
             </details>
           </div>

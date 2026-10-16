@@ -17,6 +17,29 @@ import { Menu, type MenuEntry, type MenuItem, type MenuProps } from "./menu.tsx"
 afterEach(cleanup);
 
 describe("Solid menu navigation", () => {
+  it("releases transient rows on close and restores current rows with keyboard focus", async () => {
+    const [label, setLabel] = createSignal("First");
+    const view = mountMenu({
+      lazy: "while-open",
+      get items() {
+        return [{ id: "current", label: label() }];
+      },
+    });
+    expect(surface().querySelector("[role=menuitem]")).toBeNull();
+    trigger().focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await phase(surface(), "open");
+    expect(document.activeElement).toBe(item("First"));
+    expect(document.querySelectorAll(":popover-open")).toHaveLength(1);
+    await userEvent.keyboard("{Escape}");
+    await phase(surface(), "hidden");
+    expect(surface().querySelector("[role=menuitem]")).toBeNull();
+    setLabel("Second");
+    flush();
+    expect(view.handle.open()).toBe(true);
+    expect(document.activeElement).toBe(item("Second"));
+  });
+
   it("materializes lazy content at first keyboard admission and retains it when reopened", async () => {
     let itemReads = 0;
     let childrenReads = 0;
