@@ -114,6 +114,8 @@ describe("Gateway request start fairness", () => {
       void start("cron.list", "viewer");
       void start("push.web.vapidPublicKey", "viewer");
       void start("sessions.github.options", "viewer");
+      void start("workboard.cards.list", "viewer");
+      void start("github.preview", "viewer");
       void start("sessions.create", "another-viewer");
       await nextTurn();
       expect([...starts]).toEqual([
@@ -122,11 +124,13 @@ describe("Gateway request start fairness", () => {
         "cron.list",
         "push.web.vapidPublicKey",
         "sessions.github.options",
+        "workboard.cards.list",
+        "github.preview",
         "sessions.create",
       ]);
       held[0]!.resolve();
       await Promise.all([subscription, unsubscribe, mutation]);
-      expect(starts.slice(6)).toEqual([
+      expect(starts.slice(8)).toEqual([
         "sessions.messages.subscribe",
         "sessions.messages.unsubscribe",
         "chat.send",
