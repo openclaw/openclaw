@@ -128,8 +128,8 @@ describe("noteDevicePairingHealth", () => {
       expect(callGatewayMock).not.toHaveBeenCalled();
 
       const findings = await collectDevicePairingHealthFindings(localHealth);
-      expect(findings).toEqual([
-        expect.objectContaining({
+      expect(findings).toMatchObject([
+        {
           checkId: "core/doctor/device-pairing",
           severity: "warning",
           path: "devices.pending",
@@ -137,54 +137,45 @@ describe("noteDevicePairingHealth", () => {
           requirement: "scope-upgrade",
           message: expect.stringContaining("Pending scope upgrade"),
           fixHint: expect.stringContaining("openclaw devices approve"),
-        }),
+        },
       ]);
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
   });
 
   it.each([
-    {
-      file: "nodes/paired.json",
-      mode: "local",
-      findingPath: "devices.legacy-store",
-      requirement: "pairing-store-legacy-file",
-      fixHint: "openclaw doctor --fix",
-    },
-    {
-      file: "identity/device-auth.json",
-      mode: "remote",
-      findingPath: "identity.device-auth",
-      requirement: "device-auth-store-legacy-file",
-      fixHint: "openclaw doctor --fix",
-    },
+    ["nodes/paired.json", "local", "devices.legacy-store", "pairing-store-legacy-file"],
+    [
+      "identity/device-auth.json",
+      "remote",
+      "identity.device-auth",
+      "device-auth-store-legacy-file",
+    ],
   ] as const)(
-    "warns about unimported $file in $mode mode without changing it",
-    async (testCase) => {
+    "warns about unimported %s in %s mode without changing it",
+    async (file, mode, findingPath, requirement) => {
       await withOpenClawTestState(
         { prefix: "openclaw-doctor-device-pairing-", env: { OPENCLAW_TEST_FAST: "1" } },
         async (state) => {
           const content =
-            testCase.requirement === "pairing-store-legacy-file"
-              ? "{not-json}"
-              : legacyDeviceAuthContents;
-          const sourcePath = await state.writeText(testCase.file, content);
-          const params = { cfg: { gateway: { mode: testCase.mode } }, healthOk: false };
+            requirement === "pairing-store-legacy-file" ? "{not-json}" : legacyDeviceAuthContents;
+          const sourcePath = await state.writeText(file, content);
+          const params = { cfg: { gateway: { mode } }, healthOk: false };
 
           const findings = await collectDevicePairingHealthFindings(params);
-          expect.soft(findings).toEqual([
-            expect.objectContaining({
+          expect.soft(findings).toMatchObject([
+            {
               checkId: "core/doctor/device-pairing",
               severity: "warning",
-              path: testCase.findingPath,
-              requirement: testCase.requirement,
+              path: findingPath,
+              requirement,
               message: expect.stringContaining(
-                testCase.requirement === "pairing-store-legacy-file"
+                requirement === "pairing-store-legacy-file"
                   ? "has not been imported"
                   : "is still present",
               ),
-              fixHint: expect.stringContaining(testCase.fixHint),
-            }),
+              fixHint: expect.stringContaining("openclaw doctor --fix"),
+            },
           ]);
           await noteDevicePairingHealth(params);
           expect.soft(noteMock).toHaveBeenCalledTimes(1);
@@ -213,12 +204,10 @@ describe("noteDevicePairingHealth", () => {
           legacyDeviceAuthContents,
         );
         // Migration lock release retires native handles; each read reacquires the owner.
-        const readTokenRow = () => {
-          const { db: readDb } = openOpenClawStateDatabase({ env: state.env });
-          return readDb
-            .prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
+        const readTokenRow = () =>
+          openOpenClawStateDatabase({ env: state.env })
+            .db.prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
             .get("synthetic-device", "operator");
-        };
         let rowAtRemoval: unknown;
         let removalAttempts = 0;
         __setFsSafeTestHooksForTest({
@@ -252,12 +241,12 @@ describe("noteDevicePairingHealth", () => {
         ).rejects.toThrow("Legacy device auth requires migration");
         const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
         const findings = await collectDevicePairingHealthFindings(params);
-        expect(findings).toEqual([
-          expect.objectContaining({
+        expect(findings).toMatchObject([
+          {
             requirement: "device-auth-store-legacy-file",
             message: expect.stringContaining("is still present"),
             fixHint: expect.stringContaining("migration or cleanup"),
-          }),
+          },
         ]);
         await noteDevicePairingHealth(params);
         expect(requireNoteMessage()).not.toContain("has not been imported");
@@ -268,21 +257,40 @@ describe("noteDevicePairingHealth", () => {
     );
   });
 
-  it("warns when the local cached device token predates the gateway rotation", async () => {
-    await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({ deviceId: identity.deviceId, ...operatorToken, updatedAtMs: 1 });
-
-      const rotated = await rotateDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
+  it.each(["rotated token", "unapproved role", "revoked token"] as const)(
+    "diagnoses local auth with a %s without misleading recovery advice",
+    async (scenario) => {
+      await withApprovedOperatorPairing(async ({ identity: { deviceId } }) => {
+        seedDeviceAuthToken(
+          scenario === "unapproved role"
+            ? { deviceId, role: "node", token: "stale-node-token", scopes: [] }
+            : {
+                deviceId,
+                ...operatorToken,
+                ...(scenario === "rotated token" ? { updatedAtMs: 1 } : {}),
+              },
+        );
+        if (scenario === "rotated token") {
+          expect((await rotateDeviceToken({ deviceId, role: "operator" })).ok).toBe(true);
+        } else if (scenario === "revoked token") {
+          await revokeDeviceToken({ deviceId, role: "operator" });
+        }
+        const message = await localNote();
+        if (scenario === "rotated token") {
+          expect(message).toContain("stale device-token pattern");
+          expect(message).toContain("openclaw devices rotate");
+        } else if (scenario === "unapproved role") {
+          expect(message).toContain("Local cached node device auth");
+          expect(message).toContain("role is no longer approved");
+          expect(message).toContain("remove the stale cached node auth entry");
+          expect(message).not.toContain("--role node");
+        } else {
+          expect(message).toContain("has no active operator device token");
+          expect(message).not.toContain("no longer has a matching active gateway token");
+        }
       });
-      expect(rotated.ok).toBe(true);
-
-      const message = await localNote();
-      expect(message).toContain("stale device-token pattern");
-      expect(message).toContain("openclaw devices rotate");
-    });
-  });
+    },
+  );
 
   it("preserves pairing diagnostics when the token inventory read rejects", async () => {
     await withApprovedOperatorPairing(async () => {
@@ -329,23 +337,6 @@ describe("noteDevicePairingHealth", () => {
       );
     },
   );
-
-  it("does not suggest rotating local auth for a role that is no longer approved", async () => {
-    await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "node",
-        token: "stale-node-token",
-        scopes: [],
-      });
-
-      const message = await localNote();
-      expect(message).toContain("Local cached node device auth");
-      expect(message).toContain("role is no longer approved");
-      expect(message).toContain("remove the stale cached node auth entry");
-      expect(message).not.toContain("--role node");
-    });
-  });
 
   it("sanitizes device labels before printing doctor notes", async () => {
     callGatewayMock.mockResolvedValue({
@@ -410,21 +401,5 @@ describe("noteDevicePairingHealth", () => {
     expect(message).toContain(
       "openclaw devices rotate --device 'device; echo pwn' --role 'operator; touch /tmp/pwn'",
     );
-  });
-
-  it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
-    await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({ deviceId: identity.deviceId, ...operatorToken });
-      await revokeDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-      });
-
-      await noteDevicePairingHealth(localHealth);
-
-      const message = requireNoteMessage();
-      expect(message).toContain("has no active operator device token");
-      expect(message).not.toContain("no longer has a matching active gateway token");
-    });
   });
 });

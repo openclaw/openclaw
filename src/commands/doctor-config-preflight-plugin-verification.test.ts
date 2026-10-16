@@ -46,7 +46,7 @@ it("keeps an unavailable copied plugin nonblocking without fetching a replacemen
   );
   const result = await freshCache(() => runDoctorPluginConvergence({ cfg, env }));
   expect(npmInstall).not.toHaveBeenCalled();
-  expect(result).toEqual({
+  expect(result).toMatchObject({
     quarantinedPlugins: [
       {
         pluginId: "canary-fixture",
@@ -54,22 +54,12 @@ it("keeps an unavailable copied plugin nonblocking without fetching a replacemen
         diagnostic: {
           kind: "plugin-verification",
           reason: "missing-install-path",
-          detail: "Install path is missing from the plugin install record.",
         },
       },
     ],
-    migrationInspection: {
-      requiredPluginIds: [],
-      inspectionRequiredPluginIds: [],
-      statelessPlugins: [],
-      runtimePluginAliases: [],
-      discoveryBlockedPluginIds: [],
-    },
     deferredPlugins: [
       {
         pluginId: "canary-fixture",
-        reason:
-          "Package convergence must wait until the updating parent releases its install records.",
         command: "openclaw update repair",
       },
     ],

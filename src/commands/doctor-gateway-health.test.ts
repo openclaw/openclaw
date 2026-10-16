@@ -43,21 +43,14 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayCredentialsRequiredError,
 }));
 
-vi.mock("../gateway/credentials.js", () => ({
-  isGatewaySecretRefUnavailableError,
-}));
-
-vi.mock("../cli/daemon-cli/probe.js", () => ({
-  probeGatewayStatus,
-}));
+vi.mock("../gateway/credentials.js", () => ({ isGatewaySecretRefUnavailableError }));
+vi.mock("../cli/daemon-cli/probe.js", () => ({ probeGatewayStatus }));
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: readServiceCommand }),
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("./health.js", () => ({
   healthCommand: vi.fn(),
@@ -73,6 +66,16 @@ describe("checkGatewayHealth", () => {
   const expectResult = (expected: Awaited<ReturnType<typeof checkGatewayHealth>>) =>
     expect(check({ timeoutMs: 3000 })).resolves.toEqual(expected);
   const unauthenticated = { healthOk: true, authenticated: false };
+  const healthy = { healthOk: true, authenticated: true };
+  const statePaths = (owner: string) => ({
+    stateDir: `/tmp/doctor-${owner}-state`,
+    configPath: `/tmp/doctor-${owner}-state/openclaw.json`,
+  });
+  const useCliStatePaths = () => {
+    const { stateDir, configPath } = statePaths("cli");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  };
   const expectNote = (
     title: string,
     message: string | ReturnType<typeof expect.stringContaining>,
@@ -130,27 +133,20 @@ describe("checkGatewayHealth", () => {
   });
 
   it("reports live paths when status RPC rejects", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/doctor-cli-state");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/doctor-cli-state/openclaw.json");
-    callGateway.mockImplementation(
-      async (options: {
-        method?: string;
+    useCliStatePaths();
+    callGateway.mockImplementationOnce(
+      async ({
+        onHelloOk,
+      }: {
         onHelloOk?: (hello: { snapshot: { stateDir: string; configPath: string } }) => void;
       }) => {
-        if (options.method === "status") {
-          options.onHelloOk?.({
-            snapshot: {
-              stateDir: "/tmp/doctor-gateway-state",
-              configPath: "/tmp/doctor-gateway-state/openclaw.json",
-            },
-          });
-          throw new Error("status unavailable");
-        }
-        return {};
+        onHelloOk?.({ snapshot: statePaths("gateway") });
+        throw new Error("status unavailable");
       },
     );
 
     await expect(check()).resolves.toMatchObject({ authenticated: false, healthOk: false });
+    expect(callGateway).toHaveBeenNthCalledWith(1, expect.objectContaining({ method: "status" }));
 
     expectNote(
       "Gateway state directory mismatch",
@@ -160,8 +156,7 @@ describe("checkGatewayHealth", () => {
   });
 
   it("reports the offline service state directory", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/doctor-cli-state");
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/doctor-cli-state/openclaw.json");
+    useCliStatePaths();
     vi.stubEnv("OPENCLAW_HOME", "/tmp/doctor-cli-home");
     callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
     readServiceCommand.mockResolvedValueOnce({
@@ -314,10 +309,7 @@ describe("checkGatewayHealth", () => {
         [{ id: "feishu" }],
       ),
     });
-    await expect(check({ timeoutMs: 3000 })).resolves.toMatchObject({
-      authenticated: true,
-      healthOk: true,
-    });
+    await expect(check({ timeoutMs: 3000 })).resolves.toMatchObject(healthy);
 
     expectNote(
       "Channel warnings",
@@ -385,7 +377,7 @@ describe("checkGatewayHealth", () => {
       await started.diagnosticsStarted;
       await vi.advanceTimersByTimeAsync(4_000);
 
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      await expect(result).resolves.toMatchObject(healthy);
       expect(note).not.toHaveBeenCalled();
       expect(sharedRuntime.error).not.toHaveBeenCalled();
       expectRpc("channels.status", 6_100, { probe: true, timeoutMs: 5_000 });
@@ -409,7 +401,7 @@ describe("checkGatewayHealth", () => {
       await started.diagnosticsStarted;
       await vi.advanceTimersByTimeAsync(21_000);
 
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      await expect(result).resolves.toMatchObject(healthy);
       expectRpc("channels.status", 21_000, { probe: true, timeoutMs: 13_000 });
       expectNote(
         "Channel warnings",
@@ -442,8 +434,7 @@ describe("checkGatewayHealth", () => {
         new Error(`\u001B[31m${target} probe failed\nAuthorization: Bearer ${token}`),
       );
       await expect(check(target === "exporter" ? { timeoutMs: 3000 } : {})).resolves.toEqual({
-        authenticated: true,
-        healthOk: true,
+        ...healthy,
         status: { ok: true },
       });
       const [message, actualTitle] = note.mock.calls.at(-1) ?? [];
@@ -468,11 +459,7 @@ describe("checkGatewayHealth", () => {
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
 
-    await expectResult({
-      authenticated: true,
-      healthOk: true,
-      status: { runtimeVersion: "2026.4.23" },
-    });
+    await expectResult({ ...healthy, status: { runtimeVersion: "2026.4.23" } });
 
     const mismatchNotes = note.mock.calls
       .filter(([, title]) => title === "OpenClaw version mismatch")
@@ -495,10 +482,7 @@ describe("checkGatewayHealth", () => {
         },
       })
       .mockResolvedValue({});
-    expect(await check()).toMatchObject({
-      healthOk: true,
-      authenticated: true,
-    });
+    expect(await check()).toMatchObject(healthy);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
         "Secret egress proxy: Check the system clock, then restart the Gateway.",
