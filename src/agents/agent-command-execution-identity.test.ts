@@ -11,6 +11,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
+  type AgentCommandExecutionIdentitySpawnFacts,
   readAgentCommandExecutionIdentitySpawnFacts,
   withAgentCommandExecutionIdentitySpawnFacts,
 } from "./agent-command-execution-identity-spawn.js";
@@ -231,7 +232,7 @@ describe("Gateway agent command execution identity", () => {
       applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
       assurance: [],
       spawnAdmission: "[null,[]]",
-    } as const;
+    } satisfies AgentCommandExecutionIdentitySpawnFacts;
     const prepared = {
       ...withAgentCommandExecutionIdentitySpawnFacts({ message: "spawn" }, facts),
     };
