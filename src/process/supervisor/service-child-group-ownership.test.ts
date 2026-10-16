@@ -9,7 +9,8 @@ const { census, definitelyDead, directory, readStat, darwinCommand, nativeDarwin
     readStat: vi.fn(),
     darwinCommand: vi.fn(),
   }));
-vi.mock("./darwin-bun-process-census.js", () => ({
+vi.mock("./darwin-bun-process-census.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./darwin-bun-process-census.js")>()),
   readDarwinBunProcessCensus: nativeDarwinCensus,
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
