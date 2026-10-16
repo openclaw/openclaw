@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-// Image runtime tests cover model-backed image routing, auth/profile handling,
-// provider payload transforms, and MiniMax/Copilot special paths.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -10,7 +8,6 @@ import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   API_KEY_FIELD,
-  SET_RUNTIME_API_KEY_FIELD,
   imageRuntimeMocks,
   imageRequestDefaults,
   mockImageModel,
@@ -26,7 +23,6 @@ const {
   shouldPreferProviderRuntimeResolvedModelMock,
   prepareProviderRuntimeAuthMock,
   releasePreparedModelRuntimeMock,
-  resolveModelWithRegistryMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
@@ -44,6 +40,37 @@ const {
   describeImageWithModelPayloadTransformCore,
 } = await import("./image.js");
 const imageModelRuntime = await import("./image-model-runtime.js");
+type ImageRequest = Parameters<typeof describeImageWithModelCore>[0];
+const openai = { provider: "openai", model: "gpt-5.4-mini" };
+const minimax = { provider: "minimax-portal", model: "MiniMax-VL-01" };
+function request(ref = openai, overrides: Partial<ImageRequest> = {}): ImageRequest {
+  return { ...imageRequestDefaults(), ...ref, ...overrides };
+}
+function mockOpenAi() {
+  mockImageModel({
+    provider: openai.provider,
+    id: openai.model,
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+}
+function mockUnknownMinimax() {
+  resolveModelAsyncMock.mockResolvedValue({
+    authStorage: preparedAuthStorage,
+    modelRegistry: { find: vi.fn(() => null) },
+    error: "Unknown model: minimax-cn/MiniMax-VL-01",
+  });
+}
+type Providers = NonNullable<NonNullable<ImageRequest["cfg"]["models"]>["providers"]>;
+async function describeCn(providers: Providers, workspaceDir?: string) {
+  const cfg = { models: { providers } };
+  await expect(
+    describeImageWithModelCore(
+      request({ ...minimax, provider: "minimax-cn" }, { cfg, workspaceDir }),
+    ),
+  ).resolves.toEqual({ text: "portal ok", model: "MiniMax-VL-01" });
+  expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+}
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
@@ -94,11 +121,7 @@ describe("describeImageWithModelCore", () => {
       ),
     });
 
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "minimax-portal",
-      model: "MiniMax-VL-01",
-    });
+    await describeImageWithModelCore(request(minimax));
 
     const guardedOptions = requireRecord(
       expectDefined(imageTestFetchWithSsrFGuardMock.mock.calls[0], "guarded fetch call 0")[0],
@@ -119,11 +142,7 @@ describe("describeImageWithModelCore", () => {
     });
     unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("test-token");
 
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "minimax-portal",
-      model: "MiniMax-VL-01",
-    });
+    await describeImageWithModelCore(request(minimax));
 
     expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
       sentinelValue,
@@ -189,38 +208,17 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
-    const authStorage = {
-      [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-    };
-    resolveModelAsyncMock.mockResolvedValue({
-      authStorage,
-      modelRegistry: { find: vi.fn(() => null) },
-      error: "Unknown model: minimax-cn/MiniMax-VL-01",
-    });
-
-    await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        workspaceDir: "/tmp/openclaw-workspace",
-        cfg: {
-          models: {
-            providers: {
-              minimax: {
-                [API_KEY_FIELD]: "test-api-key",
-                baseUrl: "https://api.minimaxi.com/anthropic",
-                models: [],
-              },
-            },
-          },
+    mockUnknownMinimax();
+    await describeCn(
+      {
+        minimax: {
+          [API_KEY_FIELD]: "test-api-key",
+          baseUrl: "https://api.minimaxi.com/anthropic",
+          models: [],
         },
-        provider: "minimax-cn",
-        model: "MiniMax-VL-01",
-        prompt: "Describe the image.",
-      }),
-    ).resolves.toEqual({
-      text: "portal ok",
-      model: "MiniMax-VL-01",
-    });
+      },
+      "/tmp/openclaw-workspace",
+    );
 
     expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -229,87 +227,32 @@ describe("describeImageWithModelCore", () => {
         workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
-    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
-    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
   it("uses MiniMax CN alias auth when the alias apiKey is a SecretRef", async () => {
-    const authStorage = {
-      [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-    };
-    resolveModelAsyncMock.mockResolvedValue({
-      authStorage,
-      modelRegistry: { find: vi.fn(() => null) },
-      error: "Unknown model: minimax-cn/MiniMax-VL-01",
-    });
-
-    await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        cfg: {
-          models: {
-            providers: {
-              "minimax-cn": {
-                [API_KEY_FIELD]: {
-                  source: "file",
-                  provider: "default",
-                  id: "/providers/minimax-cn/apiKey",
-                },
-                baseUrl: "https://api.minimaxi.com/anthropic",
-                models: [],
-              },
-            },
-          },
+    mockUnknownMinimax();
+    await describeCn({
+      "minimax-cn": {
+        [API_KEY_FIELD]: {
+          source: "file",
+          provider: "default",
+          id: "/providers/minimax-cn/apiKey",
         },
-        provider: "minimax-cn",
-        model: "MiniMax-VL-01",
-        prompt: "Describe the image.",
-      }),
-    ).resolves.toEqual({
-      text: "portal ok",
-      model: "MiniMax-VL-01",
+        baseUrl: "https://api.minimaxi.com/anthropic",
+        models: [],
+      },
     });
 
     expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "minimax-cn",
-      }),
+      expect.objectContaining({ provider: "minimax-cn" }),
     );
-    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
-    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
   it("does not inherit global MiniMax baseUrl for CN VLM aliases", async () => {
-    const authStorage = {
-      [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-    };
-    resolveModelAsyncMock.mockResolvedValue({
-      authStorage,
-      modelRegistry: { find: vi.fn(() => null) },
-      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    mockUnknownMinimax();
+    await describeCn({
+      minimax: { baseUrl: "https://api.minimax.io/anthropic", models: [] },
     });
-
-    await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        cfg: {
-          models: {
-            providers: {
-              minimax: { baseUrl: "https://api.minimax.io/anthropic", models: [] },
-            },
-          },
-        },
-        provider: "minimax-cn",
-        model: "MiniMax-VL-01",
-        prompt: "Describe the image.",
-      }),
-    ).resolves.toEqual({
-      text: "portal ok",
-      model: "MiniMax-VL-01",
-    });
-
-    const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
-    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 });
 
@@ -326,12 +269,7 @@ describe("image runtime cancellation and retries", () => {
     });
 
     await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        provider: "lmstudio",
-        model: "text-only",
-        prompt: "Describe the image.",
-      }),
+      describeImageWithModelCore(request({ provider: "lmstudio", model: "text-only" })),
     ).rejects.toThrow(
       "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
     );
@@ -344,12 +282,7 @@ describe("image runtime cancellation and retries", () => {
   ])(
     "applies caller transforms after retry stripping ($asyncTransform, $replace)",
     async ({ asyncTransform, replace }) => {
-      mockImageModel({
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        baseUrl: "https://api.openai.com/v1",
-      });
+      mockOpenAi();
       const completion = imageCompletion("openai-responses", "openai", "gpt-5.4-mini", "retry ok");
       const stripped = { reasoning: { effort: "none" } };
       const replacement = { custom: "provider option" };
@@ -381,14 +314,7 @@ describe("image runtime cancellation and retries", () => {
         });
 
       await expect(
-        describeImageWithModelPayloadTransformCore(
-          {
-            ...imageRequestDefaults(),
-            provider: "openai",
-            model: "gpt-5.4-mini",
-          },
-          transform,
-        ),
+        describeImageWithModelPayloadTransformCore(request(), transform),
       ).resolves.toEqual({ text: "retry ok", model: "gpt-5.4-mini" });
       expect(transform).toHaveBeenCalledOnce();
     },
@@ -396,33 +322,17 @@ describe("image runtime cancellation and retries", () => {
 
   it("does not start the reasoning-only retry after caller cancellation", async () => {
     const controller = new AbortController();
-    mockImageModel({
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    mockOpenAi();
     completeMock.mockImplementationOnce(async () => {
       controller.abort(new Error("caller cancelled image description"));
       return {
-        role: "assistant",
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        stopReason: "stop",
-        timestamp: Date.now(),
+        ...imageCompletion("openai-responses", "openai", "gpt-5.4-mini", ""),
         content: [{ type: "thinking", thinking: "internal", thinkingSignature: "reasoning" }],
       };
     });
 
     await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        prompt: "Describe the image.",
-        signal: controller.signal,
-      }),
+      describeImageWithModelCore(request(openai, { signal: controller.signal })),
     ).rejects.toThrow("caller cancelled image description");
 
     expect(completeMock).toHaveBeenCalledOnce();
@@ -434,26 +344,16 @@ describe("image runtime cancellation and retries", () => {
   });
 
   it("retains the prepared runtime until an aborted provider actually settles", async () => {
-    mockImageModel({
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    mockOpenAi();
     const completion = createDeferred();
     completeMock.mockImplementation(async () => {
       await completion.promise;
       throw new Error("late provider failure");
     });
     const controller = new AbortController();
-    const result = describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      prompt: "Describe the image.",
-      timeoutMs: 60_000,
-      signal: controller.signal,
-    });
+    const result = describeImageWithModelCore(
+      request(openai, { timeoutMs: 60_000, signal: controller.signal }),
+    );
 
     try {
       await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
@@ -471,39 +371,20 @@ describe("image runtime cancellation and retries", () => {
   it("keeps the full configured timeout for provider requests after slow setup", async () => {
     vi.useFakeTimers();
     const slowSetupMs = 400;
-    mockImageModel({
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    resolveModelAsyncMock.mockImplementationOnce(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, slowSetupMs);
-        });
-        const authStorage = {
-          [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-        };
-        const modelRegistry = discoverModelsMock(authStorage, agentDir);
-        const model = resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
-        return { authStorage, model, modelRegistry };
-      },
+    mockOpenAi();
+    const resolveModel = expectDefined(
+      resolveModelAsyncMock.getMockImplementation(),
+      "model resolver",
     );
+    resolveModelAsyncMock.mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, slowSetupMs);
+      });
+      return resolveModel(...args);
+    });
     completeMock.mockImplementation(() => new Promise(() => {}));
 
-    const result = describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      prompt: "Describe the image.",
-    });
+    const result = describeImageWithModelCore(request());
 
     await vi.advanceTimersByTimeAsync(slowSetupMs);
     await Promise.resolve();
@@ -596,14 +477,7 @@ describe("image runtime cancellation and retries", () => {
       const controller = new AbortController();
       const work = new AsyncWorkScope();
       const pending = work.track(() =>
-        describeImageWithModelCore({
-          ...imageRequestDefaults(),
-          provider: "openai",
-          model: "gpt-5.4-mini",
-          prompt: "Describe the image.",
-          timeoutMs: 25,
-          signal: controller.signal,
-        }),
+        describeImageWithModelCore(request(openai, { timeoutMs: 25, signal: controller.signal })),
       );
       const rejected = expect(pending).rejects.toThrow(
         mode === "timeout"

@@ -1,5 +1,3 @@
-// Media-understanding apply tests cover attachment transcription/description,
-// local binary probing, file text extraction, and context mutation.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -89,23 +87,22 @@ function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvid
     capabilities: ["audio"],
     transcribeAudio: async () => ({ text: "transcribed text" }),
   });
-  return {
-    groq: createAudioProvider("groq"),
-    deepgram: createAudioProvider("deepgram"),
-  };
+  return { groq: createAudioProvider("groq"), deepgram: createAudioProvider("deepgram") };
 }
 
-function expectTranscriptApplied(params: {
-  ctx: MsgContext;
-  transcript: string;
-  body: string;
-  commandBody: string;
-}) {
-  expect(params.ctx.Transcript).toBe(params.transcript);
-  expect(params.ctx.Body).toBe(params.body);
-  expect(params.ctx.CommandBody).toBe(params.commandBody);
-  expect(params.ctx.RawBody).toBe(params.commandBody);
-  expect(params.ctx.BodyForCommands).toBe(params.commandBody);
+function expectTranscriptApplied(
+  ctx: MsgContext,
+  transcript: string,
+  body: string,
+  commandBody: string,
+) {
+  expect(ctx).toMatchObject({
+    Transcript: transcript,
+    Body: body,
+    CommandBody: commandBody,
+    RawBody: commandBody,
+    BodyForCommands: commandBody,
+  });
 }
 
 function getRunExecCallForCommand(command: string) {
@@ -127,39 +124,37 @@ function createMediaDisabledConfig(): OpenClawConfig {
 function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): OpenClawConfig {
   return {
     ...createMediaDisabledConfig(),
-    gateway: {
-      http: {
-        endpoints: {
-          responses: {
-            files: { allowedMimes },
-          },
-        },
-      },
-    },
+    gateway: { http: { endpoints: { responses: { files: { allowedMimes } } } } },
   };
 }
 
-async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+async function createTempMediaFile(fileName: string, content: Buffer | string) {
   // Many tests reuse identical fixture buffers; cache by content hash to keep
   // setup cheap while each case still gets a stable local path.
-  const normalizedContent =
-    typeof params.content === "string" ? Buffer.from(params.content) : params.content;
+  const normalizedContent = typeof content === "string" ? Buffer.from(content) : content;
   const contentHash = crypto.createHash("sha256").update(normalizedContent).digest("hex");
-  const cacheKey = `${params.fileName}:${contentHash}`;
+  const cacheKey = `${fileName}:${contentHash}`;
   const cachedPath = tempMediaFileCache.get(cacheKey);
   if (cachedPath) {
     return cachedPath;
   }
   const cacheDir = path.join(suiteTempMediaRootDir, contentHash);
   await fs.mkdir(cacheDir, { recursive: true });
-  const mediaPath = path.join(cacheDir, params.fileName);
-  await fs.writeFile(mediaPath, params.content);
+  const mediaPath = path.join(cacheDir, fileName);
+  await fs.writeFile(mediaPath, content);
   tempMediaFileCache.set(cacheKey, mediaPath);
   return mediaPath;
 }
 
 async function attachment(fileName: string, content: Buffer | string, contentType: string) {
-  return { path: await createTempMediaFile({ fileName, content }), contentType };
+  return { path: await createTempMediaFile(fileName, content), contentType };
+}
+
+function mediaCtx(media: NonNullable<MsgContext["media"]>, Body = ""): MsgContext {
+  return { Body, media };
+}
+function imageProviders(describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]>) {
+  return { openai: { id: "openai", capabilities: ["image" as const], describeImage } };
 }
 
 async function createMockExecutable(dir: string, name: string) {
@@ -193,14 +188,16 @@ async function createAudioCtx(params?: {
   mediaType?: string;
   content?: Buffer | string;
 }): Promise<MsgContext> {
-  const mediaPath = await createTempMediaFile({
-    fileName: params?.fileName ?? "note.ogg",
-    content: params?.content ?? createSafeAudioFixtureBuffer(2048),
-  });
-  return {
-    Body: params?.body ?? "",
-    media: [{ path: mediaPath, contentType: params?.mediaType ?? "audio/ogg" }],
-  } satisfies MsgContext;
+  return mediaCtx(
+    [
+      await attachment(
+        params?.fileName ?? "note.ogg",
+        params?.content ?? createSafeAudioFixtureBuffer(2048),
+        params?.mediaType ?? "audio/ogg",
+      ),
+    ],
+    params?.body,
+  );
 }
 
 function mockWhisperCliTranscript(transcript: string) {
@@ -230,7 +227,7 @@ async function applyFile(params: {
     Body: params.body ?? "<media:file>",
     media: [
       {
-        path: await createTempMediaFile(params),
+        path: await createTempMediaFile(params.fileName, params.content),
         contentType: params.mediaType,
         ...(params.senderFileName ? { fileName: params.senderFileName } : {}),
       },
@@ -302,9 +299,7 @@ describe("applyMediaUnderstanding", () => {
       convertHeicToJpeg: convertHeicToJpegMock,
       readImageMetadataFromHeader: () => null,
     }));
-    vi.doMock("../process/exec.js", () => ({
-      runExec: runExecMock,
-    }));
+    vi.doMock("../process/exec.js", () => ({ runExec: runExecMock }));
     vi.doMock("../media/input-files.js", async () => {
       const actual =
         await vi.importActual<typeof import("../media/input-files.js")>("../media/input-files.js");
@@ -464,18 +459,16 @@ describe("applyMediaUnderstanding", () => {
       attempts: [{ outcome: "skipped" }, { outcome: "success" }],
       chosen: { outcome: "success", model: "fallback" },
     });
-    expectTranscriptApplied({
+    expectTranscriptApplied(
       ctx,
-      transcript: "recovered transcript",
-      body: "[Audio]\nTranscript:\nrecovered transcript",
-      commandBody: "recovered transcript",
-    });
+      "recovered transcript",
+      "[Audio]\nTranscript:\nrecovered transcript",
+      "recovered transcript",
+    );
   });
 
   it("keeps caption for command parsing when audio has user text", async () => {
-    const ctx = await createAudioCtx({
-      body: "/capture status",
-    });
+    const ctx = await createAudioCtx({ body: "/capture status" });
     ctx.CommandAuthorized = false;
     await applyMediaUnderstanding({
       ctx,
@@ -483,12 +476,12 @@ describe("applyMediaUnderstanding", () => {
       providers: createGroqProviders(),
     });
 
-    expectTranscriptApplied({
+    expectTranscriptApplied(
       ctx,
-      transcript: "transcribed text",
-      body: "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
-      commandBody: "/capture status",
-    });
+      "transcribed text",
+      "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
+      "/capture status",
+    );
     expect(ctx.CommandAuthorized).toBe(false);
   });
 
@@ -523,9 +516,7 @@ describe("applyMediaUnderstanding", () => {
       content: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
     });
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
-    const cfg = createGroqAudioConfig({
-      maxBytes: 4,
-    });
+    const cfg = createGroqAudioConfig({ maxBytes: 4 });
 
     await applyMediaUnderstanding({
       ctx,
@@ -565,24 +556,17 @@ describe("applyMediaUnderstanding", () => {
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     const executablePath = await createMockExecutable(binDir, "sherpa-onnx-offline");
-    await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
-    await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
-    await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
-    await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
+    for (const file of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
+      await fs.writeFile(path.join(modelDir, file), "a");
+    }
 
     const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
     const cfg = mediaConfig({ audio: {} });
     runExecMock.mockResolvedValueOnce({ stdout: '{"text":"sherpa ok"}', stderr: "" });
 
-    await withMediaAutoDetectEnv(
-      {
-        PATH: binDir,
-        SHERPA_ONNX_MODEL_DIR: modelDir,
-      },
-      async () => {
-        await applyMediaUnderstanding({ ctx, cfg });
-      },
-    );
+    await withMediaAutoDetectEnv({ PATH: binDir, SHERPA_ONNX_MODEL_DIR: modelDir }, async () => {
+      await applyMediaUnderstanding({ ctx, cfg });
+    });
 
     expect(ctx.Transcript).toBe("sherpa ok");
     const [command, args] = getRunExecCallForCommand(executablePath);
@@ -620,15 +604,9 @@ describe("applyMediaUnderstanding", () => {
     });
     mockWhisperCliTranscript("whisper cpp ogg ok\n");
 
-    await withMediaAutoDetectEnv(
-      {
-        PATH: binDir,
-        WHISPER_CPP_MODEL: modelPath,
-      },
-      async () => {
-        await applyMediaUnderstanding({ ctx, cfg });
-      },
-    );
+    await withMediaAutoDetectEnv({ PATH: binDir, WHISPER_CPP_MODEL: modelPath }, async () => {
+      await applyMediaUnderstanding({ ctx, cfg });
+    });
 
     expect(ctx.Transcript).toBe("whisper cpp ogg ok");
     const ffmpegArgs = runFfmpegMock.mock.calls[0]?.[0];
@@ -671,16 +649,10 @@ describe("applyMediaUnderstanding", () => {
       content: createSafeAudioFixtureBuffer(2048),
     });
     const cfg = mediaConfig({ audio: {} });
-    resolveApiKeyForProviderCoreMock.mockResolvedValue({
-      source: "none",
-      mode: "api-key",
-    });
+    resolveApiKeyForProviderCoreMock.mockResolvedValue({ source: "none", mode: "api-key" });
 
     await withMediaAutoDetectEnv(
-      {
-        PATH: binDir,
-        OPENCLAW_AGENT_DIR: isolatedAgentDir,
-      },
+      { PATH: binDir, OPENCLAW_AGENT_DIR: isolatedAgentDir },
       async () => {
         await applyMediaUnderstanding({ ctx, cfg });
       },
@@ -694,15 +666,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("describes ACP-delivered images and preserves their captions for commands", async () => {
-    const imagePath = await createTempMediaFile({
-      fileName: "photo.jpg",
-      content: "image-bytes",
-    });
-
-    const ctx: MsgContext = {
-      Body: "show Dom",
-      media: [{ path: imagePath, contentType: "image/jpeg" }],
-    };
+    const ctx = mediaCtx([await attachment("photo.jpg", "image-bytes", "image/jpeg")], "show Dom");
     const cfg = mediaConfig({
       models: [
         {
@@ -712,21 +676,12 @@ describe("applyMediaUnderstanding", () => {
           capabilities: ["image"],
         },
       ],
-      image: {
-        enabled: true,
-      },
+      image: { enabled: true },
     });
 
-    runExecMock.mockResolvedValue({
-      stdout: "image description\n",
-      stderr: "",
-    });
+    runExecMock.mockResolvedValue({ stdout: "image description\n", stderr: "" });
 
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      deliveredImageIndexes: new Set([0]),
-    });
+    await applyMediaUnderstanding({ ctx, cfg, deliveredImageIndexes: new Set([0]) });
 
     expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
     expect(ctx.CommandBody).toBe("show Dom");
@@ -742,10 +697,7 @@ describe("applyMediaUnderstanding", () => {
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
     await fs.writeFile(imagePath, "image-bytes");
     const describeImage = vi.fn(async () => ({ text: "workspace image" }));
-    const ctx: MsgContext = {
-      Body: "",
-      media: [{ path: relativeImagePath, contentType: "image/jpeg" }],
-    };
+    const ctx = mediaCtx([{ path: relativeImagePath, contentType: "image/jpeg" }]);
     const cfg = createImageConfig();
 
     await applyMediaUnderstanding({
@@ -753,13 +705,7 @@ describe("applyMediaUnderstanding", () => {
       cfg,
       agentDir: "/tmp/openclaw-agent",
       workspaceDir,
-      providers: {
-        openai: {
-          id: "openai",
-          capabilities: ["image"],
-          describeImage,
-        },
-      },
+      providers: imageProviders(describeImage),
     });
 
     expect(ctx.Body).toBe("[Image]\nDescription:\nworkspace image");
@@ -782,28 +728,15 @@ describe("applyMediaUnderstanding", () => {
       bytes: Buffer.from("000000186674797068657663000000000000000000000000", "hex"),
     },
   ])("normalizes $name images before tools.media.image provider execution", async (testCase) => {
-    const imagePath = await createTempMediaFile({
-      fileName: testCase.fileName,
-      content: testCase.bytes,
-    });
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
-    const ctx: MsgContext = {
-      Body: "",
-      media: [{ path: imagePath, contentType: testCase.mime }],
-    };
+    const ctx = mediaCtx([await attachment(testCase.fileName, testCase.bytes, testCase.mime)]);
     const cfg = createImageConfig();
 
     await applyMediaUnderstanding({
       ctx,
       cfg,
       agentDir: "/tmp/openclaw-agent",
-      providers: {
-        openai: {
-          id: "openai",
-          capabilities: ["image"],
-          describeImage,
-        },
-      },
+      providers: imageProviders(describeImage),
     });
 
     expect(convertHeicToJpegMock).toHaveBeenCalledWith(testCase.bytes);
@@ -1059,11 +992,9 @@ describe("applyMediaUnderstanding", () => {
         mediaType: "audio/ogg",
         content: original,
       });
-      const followingFile = await createTempMediaFile({
-        fileName: "following.txt",
-        content: "Following document survives",
-      });
-      ctx.media?.push({ path: followingFile, contentType: "text/plain" });
+      ctx.media?.push(
+        await attachment("following.txt", "Following document survives", "text/plain"),
+      );
       let borrowed: Buffer | undefined;
       const transcribeAudio = vi.fn<NonNullable<MediaUnderstandingProvider["transcribeAudio"]>>(
         async (request) => {
@@ -1204,10 +1135,10 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("defers the self-serve path until the final runtime capability", async () => {
-    const filePath = await createTempMediaFile({
-      fileName: "sandboxed.doc",
-      content: Buffer.from("Root Entry WordDocument legacy preview", "utf8"),
-    });
+    const filePath = await createTempMediaFile(
+      "sandboxed.doc",
+      "Root Entry WordDocument legacy preview",
+    );
 
     const ctx: MsgContext = {
       Body: "transport envelope <media:file>",
@@ -1265,21 +1196,14 @@ describe("applyMediaUnderstanding", () => {
     const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
     const media: { path: string; contentType: string }[] = [];
     for (let i = 0; i < 4; i += 1) {
-      const filePath = await createTempMediaFile({
-        fileName: `mixed-legacy-${i}.doc`,
-        content: olePayload,
-      });
-      media.push({ path: filePath, contentType: "application/msword" });
+      media.push(await attachment(`mixed-legacy-${i}.doc`, olePayload, "application/msword"));
     }
     for (let i = 0; i < 3; i += 1) {
       media.push({ path: `/tmp/junk-image-${i}.jpg`, contentType: "image/jpeg" });
     }
 
     const ctx: MsgContext = { Body: "<media:file>", media };
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createMediaDisabledConfig(),
-    });
+    await applyMediaUnderstanding({ ctx, cfg: createMediaDisabledConfig() });
 
     expect(ctx.Body?.split("[Unsupported document format")).toHaveLength(5);
     expect(
@@ -1291,10 +1215,6 @@ describe("applyMediaUnderstanding", () => {
   describe("renderInboundDocumentContext", () => {
     it("returns rendered PDF page images for a scanned document", async () => {
       const { renderInboundDocumentContext } = await import("./file-context.js");
-      const mediaPath = await createTempMediaFile({
-        fileName: "scan.pdf",
-        content: Buffer.from("%PDF-1.4\n", "utf8"),
-      });
       extractFileContentFromBufferMock.mockResolvedValueOnce({
         text: "",
         images: [
@@ -1302,10 +1222,10 @@ describe("applyMediaUnderstanding", () => {
           { type: "image", data: "page-2-bytes", mimeType: "image/png" },
         ],
       });
-      const ctx: MsgContext = {
-        Body: "see attached",
-        media: [{ path: mediaPath, contentType: "application/pdf" }],
-      };
+      const ctx = mediaCtx(
+        [await attachment("scan.pdf", "%PDF-1.4\n", "application/pdf")],
+        "see attached",
+      );
 
       const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
 

@@ -1,4 +1,3 @@
-// Attachment cache tests cover bounded reads, MIME detection, and temporary-file ownership.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -32,6 +31,19 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
   "base64",
 );
+const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 };
+const pngRequest = { ...request, maxBytes: PNG_1X1.length };
+const remoteAttachment = { index: 0, url: "https://example.com/photo.png" };
+function localCache(file: string, root: string) {
+  return new MediaAttachmentCache([{ index: 0, path: file }], {
+    localPathRoots: [root],
+    includeDefaultLocalPathRoots: false,
+  });
+}
+function mockRemote(base: string, fileName = "photo.png") {
+  vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
+  readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName });
+}
 
 describe("media understanding attachment cache", () => {
   it.each(["canonical", "directory alias"] as const)(
@@ -70,9 +82,7 @@ describe("media understanding attachment cache", () => {
             ctx: {} as never,
             workspaceDir: sessionWorkspaceDir,
           });
-          // Production construction (apply.ts / file-context.ts): the scoped root set is
-          // authoritative — merging sessionless defaults back in would restore the shared
-          // workspace/sandbox parents for sandboxed sessions.
+          // Session roots must not regain the sessionless shared-workspace defaults.
           const cache = new MediaAttachmentCache(
             [
               { index: 0, path: sourcePath(ownFile) },
@@ -82,18 +92,14 @@ describe("media understanding attachment cache", () => {
             { localPathRoots: roots, includeDefaultLocalPathRoots: false },
           );
 
-          const own = await cache.getBuffer({
-            attachmentIndex: 0,
-            maxBytes: 1024,
-            timeoutMs: 1000,
-          });
+          const own = await cache.getBuffer(request);
           expect(own.buffer.toString()).toBe("OWN-SANDBOX-CONTENT");
-          await expect(
-            cache.getBuffer({ attachmentIndex: 1, maxBytes: 1024, timeoutMs: 1000 }),
-          ).rejects.toThrow(/outside allowed roots/i);
-          await expect(
-            cache.getBuffer({ attachmentIndex: 2, maxBytes: 1024, timeoutMs: 1000 }),
-          ).rejects.toThrow(/outside allowed roots/i);
+          await expect(cache.getBuffer({ ...request, attachmentIndex: 1 })).rejects.toThrow(
+            /outside allowed roots/i,
+          );
+          await expect(cache.getBuffer({ ...request, attachmentIndex: 2 })).rejects.toThrow(
+            /outside allowed roots/i,
+          );
         } finally {
           vi.unstubAllEnvs();
         }
@@ -118,14 +124,9 @@ describe("media understanding attachment cache", () => {
         await fs.symlink(outsideRoot, alias, aliasType);
         return await openLocalFileSafely(params);
       });
-      const cache = new MediaAttachmentCache([{ index: 0, path: path.join(alias, "note.txt") }], {
-        localPathRoots: [allowedRoot],
-        includeDefaultLocalPathRoots: false,
-      });
+      const cache = localCache(path.join(alias, "note.txt"), allowedRoot);
 
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toMatchObject({ reason: "blocked" });
+      await expect(cache.getBuffer(request)).rejects.toMatchObject({ reason: "blocked" });
       expect(openSpy).toHaveBeenCalledOnce();
     });
   });
@@ -182,12 +183,9 @@ describe("media understanding attachment cache", () => {
           });
           return handle;
         });
-        const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-          localPathRoots: [base],
-          includeDefaultLocalPathRoots: false,
-        });
+        const cache = localCache(attachmentPath, base);
 
-        const result = cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 });
+        const result = cache.getBuffer({ ...request, maxBytes });
         if (behavior === "growing") {
           await expect(result).rejects.toMatchObject({ reason: "maxBytes" });
         } else {
@@ -211,17 +209,13 @@ describe("media understanding attachment cache", () => {
       await withTestDir({ prefix: "openclaw-media-cache-path-limit-" }, async (base) => {
         const attachmentPath = path.join(base, "photo.png");
         await fs.writeFile(attachmentPath, PNG_1X1);
-        vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-        readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
+        mockRemote(base);
         const attachment =
-          source === "local"
-            ? { index: 0, path: attachmentPath }
-            : { index: 0, url: "https://example.com/photo.png" };
+          source === "local" ? { index: 0, path: attachmentPath } : remoteAttachment;
         const cache = new MediaAttachmentCache([attachment], { localPathRoots: [base] });
-        const request = { attachmentIndex: 0, maxBytes: PNG_1X1.length, timeoutMs: 1000 };
         try {
-          await expect(cache.getPath(request)).resolves.toEqual(expect.any(String));
-          await expect(cache.getPath({ ...request, maxBytes: 0 })).rejects.toMatchObject({
+          await expect(cache.getPath(pngRequest)).resolves.toEqual(expect.any(String));
+          await expect(cache.getPath({ ...pngRequest, maxBytes: 0 })).rejects.toMatchObject({
             reason: "maxBytes",
           });
         } finally {
@@ -238,14 +232,10 @@ describe("media understanding attachment cache", () => {
     "restages $fileName with a safe suffix after cache cleanup",
     async ({ fileName, extension, removeBeforeCleanup }) => {
       await withTestDir({ prefix: "openclaw-media-cache-restage-" }, async (base) => {
-        vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-        readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName });
-        const cache = new MediaAttachmentCache([
-          { index: 0, url: "https://example.com/photo.png" },
-        ]);
-        const request = { attachmentIndex: 0, maxBytes: PNG_1X1.length, timeoutMs: 1000 };
+        mockRemote(base, fileName);
+        const cache = new MediaAttachmentCache([remoteAttachment]);
         try {
-          const first = await cache.getPath(request);
+          const first = await cache.getPath(pngRequest);
           expect(path.extname(first)).toBe(extension);
           if (removeBeforeCleanup) {
             await fs.unlink(first);
@@ -253,11 +243,11 @@ describe("media understanding attachment cache", () => {
           await cache.cleanup();
           await expect(fs.stat(first)).rejects.toMatchObject({ code: "ENOENT" });
           expect(await fs.readdir(base)).toEqual([]);
-          const second = await cache.getPath(request);
+          const second = await cache.getPath(pngRequest);
           expect(second).not.toBe(first);
           expect(path.extname(second)).toBe(extension);
           await expect(fs.readFile(second)).resolves.toEqual(PNG_1X1);
-          expect(await cache.getPath(request)).toBe(second);
+          expect(await cache.getPath(pngRequest)).toBe(second);
           expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
         } finally {
           await cache.cleanup();
@@ -279,12 +269,11 @@ describe("media understanding attachment cache", () => {
       });
       const cache = new MediaAttachmentCache(
         [
-          { index: 0, url: "https://example.com/photo.png", mime: "application/pdf" },
+          { ...remoteAttachment, mime: "application/pdf" },
           { index: 1, path: localPath, mime: "application/octet-stream" },
         ],
         { localPathRoots: [base], includeDefaultLocalPathRoots: false },
       );
-      const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 };
       const borrowed = await cache.getBuffer(request);
       const local = await cache.getBuffer({ ...request, attachmentIndex: 1 });
       expect(borrowed.classification).toEqual({ mime: "image/png", class: "image" });
@@ -307,10 +296,9 @@ describe("media understanding attachment cache", () => {
     "does not return a local path after its validation open fails (URL fallback: %s)",
     async (hasFallback) => {
       await withTestDir({ prefix: "openclaw-media-cache-open-failure-" }, async (base) => {
-        vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
+        mockRemote(base, "remote.png");
         const attachmentPath = path.join(base, "local.png");
         await fs.writeFile(attachmentPath, PNG_1X1);
-        readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "remote.png" });
         const open = fs.open.bind(fs);
         vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           if (args[0] === attachmentPath) {
@@ -329,7 +317,7 @@ describe("media understanding attachment cache", () => {
           { localPathRoots: [base], includeDefaultLocalPathRoots: false },
         );
         try {
-          const result = cache.getPath({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 });
+          const result = cache.getPath(request);
           if (hasFallback) {
             const staged = await result;
             expect(staged).not.toBe(attachmentPath);
@@ -368,11 +356,7 @@ describe("media understanding attachment cache", () => {
           { includeDefaultLocalPathRoots: false },
         );
         try {
-          const staged = await cache.getPath({
-            attachmentIndex: 0,
-            maxBytes: 1024,
-            timeoutMs: 1_000,
-          });
+          const staged = await cache.getPath(request);
           expect(path.dirname(staged)).toBe(selectedRoot);
           await expect(fs.readFile(staged)).resolves.toEqual(PNG_1X1);
         } finally {
@@ -387,10 +371,8 @@ describe("media understanding attachment cache", () => {
 
   it("keeps a successful concurrent path when another staging attempt fails", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-concurrent-" }, async (base) => {
-      vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
-      const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }]);
-      const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 };
+      mockRemote(base);
+      const cache = new MediaAttachmentCache([remoteAttachment]);
       const started = createDeferred();
       const finish = createDeferred();
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
@@ -424,15 +406,13 @@ describe("media understanding attachment cache", () => {
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
       const cleanupError = Object.assign(new Error("permission denied"), { code: "EACCES" });
       const writeFile = fs.writeFile.bind(fs);
-      vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
+      mockRemote(base);
       const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file) => {
         await writeFile(file, PNG_1X1.subarray(0, 4));
         throw writeError;
       });
       const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupError);
-      const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }]);
-      const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 };
+      const cache = new MediaAttachmentCache([remoteAttachment]);
 
       await expect(cache.getPath(request)).rejects.toBe(writeError);
       expect(await fs.readdir(base)).toHaveLength(1);
@@ -454,10 +434,8 @@ describe("media understanding attachment cache", () => {
 
   it("retains files staged after cleanup takes its snapshot", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-cleanup-snapshot-" }, async (base) => {
-      vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
-      const cache = new MediaAttachmentCache([{ index: 0, url: "https://example.com/photo.png" }]);
-      const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 };
+      mockRemote(base);
+      const cache = new MediaAttachmentCache([remoteAttachment]);
       const first = await cache.getPath(request);
       const started = createDeferred();
       const finish = createDeferred();
