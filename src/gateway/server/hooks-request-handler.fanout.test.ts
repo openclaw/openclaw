@@ -1,6 +1,3 @@
-// Fan-out hook dispatch tests protect the batched-producer contract: every
-// pushed item ends in its own dispatch, retries replay instead of duplicating,
-// and gmail-path bodies are bounded by the provisioned producer contract.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,9 +26,8 @@ function completedDispatch(runId: string): HookAgentDispatchResult {
 }
 
 vi.mock("../hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../hooks.js")>("../hooks.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../hooks.js")>("../hooks.js")),
     readJsonBody: readJsonBodyMock,
   };
 });
@@ -86,9 +82,7 @@ function createFanOutHandler(params?: {
     logHooks,
     dispatchWakeHook,
     dispatchAgentHook,
-    ...(params?.fanoutResponseDeadlineMs !== undefined
-      ? { fanoutResponseDeadlineMs: params.fanoutResponseDeadlineMs }
-      : {}),
+    fanoutResponseDeadlineMs: params?.fanoutResponseDeadlineMs,
   });
   return { handler, dispatchAgentHook, dispatchWakeHook, logHooks };
 }
@@ -105,10 +99,25 @@ function startRequest(
 async function postGmailPayload(
   handler: ReturnType<typeof createHooksRequestHandler>,
   payload: Record<string, unknown>,
-) {
+  expectedStatus = 200,
+): Promise<unknown> {
   const { response, handling } = startRequest(handler, payload, "/hooks/gmail");
   await handling;
-  return response;
+  expect(response.res.statusCode).toBe(expectedStatus);
+  return response.getBody() ? JSON.parse(response.getBody()) : undefined;
+}
+
+async function expectRun(
+  request: ReturnType<typeof startRequest>,
+  runId: string,
+  completion?: HookAgentCompletion,
+) {
+  await request.handling;
+  expect(JSON.parse(request.response.getBody())).toEqual({
+    ok: true,
+    runId,
+    ...(completion ? { completion } : {}),
+  });
 }
 
 function gmailMessage(id: string) {
@@ -123,9 +132,7 @@ describe("hook fan-out dispatch", () => {
   test("empty batches record a no-op instead of dispatching a junk run", async () => {
     const { handler, dispatchAgentHook } = createFanOutHandler();
 
-    const response = await postGmailPayload(handler, { messages: [] });
-
-    expect(response.res.statusCode).toBe(204);
+    await postGmailPayload(handler, { messages: [] }, 204);
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
 
@@ -141,20 +148,15 @@ describe("hook fan-out dispatch", () => {
     });
     const payload = { messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")] };
 
-    const firstResponse = await postGmailPayload(handler, payload);
-    expect(firstResponse.res.statusCode).toBe(502);
-    const firstBody = JSON.parse(firstResponse.getBody()) as { ok: boolean; runIds?: string[] };
-    expect(firstBody.ok).toBe(false);
-    expect(firstBody.runIds).toEqual(["run:hook:gmail:m1", "run:hook:gmail:m3"]);
+    const firstResponse = await postGmailPayload(handler, payload, 502);
+    expect(firstResponse).toMatchObject({
+      ok: false,
+      runIds: ["run:hook:gmail:m1", "run:hook:gmail:m3"],
+    });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(3);
 
-    // The producer redelivers the identical batch after the failure.
     failM2 = false;
-    const retryResponse = await postGmailPayload(handler, payload);
-    expect(retryResponse.res.statusCode).toBe(200);
-    const retryBody = JSON.parse(retryResponse.getBody()) as { runIds?: string[] };
-    expect(retryBody.runIds).toHaveLength(3);
-    // Only the failed item is re-dispatched; m1/m3 replay from the cache.
+    expect(await postGmailPayload(handler, payload)).toHaveProperty("runIds.length", 3);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(4);
     expect(dispatchAgentHook.mock.calls[3]?.[0]?.sessionKey).toBe("hook:gmail:m2");
   });
@@ -170,17 +172,16 @@ describe("hook fan-out dispatch", () => {
     });
     const payload = { messages: [gmailMessage("fast"), gmailMessage("slow")] };
 
-    const response = await postGmailPayload(handler, payload);
-    expect(response.res.statusCode).toBe(503);
-    const body = JSON.parse(response.getBody()) as { error?: string; runIds?: string[] };
-    expect(body.error).toContain("pending");
-    expect(body.runIds).toEqual(["run:hook:gmail:fast"]);
+    const response = await postGmailPayload(handler, payload, 503);
+    expect(response).toMatchObject({
+      error: expect.stringContaining("pending"),
+      runIds: ["run:hook:gmail:fast"],
+    });
 
     // The pending admission settles in the background; the redelivered batch
     // replays both items without a duplicate dispatch.
     releaseHang(completedDispatch("run:hook:gmail:slow"));
-    const retryResponse = await postGmailPayload(handler, payload);
-    expect(retryResponse.res.statusCode).toBe(200);
+    await postGmailPayload(handler, payload);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
@@ -195,13 +196,11 @@ describe("hook fan-out dispatch", () => {
     const payload = { messages: [gmailMessage("twin"), gmailMessage("twin")] };
 
     const response = await postGmailPayload(handler, payload);
-    expect(response.res.statusCode).toBe(200);
-    const body = JSON.parse(response.getBody()) as { runIds?: string[] };
-    expect(body.runIds).toEqual(["run-0", "run-1"]);
+    expect(response).toMatchObject({ runIds: ["run-0", "run-1"] });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
 
     const retry = await postGmailPayload(handler, payload);
-    expect(JSON.parse(retry.getBody())).toMatchObject({ runIds: ["run-0", "run-1"] });
+    expect(retry).toMatchObject({ runIds: ["run-0", "run-1"] });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(2);
   });
 
@@ -209,9 +208,8 @@ describe("hook fan-out dispatch", () => {
     const { handler, dispatchAgentHook, logHooks } = createFanOutHandler();
     const messages = Array.from({ length: 205 }, (_, index) => gmailMessage(`m${index}`));
 
-    const response = await postGmailPayload(handler, { messages });
+    await postGmailPayload(handler, { messages });
 
-    expect(response.res.statusCode).toBe(200);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(200);
     expect(logHooks.warn).toHaveBeenCalledWith(expect.stringContaining("dropped 5 items"));
   });
@@ -263,8 +261,7 @@ describe("hook fan-out dispatch", () => {
       };
       const response = await postGmailPayload(handler, payload);
 
-      expect(response.res.statusCode).toBe(200);
-      expect(JSON.parse(response.getBody())).toMatchObject({ eventOutcome: "queued" });
+      expect(response).toMatchObject({ eventOutcome: "queued" });
       expect(dispatchWakeHook).toHaveBeenCalledTimes(2);
       expect(dispatchWakeHook.mock.calls[0]?.[0]).toMatchObject({ text: "wake:w1" });
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
@@ -275,19 +272,22 @@ describe("hook fan-out dispatch", () => {
 
       coalesceWakes = true;
       const replay = await postGmailPayload(handler, payload);
-      expect(JSON.parse(replay.getBody())).toMatchObject({ eventOutcome: "coalesced" });
+      expect(replay).toMatchObject({ eventOutcome: "coalesced" });
       expect(dispatchWakeHook).toHaveBeenCalledTimes(4);
       expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
 
       coalesceWakes = false;
-      const invalid = await postGmailPayload(handler, {
-        messages: [
-          { id: "w3", kind: "wake" },
-          { id: "a2", kind: "invalid-agent" },
-        ],
-      });
-      expect(invalid.res.statusCode).toBe(400);
-      expect(JSON.parse(invalid.getBody())).toMatchObject({
+      const invalid = await postGmailPayload(
+        handler,
+        {
+          messages: [
+            { id: "w3", kind: "wake" },
+            { id: "a2", kind: "invalid-agent" },
+          ],
+        },
+        400,
+      );
+      expect(invalid).toMatchObject({
         ok: false,
         eventOutcome: "queued",
       });
@@ -350,27 +350,21 @@ describe("hook fan-out dispatch", () => {
     await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
 
     resolveAdmission({ ok: true, runId: "run:shared", completion });
-    await admittedOnly.handling;
-    expect(JSON.parse(admittedOnly.response.getBody())).toEqual({
-      ok: true,
-      runId: "run:shared",
-    });
+    await expectRun(admittedOnly, "run:shared");
     expect(waiting.response.getBody()).toBe("");
 
     resolveCompletion({ status: "ok", replyDisposition: "silent", delivered: true });
-    await waiting.handling;
-    expect(JSON.parse(waiting.response.getBody())).toEqual({
-      ok: true,
-      runId: "run:shared",
-      completion: { status: "ok", replyDisposition: "silent", delivered: true },
+    await expectRun(waiting, "run:shared", {
+      status: "ok",
+      replyDisposition: "silent",
+      delivered: true,
     });
 
     const replay = startDirect(true);
-    await replay.handling;
-    expect(JSON.parse(replay.response.getBody())).toEqual({
-      ok: true,
-      runId: "run:shared",
-      completion: { status: "ok", replyDisposition: "silent", delivered: true },
+    await expectRun(replay, "run:shared", {
+      status: "ok",
+      replyDisposition: "silent",
+      delivered: true,
     });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
   });
@@ -404,13 +398,7 @@ describe("hook fan-out dispatch", () => {
     expect(replay.response.getBody()).toBe("");
     expect(activeDispatches).toBe(1);
     resolveActiveCompletion({ status: "ok", replyDisposition: "silent" });
-    await replay.handling;
-
-    expect(JSON.parse(replay.response.getBody())).toEqual({
-      ok: true,
-      runId: "run:active",
-      completion: { status: "ok", replyDisposition: "silent" },
-    });
+    await expectRun(replay, "run:active", { status: "ok", replyDisposition: "silent" });
     expect(dispatchAgentHook).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
   });
 
@@ -436,33 +424,18 @@ describe("hook fan-out dispatch", () => {
       await startDirect().handling;
 
       await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 1);
-      const activeReplay = startDirect();
-      await activeReplay.handling;
-      expect(JSON.parse(activeReplay.response.getBody())).toEqual({
-        ok: true,
-        runId: "run:active",
-      });
+      await expectRun(startDirect(), "run:active");
       expect(dispatches).toBe(1);
 
       resolveCompletion({ status: "ok", replyDisposition: "empty" });
       await vi.advanceTimersByTimeAsync(0);
 
       await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS);
-      const terminalReplay = startDirect();
-      await terminalReplay.handling;
-      expect(JSON.parse(terminalReplay.response.getBody())).toEqual({
-        ok: true,
-        runId: "run:active",
-      });
+      await expectRun(startDirect(), "run:active");
       expect(dispatches).toBe(1);
 
       await vi.advanceTimersByTimeAsync(1);
-      const expired = startDirect();
-      await expired.handling;
-      expect(JSON.parse(expired.response.getBody())).toEqual({
-        ok: true,
-        runId: "run:duplicate",
-      });
+      await expectRun(startDirect(), "run:duplicate");
       expect(dispatches).toBe(2);
     } finally {
       vi.useRealTimers();
@@ -513,35 +486,17 @@ describe("hook fan-out dispatch", () => {
   });
 
   test.each([
-    {
-      name: "before direct wake dispatch",
-      url: "/hooks/wake",
-      value: { text: "stale wake" },
-      reads: 3,
-      calls: 0,
-    },
-    {
-      name: "inside direct agent dispatch",
-      url: "/hooks/agent",
-      value: { message: "stale agent" },
-      reads: 3,
-      calls: 0,
-    },
-    {
-      name: "during mapping",
-      url: "/hooks/gmail",
-      value: { messages: [gmailMessage("stale-mapping")] },
-      reads: 3,
-      calls: 0,
-    },
-    {
-      name: "before every fan-out item",
-      url: "/hooks/gmail",
-      value: { messages: ["m1", "m2", "m3"].map(gmailMessage) },
-      reads: 5,
-      calls: 1,
-    },
-  ])("rechecks hook config $name", async ({ url, value, reads, calls }) => {
+    ["before direct wake dispatch", "/hooks/wake", { text: "stale wake" }, 3, 0],
+    ["inside direct agent dispatch", "/hooks/agent", { message: "stale agent" }, 3, 0],
+    ["during mapping", "/hooks/gmail", { messages: [gmailMessage("stale-mapping")] }, 3, 0],
+    [
+      "before every fan-out item",
+      "/hooks/gmail",
+      { messages: ["m1", "m2", "m3"].map(gmailMessage) },
+      5,
+      1,
+    ],
+  ] as const)("rechecks hook config %s", async (_name, url, value, reads, calls) => {
     const initial = url === "/hooks/gmail" ? createGmailHooksConfig() : createHooksConfig();
     const replacement = { ...initial };
     let configReads = 0;

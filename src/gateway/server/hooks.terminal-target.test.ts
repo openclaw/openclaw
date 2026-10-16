@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload as HookPayload } from "../hooks.js";
 
@@ -37,8 +38,6 @@ const logHooksWarnMock = vi.fn((message: string) => {
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: enqueueSystemEventMock,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    enqueueSystemEventMock(...args) ? () => true : null,
 }));
 // mock-isolation: Observe the terminal destination without admitting an ordinary reply turn.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
@@ -55,44 +54,27 @@ vi.mock("../../config/io.js", () => ({
 const { createGatewayHookDispatcher } = await import("./hooks.js");
 let dispatch: ReturnType<typeof createGatewayHookDispatcher>["dispatchAgentHook"];
 
-function payload(overrides: Partial<HookPayload> = {}): HookPayload {
-  return {
-    message: "test message",
-    name: "Email",
-    effectiveAgentId: "main",
-    wakeMode: "now",
-    sessionKey: "session-1",
-    sessionMode: "isolated",
-    sourcePath: "/hooks/agent",
-    deliver: true,
-    channel: "last",
-    delivery: { mode: "none" },
-    ...overrides,
-  };
-}
+const payload = (wakeMode: HookPayload["wakeMode"] = "now"): HookPayload => ({
+  message: "test message",
+  name: "Email",
+  effectiveAgentId: "main",
+  wakeMode,
+  sessionKey: "session-1",
+  sessionMode: "isolated",
+  sourcePath: "/hooks/agent",
+  deliver: true,
+  channel: "last",
+  delivery: { mode: "none" },
+});
 
-function globalConfig(systemAgentId: "main" | "work", includeMain = true): OpenClawConfig {
-  return {
-    agents: {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: systemAgentId } },
-      entries: {
-        ...(includeMain ? { main: {} } : {}),
-        work: {},
-      },
-    },
-    session: { scope: "global" },
-  };
-}
-
-function expectOwnedEvent(text: string, agentId: string): void {
-  const call = enqueueSessionEventMock.mock.calls.find(([actual]) => actual === text);
-  expect(call?.[1]).toMatchObject({
-    agentId,
-    sessionKey: "global",
-    expectedTarget: { agentId, sessionKey: "global", sessionId: "captured-session" },
-  });
-}
+const globalConfig = (systemAgentId: "main" | "work", includeMain = true): OpenClawConfig => ({
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: systemAgentId } },
+    entries: includeMain ? { main: {}, work: {} } : { work: {} },
+  },
+  session: { scope: "global" },
+});
 
 async function startGatedRun(
   result: "success" | "failure",
@@ -108,7 +90,7 @@ async function startGatedRun(
     }
     return { status: "ok", summary: "done", delivered: false, deliveryAttempted: false };
   });
-  void dispatch(payload({ wakeMode }));
+  void dispatch(payload(wakeMode));
   await started.promise;
   return gate;
 }
@@ -123,18 +105,14 @@ describe("global hook terminal target resolution", () => {
     ({ dispatchAgentHook: dispatch } = createGatewayHookDispatcher({
       deps: {} as never,
       logHooks: {
+        ...createSubsystemLogger("hook-terminal-test"),
         warn: logHooksWarnMock,
-        debug: vi.fn(),
         info: vi.fn(),
-        error: vi.fn(),
-      } as never,
+      },
     }));
   });
 
-  afterEach(() => {
-    resetGatewayWorkAdmission();
-    vi.restoreAllMocks();
-  });
+  afterEach(resetGatewayWorkAdmission);
 
   it.each(["now", "next-heartbeat"] as const)(
     "keeps the accepted %s target when hooks are disabled and the system agent changes",
@@ -148,7 +126,14 @@ describe("global hook terminal target resolution", () => {
 
       await terminalObserved.promise;
       if (wakeMode === "now") {
-        expectOwnedEvent("Hook Email: done", "main");
+        const call = enqueueSessionEventMock.mock.calls.find(
+          ([text]) => text === "Hook Email: done",
+        );
+        expect(call?.[1]).toMatchObject({
+          agentId: "main",
+          sessionKey: "global",
+          expectedTarget: { agentId: "main", sessionKey: "global", sessionId: "captured-session" },
+        });
         expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
         expect(enqueueSystemEventMock).not.toHaveBeenCalled();
       } else {
@@ -178,12 +163,9 @@ describe("global hook terminal target resolution", () => {
     );
   });
 
-  it.each([
-    ["success", "ok"],
-    ["failure", "error"],
-  ] as const)(
+  it.each(["success", "failure"] as const)(
     "suppresses the terminal event when the accepted agent is removed after %s",
-    async (outcome, status) => {
+    async (outcome) => {
       const gate = await startGatedRun(outcome);
       loadConfigMock.mockReturnValue({
         ...globalConfig("work", false),
@@ -196,7 +178,7 @@ describe("global hook terminal target resolution", () => {
         "hook agent terminal event suppressed",
         expect.objectContaining({
           acceptedAgentId: "main",
-          status,
+          status: outcome === "success" ? "ok" : "error",
           reason: "accepted-agent-removed",
           runId: expect.any(String),
           jobId: expect.any(String),

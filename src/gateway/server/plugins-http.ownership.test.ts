@@ -13,13 +13,9 @@ import {
   type PluginInstanceHandle,
 } from "../../plugins/plugin-instance-scope.js";
 import { projectPluginContributions } from "../../plugins/registry-contributions.js";
-import {
-  createEmptyPluginRegistry,
-  createPluginRegistry,
-  type PluginRegistry,
-} from "../../plugins/registry.js";
+import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -31,11 +27,7 @@ import {
 const instances = new Set<PluginInstanceHandle>();
 
 function createOwner(id = "shared-route") {
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const builder = createTestPluginRegistry();
   const record = createPluginRecord({ id });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
@@ -44,14 +36,10 @@ function createOwner(id = "shared-route") {
   return { registry: builder.registry, record, api, instance };
 }
 
-async function dispatch(
-  registry: PluginRegistry,
-  transport: "HTTP" | "WebSocket" = "HTTP",
-  path = "/owned",
-) {
+async function dispatch(registry: PluginRegistry, transport: "HTTP" | "WebSocket" = "HTTP") {
   const warn = vi.fn();
   const log = { warn } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
-  const req = { url: path, method: "GET", headers: {} } as IncomingMessage;
+  const req = { url: "/owned", method: "GET", headers: {} } as IncomingMessage;
   const response = makeMockHttpResponse();
   const socket = new PassThrough();
   const context = {
@@ -59,22 +47,13 @@ async function dispatch(
     gatewayRequestOperatorScopes: ["operator.read"],
     gatewayRequestAuth: { authMethod: "token" as const, trustDeclaredOperatorScopes: false },
   };
+  const http = createGatewayPluginRequestHandler({ registry, log });
+  const upgrade = createGatewayPluginUpgradeHandler({ registry, log });
   try {
     const handled =
       transport === "HTTP"
-        ? await createGatewayPluginRequestHandler({ registry, log })(
-            req,
-            response.res,
-            undefined,
-            context,
-          )
-        : await createGatewayPluginUpgradeHandler({ registry, log })(
-            req,
-            socket,
-            Buffer.alloc(0),
-            undefined,
-            context,
-          );
+        ? await http(req, response.res, undefined, context)
+        : await upgrade(req, socket, Buffer.alloc(0), undefined, context);
     return { ...response, handled, warn, socketDestroyed: socket.destroyed };
   } finally {
     socket.destroy();
@@ -125,15 +104,14 @@ describe("plugin HTTP route instance ownership", () => {
         observed.push(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
         return true;
       });
+      const route = { path: "/owned", auth: "plugin" as const, handler: () => nested() };
       if (registration === "static") {
-        owner.api.registerHttpRoute({ path: "/owned", auth: "plugin", handler: () => nested() });
+        owner.api.registerHttpRoute(route);
       } else {
         owner.instance.run(() =>
           registerPluginHttpRoute({
             registry: owner.registry,
-            path: "/owned",
-            auth: "plugin",
-            handler: () => nested(),
+            ...route,
             ...(registration === "dynamic" ? { pluginId: owner.record.id } : {}),
             throwOnFailure: true,
           }),

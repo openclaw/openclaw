@@ -9,7 +9,7 @@ import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
@@ -72,21 +72,9 @@ function createRoute(params: Partial<PluginHttpRouteRegistration>): PluginHttpRo
     ...params,
   };
 }
-function createMockLogger(): SubsystemLogger {
-  const child = vi.fn<(name: string) => SubsystemLogger>();
-  const logger = {
-    subsystem: "test/plugins-http-runtime-scopes",
-    isEnabled: () => true,
-    trace: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child,
-  } satisfies SubsystemLogger;
-  child.mockImplementation(() => logger);
+function createMockLogger() {
+  const logger = createSubsystemLogger("test/plugins-http-runtime-scopes");
+  vi.spyOn(logger, "warn").mockImplementation(() => {});
   return logger;
 }
 async function dispatchPluginRequest(
@@ -105,8 +93,11 @@ async function dispatchPluginRequest(
   );
   return { handled, ...response };
 }
-async function invoke(routes: PluginHttpRouteRegistration[], authContext = trusted) {
-  const { log, handler } = setup(routes);
+async function invoke(
+  routes: Partial<PluginHttpRouteRegistration> | Partial<PluginHttpRouteRegistration>[],
+  authContext = trusted,
+) {
+  const { log, handler } = setup((Array.isArray(routes) ? routes : [routes]).map(createRoute));
   return { log, ...(await dispatchPluginRequest(handler, { authContext })) };
 }
 
@@ -120,29 +111,26 @@ describe("plugin HTTP route runtime scopes", () => {
     async (auth) => {
       let scope: RuntimeScope;
       const response = await invoke(
-        [
-          createRoute({
-            auth,
-            handler: () => {
-              scope = getPluginRuntimeGatewayRequestScope();
-              const allowed = authorizeOperatorScopesForMethod(
-                "agent",
-                scope?.client?.connect.scopes ?? [],
-              );
-              if (!allowed.allowed) {
-                throw new Error(`missing scope: ${allowed.missingScope}`);
-              }
-              return true;
-            },
-          }),
-        ],
+        {
+          auth,
+          handler: () => {
+            scope = getPluginRuntimeGatewayRequestScope();
+            const allowed = authorizeOperatorScopesForMethod(
+              "agent",
+              scope?.client?.connect.scopes ?? [],
+            );
+            if (!allowed.allowed) {
+              throw new Error(`missing scope: ${allowed.missingScope}`);
+            }
+            return true;
+          },
+        },
         {
           gatewayAuthSatisfied: auth === "gateway",
           gatewayRequestOperatorScopes: ["operator.read"],
         },
       );
-      expect(response.handled).toBe(true);
-      expect(response.res.statusCode).toBe(500);
+      expect(response).toMatchObject({ handled: true, res: { statusCode: 500 } });
       expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
       expect(response.end).toHaveBeenCalledWith("Internal Server Error");
       expect(response.log.warn).toHaveBeenCalledWith(
@@ -215,15 +203,13 @@ describe("plugin HTTP route runtime scopes", () => {
       };
       let scope: RuntimeScope;
       const response = await invoke(
-        [
-          createRoute({
-            auth,
-            handler: () => {
-              scope = getPluginRuntimeGatewayRequestScope();
-              return true;
-            },
-          }),
-        ],
+        {
+          auth,
+          handler: () => {
+            scope = getPluginRuntimeGatewayRequestScope();
+            return true;
+          },
+        },
         {
           ...trusted,
           gatewayRequestAuth: {
@@ -302,19 +288,16 @@ describe("plugin HTTP route runtime scopes", () => {
     let scope: RuntimeScope;
     let visible: boolean | undefined;
     const response = await invoke(
-      [
-        createRoute({
-          handler: () => {
-            scope = getPluginRuntimeGatewayRequestScope();
-            visible = isApprovalRecordVisibleToClient({ record, client: scope?.client ?? null });
-            return true;
-          },
-        }),
-      ],
+      {
+        handler: () => {
+          scope = getPluginRuntimeGatewayRequestScope();
+          visible = isApprovalRecordVisibleToClient({ record, client: scope?.client ?? null });
+          return true;
+        },
+      },
       { gatewayAuthSatisfied: true, gatewayRequestOperatorScopes: ["operator.approvals"] },
     );
-    expect(response.handled).toBe(true);
-    expect(response.res.statusCode).toBe(200);
+    expect(response).toMatchObject({ handled: true, res: { statusCode: 200 } });
     expect(scope?.client?.internal?.approvalRuntime).not.toBe(true);
     expect(visible).toBe(false);
   });
@@ -342,8 +325,7 @@ describe("plugin HTTP route runtime scopes", () => {
         },
       }),
     ]);
-    expect(response.handled).toBe(true);
-    expect(response.res.statusCode).toBe(200);
+    expect(response).toMatchObject({ handled: true, res: { statusCode: 200 } });
     expect(response.log.warn).not.toHaveBeenCalled();
     expect(scopes).toEqual([["operator.write"], CLI_DEFAULT_OPERATOR_SCOPES]);
   });
@@ -392,25 +374,20 @@ async function withCookieSessionReader(
         const ownerEmail = "http-owner@example.test";
         const owner = ensureProfileForEmail(ownerEmail);
         setUserProfileRole(reader.id, "reader");
-        for (const row of [
-          { name: "own-draft", ownerId: reader.id, visibility: "draft" as const },
-          { name: "foreign-draft", ownerId: owner.id, visibility: "draft" as const },
-          { name: "shared", ownerId: owner.id, visibility: "shared" as const },
-          {
-            name: "dashboard:incognito-http-reader",
-            ownerId: owner.id,
-            visibility: "shared" as const,
-            incognito: true,
-          },
-        ]) {
+        for (const [name, ownerId, visibility, incognito = false] of [
+          ["own-draft", reader.id, "draft"],
+          ["foreign-draft", owner.id, "draft"],
+          ["shared", owner.id, "shared"],
+          ["dashboard:incognito-http-reader", owner.id, "shared", true],
+        ] as const) {
           await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: `agent:main:${row.name}` },
+            { agentId: "main", sessionKey: `agent:main:${name}` },
             {
-              sessionId: row.name,
+              sessionId: name,
               updatedAt: 1,
-              visibility: row.visibility,
-              ...(row.incognito ? { incognito: true } : {}),
-              createdActor: { type: "human", source: "profile", id: row.ownerId },
+              visibility,
+              ...(incognito ? { incognito: true } : {}),
+              createdActor: { type: "human", source: "profile", id: ownerId },
             },
           );
         }
@@ -553,58 +530,57 @@ describe("plugin HTTP authenticated session reads", () => {
     },
   );
 
-  it("refreshes merged-profile ownership during HTTP projection readiness", async () => {
-    await withCookieSessionReader(
-      true,
-      async ({ readerId, ownerEmail, dispatch, blockCatalog }) => {
-        const gate = blockCatalog();
-        const pending = dispatch("sessions.list");
-        try {
-          await gate.entered;
-          linkEmail(ownerEmail, readerId);
-          gate.release();
-          expectSessionKeys(await pending, [
-            "agent:main:own-draft",
-            "agent:main:foreign-draft",
-            "agent:main:shared",
-          ]);
-          expect(await dispatch("sessions.describe", "agent:main:foreign-draft")).toMatchObject({
-            ok: true,
-            payload: { session: { sharingRole: "owner" } },
-          });
-        } finally {
-          gate.release();
-          await pending;
-        }
-      },
-    );
-  });
-
-  it("withdraws foreign-session access during HTTP projection readiness", async () => {
-    await withCookieSessionReader(
-      true,
-      async ({ readerId, dispatch, dispatchHttp, blockCatalog }) => {
-        expectSessionKeys(await dispatch("sessions.list"), [
-          "agent:main:own-draft",
-          "agent:main:shared",
-        ]);
-        const gate = blockCatalog();
-        const pending = dispatchHttp("sessions.list");
-        try {
-          await gate.entered;
-          setUserProfileRole(readerId, "blocked");
-          invalidateOperatorRolePolicy(readerId);
-          gate.release();
-          expect(await pending).toEqual({ statusCode: 500, result: undefined });
-          expectSessionKeys(await dispatch("sessions.list"), ["agent:main:own-draft"]);
-          expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
-        } finally {
-          gate.release();
-          await pending;
-        }
-      },
-    );
-  });
+  it.each(["merge", "revoke"] as const)(
+    "refreshes %s authority during HTTP projection readiness",
+    async (change) => {
+      await withCookieSessionReader(
+        true,
+        async ({ readerId, ownerEmail, dispatch, dispatchHttp, blockCatalog }) => {
+          if (change === "revoke") {
+            expectSessionKeys(await dispatch("sessions.list"), [
+              "agent:main:own-draft",
+              "agent:main:shared",
+            ]);
+          }
+          const gate = blockCatalog();
+          const pending = dispatchHttp("sessions.list");
+          try {
+            await gate.entered;
+            if (change === "merge") {
+              linkEmail(ownerEmail, readerId);
+            } else {
+              setUserProfileRole(readerId, "blocked");
+              invalidateOperatorRolePolicy(readerId);
+            }
+            gate.release();
+            const response = await pending;
+            if (change === "merge") {
+              expect(response.statusCode).toBe(200);
+              expect(response.result).toBeDefined();
+              expectSessionKeys(response.result!, [
+                "agent:main:own-draft",
+                "agent:main:foreign-draft",
+                "agent:main:shared",
+              ]);
+              expect(await dispatch("sessions.describe", "agent:main:foreign-draft")).toMatchObject(
+                {
+                  ok: true,
+                  payload: { session: { sharingRole: "owner" } },
+                },
+              );
+            } else {
+              expect(response).toEqual({ statusCode: 500, result: undefined });
+              expectSessionKeys(await dispatch("sessions.list"), ["agent:main:own-draft"]);
+              expect(await dispatch("sessions.describe")).toMatchObject({ ok: false });
+            }
+          } finally {
+            gate.release();
+            await pending;
+          }
+        },
+      );
+    },
+  );
 });
 
 function route(params: Partial<PluginHttpRouteRegistration> = {}) {
@@ -823,201 +799,197 @@ describe("plugin suspension admission", () => {
     resetGatewayWorkAdmission();
   });
 
-  describe("plugin HTTP suspension admission", () => {
-    it.each(["HTTP", "upgrade"] as const)(
-      "keeps an in-flight %s route visible to suspension",
-      async (transport) => {
-        const started = createDeferred();
-        const finish = createDeferred();
-        const run = async () => {
-          started.resolve();
-          await finish.promise;
-          return true;
-        };
-        const routes = [suspensionRoute({ handler: run, handleUpgrade: run })];
-        const socket = createMockUpgradeSocket();
-        const pending =
-          transport === "HTTP"
-            ? suspensionSetup(routes).request(makeMockHttpResponse().res)
-            : suspensionSetup(routes).upgrade(socket);
-        try {
-          await started.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
-          expect(
-            prepareGatewaySuspend({
-              requestId: "plugin-active",
-              pauseScheduling: vi.fn(),
-              resumeScheduling: vi.fn(),
-            }),
-          ).toMatchObject({
-            status: "busy",
-            reason: "active-work",
-            activeCount: 1,
-            blockers: [expect.objectContaining({ kind: "root-request", count: 1 })],
-          });
-        } finally {
-          finish.resolve();
-        }
-        await expect(pending).resolves.toBe(true);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        socket.destroy();
-      },
-    );
-
-    it("keeps an ordinary sibling from an entitled plugin behind admission", async () => {
-      const ordinaryHandler = vi.fn(() => true);
-      const { request } = suspensionSetup([
-        suspensionRoute({
-          auth: "gateway",
-          gatewayMethodDispatchAllowed: true,
-          handler: ordinaryHandler,
-        }),
-        suspensionRoute({
-          path: `${ROUTE_PATH}/control`,
-          auth: "gateway",
-          gatewayRuntimeScopeSurface: "trusted-operator",
-          gatewayMethodDispatchAllowed: true,
-        }),
-      ]);
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.commit()).toBe(true);
-      const response = makeMockHttpResponse();
-
-      await expect(request(response.res)).resolves.toBe(true);
-
-      expect(ordinaryHandler).not.toHaveBeenCalled();
-      expect(response.res.statusCode).toBe(503);
-      expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
-      expect(JSON.parse(String(response.end.mock.calls[0]?.[0]))).toMatchObject({
-        error: { code: "gateway_unavailable" },
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(suspension?.release()).toBe(true);
-    });
-
-    it("keeps entitled Gateway suspension dispatch outside the plugin route root", async () => {
-      const cron = {
-        pauseScheduling: vi.fn(),
-        resumeScheduling: vi.fn(),
-        getSuspensionBlockerCount: vi.fn(() => 0),
+  it.each(["HTTP", "upgrade"] as const)(
+    "keeps an in-flight %s route visible to suspension",
+    async (transport) => {
+      const started = createDeferred();
+      const finish = createDeferred();
+      const run = async () => {
+        started.resolve();
+        await finish.promise;
+        return true;
       };
-      const context = {
-        getRuntimeConfig: () => ({}),
-        trackExecution: trackAsyncWork,
-        cron,
-        logGateway: { warn: vi.fn() },
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-        terminalSessions: new Map(),
-      } as unknown as GatewayRequestContext;
-      const invokeSuspension = async (method: string, params: Record<string, unknown>) => {
-        let result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
-        const { request } = suspensionSetup(
-          [
-            suspensionRoute({
-              auth: "gateway",
-              gatewayRuntimeScopeSurface: "trusted-operator",
-              gatewayMethodDispatchAllowed: true,
-              handler: async () => {
-                expect(getActiveGatewayRootWorkCount()).toBe(0);
-                result = await dispatchGatewayMethod(method, params);
-                return true;
-              },
-            }),
-          ],
-          () => context,
-        );
+      const routes = [suspensionRoute({ handler: run, handleUpgrade: run })];
+      const socket = createMockUpgradeSocket();
+      const pending =
+        transport === "HTTP"
+          ? suspensionSetup(routes).request(makeMockHttpResponse().res)
+          : suspensionSetup(routes).upgrade(socket);
+      try {
+        await started.promise;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
         expect(
-          await request(makeMockHttpResponse().res, {
-            ...trusted,
-            gatewayRequestOperatorScopes: ["operator.admin"],
+          prepareGatewaySuspend({
+            requestId: "plugin-active",
+            pauseScheduling: vi.fn(),
+            resumeScheduling: vi.fn(),
           }),
-        ).toBe(true);
-        expect(result).toBeDefined();
-        return result!;
-      };
-
-      const prepared = await invokeSuspension("gateway.suspend.prepare", {
-        requestId: "admin-http-suspension",
-      });
-      expect(prepared).toMatchObject({
-        ok: true,
-        payload: { status: "ready", activeCount: 0, blockers: [] },
-      });
-      const suspensionId = (prepared.payload as { suspensionId: string }).suspensionId;
-
-      await expect(
-        invokeSuspension("gateway.suspend.status", { suspensionId }),
-      ).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "ready" },
-      });
-      await expect(
-        invokeSuspension("gateway.suspend.resume", { suspensionId }),
-      ).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "running", resumed: true },
-      });
-      expect(cron.pauseScheduling).toHaveBeenCalledOnce();
-      expect(cron.resumeScheduling).toHaveBeenCalledOnce();
+        ).toMatchObject({
+          status: "busy",
+          reason: "active-work",
+          activeCount: 1,
+          blockers: [expect.objectContaining({ kind: "root-request", count: 1 })],
+        });
+      } finally {
+        finish.resolve();
+      }
+      await expect(pending).resolves.toBe(true);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
+      socket.destroy();
+    },
+  );
+
+  it("keeps an ordinary sibling from an entitled plugin behind admission", async () => {
+    const ordinaryHandler = vi.fn(() => true);
+    const { request } = suspensionSetup([
+      suspensionRoute({
+        auth: "gateway",
+        gatewayMethodDispatchAllowed: true,
+        handler: ordinaryHandler,
+      }),
+      suspensionRoute({
+        path: `${ROUTE_PATH}/control`,
+        auth: "gateway",
+        gatewayRuntimeScopeSurface: "trusted-operator",
+        gatewayMethodDispatchAllowed: true,
+      }),
+    ]);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const response = makeMockHttpResponse();
+
+    await expect(request(response.res)).resolves.toBe(true);
+
+    expect(ordinaryHandler).not.toHaveBeenCalled();
+    expect(response.res.statusCode).toBe(503);
+    expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+    expect(JSON.parse(String(response.end.mock.calls[0]?.[0]))).toMatchObject({
+      error: { code: "gateway_unavailable" },
     });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspension?.release()).toBe(true);
   });
 
-  describe("plugin upgrade suspension admission", () => {
-    it("rejects a new upgrade with HTTP 503 after admission closes", async () => {
-      const upgrade = vi.fn(() => true);
-      const { upgrade: dispatch } = suspensionSetup([
-        suspensionRoute({ handler: () => false, handleUpgrade: upgrade }),
-      ]);
-      const suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.commit()).toBe(true);
-      const socket = createMockUpgradeSocket();
-      const closed = once(socket, "close");
-
-      await expect(dispatch(socket)).resolves.toBe(true);
-      await closed;
-
-      expect(upgrade).not.toHaveBeenCalled();
-      expect(socket.destroyed).toBe(true);
-      expect(socket.chunks.join("")).toContain("HTTP/1.1 503 Service Unavailable");
-      expect(socket.chunks.join("")).toContain("Gateway websocket admission closed");
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(suspension?.release()).toBe(true);
-    });
-
-    it("releases upgrade admission after fallthrough and failure", async () => {
-      const fallthrough = vi.fn(() => false);
-      const handled = vi.fn(() => true);
-      const { upgrade: fallthroughHandler } = suspensionSetup([
-        suspensionRoute({ handler: () => false, handleUpgrade: fallthrough }),
-        suspensionRoute({
-          path: "/plugin",
-          match: "prefix",
-          handler: () => false,
-          handleUpgrade: handled,
+  it("keeps entitled Gateway suspension dispatch outside the plugin route root", async () => {
+    const cron = {
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      getSuspensionBlockerCount: vi.fn(() => 0),
+    };
+    const context = {
+      getRuntimeConfig: () => ({}),
+      trackExecution: trackAsyncWork,
+      cron,
+      logGateway: { warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      terminalSessions: new Map(),
+    } as unknown as GatewayRequestContext;
+    const invokeSuspension = async (method: string, params: Record<string, unknown>) => {
+      let result: Awaited<ReturnType<typeof dispatchGatewayMethod>> | undefined;
+      const { request } = suspensionSetup(
+        [
+          suspensionRoute({
+            auth: "gateway",
+            gatewayRuntimeScopeSurface: "trusted-operator",
+            gatewayMethodDispatchAllowed: true,
+            handler: async () => {
+              expect(getActiveGatewayRootWorkCount()).toBe(0);
+              result = await dispatchGatewayMethod(method, params);
+              return true;
+            },
+          }),
+        ],
+        () => context,
+      );
+      expect(
+        await request(makeMockHttpResponse().res, {
+          ...trusted,
+          gatewayRequestOperatorScopes: ["operator.admin"],
         }),
-      ]);
-      const fallthroughSocket = createMockUpgradeSocket();
+      ).toBe(true);
+      expect(result).toBeDefined();
+      return result!;
+    };
 
-      await expect(fallthroughHandler(fallthroughSocket)).resolves.toBe(true);
-      expect(fallthrough).toHaveBeenCalledOnce();
-      expect(handled).toHaveBeenCalledOnce();
-      expect(fallthroughSocket.destroyed).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      const { upgrade: failingHandler } = suspensionSetup([
-        suspensionRoute({
-          handler: () => false,
-          handleUpgrade: () => {
-            throw new Error("upgrade failed");
-          },
-        }),
-      ]);
-      const failureSocket = createMockUpgradeSocket();
-      await expect(failingHandler(failureSocket)).resolves.toBe(true);
-      expect(failureSocket.destroyed).toBe(true);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    const prepared = await invokeSuspension("gateway.suspend.prepare", {
+      requestId: "admin-http-suspension",
     });
+    expect(prepared).toMatchObject({
+      ok: true,
+      payload: { status: "ready", activeCount: 0, blockers: [] },
+    });
+    const suspensionId = (prepared.payload as { suspensionId: string }).suspensionId;
+
+    await expect(
+      invokeSuspension("gateway.suspend.status", { suspensionId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "ready" },
+    });
+    await expect(
+      invokeSuspension("gateway.suspend.resume", { suspensionId }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { status: "running", resumed: true },
+    });
+    expect(cron.pauseScheduling).toHaveBeenCalledOnce();
+    expect(cron.resumeScheduling).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("rejects a new upgrade with HTTP 503 after admission closes", async () => {
+    const upgrade = vi.fn(() => true);
+    const { upgrade: dispatch } = suspensionSetup([
+      suspensionRoute({ handler: () => false, handleUpgrade: upgrade }),
+    ]);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const socket = createMockUpgradeSocket();
+    const closed = once(socket, "close");
+
+    await expect(dispatch(socket)).resolves.toBe(true);
+    await closed;
+
+    expect(upgrade).not.toHaveBeenCalled();
+    expect(socket.destroyed).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 503 Service Unavailable");
+    expect(socket.chunks.join("")).toContain("Gateway websocket admission closed");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspension?.release()).toBe(true);
+  });
+
+  it("releases upgrade admission after fallthrough and failure", async () => {
+    const fallthrough = vi.fn(() => false);
+    const handled = vi.fn(() => true);
+    const { upgrade: fallthroughHandler } = suspensionSetup([
+      suspensionRoute({ handler: () => false, handleUpgrade: fallthrough }),
+      suspensionRoute({
+        path: "/plugin",
+        match: "prefix",
+        handler: () => false,
+        handleUpgrade: handled,
+      }),
+    ]);
+    const fallthroughSocket = createMockUpgradeSocket();
+
+    await expect(fallthroughHandler(fallthroughSocket)).resolves.toBe(true);
+    expect(fallthrough).toHaveBeenCalledOnce();
+    expect(handled).toHaveBeenCalledOnce();
+    expect(fallthroughSocket.destroyed).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    const { upgrade: failingHandler } = suspensionSetup([
+      suspensionRoute({
+        handler: () => false,
+        handleUpgrade: () => {
+          throw new Error("upgrade failed");
+        },
+      }),
+    ]);
+    const failureSocket = createMockUpgradeSocket();
+    await expect(failingHandler(failureSocket)).resolves.toBe(true);
+    expect(failureSocket.destroyed).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });

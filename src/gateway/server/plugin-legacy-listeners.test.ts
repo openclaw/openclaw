@@ -7,6 +7,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { text } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -51,6 +52,23 @@ describe("legacy channel webhook ports", () => {
       server.close(() => resolve());
     });
   const restrictedTimeouts = { headersTimeout: 15_000, requestTimeout: 30_000, timeout: 30_000 };
+  const signedHeaders = { "x-webhook-secret": "synthetic-secret" };
+  const verifiedCallback =
+    (
+      handler: Parameters<typeof registerPluginHttpRoute>[0]["handler"],
+      path = "/webhook",
+    ): typeof handler =>
+    (req, res) => {
+      if (req.url !== path) {
+        res.writeHead(404).end();
+        return;
+      }
+      if (req.headers["x-webhook-secret"] !== signedHeaders["x-webhook-secret"]) {
+        res.writeHead(401).end();
+        return;
+      }
+      return handler(req, res);
+    };
 
   beforeAll(async () => {
     claim = await acquireTestPortBlock({ offsets: [0, 1, 2] });
@@ -148,15 +166,9 @@ describe("legacy channel webhook ports", () => {
           headers: { Connection: "close", ...options.headers },
         },
         (res) => {
-          let body = "";
-          res.setEncoding("utf8");
-          res.on("data", (chunk: string) => {
-            body += chunk;
-          });
-          res.on("error", reject);
-          res.on("end", () => {
+          void text(res).then((body) => {
             resolve({ status: res.statusCode, headers: res.headers, body });
-          });
+          }, reject);
         },
       );
       req.on("error", reject);
@@ -333,15 +345,7 @@ describe("legacy channel webhook ports", () => {
     const body = '{ "event": "synthetic", "spacing":  true }';
     register({
       legacyListener: endpoint(1),
-      handler: async (req, res) => {
-        if (req.url !== "/webhook") {
-          res.writeHead(404).end();
-          return;
-        }
-        if (req.headers["x-webhook-secret"] !== "synthetic-secret") {
-          res.writeHead(401).end();
-          return;
-        }
+      handler: verifiedCallback(async (req, res) => {
         expect(await readRequestBodyWithLimit(req, { maxBytes: 1024, timeoutMs: 1000 })).toBe(body);
         res.setHeader("x-peer", req.socket.remoteAddress ?? "missing");
         const legacyListener = getWebhookLegacyListener(req);
@@ -354,7 +358,7 @@ describe("legacy channel webhook ports", () => {
           getPluginRuntimeGatewayRequestScope()?.pluginId ?? "missing",
         );
         res.end("accepted");
-      },
+      }),
     });
     register({ path: "/healthz", legacyListener: endpoint(1), handler: () => false });
     register({
@@ -369,17 +373,21 @@ describe("legacy channel webhook ports", () => {
         method: "POST",
         body,
         headers: {
-          "x-webhook-secret": "synthetic-secret",
+          ...signedHeaders,
           "x-openclaw-legacy-listener": JSON.stringify(endpoint(2)),
         },
       });
-      expect(accepted.status).toBe(200);
-      expect(accepted.body).toBe("accepted");
-      expect(accepted.headers["x-peer"]).toBe("127.0.0.1");
+      expect(accepted).toMatchObject({
+        status: 200,
+        body: "accepted",
+        headers: {
+          "x-peer": "127.0.0.1",
+          "x-runtime-plugin": "demo",
+        },
+      });
       expect(JSON.parse(String(accepted.headers["x-legacy-listener"]))).toEqual(
         offset === 0 ? null : endpoint(1),
       );
-      expect(accepted.headers["x-runtime-plugin"]).toBe("demo");
       expect((await send(offset, "/webhook", { method: "POST", body })).status).toBe(401);
     }
     expect((await send(0, "/other")).status).toBe(200);
@@ -391,37 +399,25 @@ describe("legacy channel webhook ports", () => {
       await send(1, "/webhook", {
         method: "POST",
         body,
-        headers: { "x-webhook-secret": "synthetic-secret" },
+        headers: signedHeaders,
       }),
     ).toMatchObject({ status: 503 });
     expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      name: "protected namespace",
-      path: "/api/channels/telegram",
-      primaryStatus: 401,
-      forwardedPrimaryStatus: 403,
-      primaryBody: undefined,
-    },
-    {
-      name: "capability rewrite",
-      path: "/__openclaw__/cap/vendor/webhook",
-      primaryStatus: 200,
-      forwardedPrimaryStatus: 200,
-      primaryBody: "rewritten sibling: /webhook?oc_cap=vendor",
-    },
-    {
-      name: "incomplete capability",
-      path: "/__openclaw__/cap/vendor",
-      primaryStatus: 401,
-      forwardedPrimaryStatus: 401,
-      primaryBody: undefined,
-    },
-  ])(
-    "preserves the $name callback on its legacy port and the primary listener's policy",
-    async ({ path, primaryStatus, forwardedPrimaryStatus, primaryBody }) => {
+    ["protected namespace", "/api/channels/telegram", 401, 403, undefined],
+    [
+      "capability rewrite",
+      "/__openclaw__/cap/vendor/webhook",
+      200,
+      200,
+      "rewritten sibling: /webhook?oc_cap=vendor",
+    ],
+    ["incomplete capability", "/__openclaw__/cap/vendor", 401, 401, undefined],
+  ] as const)(
+    "preserves %s on the legacy port and the primary listener's policy",
+    async (_name, path, primaryStatus, forwardedPrimaryStatus, primaryBody) => {
       expect(() =>
         register({ auth: "gateway", legacyListener: endpoint(1), throwOnFailure: true }),
       ).toThrow("legacy webhook listeners require plugin authentication");
@@ -429,18 +425,10 @@ describe("legacy channel webhook ports", () => {
       register({
         path,
         legacyListener: endpoint(1),
-        handler: (req, res) => {
-          if (req.url !== path) {
-            res.writeHead(404).end();
-            return;
-          }
-          if (req.headers["x-webhook-secret"] !== "synthetic-secret") {
-            res.writeHead(401).end();
-            return;
-          }
+        handler: verifiedCallback((_req, res) => {
           expect(getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes).toEqual([]);
           res.end("vendor accepted");
-        },
+        }, path),
       });
       register({
         path: "/webhook",
@@ -466,18 +454,15 @@ describe("legacy channel webhook ports", () => {
               "x-forwarded-host": "callbacks.example",
             }
           : {};
-        const signed = { ...headers, "x-webhook-secret": "synthetic-secret" };
+        const signed = { ...headers, ...signedHeaders };
         const accepted = await send(1, path, { method: "POST", headers: signed });
-        expect(accepted.status).toBe(200);
-        expect(accepted.body).toBe("vendor accepted");
+        expect(accepted).toMatchObject({ status: 200, body: "vendor accepted" });
         expect(
-          (
-            await send(1, path, {
-              method: "POST",
-              headers: { ...headers, "x-webhook-secret": "wrong" },
-            })
-          ).status,
-        ).toBe(401);
+          await send(1, path, {
+            method: "POST",
+            headers: { ...headers, "x-webhook-secret": "wrong" },
+          }),
+        ).toMatchObject({ status: 401 });
         const primary = await send(0, path, { method: "POST", headers: signed });
         expect(primary.status).toBe(forwarded ? forwardedPrimaryStatus : primaryStatus);
         const primaryText = primary.body;
@@ -487,9 +472,9 @@ describe("legacy channel webhook ports", () => {
         if (primaryBody !== undefined) {
           expect(primaryText).toBe(primaryBody);
         }
-        expect((await send(1, "/tools/invoke", { method: "POST", headers: signed })).status).toBe(
-          404,
-        );
+        expect(await send(1, "/tools/invoke", { method: "POST", headers: signed })).toMatchObject({
+          status: 404,
+        });
       }
       expect(gatewayOnlyHandler).not.toHaveBeenCalled();
     },

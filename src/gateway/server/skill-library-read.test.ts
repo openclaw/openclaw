@@ -4,23 +4,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
 import { isDeepStrictEqual } from "node:util";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
-import { buildDeviceAuthPayloadV3 } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   PROTOCOL_VERSION,
   type SkillsLibraryReceipt,
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  acquireGatewayTestWebSocket,
-  closeGatewayTestWebSocket,
-} from "../../../test/helpers/gateway-websocket.js";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { prepareDirectCompactionAttempt } from "../../agents/embedded-agent-runner/direct-compaction-preparation.js";
 import {
   buildPreparedCompactionRuntime,
@@ -37,7 +32,6 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
 } from "../../infra/device-identity.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { requestDevicePairing } from "../../infra/device-pairing.js";
@@ -53,122 +47,83 @@ import { setTestEnvValue } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import {
+  GatewayClientRequestError,
+  type GatewayClient,
+  type GatewayClientOptions,
+} from "../client.js";
 import { startGatewayServer } from "../server.js";
 import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
-type Frame = {
-  type?: string;
-  id?: string;
-  event?: string;
-  ok?: boolean;
-  payload?: unknown;
-  error?: { message?: string };
-};
-function waitForFrame(ws: WebSocket, matches: (frame: Frame) => boolean): Promise<Frame> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("message", onMessage);
-      ws.off("close", onClose);
-      ws.off("error", onError);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onClose = () => onError(new Error("Gateway closed before its RPC response"));
-    const onMessage = (data: WebSocket.RawData) => {
-      const frame = JSON.parse(rawDataToString(data)) as Frame;
-      if (matches(frame)) {
-        cleanup();
-        resolve(frame);
-      }
-    };
-    const timer = setTimeout(() => onError(new Error("Gateway fixture RPC timed out")), 45_000);
-    ws.on("message", onMessage);
-    ws.once("close", onClose);
-    ws.once("error", onError);
-  });
-}
-async function rpc(ws: WebSocket, method: string, params: unknown): Promise<unknown> {
-  const id = randomUUID();
-  const response = waitForFrame(ws, (frame) => frame.type === "res" && frame.id === id);
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
-  const frame = await response;
-  if (!frame.ok) {
-    throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
+async function rpc(client: GatewayClient, method: string, params: unknown): Promise<unknown> {
+  try {
+    return await client.request<unknown>(method, params);
+  } catch (error) {
+    if (error instanceof GatewayClientRequestError) {
+      throw new Error(
+        `${method}: ${JSON.stringify({ code: error.code, message: error.message, details: error.details })}`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  return frame.payload;
 }
 
-// Synthetic trusted-proxy headers stand in for human authentication. No production OAuth is used.
-async function connectProfile(port: number, email: string, identityPath: string) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
-    headers: {
-      origin: "https://control.example.test",
-      "x-forwarded-for": "203.0.113.50",
-      "x-forwarded-proto": "https",
-      "x-forwarded-user": email,
-    },
+// Pair only disposable identities; the real client owns nonce signing, RPCs and socket cleanup.
+async function connectProfile(
+  port: number,
+  email: string,
+  identityPath: string,
+  observer: Pick<GatewayClientOptions, "onEvent" | "onClose"> = {},
+) {
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const scopes = ["operator.read", "operator.write"];
+  const clientName = GATEWAY_CLIENT_NAMES.CONTROL_UI;
+  const mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+  const origin = "https://control.example.test";
+  const pairing = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "operator",
+    scopes,
+    clientId: clientName,
+    clientMode: mode,
+    platform: "test",
+    browserOrigin: origin,
+    silent: false,
   });
-  const challenge = waitForFrame(ws, (frame) => frame.event === "connect.challenge");
-  void challenge.catch(() => {});
-  return await acquireGatewayTestWebSocket(ws, 10_000, async () => {
-    const frame = await challenge;
-    const nonce = (frame.payload as { nonce: string }).nonce;
-    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-    const scopes = ["operator.read", "operator.write"];
-    const client = {
-      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      version: "test",
+  expect(
+    (await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes }))?.status,
+  ).toBe("approved");
+  return acquireGatewayTestClient(
+    {
+      url: `ws://127.0.0.1:${port}`,
+      origin,
+      clientName,
+      mode,
+      clientVersion: "test",
       platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    };
-    const claims = {
-      clientId: client.id,
-      clientMode: client.mode,
       role: "operator",
       scopes,
-      platform: client.platform,
-    };
-    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-    // Same test-only pre-pairing contract as server.auth.presence-audience.test.ts.
-    // Approval is scoped to this disposable state, not a production sign-in.
-    const pairing = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey,
-      ...claims,
-      browserOrigin: "https://control.example.test",
-      silent: false,
-    });
-    expect(
-      (await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes }))?.status,
-    ).toBe("approved");
-    const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayloadV3({
-      deviceId: identity.deviceId,
-      ...claims,
-      signedAtMs,
-      token: null,
-      nonce,
-    });
-    await rpc(ws, "connect", {
+      caps: [],
+      deviceIdentity: identity,
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client,
-      role: claims.role,
-      scopes,
-      caps: [],
-      device: {
-        id: identity.deviceId,
-        publicKey,
-        signature: signDevicePayload(identity.privateKeyPem, payload),
-        signedAt: signedAtMs,
-        nonce,
+      requestTimeoutMs: 45_000,
+      edgeAuthHeaders: {
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": email,
       },
-    });
-  });
+      ...observer,
+    },
+    {
+      timeoutMs: 10_000,
+      timeoutMessage: "Gateway fixture connection timed out",
+      closeMessage: "Gateway closed before authentication",
+    },
+  );
 }
 
 type PlannedCall = { id: string; name: string; args: Record<string, unknown> };
@@ -183,7 +138,7 @@ const readCall = (
 });
 const instructionFile = (receipt: SkillsLibraryReceipt) =>
   path.join(skillLibraryRevisionDir(receipt.entry.skillId, receipt.entry.revision), "SKILL.md");
-async function saveLibrary(ws: WebSocket, slug: string, previous?: SkillsLibraryReceipt) {
+async function saveLibrary(ws: GatewayClient, slug: string, previous?: SkillsLibraryReceipt) {
   const revision = (text: string) => (previous ? text.replaceAll("R1", "R2") : text);
   return (await rpc(ws, "skills.library.save", {
     slug,
@@ -238,7 +193,7 @@ describe("Gateway pinned manual library read", () => {
       // Keep repository discovery inside this synthetic workspace, not its enclosing test checkout.
       execFileSync("git", ["init", "--quiet", state.workspaceDir]);
       let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-      const sockets: WebSocket[] = [];
+      const clients: GatewayClient[] = [];
       const requests: ProviderRequest[] = [];
       const outputs = new Map<string, unknown>();
       const wireCalls = new Map<string, string>();
@@ -380,12 +335,27 @@ describe("Gateway pinned manual library read", () => {
               startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
             );
             await gateway.startupSettled;
+            const settlement = createDeferred();
+            void settlement.promise.catch(() => {});
+            const awaitedRun: { id?: string } = {};
             const alice = await connectProfile(
               port,
               "alice@example.test",
               state.path("alice-device.sqlite"),
+              {
+                onEvent: (frame) => {
+                  if (
+                    frame.event === "sessions.changed" &&
+                    awaitedRun.id &&
+                    !getAgentRunContext(awaitedRun.id)
+                  ) {
+                    settlement.resolve();
+                  }
+                },
+                onClose: () => settlement.reject(new Error("Gateway closed before settlement")),
+              },
             );
-            sockets.push(alice);
+            clients.push(alice);
             const bob = await connectProfile(
               port,
               "bob@example.test",
@@ -499,7 +469,6 @@ describe("Gateway pinned manual library read", () => {
                 compactionCleanup?.restoreSkillEnvironment();
                 await compactionCleanup?.disposeToolRuntimes();
               }
-              console.info("Prepared compaction normal-read R1 instruction proof", instructions);
               return;
             }
             await rpc(alice, "sessions.subscribe", {});
@@ -511,19 +480,15 @@ describe("Gateway pinned manual library read", () => {
             expect(started.status).toBe("started");
             // Session settlement publishes after releasing the live run context. A completed
             // run must remain visible to its current session owner, but not another profile.
+            awaitedRun.id = started.runId;
             const settled = getAgentRunContext(started.runId)
-              ? waitForFrame(
-                  alice,
-                  (frame) =>
-                    frame.event === "sessions.changed" &&
-                    getAgentRunContext(started.runId) === undefined,
-                )
+              ? withTestTimeout(settlement.promise, 45_000, "Gateway fixture settlement timed out")
               : Promise.resolve();
-            const [immediate, settlement] = await Promise.allSettled([
+            const [immediate, settledResult] = await Promise.allSettled([
               rpc(alice, "agent.wait", { runId: started.runId, timeoutMs: 40_000 }),
               settled,
             ]);
-            expect(settlement.status).toBe("fulfilled");
+            expect(settledResult.status).toBe("fulfilled");
             const completed = await rpc(alice, "agent.wait", {
               runId: started.runId,
               timeoutMs: 40_000,
@@ -593,15 +558,11 @@ describe("Gateway pinned manual library read", () => {
             );
             expect(transcript).toContain("PINNED_RESOURCE_PROOF_COMPLETE");
             expect(transcript).toContain("R1 instructions");
-            console.info(
-              "Synthetic Gateway normal-read proof (mock provider; not production OAuth)",
-              Object.fromEntries(outputs),
-            );
           },
         );
       } finally {
-        for (const ws of sockets) {
-          await closeGatewayTestWebSocket(ws);
+        for (const client of clients) {
+          await client.stopAndWait();
         }
         await gateway?.close({ reason: "manual library proof complete" });
         await state.cleanup();

@@ -8,6 +8,7 @@ import {
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 import { createReadinessChecker } from "./readiness.js";
 
 const FIVE_MIN_MS = 5 * 60_000;
@@ -118,21 +119,21 @@ describe("createReadinessChecker", () => {
   });
 
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
-    const stateDatabase = { failure: undefined as Error | undefined };
+    let failure: Error | undefined;
     const { manager, readiness } = createReadinessHarness({
-      getStateDatabaseFailure: () => stateDatabase.failure,
+      getStateDatabaseFailure: () => failure,
       cacheTtlMs: 1_000,
     });
     expect(readiness()).toEqual(readySnapshot());
 
-    stateDatabase.failure = new Error("newer shared-state schema");
+    failure = new Error("newer shared-state schema");
     expect(readiness()).toEqual({
       ...failingSnapshot(["state-database"]),
       stateDatabase: { reason: "newer shared-state schema" },
     });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
-    stateDatabase.failure = undefined;
+    failure = undefined;
     expect(readiness()).toEqual(readySnapshot());
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -145,7 +146,7 @@ describe("createReadinessChecker", () => {
     );
     expect(readiness()).toEqual(readySnapshot());
 
-    vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+    manager.getRuntimeSnapshot.mockReturnValue(
       snapshotWith({ discord: stoppedAccount({ connected: false }) }),
     );
 
@@ -192,11 +193,8 @@ describe("createReadinessChecker", () => {
         reason: "Session identities require migration before this agent can run.",
       });
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
-      const readiness = createReadinessChecker({
-        channelManager: createManager(
-          snapshotWith(channelFailed ? { discord: stoppedAccount({ connected: false }) } : {}),
-        ),
-        startedAt: Date.now() - FIVE_MIN_MS,
+      const { readiness } = createReadinessHarness({
+        accounts: channelFailed ? { discord: stoppedAccount({ connected: false }) } : {},
         cacheTtlMs: 1_000,
         shouldSkipChannelReadiness: () => skipChannels,
         getAgentDatabaseAdmissionRefusals: () => refusals,
@@ -261,8 +259,6 @@ describe("createReadinessChecker", () => {
   );
 
   it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
-    // The next start re-proves ingress, so this window gets the same grace as any
-    // other restart handoff rather than flapping readiness on every retry.
     const startedAt = Date.now() - FIVE_MIN_MS;
     const { readiness } = discordHarness({
       running: false,
@@ -321,7 +317,7 @@ describe("createReadinessChecker", () => {
     });
 
     expect(readiness()).toEqual(readySnapshot());
-    vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+    manager.getRuntimeSnapshot.mockReturnValue(
       snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
     );
     vi.setSystemTime(Date.now() - 60_000);
@@ -331,32 +327,19 @@ describe("createReadinessChecker", () => {
   });
 
   it("adds event-loop health to detailed readiness without changing readiness state", () => {
+    const eventLoop: GatewayEventLoopHealth = {
+      degraded: true,
+      degradedSinceMs: 61_000,
+      reasons: ["cpu", "event_loop_utilization"],
+      intervalMs: 2_000,
+      delayP99Ms: 42.1,
+      delayMaxMs: 88.7,
+      utilization: 0.991,
+      cpuCoreRatio: 0.973,
+    };
     const { readiness } = createReadinessHarness({
-      getEventLoopHealth: () => ({
-        degraded: true,
-        degradedSinceMs: 61_000,
-        reasons: ["cpu", "event_loop_utilization"],
-        intervalMs: 2_000,
-        delayP99Ms: 42.1,
-        delayMaxMs: 88.7,
-        utilization: 0.991,
-        cpuCoreRatio: 0.973,
-      }),
+      getEventLoopHealth: () => structuredClone(eventLoop),
     });
-
-    expect(readiness()).toEqual(
-      readySnapshot(FIVE_MIN_MS, {
-        eventLoop: {
-          degraded: true,
-          degradedSinceMs: 61_000,
-          reasons: ["cpu", "event_loop_utilization"],
-          intervalMs: 2_000,
-          delayP99Ms: 42.1,
-          delayMaxMs: 88.7,
-          utilization: 0.991,
-          cpuCoreRatio: 0.973,
-        },
-      }),
-    );
+    expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { eventLoop }));
   });
 });
