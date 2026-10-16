@@ -1,9 +1,12 @@
+import { EventEmitter } from "node:events";
 import type { SessionEvent } from "@github/copilot-sdk";
-// Copilot tests cover event bridge plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
+
+type EventData = Record<string, unknown>;
+type EventMeta = Partial<SessionEvent>;
 
 const MODEL_REF = {
   api: "openai-responses",
@@ -20,30 +23,51 @@ function flushAsync() {
   return tick().then(tick);
 }
 
-function makeEvent(type: string, data: Record<string, unknown>): SessionEvent {
+function makeEvent(type: string, data: EventData, metadata: EventMeta = {}): SessionEvent {
   return {
     data,
     id: `${type}-id`,
     parentId: null,
     timestamp: "2024-01-01T00:00:00.000Z",
     type,
+    ...metadata,
   } as SessionEvent;
 }
 
-function emit(session: FakeSession, type: string, data: Record<string, unknown> = {}) {
-  session.emit(type, makeEvent(type, data));
+function emit(session: FakeSession, type: string, data: EventData = {}, metadata: EventMeta = {}) {
+  session.emit(type, makeEvent(type, data, metadata));
+}
+
+function planEvent(title: string, data: EventData) {
+  return { stream: "plan", data: { phase: "update", source: "copilot-sdk", title, ...data } };
+}
+
+function expectedUsage(output: number) {
+  return {
+    cacheRead: 0,
+    cacheWrite: 0,
+    input: 0,
+    output,
+    totalTokens: output,
+    cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+  };
 }
 
 function makeAssistantMessageEvent(
   content = "assistant text",
-  overrides: Record<string, unknown> = {},
+  overrides: EventData = {},
+  metadata: EventMeta = {},
 ): SessionEvent {
-  return makeEvent("assistant.message", {
-    content,
-    messageId: "msg-1",
-    model: "gpt-5",
-    ...overrides,
-  });
+  return makeEvent(
+    "assistant.message",
+    {
+      content,
+      messageId: "msg-1",
+      model: "gpt-5",
+      ...overrides,
+    },
+    metadata,
+  );
 }
 
 function createFakeSession(
@@ -51,31 +75,22 @@ function createFakeSession(
     onReturnedUnsubscribe?: (eventType: string) => void;
   } = {},
 ): FakeSession {
-  const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
-  const on = vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
-    listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
-    return () => {
-      options.onReturnedUnsubscribe?.(eventType);
-      listeners.set(
-        eventType,
-        (listeners.get(eventType) ?? []).filter((existing) => existing !== handler),
-      );
-    };
-  });
-
+  const events = new EventEmitter();
   return {
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
-    emit(eventType: string, event: SessionEvent) {
-      for (const handler of listeners.get(eventType) ?? []) {
-        handler(event);
-      }
+    emit: (type, event) => {
+      events.emit(type, event);
     },
     id: "session-id",
-    listenerCount(eventType: string) {
-      return listeners.get(eventType)?.length ?? 0;
-    },
-    on,
+    listenerCount: (type) => events.listenerCount(type),
+    on: vi.fn((type: string, handler: (event: SessionEvent) => void) => {
+      events.on(type, handler);
+      return () => {
+        options.onReturnedUnsubscribe?.(type);
+        events.off(type, handler);
+      };
+    }),
     send: vi.fn().mockResolvedValue("sdk-user"),
     sendAndWait: vi.fn().mockResolvedValue(undefined),
     sessionId: "sdk-session-id",
@@ -102,10 +117,6 @@ function emitDelta(session: FakeSession, deltaContent: string, messageId: string
   emit(session, "assistant.message_delta", { deltaContent, messageId });
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe("attachEventBridge", () => {
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const onAssistantDelta = vi.fn();
@@ -115,15 +126,19 @@ describe("attachEventBridge", () => {
       onAgentEvent,
     });
 
-    session.emit("assistant.message_delta", {
-      ...makeEvent("assistant.message_delta", { deltaContent: "child", messageId: "child-msg" }),
-      agentId: "child-1",
-    } as SessionEvent);
+    emit(
+      session,
+      "assistant.message_delta",
+      { deltaContent: "child", messageId: "child-msg" },
+      { agentId: "child-1" },
+    );
     emitDelta(session, "root", "root-msg");
-    session.emit("tool.execution_start", {
-      ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
-      agentId: "child-1",
-    } as SessionEvent);
+    emit(
+      session,
+      "tool.execution_start",
+      { toolCallId: "child-call", toolName: "write" },
+      { agentId: "child-1" },
+    );
     bridge.completeTool({ toolCallId: "child-call", toolName: "write", isError: false });
     bridge.completeTool({
       toolCallId: "child-nested",
@@ -131,18 +146,17 @@ describe("attachEventBridge", () => {
       toolName: "read",
       isError: false,
     });
-    session.emit("tool.execution_complete", {
-      ...makeEvent("tool.execution_complete", {
+    emit(
+      session,
+      "tool.execution_complete",
+      {
         result: { content: "child write" },
         success: true,
         toolCallId: "child-call",
-      }),
-      agentId: "child-1",
-    } as SessionEvent);
-    session.emit("assistant.usage", {
-      ...makeEvent("assistant.usage", { inputTokens: 99, outputTokens: 99 }),
-      agentId: "child-1",
-    } as SessionEvent);
+      },
+      { agentId: "child-1" },
+    );
+    emit(session, "assistant.usage", { inputTokens: 99, outputTokens: 99 }, { agentId: "child-1" });
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
@@ -150,10 +164,7 @@ describe("attachEventBridge", () => {
       { meta: "child write", toolName: "write", isError: false },
     ]);
     expect(
-      bridge.recordSendResult({
-        ...makeAssistantMessageEvent("child final"),
-        agentId: "child-1",
-      } as SessionEvent),
+      bridge.recordSendResult(makeAssistantMessageEvent("child final", {}, { agentId: "child-1" })),
     ).toBe(false);
     await bridge.awaitDeltaChain();
     await bridge.awaitAgentEventChain();
@@ -174,28 +185,24 @@ describe("attachEventBridge", () => {
   it("ignored child and ephemeral users do not split a root assistant API call", () => {
     const { session, bridge } = setup();
 
-    session.emit("assistant.message", {
-      ...makeAssistantMessageEvent("first", {
-        apiCallId: "shared-call",
-        messageId: "chunk-a",
-      }),
-      id: "assistant-chunk-a",
-    } as SessionEvent);
-    session.emit("user.message", {
-      ...makeEvent("user.message", { content: "child" }),
-      agentId: "child-1",
-    } as SessionEvent);
-    session.emit("user.message", {
-      ...makeEvent("user.message", { content: "ephemeral" }),
-      ephemeral: true,
-    } as SessionEvent);
-    session.emit("assistant.message", {
-      ...makeAssistantMessageEvent("second", {
-        apiCallId: "shared-call",
-        messageId: "chunk-b",
-      }),
-      id: "assistant-chunk-b",
-    } as SessionEvent);
+    session.emit(
+      "assistant.message",
+      makeAssistantMessageEvent(
+        "first",
+        { apiCallId: "shared-call", messageId: "chunk-a" },
+        { id: "assistant-chunk-a" },
+      ),
+    );
+    emit(session, "user.message", { content: "child" }, { agentId: "child-1" });
+    emit(session, "user.message", { content: "ephemeral" }, { ephemeral: true });
+    session.emit(
+      "assistant.message",
+      makeAssistantMessageEvent(
+        "second",
+        { apiCallId: "shared-call", messageId: "chunk-b" },
+        { id: "assistant-chunk-b" },
+      ),
+    );
     bridge.flushTranscriptProjection();
 
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
@@ -265,9 +272,7 @@ describe("attachEventBridge", () => {
 
     emit(session, "assistant.reasoning_delta", { deltaContent: "older", reasoningId: "reason-1" });
     bridge.recordSendResult(
-      makeAssistantMessageEvent("done", {
-        reasoningText: "terminal reasoning",
-      }),
+      makeAssistantMessageEvent("done", { reasoningText: "terminal reasoning" }),
     );
 
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 8 })?.content).toEqual([
@@ -276,23 +281,14 @@ describe("attachEventBridge", () => {
     ]);
   });
 
-  it("assistant.message only overwrites accumulated text when content is at least as long", () => {
-    const { session: shorterSession, bridge: shorterBridge } = setup();
-    emitDelta(shorterSession, "longer", "msg-1");
-    shorterSession.emit(
-      "assistant.message",
-      makeAssistantMessageEvent("short", { messageId: "msg-1" }),
-    );
-
-    const { session: longerSession, bridge: longerBridge } = setup();
-    emitDelta(longerSession, "tiny", "msg-1");
-    longerSession.emit(
-      "assistant.message",
-      makeAssistantMessageEvent("longer text", { messageId: "msg-1" }),
-    );
-
-    expect(shorterBridge.finalizeAssistantTexts()).toEqual(["longer"]);
-    expect(longerBridge.finalizeAssistantTexts()).toEqual(["longer text"]);
+  it.each([
+    ["longer", "short", "longer"],
+    ["tiny", "longer text", "longer text"],
+  ])("assistant.message reconciles delta %s with terminal %s", (delta, terminal, expected) => {
+    const { session, bridge } = setup();
+    emitDelta(session, delta, "msg-1");
+    session.emit("assistant.message", makeAssistantMessageEvent(terminal));
+    expect(bridge.finalizeAssistantTexts()).toEqual([expected]);
   });
 
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {
@@ -327,28 +323,13 @@ describe("attachEventBridge", () => {
       role: "assistant",
       stopReason: "toolUse",
       timestamp: 9,
-      usage: {
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
-        input: 0,
-        output: 7,
-        totalTokens: 7,
-      },
+      usage: expectedUsage(7),
     });
   });
 
   it("projects Copilot plan events through the generic plan stream", async () => {
     const onAgentEvent = vi.fn().mockResolvedValue(undefined);
-    const { session, bridge } = setup({
-      onAgentEvent,
-    });
+    const { session, bridge } = setup({ onAgentEvent });
 
     emit(session, "session.plan_changed", { operation: "update" });
     emit(session, "exit_plan_mode.requested", {
@@ -367,43 +348,28 @@ describe("attachEventBridge", () => {
     await bridge.awaitAgentEventChain();
 
     expect(onAgentEvent).toHaveBeenCalledTimes(3);
-    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
-      stream: "plan",
-      data: {
-        phase: "update",
-        title: "Plan updated",
-        source: "copilot-sdk",
-        operation: "update",
-      },
-    });
-    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
-      stream: "plan",
-      data: {
-        phase: "update",
-        title: "Plan updated",
-        source: "copilot-sdk",
+    expect(onAgentEvent).toHaveBeenNthCalledWith(
+      1,
+      planEvent("Plan updated", { operation: "update" }),
+    );
+    expect(onAgentEvent).toHaveBeenNthCalledWith(
+      2,
+      planEvent("Plan updated", {
         explanation: "Plan ready",
-        steps: [
-          { step: "# Plan", status: "pending" },
-          { step: "inspect", status: "pending" },
-          { step: "patch", status: "pending" },
-        ],
+        steps: ["# Plan", "inspect", "patch"].map((step) => ({ step, status: "pending" })),
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
-      },
-    });
-    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
-      stream: "plan",
-      data: {
-        phase: "update",
-        title: "Plan decision",
-        source: "copilot-sdk",
+      }),
+    );
+    expect(onAgentEvent).toHaveBeenNthCalledWith(
+      3,
+      planEvent("Plan decision", {
         requestId: "request-1",
         approved: true,
         selectedAction: "approve",
-      },
-    });
+      }),
+    );
   });
 
   it("replaces prior usage and terminal token fallback with an invalid usage zero snapshot", () => {
@@ -427,20 +393,9 @@ describe("attachEventBridge", () => {
       output: undefined,
       total: 0,
     });
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9.5 })?.usage).toEqual({
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: {
-        cacheRead: 0,
-        cacheWrite: 0,
-        input: 0,
-        output: 0,
-        total: 0,
-      },
-      input: 0,
-      output: 0,
-      totalTokens: 0,
-    });
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9.5 })?.usage).toEqual(
+      expectedUsage(0),
+    );
   });
 
   registerCopilotToolEventTests({ createFakeSession, makeEvent });
@@ -504,9 +459,7 @@ describe("attachEventBridge", () => {
   it("invalidates shared tool context synchronously after every successful compaction", () => {
     const session = createFakeSession();
     const onContextCompacted = vi.fn();
-    attachTestBridge(session, {
-      onContextCompacted,
-    });
+    attachTestBridge(session, { onContextCompacted });
 
     emit(session, "session.compaction_complete", { success: false });
     expect(onContextCompacted).not.toHaveBeenCalled();
@@ -514,72 +467,51 @@ describe("attachEventBridge", () => {
     emit(session, "session.compaction_complete", { success: true });
     expect(onContextCompacted).toHaveBeenCalledTimes(1);
 
-    session.emit("session.compaction_complete", {
-      ...makeEvent("session.compaction_complete", { success: true }),
-      agentId: "subagent-1",
-    });
+    emit(session, "session.compaction_complete", { success: true }, { agentId: "subagent-1" });
     expect(onContextCompacted).toHaveBeenCalledTimes(2);
   });
 
-  it("waits for an active compaction and its completion callback", async () => {
-    const complete = vi.fn();
-    const { session, bridge } = setup({
-      onCompactionComplete: complete,
-    });
-
-    emit(session, "session.compaction_start", {});
-    const completion = bridge.awaitCompactionCompletion();
-    await flushAsync();
-
-    expect(bridge.hasObservedCompaction()).toBe(true);
-    expect(complete).not.toHaveBeenCalled();
-    emit(session, "session.compaction_complete", { messagesRemoved: 3, success: true });
-    await completion;
-
-    expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
-    expect(bridge.isCompacting()).toBe(false);
-  });
+  it.each(["completion", "abort", "teardown"] as const)(
+    "settles compaction after %s",
+    async (mode) => {
+      const complete = vi.fn();
+      const { session, bridge } = setup(
+        mode === "completion" ? { onCompactionComplete: complete } : {},
+      );
+      emit(session, "session.compaction_start", {});
+      const completion = bridge.awaitCompactionCompletion();
+      if (mode === "completion") {
+        await flushAsync();
+        expect(bridge.hasObservedCompaction()).toBe(true);
+        expect(complete).not.toHaveBeenCalled();
+        emit(session, "session.compaction_complete", { messagesRemoved: 3, success: true });
+      } else if (mode === "abort") {
+        emit(session, "abort", { reason: "tool yield" });
+        await flushAsync();
+        expect(bridge.isCompacting()).toBe(true);
+        emit(session, "session.compaction_complete", { success: false });
+      } else {
+        bridge.settleCompactionWait();
+      }
+      await completion;
+      if (mode === "completion") {
+        expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
+      }
+      expect(bridge.isCompacting()).toBe(false);
+    },
+  );
 
   it("ignores subagent idle events while waiting for the root session", async () => {
     const { session, bridge } = setup();
 
     const idle = bridge.awaitSessionIdle();
-    session.emit("session.idle", {
-      ...makeEvent("session.idle", {}),
-      agentId: "subagent-1",
-    });
+    emit(session, "session.idle", {}, { agentId: "subagent-1" });
     await flushAsync();
     expect(bridge.hasObservedSessionIdle()).toBe(false);
 
     emit(session, "session.idle", {});
     await idle;
     expect(bridge.hasObservedSessionIdle()).toBe(true);
-  });
-
-  it("keeps compaction pending after an abort until the SDK reports completion", async () => {
-    const { session, bridge } = setup();
-
-    emit(session, "session.compaction_start", {});
-    const completion = bridge.awaitCompactionCompletion();
-    emit(session, "abort", { reason: "tool yield" });
-    await flushAsync();
-
-    expect(bridge.isCompacting()).toBe(true);
-    emit(session, "session.compaction_complete", { success: false });
-    await completion;
-
-    expect(bridge.isCompacting()).toBe(false);
-  });
-
-  it("settles an active compaction wait before terminal teardown", async () => {
-    const { session, bridge } = setup();
-
-    emit(session, "session.compaction_start", {});
-    const completion = bridge.awaitCompactionCompletion();
-    bridge.settleCompactionWait();
-
-    await completion;
-    expect(bridge.isCompacting()).toBe(false);
   });
 
   it("ignores subagent compaction events when tracking the root session", async () => {
@@ -590,14 +522,8 @@ describe("attachEventBridge", () => {
       onCompactionComplete,
     });
 
-    session.emit("session.compaction_start", {
-      ...makeEvent("session.compaction_start", {}),
-      agentId: "subagent-1",
-    });
-    session.emit("session.compaction_complete", {
-      ...makeEvent("session.compaction_complete", { success: true }),
-      agentId: "subagent-1",
-    });
+    emit(session, "session.compaction_start", {}, { agentId: "subagent-1" });
+    emit(session, "session.compaction_complete", { success: true }, { agentId: "subagent-1" });
     await bridge.awaitCompactionCompletion();
 
     expect(bridge.hasObservedCompaction()).toBe(false);
@@ -606,34 +532,25 @@ describe("attachEventBridge", () => {
     expect(onCompactionComplete).not.toHaveBeenCalled();
   });
 
-  it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
-    const { session: activeSession, bridge: activeBridge } = setup();
-    emit(activeSession, "session.error", {
-      errorCode: "boom_code",
-      errorType: "boom_type",
-      message: "boom",
-    });
-
-    const { session: abortedSession, bridge: abortedBridge } = setup({
-      isAborted: () => true,
-    });
-    emit(abortedSession, "session.error", {
-      errorType: "ignored",
-      message: "ignored",
-    });
-
-    expect((activeBridge.snapshot().streamError as Error & { code?: string })?.code).toBe(
-      "boom_code",
+  it.each([false, true])("records session.error only when aborted=%s is false", (aborted) => {
+    const { session, bridge } = setup({ isAborted: () => aborted });
+    emit(
+      session,
+      "session.error",
+      aborted
+        ? { errorType: "ignored", message: "ignored" }
+        : { errorCode: "boom_code", errorType: "boom_type", message: "boom" },
     );
-    expect(activeBridge.snapshot().streamError?.message).toBe("boom");
-    expect(abortedBridge.snapshot().streamError).toBeUndefined();
+    if (aborted) {
+      expect(bridge.snapshot().streamError).toBeUndefined();
+    } else {
+      expect(bridge.snapshot().streamError).toMatchObject({ code: "boom_code", message: "boom" });
+    }
   });
 
   it("ignores empty assistant and reasoning deltas", () => {
     const onAssistantDelta = vi.fn();
-    const { session, bridge } = setup({
-      onAssistantDelta,
-    });
+    const { session, bridge } = setup({ onAssistantDelta });
 
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
 
@@ -646,39 +563,21 @@ describe("attachEventBridge", () => {
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
   });
 
-  it("detach is idempotent after the first unsubscribe pass", () => {
+  it.each([false, true])("detaches once in reverse order even with throwing=%s", (throws) => {
     const order: string[] = [];
     const session = createFakeSession({
       onReturnedUnsubscribe: (eventType) => {
         order.push(eventType);
-      },
-    });
-    const bridge = attachTestBridge(session);
-
-    const registeredEvents = vi.mocked(session.on).mock.calls.map(([eventType]) => eventType);
-    bridge.detach();
-    bridge.detach();
-
-    expect(order).toEqual(registeredEvents.toReversed());
-    expect(session.listenerCount("assistant.message_delta")).toBe(0);
-  });
-
-  it("detaches remaining listeners in reverse order when a disposer throws", () => {
-    const order: string[] = [];
-    const session = createFakeSession({
-      onReturnedUnsubscribe: (eventType) => {
-        order.push(eventType);
-        if (eventType === "session.error") {
+        if (throws && eventType === "session.error") {
           throw new Error("unsubscribe failed");
         }
       },
     });
     const bridge = attachTestBridge(session);
-
     const registeredEvents = vi.mocked(session.on).mock.calls.map(([eventType]) => eventType);
     bridge.detach();
+    bridge.detach();
     emitDelta(session, "ignored", "msg-1");
-
     expect(order).toEqual(registeredEvents.toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });

@@ -43,13 +43,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     parameters: { type: "object", properties: {} },
     async execute(_id, _args, signal) {
       nestedSignal = signal;
-      signal?.addEventListener(
-        "abort",
-        () => {
-          aborts += 1;
-        },
-        { once: true },
-      );
+      signal?.addEventListener("abort", () => (aborts += 1), { once: true });
       entered.resolve();
       await gate.promise;
       return { content: [{ type: "text", text: "gate released" }], details: { released: true } };
@@ -76,12 +70,8 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     message: userMessage,
     resolveMessage: async () => userMessage,
     markRuntimePersistencePending: () => {},
-    markRuntimePersisted: () => {
-      persisted = true;
-    },
-    markBlocked: () => {
-      blocked = true;
-    },
+    markRuntimePersisted: () => void (persisted = true),
+    markBlocked: () => void (blocked = true),
     hasPersisted: () => persisted,
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => false,
@@ -154,40 +144,31 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       abortSignal: callController.signal,
       observeToolTerminal: createContractToolTerminalObserver(runId),
       userTurnTranscriptRecorder: recorder,
-      onAgentToolResult: (event: { toolName: string; result: unknown }) => {
-        observed.push(event);
-      },
+      onAgentToolResult: (event) => void observed.push(event),
     } satisfies AgentHarnessAttemptParamsV2 & { auth: { useLoggedInUser: true } };
     attempt = harness.runAttempt(params).finally(() => {
       host.closeHost();
       host.closeAdmission();
     });
     await peer.sent;
-    const execReply = peer.requestTool("exec", {
+    await peer.requestTool("exec", {
       code: 'await yield_control(); await fixture_gate({}); text("STALE AFTER CLOSE"); return "stale";',
     });
-    await execReply;
     const execResult = observed.find((event) => event.toolName === "exec")?.result as {
       details: { status: string; runId: string };
     };
     expect(execResult.details.status).toBe("waiting");
-    const catalogIdentity = catalog?.current;
-    expect(catalogIdentity).toBeDefined();
+    expect(catalog?.current).toBeDefined();
     const waitReply = peer.requestTool("wait", { runId: execResult.details.runId });
     await entered.promise;
     host.hostCapabilities.assertActive();
     expect(nestedSignal?.aborted).toBe(false);
-    peer.emit("session.error", {
-      message: providerFailure,
-      errorType: "model_error",
-    });
+    peer.emit("session.error", { message: providerFailure, errorType: "model_error" });
     await peer.detaching;
     expect(catalog?.current).toBeUndefined();
     host.hostCapabilities.assertActive();
-    expect(callController.signal.aborted).toBe(false);
-    expect(contextSignal?.aborted).toBe(false);
-    const abortsBeforeGateRelease = aborts;
-    const nestedAbortedBeforeGateRelease = nestedSignal?.aborted;
+    expect([callController.signal.aborted, contextSignal?.aborted]).toEqual([false, false]);
+    const beforeGateRelease = { aborts, aborted: nestedSignal?.aborted };
     gate.resolve();
     await waitReply;
     const waitResult = observed.find((event) => event.toolName === "wait")?.result;
@@ -197,30 +178,20 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       throw new Error("Expected a canonical Copilot attempt terminal");
     }
     const terminal = attemptResult.terminal;
-    const failure =
-      terminal.kind === "failed" ? terminal : "failure" in terminal ? terminal.failure : undefined;
     expect(() => host.hostCapabilities.assertActive()).toThrow(/no longer active/);
-    const retainedTool = retained.at(0);
-    if (!retainedTool) {
-      throw new Error("Expected a retained host-bound tool");
-    }
-    await expect(retainedTool.execute("retained", {})).rejects.toThrow(/no longer active/);
-    expect(abortsBeforeGateRelease).toBe(1);
-    expect(nestedAbortedBeforeGateRelease).toBe(true);
+    await expect(retained.at(0)?.execute("retained", {})).rejects.toThrow(/no longer active/);
+    expect(beforeGateRelease).toEqual({ aborts: 1, aborted: true });
     expect(aborts).toBe(1);
     expect(waitResult).toMatchObject({ details: { status: "failed", code: "aborted" } });
     expect(JSON.stringify(waitResult)).not.toContain("STALE AFTER CLOSE");
-    expect({
-      kind: terminal.kind,
-      source: "source" in terminal ? terminal.source : null,
-      failureSource: failure?.source ?? null,
-      errorMessage: failure?.error instanceof Error ? failure.error.message : null,
-    }).toEqual({
+    expect(terminal).toMatchObject({
       kind: "failed",
       source: "prompt",
-      failureSource: "prompt",
-      errorMessage: providerFailure,
+      error: expect.objectContaining({ message: providerFailure }),
     });
+    if (terminal.kind === "failed") {
+      expect(terminal.error).toBeInstanceOf(Error);
+    }
     expect(callController.signal.aborted).toBe(false);
     expect(attemptResult.lastToolError).toMatchObject({
       toolName: "wait",
