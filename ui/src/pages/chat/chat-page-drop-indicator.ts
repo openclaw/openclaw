@@ -116,13 +116,13 @@ export function createChatPageDropIndicator(
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane, [data-unbound-pane-id]");
-    const indicator =
+    const destination =
       pane && host.contains(pane)
         ? resolveDropIndicator(container, pane, event.clientX, event.clientY)
         : null;
     clear();
-    if (sessionKey && indicator) {
-      options.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
+    if (sessionKey && destination) {
+      options.applySessionDrop(sessionKey, destination.paneId, destination.zone);
     }
   };
 
