@@ -56,6 +56,8 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry) {
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
     contextTokens: entry?.contextTokens,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
   };
 }
 
