@@ -106,7 +106,7 @@ export function readSessionBranchSummaries(
   }
   let appendSafe = true;
   let navigationCount = 0;
-  let identityCount = 0;
+  let identityCount: number | null = 0;
   function* navigationEntries() {
     const query = navigationQuery.select((eb) =>
       eb
