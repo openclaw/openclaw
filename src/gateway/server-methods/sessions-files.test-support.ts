@@ -18,10 +18,6 @@ type SessionFilesMethod = `sessions.files.${SessionFilesOperation}`;
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
 
-export const IMAGE_PREVIEW_FIXTURES = [
-  { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
-] as const;
-
 export const TEXT_PREVIEW_FIXTURES = [
   { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
   { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
@@ -75,25 +71,29 @@ export function createSessionFileDownloadClient() {
 
 export function createSessionFilesClient(
   invoke: ReturnType<typeof createSessionFilesHandlerInvoker>,
-  sessionKey: () => string,
-  context: () => Record<string, unknown> = () => ({}),
-  options: () => Parameters<typeof invoke>[3] = () => ({}),
+  defaults: () => {
+    sessionKey: string;
+    context?: Record<string, unknown>;
+    options?: Parameters<typeof invoke>[3];
+  },
 ) {
   const request = (
     method: SessionFilesOperation,
     params: string | Record<string, unknown> = {},
-    requestContext = context(),
-    requestOptions = options(),
-  ) =>
-    invoke(
+    context?: Record<string, unknown>,
+    options?: Parameters<typeof invoke>[3],
+  ) => {
+    const current = defaults();
+    return invoke(
       `sessions.files.${method}`,
       {
-        [method === "reveal" ? "key" : "sessionKey"]: sessionKey(),
+        [method === "reveal" ? "key" : "sessionKey"]: current.sessionKey,
         ...(typeof params === "string" ? { path: params } : params),
       },
-      requestContext,
-      requestOptions,
+      context ?? current.context,
+      options ?? current.options,
     );
+  };
   return {
     request,
     ok: async (...args: Parameters<typeof request>) => expectOkPayload(await request(...args)),

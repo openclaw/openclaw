@@ -52,21 +52,30 @@ let workspace: string;
 let cfg: OpenClawConfig;
 let entry: SessionEntry;
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const files = createSessionFilesClient(
-  invoke,
-  () => key,
-  () => context,
-);
+const files = createSessionFilesClient(invoke, () => ({ sessionKey: key, context }));
 const context = {
   getRuntimeConfig: () => cfg,
   logGateway: createSubsystemLogger("gateway/test/incognito-files"),
 };
 
+async function withoutHostSql(run: () => Promise<void>) {
+  const sql = observeHostDataSql();
+  try {
+    await run();
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+}
+
+function setConfig(value: OpenClawConfig) {
+  setRuntimeConfigSnapshot((cfg = value));
+}
+
 beforeAll(async () => {
   workspace = dirs.make("incognito-workspace-files-");
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-files-actor-") };
-  cfg = { agents: { entries: { main: { workspace } } }, mcp: { apps: { enabled: true } } };
-  setRuntimeConfigSnapshot(cfg);
+  setConfig({ agents: { entries: { main: { workspace } } }, mcp: { apps: { enabled: true } } });
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   execFileSync("git", ["init", "-q", "-b", "main", workspace]);
@@ -105,10 +114,9 @@ afterAll(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it("serves unbound memory files and the complete diff baseline without opening host SQLite", async () => {
-  await writeFile(path.join(workspace, "example.txt"), "after session\n");
-  const sql = observeHostDataSql();
-  try {
+it("serves unbound memory files and the complete diff baseline without opening host SQLite", () =>
+  withoutHostSql(async () => {
+    await writeFile(path.join(workspace, "example.txt"), "after session\n");
     const list = await files.ok("list");
     expect(list.browser.entries).toEqual(
       expect.arrayContaining([
@@ -143,45 +151,36 @@ it("serves unbound memory files and the complete diff baseline without opening h
     const opened = vi.spyOn(openPath, "execOpenPath").mockResolvedValue(undefined);
     expect(await files.ok("reveal")).toMatchObject({ ok: true, path: workspace });
     expect(opened).toHaveBeenCalledOnce();
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+  }));
 
-function mcpOptions(): GatewayRequestHandlerOptions {
-  return {
-    params: {},
-    client: {
-      connId: "actor-file-view",
-      connect: { role: "operator", scopes: ["operator.admin"] },
-      connectionSignal: new AbortController().signal,
-    },
-    context: { ...context, broadcastToConnIds() {} },
-    hasCurrentClientAuthority: () => true,
-  } as unknown as GatewayRequestHandlerOptions;
-}
-
-it("keeps MCP file and upload authority on the original actor when a same-ID actor replaces it", async () => {
-  const options = mcpOptions();
-  const runtime = {
-    sessionId: sid,
-    sessionKey: key,
-    mcpAppsEnabled: true,
-    markUsed() {},
-    readResource: async () => ({
-      contents: [
-        {
-          uri: "ui://fixture/editor",
-          mimeType: "text/html;profile=mcp-app",
-          text: "<p>editor</p>",
-        },
-      ],
-    }),
-  } as unknown as SessionMcpRuntime;
-  let viewId: string | undefined;
-  const sql = observeHostDataSql();
-  try {
+it("keeps MCP file and upload authority on the original actor when a same-ID actor replaces it", () =>
+  withoutHostSql(async () => {
+    using connection = createSessionFileDownloadClient();
+    const options = {
+      params: {},
+      client: {
+        connId: "actor-file-view",
+        connect: { role: "operator", scopes: ["operator.admin"] },
+        connectionSignal: new AbortController().signal,
+      },
+      context: { ...context, broadcastToConnIds() {} },
+      hasCurrentClientAuthority: () => true,
+    } as unknown as GatewayRequestHandlerOptions;
+    const runtime = {
+      sessionId: sid,
+      sessionKey: key,
+      mcpAppsEnabled: true,
+      markUsed() {},
+      readResource: async () => ({
+        contents: [
+          {
+            uri: "ui://fixture/editor",
+            mimeType: "text/html;profile=mcp-app",
+            text: "<p>editor</p>",
+          },
+        ],
+      }),
+    } as unknown as SessionMcpRuntime;
     const file = await prepareMcpAppHostFile(options, {
       sessionKey: key,
       agentId: "main",
@@ -193,6 +192,13 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       agentId: "main",
       assertCurrent() {},
     });
+    const uploadText = (name: string, text: string) =>
+      upload({
+        options,
+        kind: "file",
+        files: [{ name, mimeType: "text/plain", data: Buffer.from(text) }],
+        assertCurrent() {},
+      });
     const descriptor = await fetchMcpAppView({
       runtime,
       agentId: "main",
@@ -206,84 +212,62 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       hostFile: file,
     });
     assert(descriptor);
-    viewId = descriptor.viewId;
-    const view = getMcpAppViewLease(viewId, runtime);
-    assert(view);
-    // The view and upload callback retain the owner selected at preparation.
-    await readMcpAppHostFile(options, view, { uri: file.resourceUri });
-    expect(
-      await writeMcpAppHostFile(options, view, { uri: file.resourceUri, text: "MCP saved\n" }),
-    ).toMatchObject({ outcome: "saved" });
-    const uploaded = await upload({
-      options,
-      kind: "file",
-      files: [{ name: "upload.txt", mimeType: "text/plain", data: Buffer.from("uploaded") }],
-      assertCurrent() {},
-    });
-    expect(uploaded).toHaveLength(1);
-    expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
-    await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
-    using connection = createSessionFileDownloadClient();
-    const download = await files.ok("download", "example.txt", undefined, connection);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const original = workspaceFs.readWorkspaceFile;
-    vi.spyOn(workspaceFs, "readWorkspaceFile").mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return original(...args);
-    });
-    const reading = readMcpAppHostFile(options, view, { uri: file.resourceUri });
-    const rejected = expect(reading).rejects.toThrow(/Incognito|incognito/);
+    const viewId = descriptor.viewId;
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        reading,
-        "MCP read skipped its file boundary",
-      );
-      memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+      const view = getMcpAppViewLease(viewId, runtime);
+      assert(view);
+      const read = () => readMcpAppHostFile(options, view, { uri: file.resourceUri });
+      await read();
+      expect(
+        await writeMcpAppHostFile(options, view, { uri: file.resourceUri, text: "MCP saved\n" }),
+      ).toMatchObject({ outcome: "saved" });
+      const uploaded = await uploadText("upload.txt", "uploaded");
+      expect(uploaded).toHaveLength(1);
+      expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
+      await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
+      const download = await files.ok("download", "example.txt", undefined, connection);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const original = workspaceFs.readWorkspaceFile;
+      vi.spyOn(workspaceFs, "readWorkspaceFile").mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return original(...args);
+      });
+      const reading = read();
+      const rejected = expect(reading).rejects.toThrow(/Incognito|incognito/);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          reading,
+          "MCP read skipped its file boundary",
+        );
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([reading, rejected]);
+      }
+      await rejected;
+      await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+      expect(
+        (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+      ).toBe(404);
+      await expect(read()).rejects.toThrow(/Incognito|incognito/);
+      await expect(uploadText("refused.txt", "stale")).rejects.toThrow(/Incognito|incognito/);
     } finally {
-      release.resolve();
-      await Promise.allSettled([reading, rejected]);
-    }
-    await rejected;
-    await replaceSessionEntry({ sessionKey: key, storePath }, entry);
-    expect(
-      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
-    ).toBe(404);
-    await expect(readMcpAppHostFile(options, view, { uri: file.resourceUri })).rejects.toThrow(
-      /Incognito|incognito/,
-    );
-    await expect(
-      upload({
-        options,
-        kind: "file",
-        files: [{ name: "refused.txt", mimeType: "text/plain", data: Buffer.from("stale") }],
-        assertCurrent() {},
-      }),
-    ).rejects.toThrow(/Incognito|incognito/);
-    expect(sql.queries).toEqual([]);
-  } finally {
-    if (viewId) {
       releaseMcpAppView(viewId, runtime);
     }
-    sql.restore();
-  }
-});
+  }));
 
 it("preserves unbound memory and durable files while an absent memory namespace stays absent", async () => {
   const nativeEnv = { OPENCLAW_STATE_DIR: dirs.make("files-native-control-") };
   const controlStorePath = path.join(
     nativeEnv.OPENCLAW_STATE_DIR,
-    "agents",
-    "main",
-    "sessions",
-    "sessions.json",
+    "agents/main/sessions/sessions.json",
   );
   const originalCfg = cfg;
   await writeFile(path.join(workspace, "control.txt"), "native control\n");
-  cfg = { ...cfg, session: { store: controlStorePath } };
-  setRuntimeConfigSnapshot(cfg);
+  setConfig({ ...cfg, session: { store: controlStorePath } });
   try {
     for (const sessionKey of [
       "agent:main:dashboard:incognito-native-files",
@@ -305,30 +289,24 @@ it("preserves unbound memory and durable files while an absent memory namespace 
       });
     }
     const absentEnv = { OPENCLAW_STATE_DIR: dirs.make("files-absent-control-") };
-    const sql = observeHostDataSql();
-    try {
-      cfg = { ...originalCfg };
-      setRuntimeConfigSnapshot(cfg);
+    await withoutHostSql(async () => {
+      setConfig({ ...originalCfg });
       await withEnvAsync(absentEnv, async () => {
         const missing = await files.error("get", "example.txt");
         expect(missing).toMatchObject({ details: { type: "session_file_not_found" } });
       });
-      expect(sql.queries).toEqual([]);
       expect(
         memorySessionActorOwners.read({
           agentId: "main",
           path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: absentEnv }),
         }),
       ).toBeUndefined();
-    } finally {
-      sql.restore();
-    }
+    });
   } finally {
     memorySessionActorOwners.closeDatabase({
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: nativeEnv }),
     });
-    cfg = originalCfg;
-    setRuntimeConfigSnapshot(cfg);
+    setConfig(originalCfg);
   }
 });

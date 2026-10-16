@@ -138,11 +138,7 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 }));
 
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const files = createSessionFilesClient(
-  invoke,
-  () => sessionKey,
-  () => context,
-);
+const files = createSessionFilesClient(invoke, () => ({ sessionKey, context }));
 let sessionKey = "agent:main:repository";
 const gatewayDeviceId = "repository-gateway";
 const identity = {
@@ -171,6 +167,52 @@ let context: ReturnType<typeof requestContext>;
 
 function git(...args: string[]): string {
   return execFileSync("git", ["-C", workspace, ...args], { encoding: "utf8" }).trim();
+}
+
+const workspaceFile = (name: string) => path.join(workspace, name);
+const readFile = (name: string) => fs.readFileSync(workspaceFile(name), "utf8");
+const writeFile = (name: string, content: string | Buffer) =>
+  fs.writeFileSync(workspaceFile(name), content);
+const capture = (baseCommit = source.baseCommit) =>
+  captureWorkspaceManifest({ root: workspace, baseCommit });
+const edit = (content = "saved\n", expectedHash = hashContent("before\n")) => ({
+  path: "changed.txt",
+  content,
+  expectedHash,
+});
+const repositoryEntry = () => ({
+  sessionId,
+  repositoryWorkspaceId: source.workspaceId,
+  lifecycleRevision,
+  archivedAt,
+});
+const environmentRecord = () => ({
+  ...environment(),
+  environmentId: identity.environmentId,
+  ownerEpoch: identity.generation,
+  attachedSessionIds: [identity.sessionId],
+});
+
+function checkpointData(base: Awaited<ReturnType<typeof capture>>, current = base) {
+  return {
+    stagingRoot: workspace,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
+  };
+}
+
+const createRepository = (url: string) =>
+  store.create({ agentId: "main", sessionKey, url, assertCurrent() {} });
+async function bindBase(baseCommit: string, baseManifestHash: string) {
+  source = await store.bindBase({
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent() {},
+  });
 }
 
 function requestContext() {
@@ -233,38 +275,20 @@ beforeEach(async () => {
   git("config", "user.name", "Repository Test");
   git("config", "user.email", "repository@example.test");
   git("config", "commit.gpgsign", "false");
-  fs.writeFileSync(path.join(workspace, "README"), "untouched source\n");
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "before\n");
+  writeFile("README", "untouched source\n");
+  writeFile("changed.txt", "before\n");
   git("add", ".");
   git("commit", "-qm", "base");
   store = createSessionRepositoryWorkspaceStore({ path: path.join(gatewayRoot, "state.sqlite") });
-  source = await store.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://example.test/repository.git",
-    assertCurrent: () => {},
-  });
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: git("rev-parse", "HEAD"),
-  });
-  source = await store.bindBase({
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    baseCommit: base.manifest.baseCommit!,
-    baseManifestHash: base.manifestRef,
-    assertCurrent: () => {},
-  });
+  source = await createRepository("https://example.test/repository.git");
+  const base = await capture(git("rev-parse", "HEAD"));
+  await bindBase(base.manifest.baseCommit!, base.manifestRef);
   // Repository startup accepts its first checkpoint before exposing an active editor.
   const initial = await stageSessionRepositoryCheckpoint({
     store,
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: base.manifestRef,
+    ...checkpointData(base),
     assertCurrent: () => {},
   });
   source = await initial.publish();
@@ -276,7 +300,7 @@ beforeEach(async () => {
     cfg: {},
     storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     storeKeys: [sessionKey],
-    entry: { sessionId, repositoryWorkspaceId: source.workspaceId, lifecycleRevision, archivedAt },
+    entry: repositoryEntry(),
   }));
   context = requestContext();
   setRuntimeConfigSnapshot(context.getRuntimeConfig());
@@ -304,13 +328,7 @@ afterEach(async () => {
 async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    {
-      sessionId,
-      updatedAt: Date.now(),
-      repositoryWorkspaceId: source.workspaceId,
-      lifecycleRevision,
-      archivedAt,
-    },
+    { ...repositoryEntry(), updatedAt: Date.now() },
   );
 }
 
@@ -347,13 +365,10 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit });
+  const base = await capture();
   const environments = {
     get: (): ReturnType<WorkerEnvironmentService["get"]> => ({
-      ...environment(),
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.generation,
-      attachedSessionIds: [identity.sessionId],
+      ...environmentRecord(),
       desktopAvailable: false,
       desktopApps: [],
       tunnelStatus: "connected",
@@ -370,10 +385,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await captureWorkspaceManifest({
-          root: workspace,
-          baseCommit: source.baseCommit,
-        });
+        const current = await capture();
         const publicationStagingRoot = path.join(nodeRoot, "publication");
         const publicationDigest = execFileSync(
           process.execPath,
@@ -387,22 +399,15 @@ async function withCheckpointAcceptance(failCapture = false) {
           { encoding: "utf8" },
         ).trim();
         const prepared = await request.source.prepareCheckpoint({
-          stagingRoot: workspace,
+          ...checkpointData(base, current),
           publicationStagingRoot,
           publicationDigest,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: current.manifestRef,
         });
         return {
           manifestRef: current.manifestRef,
           changed: current.manifestRef !== base.manifestRef,
           verifyStable: async () => {
-            expect(
-              (await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit }))
-                .manifestRef,
-            ).toBe(current.manifestRef);
+            expect((await capture()).manifestRef).toBe(current.manifestRef);
           },
           verifyLocalStable: () => prepared.verify(),
           publishStagedResult: async () => {
@@ -427,12 +432,8 @@ async function withCheckpointAcceptance(failCapture = false) {
 
 it("accepts editor bytes and Git-normalized publication before acknowledging the save", async () => {
   const accepted = await withCheckpointAcceptance();
-  fs.writeFileSync(path.join(workspace, ".gitattributes"), "changed.txt text eol=lf\n");
-  await files.ok(
-    "set",
-    { path: "changed.txt", content: "saved\r\n", expectedHash: hashContent("before\n") },
-    accepted.context,
-  );
+  writeFile(".gitattributes", "changed.txt text eol=lf\n");
+  await files.ok("set", edit("saved\r\n"), accepted.context);
   await withSessionRepositoryCheckpoint(
     { store, workspaceId: source.workspaceId, includePublication: true },
     async (snapshot) => {
@@ -461,14 +462,10 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
 
 it("reports failed editor checkpoint capture and retains the durable recovery owner", async () => {
   const accepted = await withCheckpointAcceptance(true);
-  await expect(
-    files.request(
-      "set",
-      { path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
-      accepted.context,
-    ),
-  ).rejects.toThrow("checkpoint capture failed");
-  expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
+  await expect(files.request("set", edit("saved\n"), accepted.context)).rejects.toThrow(
+    "checkpoint capture failed",
+  );
+  expect(readFile("changed.txt")).toBe("saved\n");
   expect(await store.get(source.workspaceId)).toMatchObject({
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
@@ -487,19 +484,8 @@ it("keeps incognito repository downloads alive after their RPC planning borrow e
   const baseCommit = source.baseCommit!;
   const baseManifestHash = source.baseManifestHash!;
   sessionKey = "agent:main:dashboard:incognito-repository-download";
-  source = await store.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://example.test/private.git",
-    assertCurrent() {},
-  });
-  source = await store.bindBase({
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    baseCommit,
-    baseManifestHash,
-    assertCurrent() {},
-  });
+  source = await createRepository("https://example.test/private.git");
+  await bindBase(baseCommit, baseManifestHash);
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
   onTestFinished(() =>
     memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
@@ -527,7 +513,7 @@ it("keeps incognito repository downloads alive after their RPC planning borrow e
 it("downloads original live repository bytes in bounded windows and rejects stale placement", async () => {
   using connection = createSessionFileDownloadClient();
   const bytes = Buffer.alloc(8 * 1024 * 1024 + 3, 0xff);
-  fs.writeFileSync(path.join(workspace, "binary.zip"), bytes);
+  writeFile("binary.zip", bytes);
   const download = await files.ok("download", "binary.zip", undefined, connection);
   expect(download.filename).toBe("binary.zip");
   // The RPC prepares metadata without reading any file bytes.
@@ -583,21 +569,16 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   expect(list.root).toBeUndefined();
   const before = await files.ok("get", "changed.txt");
   const content = "x".repeat(192 * 1024);
-  await files.ok("set", { path: "changed.txt", content, expectedHash: before.file.hash });
+  await files.ok("set", edit(content, before.file.hash));
   const saved = await files.ok("get", "changed.txt");
-  expect(saved.file.content).toBe(content);
-  expect(saved.file.hash).toBe(hashContent(content));
+  expect(saved.file).toMatchObject({ content, hash: hashContent(content) });
   expect(saved.root).toBeUndefined();
-  const stale = await files.error("set", {
-    path: "changed.txt",
-    content: "stale",
-    expectedHash: before.file.hash,
-  });
+  const stale = await files.error("set", edit("stale", before.file.hash));
   expect(stale.details.type).toBe("session_file_conflict");
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "after\n");
+  writeFile("changed.txt", "after\n");
   git("add", ".");
   git("commit", "-qm", "session change");
-  fs.writeFileSync(path.join(workspace, "second.txt"), "second edit\n");
+  writeFile("second.txt", "second edit\n");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.root).toBeUndefined();
   expect(diff.files.map((file) => file.path)).toEqual(["changed.txt", "second.txt"]);
@@ -639,36 +620,23 @@ it.each(["reset", "archive", "lifecycle revision"])(
       }
       await persistSessionEntry();
     };
-    await expect(
-      files.request("set", {
-        path: "changed.txt",
-        content: "unowned",
-        expectedHash: hashContent("before\n"),
-      }),
-    ).rejects.toThrow("owner changed");
+    await expect(files.request("set", edit("unowned"))).rejects.toThrow("owner changed");
     expect(run).not.toHaveBeenCalled();
-    expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
+    expect(readFile("changed.txt")).toBe("before\n");
   },
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit });
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "retained first\n");
-  fs.writeFileSync(path.join(workspace, "second.txt"), "retained second\n");
-  fs.writeFileSync(path.join(workspace, "oversized.txt"), Buffer.alloc(8 * 1024 * 1024 + 1, 97));
-  const current = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
+  const base = await capture();
+  writeFile("changed.txt", "retained first\n");
+  writeFile("second.txt", "retained second\n");
+  writeFile("oversized.txt", Buffer.alloc(8 * 1024 * 1024 + 1, 97));
+  const current = await capture();
   const staged = await stageSessionRepositoryCheckpoint({
     store,
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: current.manifestRef,
+    ...checkpointData(base, current),
     assertCurrent: () => {},
   });
   source = await staged.publish();
@@ -784,12 +752,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     return await realRename(...args);
   });
   onTestFinished(() => renameSpy.mockRestore());
-  const record = {
-    ...environment(),
-    environmentId: identity.environmentId,
-    ownerEpoch: identity.generation,
-    attachedSessionIds: [identity.sessionId],
-  };
+  const record = environmentRecord();
   const nodeTransport = transport();
   let physicalWrite: Promise<unknown> | undefined;
   nodeTransport.invoke = async (request) => {
@@ -847,22 +810,16 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     },
   };
   let saveSettled = false;
-  const saving = files
-    .request(
-      "set",
-      { path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
-      managerContext,
-    )
-    .then(
-      () => {
-        saveSettled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        saveSettled = true;
-        return error;
-      },
-    );
+  const saving = files.request("set", edit("saved\n"), managerContext).then(
+    () => {
+      saveSettled = true;
+      return undefined;
+    },
+    (error: unknown) => {
+      saveSettled = true;
+      return error;
+    },
+  );
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
@@ -872,7 +829,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     run: async () => {
       stopEntered = true;
       await manager.stop(identity.environmentId, identity.generation);
-      contentAtStop = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
+      contentAtStop = readFile("changed.txt");
       active = false;
     },
   });
@@ -880,7 +837,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     await setImmediate();
     expect(saveSettled).toBe(false);
     expect(stopEntered).toBe(false);
-    expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
+    expect(readFile("changed.txt")).toBe("before\n");
   } finally {
     releaseWrite.resolve();
     await Promise.allSettled([saving, stopping, physicalWrite]);
