@@ -443,12 +443,48 @@ it.each([
   await expect(running).resolves.toBe("stopped");
 });
 
+it.each([
+  { stage: "status", delayMs: 5_000, timeoutMs: 1_000, elapsedMs: 6_000 },
+  { stage: "gateway.suspend.prepare", delayMs: 8_000, timeoutMs: undefined, elapsedMs: 30_000 },
+])(
+  "anchors the drain to its lease after slow $stage",
+  async ({ stage, delayMs, timeoutMs, elapsedMs }) => {
+    const observation = draining("embedded-run", "1 active turn", 60_000);
+    const f = fixture({ observations: [observation] });
+    const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway fixture");
+    let prepared = false;
+    let delayed = false;
+    mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+      if (request.method === "gateway.suspend.prepare" && !prepared) {
+        prepared = true;
+        observation.expiresAtMs = Date.now() + 45_000;
+      }
+      if (request.method === stage && !delayed) {
+        delayed = true;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
+      }
+      return await call(request);
+    });
+    const running = withGatewayMaintenanceDrain(
+      { ...f.params, timeoutMs, drainPolicy: "interrupt-after-drain" },
+      f.stop,
+    );
+    await vi.advanceTimersByTimeAsync(elapsedMs - 1);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.events).toContain("handoff");
+    await expect(running).resolves.toBe("stopped");
+  },
+);
+
 it.each(["expired", "replaced"] as const)(
   "does not reacquire or stop after its suspension is %s",
   async (reason) => {
     const initial = {
       ...draining("embedded-run", "1 active turn"),
-      expiresAtMs: Date.now() + (reason === "expired" ? 50 : 45_000),
+      expiresAtMs: Date.now() + 45_000,
     };
     const f = fixture({
       observations: [initial, { ...ready(), suspensionId: "replacement-suspension" }],
@@ -457,6 +493,10 @@ it.each(["expired", "replaced"] as const)(
       { ...f.params, drainPolicy: "interrupt-after-drain" },
       f.stop,
     ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === "expired") {
+      vi.setSystemTime(Date.now() + 45_000);
+    }
     await vi.advanceTimersByTimeAsync(100);
     expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
     expect(f.stop).not.toHaveBeenCalled();

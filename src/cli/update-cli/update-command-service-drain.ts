@@ -35,7 +35,7 @@ export async function withGatewayMaintenanceDrain<T>(
   stop: (guard: { prepareEffect: (beforeCommit: () => void) => Promise<void> }) => Promise<T>,
 ): Promise<T> {
   // Leave the remaining 15 seconds of the drain lease for the stop handoff.
-  const deadline = performance.now() + Math.min(params.timeoutMs ?? 30_000, 30_000);
+  const drainBudgetMs = Math.min(params.timeoutMs ?? 30_000, 30_000);
   const explicitDrain = params.drainPolicy === "interrupt-after-drain";
   const requestId = randomUUID();
   let suspensionId: string | undefined;
@@ -137,7 +137,6 @@ export async function withGatewayMaintenanceDrain<T>(
     }
     return lastObservation;
   };
-  const remaining = () => Math.max(1, deadline - performance.now());
   const connection = await (async () => {
     const { config, auth } = await resolveGatewayRestartProbeContext(params.state.env);
     const port = await resolveUpdatedGatewayRestartPort({
@@ -291,6 +290,8 @@ export async function withGatewayMaintenanceDrain<T>(
       processTarget = { pid: identity.pid, processInstanceId: identity.processInstanceId };
       verifiedResident = true;
     }
+    let deadline = performance.now() + drainBudgetMs;
+    const remaining = () => Math.max(1, deadline - performance.now());
     while (true) {
       assertSuspensionCurrent();
       try {
@@ -310,6 +311,10 @@ export async function withGatewayMaintenanceDrain<T>(
         );
         if (lastObservation.status !== "busy" && !suspensionId) {
           suspensionId = lastObservation.suspensionId;
+          // Preflight does not spend the drain budget; a slow prepare does.
+          deadline =
+            performance.now() +
+            Math.min(drainBudgetMs, Math.max(0, lastObservation.expiresAtMs - Date.now() - 15_000));
         }
         observationFailure = undefined;
       } catch (error) {
