@@ -473,21 +473,21 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       expect(glossary.has(value), value).toBe(true);
       return glossary.get(value)!;
     };
-    const group = (entry: NavGroup): NavGroup => ({
-      group: label(entry.group),
-      pages: [
-        ...entry.pages
-          .filter((page): page is string => typeof page === "string")
-          .slice(0, 1)
-          .map((page) => `sv/${page}`),
-        ...entry.pages.filter((page): page is NavGroup => typeof page !== "string").map(group),
-      ],
+    const group = (entry: NavGroup, translated: boolean): NavGroup => ({
+      group: translated ? label(entry.group) : entry.group,
+      pages: entry.pages.map((page) =>
+        typeof page === "string" ? `sv/${page}` : group(page, translated),
+      ),
     });
     const overlay = JSON.parse(fs.readFileSync("docs/.i18n/sv-navigation.json", "utf8"));
-    expect(overlay).toEqual({
+    const navigation = (translated: boolean) => ({
       language: "sv",
-      tabs: englishTabs.map((tab) => ({ tab: label(tab.tab), groups: tab.groups.map(group) })),
+      tabs: englishTabs.map((tab) => ({
+        tab: translated ? label(tab.tab) : tab.tab,
+        groups: tab.groups.map((entry) => group(entry, translated)),
+      })),
     });
+    expect(applyLocaleNavLabelOverlay(navigation(false), overlay)).toEqual(navigation(true));
   });
 
   it("keeps generated locale navigation aligned with English routes", () => {
