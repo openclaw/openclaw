@@ -113,6 +113,7 @@ import {
   markRequesterTurnYieldedWithAuthority,
 } from "./subagent-registry-requester-yield.test-support.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerTerminalStateSignalAuthorityTests } from "./subagent-registry-terminal-state.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -639,7 +640,12 @@ describe("subagent registry lifecycle hardening", () => {
       });
 
       expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-      expect(readLifecycleRun(entry).completion).toMatchObject({ terminalReply, resultText });
+      expect(readLifecycleRun(entry).completion).toMatchObject({ terminalReply });
+      expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+        terminalReply,
+        resultText,
+      });
       if (terminalReply.disposition === "empty") {
         expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
         expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -1530,9 +1536,9 @@ describe("subagent registry lifecycle hardening", () => {
       },
     });
     const beforeWrite = vi.fn();
-    await createLifecycleController({ entry, beforeWrite }).completeSubagentRun(
-      makeInterruptedSubagentCompletion(entry),
-    );
+    const runs = new Map([[entry.runId, entry]]);
+    const completion = makeInterruptedSubagentCompletion(entry);
+    await createLifecycleController({ entry, runs, beforeWrite }).completeSubagentRun(completion);
 
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_ERROR,
@@ -1543,6 +1549,21 @@ describe("subagent registry lifecycle hardening", () => {
         outcome: { status: "error", error: "restart interrupted run" },
       },
     });
+    const settled = readLifecycleRun(entry);
+    beforeWrite.mockClear();
+    helperMocks.persistSubagentSessionTiming.mockClear();
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    await createLifecycleController({
+      entry: settled,
+      runs,
+      beforeWrite,
+      emitSubagentProgressEndedForRun,
+    }).completeSubagentRun(completion);
+
+    expect(readLifecycleRun(settled)).toEqual(settled);
+    expect(beforeWrite).not.toHaveBeenCalled();
+    expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, "steer-restart"] as const)(
@@ -2158,8 +2179,11 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
       execution: { outcome: { status: "ok" } },
-      completion: { resultText: "Canonical success." },
+      completion: { terminalReply: { disposition: "visible", text: "Canonical success." } },
     });
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+      "Canonical success.",
+    );
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
       outcome: { status: "ok" },
@@ -3754,6 +3778,7 @@ describe("subagent registry lifecycle hardening", () => {
       ).toHaveBeenCalledTimes(1);
       expect(readLifecycleRun(entry).browserCleanupDispatchedAt).toBeTypeOf("number");
       expect(readLifecycleRun(entry).execution.endedAt).toBe(4_000);
+      expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
       expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).toHaveBeenCalled();
       expect(firstCleanupParams?.isCurrent?.()).toBe(true);

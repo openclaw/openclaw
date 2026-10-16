@@ -228,9 +228,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await operation();
     });
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
-  let nativeSubagentMonitorGeneration = 0;
   const unregisterNativeSubagentMonitor = async () => {
-    nativeSubagentMonitorGeneration += 1;
     const registration = state.nativeSubagentMonitor;
     state.nativeSubagentMonitor = undefined;
     if (registration) {
@@ -240,7 +238,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = async (parentThreadId: string) => {
     const requestCustody = params.hostCapabilities.captureRequestCustody?.();
-    const { client, thread, nativeHookRelay, turnRoute } = state;
+    const { client, thread, nativeHookRelay } = state;
     const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
     const storePath = params.sessionTarget?.storePath;
     const parent =
@@ -256,7 +254,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     try {
       await unregisterNativeSubagentMonitor();
       connection.assertCurrent();
-      const generation = ++nativeSubagentMonitorGeneration;
       const parentSession = parent?.entry;
       const historyOwner = createCodexNativeSubagentHistoryOwner({
         parentThreadId,
@@ -302,15 +299,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           submissionStore.assertCurrent();
         }
         thread.liveThreadOwnership?.assertCurrent();
-        if (
-          generation !== nativeSubagentMonitorGeneration ||
-          state.client !== client ||
-          state.thread !== thread ||
-          state.nativeHookRelay !== nativeHookRelay ||
-          state.turnRoute !== turnRoute
-        ) {
-          throw new Error("Codex native subagent registration was superseded during setup");
-        }
       };
       const retainModelSource = params.hostCapabilities.retainSourceAuthority;
       const modelSource = retainModelSource?.();

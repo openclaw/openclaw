@@ -102,7 +102,6 @@ export type GatewayWsMessageHandlerParams = {
 export type GatewayConnectAttachTiming =
   | "deviceAuthorizationMs"
   | "deviceLookupMs"
-  | "deviceMetadataMs"
   | "deviceTokensMs"
   | "nodePreparationMs"
   | "identityMs"
@@ -142,8 +141,14 @@ export type GatewayConnectPhaseContext = {
   onPairingWait: () => void;
   /** Nested wall times for the connect response log; direct bootstrap callers may omit it. */
   recordAttachTiming?: (phase: GatewayConnectAttachTiming, startedAt: number) => void;
+  setConnectPhase?: (phase: "profile-ensure" | "profile-authority" | "registration") => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
+  pendingDeviceMetadata?: {
+    deviceId: string;
+    identity: import("../../../infra/device-pairing-access.js").DevicePairingAccessIdentity;
+    patch: Partial<import("../../../infra/device-pairing-core.types.js").PairedDeviceMetadataPatch>;
+  };
   pendingNodePairingCleanup: {
     value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };

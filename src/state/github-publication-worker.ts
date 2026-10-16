@@ -15,7 +15,7 @@ import type {
   PublicationReadOperations,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
@@ -33,15 +33,7 @@ type MutationCommand = SqliteWorkerCommand<
 export async function readGitHubPublicationInWorker(
   command: SqliteWorkerCommand<PublicationReadOperations>,
 ) {
-  const context = captureOpenClawStateReadWorkerContext();
-  const captured = structuredClone(command);
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute(captured),
-    { existingOnly: true },
-  );
-  context.admission.assertCurrent();
-  return result;
+  return await executeExistingOpenClawStateRead({}, command, { current: true });
 }
 
 /** A publication execution retains FIFO writes through native settlement. */

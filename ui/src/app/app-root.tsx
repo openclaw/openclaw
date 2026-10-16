@@ -18,8 +18,8 @@ import {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
-import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
-import { renderConnectingSplash } from "../components/loading-skeleton.ts";
+import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { i18n } from "../i18n/index.ts";
 import {
@@ -52,7 +52,6 @@ import {
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
-import { LitRouteHost } from "./lit-route-host.tsx";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
@@ -326,12 +325,9 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   }
   function Splash(): SolidJSX.Element {
     return (
-      <LitRouteHost
-        renderValue={() => {
-          translations.revision();
-          return renderConnectingSplash(startupStatus());
-        }}
-      />
+      <openclaw-route-fragment style={{ display: "contents" }}>
+        <ConnectingSplash status={startupStatus()} />
+      </openclaw-route-fragment>
     );
   }
   function LazyDocument(documentProps: { element: OptionalCustomElement }): SolidJSX.Element {
@@ -339,16 +335,13 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
       <Show when={lazyState()?.element === documentProps.element && lazyState()}>
         {(state) => (
           <main class="connect-splash">
-            <LitRouteHost
-              renderValue={() => {
-                translations.revision();
-                return renderLazyElementState(
-                  state(),
-                  () => lazyCustomElements.retry(),
-                  () => lazyCustomElements.close(),
-                );
-              }}
-            />
+            <openclaw-route-fragment style={{ display: "contents" }}>
+              <LazyElementStateView
+                state={state()}
+                onRetry={() => lazyCustomElements.retry()}
+                onClose={() => lazyCustomElements.close()}
+              />
+            </openclaw-route-fragment>
           </main>
         )}
       </Show>
@@ -523,6 +516,10 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     );
   }
   function Login(): SolidJSX.Element {
+    const loadError = () => {
+      const state = loginLoadState();
+      return state?.status === "error" ? state : undefined;
+    };
     const registered = () => {
       lazyRevision();
       return isOptionalElementDefined(LOGIN_GATE_ELEMENT);
@@ -531,24 +528,15 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
       <Show
         when={registered()}
         fallback={
-          <Show
-            when={loginLoadState()?.status === "error" && loginLoadState()}
-            fallback={<Splash />}
-          >
+          <Show when={loadError()} fallback={<Splash />}>
             {(state) => (
-              <LitRouteHost
-                renderValue={() => {
-                  translations.revision();
-                  const current = state();
-                  return current.status === "error"
-                    ? renderLazyViewError({
-                        error: current.error,
-                        stale: current.stale,
-                        onRetry: () => loginGateLoader.retry(),
-                      })
-                    : undefined;
-                }}
-              />
+              <openclaw-route-fragment style={{ display: "contents" }}>
+                <LazyViewError
+                  error={state().error}
+                  stale={state().stale}
+                  onRetry={() => loginGateLoader.retry()}
+                />
+              </openclaw-route-fragment>
             )}
           </Show>
         }

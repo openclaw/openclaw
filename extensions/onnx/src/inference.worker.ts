@@ -1,9 +1,9 @@
 import type { WorkerConfig } from "./config.js";
 import type { ModelCache } from "./model-loader.js";
 import { UnsupportedInputError } from "./models/types.js";
-import { OnnxWorkerError, parseWorkerRequest, type WorkerReply } from "./protocol.js";
+import { OnnxWorkerError, type WorkerReply, type WorkerRequest } from "./protocol.js";
 
-let config: WorkerConfig | undefined;
+let config: WorkerConfig;
 let cache: ModelCache | undefined;
 let stopping = false;
 let finalExitCode = 0;
@@ -49,15 +49,16 @@ function send(reply: WorkerReply): void {
   });
 }
 
-function onMessage(value: unknown): void {
+function onMessage(request: WorkerRequest): void {
   if (stopping) {
     return;
   }
-  if (activeTask) {
-    stop(1);
+  if (request.kind === "init") {
+    // The private parent sends initialization before operations on the same FIFO IPC channel.
+    config = request.config;
     return;
   }
-  activeTask = handle(value);
+  activeTask = handle(request);
   void activeTask
     .catch(() => stop(1))
     .finally(() => {
@@ -67,19 +68,7 @@ function onMessage(value: unknown): void {
 process.on("disconnect", () => stop(0));
 process.on("message", onMessage);
 
-async function handle(value: unknown): Promise<void> {
-  const request = parseWorkerRequest(value);
-  if (request.kind === "init") {
-    if (config) {
-      throw new Error("Already initialized");
-    }
-    config = request.config;
-    send({ kind: "ready" });
-    return;
-  }
-  if (!config) {
-    throw new Error("Invalid worker admission");
-  }
+async function handle(request: Exclude<WorkerRequest, { kind: "init" }>): Promise<void> {
   try {
     if (!cache) {
       let implementation;
@@ -97,7 +86,7 @@ async function handle(value: unknown): Promise<void> {
         }
         await cache.get(model);
       }
-      send({ kind: "warmed", id: request.id });
+      send({ kind: "warmed" });
     } else {
       const model = await cache.get(request.model);
       const results = [];
@@ -107,12 +96,11 @@ async function handle(value: unknown): Promise<void> {
         }
         results.push(await model.classify(input));
       }
-      send({ kind: "results", id: request.id, results });
+      send({ kind: "results", results });
     }
   } catch (error) {
     send({
       kind: "error",
-      id: request.id,
       code:
         error instanceof UnsupportedInputError
           ? "unsupported-input"

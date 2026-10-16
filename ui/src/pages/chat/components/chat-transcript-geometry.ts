@@ -1,5 +1,5 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
@@ -183,7 +183,7 @@ export function measureTranscriptRow(
       return size;
     }
   }
-  // Lit registration waits for the observer's first layout; hidden panels retain
+  // Row registration waits for the observer's first layout; hidden panels retain
   // their last measurement instead of replacing it with zero and moving the viewport.
   const index = virtualizer.indexFromElement(element);
   return (
@@ -198,14 +198,14 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
     : null;
 }
 
-export class PositionRailGutterController implements ReactiveController {
+export class PositionRailGutterController implements SolidController {
   private resizeObserver: ResizeObserver | null = null;
   private viewport: HTMLDivElement | null = null;
   private innerElement: HTMLDivElement | null = null;
   private region: HTMLElement | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost & {
+    private readonly host: SolidControllerHost & {
       readonly scrollElement: HTMLDivElement | null;
     },
     private readonly inner: () => HTMLDivElement | null,

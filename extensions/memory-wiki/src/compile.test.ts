@@ -231,6 +231,33 @@ describe("compileMemoryWikiVault", () => {
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
+  it("rejects publication when a source changes after its compiled bytes were read", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createBacklinks: false, createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "edited.md");
+    await fs.writeFile(sourcePath, "# Before\n", "utf8");
+    const readFile = fs.readFile.bind(fs);
+    let edited = false;
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      const value = await readFile(...args);
+      if (args[0] === sourcePath && !edited) {
+        edited = true;
+        await fs.writeFile(sourcePath, "# After\n", "utf8");
+      }
+      return value;
+    });
+
+    await expect(compileMemoryWikiVault(config)).rejects.toThrow(
+      "vault changed while its compiled cache was being published",
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({ state: "failed" });
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("# After\n");
+  });
+
   it("does not rewrite empty source pages into related-only stubs", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -354,5 +381,57 @@ describe("compileMemoryWikiVault", () => {
     expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
     expect(bradPage.relationshipCount).toBe(1);
     expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");
+  });
+  it.each(["entities/router.md", "index.md", "reports/open-questions.md"])(
+    "refuses to rewrite malformed UTF-8 in %s and leaves it unchanged",
+    async (relativePath) => {
+      const { rootDir, config } = await createVault({
+        rootDir: nextCaseRoot(),
+        initialize: true,
+      });
+      const pagePath = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(pagePath), { recursive: true });
+      const malformed = Buffer.concat([
+        Buffer.from(
+          "---\npageType: entity\nid: entity.router\ntitle: Router\nstatus: active\n---\n# Router\n\n## Human Notes\n\nlatin1: caf",
+          "utf8",
+        ),
+        Buffer.from([0xff]),
+        Buffer.from(" keeps dropping\n", "utf8"),
+      ]);
+      await fs.writeFile(pagePath, malformed);
+
+      await expect(compileMemoryWikiVault(config)).rejects.toMatchObject({
+        name: "WikiPageNotUtf8Error",
+        message: expect.stringContaining(relativePath),
+      });
+      // The rewrite never happened: the undecodable byte survived untouched.
+      expect(await fs.readFile(pagePath)).toEqual(malformed);
+    },
+  );
+
+  it("compiles valid non-ASCII pages including a literal replacement character", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const entityDir = path.join(rootDir, "entities");
+    await fs.mkdir(entityDir, { recursive: true });
+    const entityPath = path.join(entityDir, "router.md");
+    const notesLine = "- 中文 🦀 \uFFFD tail";
+    await writePage(entityPath, {
+      frontmatter: {
+        pageType: "entity",
+        id: "entity.router",
+        title: "Router",
+      },
+      body: `# Router\n\n## Human Notes\n\n${notesLine}\n`,
+    });
+
+    await compileMemoryWikiVault(config);
+
+    const after = await fs.readFile(entityPath, "utf8");
+    expect(after).toContain(notesLine);
+    expect(after).toContain("<!-- openclaw:wiki:related:start -->");
   });
 });

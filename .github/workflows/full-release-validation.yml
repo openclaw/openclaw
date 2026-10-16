@@ -184,7 +184,12 @@ jobs:
   resolve_target:
     name: Resolve target ref
     # Hosted admission delays compound along this serial release path.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: &linux_runner_hybrid_small >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' &&
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))
+      || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
+      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -973,7 +978,7 @@ jobs:
     name: Enforce plugin compatibility release readiness
     needs: [resolve_target]
     if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: *linux_runner_hybrid_small
     timeout-minutes: 10
     steps:
       - name: Checkout target source
@@ -1016,7 +1021,7 @@ jobs:
     name: Check for reusable validation evidence
     needs: [resolve_target, plugin_compatibility_readiness]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: *linux_runner_hybrid_small
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}
@@ -1255,7 +1260,9 @@ jobs:
     name: Run normal full CI
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1687,7 +1694,7 @@ jobs:
     name: Run plugin prerelease independent validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1719,7 +1726,7 @@ jobs:
     name: Run plugin prerelease candidate validation
     needs: [resolve_target, evidence_reuse, candidate_acquisition]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_candidate_required == 'true' && needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1751,7 +1758,11 @@ jobs:
     name: Run release checks independent validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: &linux_runner_small >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&
+      'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
+      && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1795,7 +1806,7 @@ jobs:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1839,7 +1850,7 @@ jobs:
     name: Run package Telegram E2E
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1867,7 +1878,7 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1893,7 +1904,7 @@ jobs:
     name: Prepare release npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
       run_id: ${{ steps.reused.outputs.run_id || steps.producer.outputs.run_id }}
@@ -1964,7 +1975,7 @@ jobs:
     name: Qualify release npm artifacts
     needs: [resolve_target, evidence_reuse, prepare_npm_package]
     if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
       qualified_preflight_bundle_json: ${{ steps.reused.outputs.qualified_preflight_bundle_json || steps.bundle.outputs.qualified_preflight_bundle_json }}
@@ -2005,7 +2016,7 @@ jobs:
     name: Prepare exact plugin npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 150
     outputs:
       descriptor_json: ${{ steps.reused.outputs.descriptor_json || steps.prepared.outputs.descriptor_json }}
@@ -2104,7 +2115,7 @@ jobs:
     name: Prepare release Docker artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
       prepared_run_id: ${{ steps.reused.outputs.prepared_run_id || steps.bundle.outputs.prepared_run_id }}
@@ -2159,7 +2170,7 @@ jobs:
     name: Acquire full release candidate
     needs: [resolve_target, evidence_reuse, prepare_npm_package]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
       state: ${{ steps.bundle.outputs.state }}
@@ -2214,7 +2225,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -2478,7 +2489,7 @@ jobs:
     name: Release Decision
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_small
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -2546,7 +2557,7 @@ jobs:
     name: Diagnostic Drain
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    runs-on: *linux_runner_small
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -2661,7 +2672,7 @@ jobs:
         diagnostic_drain,
       ]
     if: always()
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     steps:
       - name: Require qualified publication artifacts

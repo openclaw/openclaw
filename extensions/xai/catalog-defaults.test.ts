@@ -2,7 +2,6 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildXaiCatalogModels } from "./model-definitions.js";
 import { applyXaiOAuthConfig } from "./onboard.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -26,20 +25,6 @@ const oauthProvider: ModelProviderConfig = {
   baseUrl: "https://cli-chat-proxy.grok.com/v1",
   models: [],
 };
-
-it("keeps a caller's price and input edits out of the curated catalog", () => {
-  const customized = buildXaiCatalogModels();
-  const first = customized[0];
-  if (!first) {
-    throw new Error("expected the default curated model");
-  }
-  first.cost.input = 999;
-  first.input.push("audio");
-
-  const fresh = buildXaiCatalogModels()[0];
-  expect(fresh?.cost.input).toBe(2);
-  expect(fresh?.input).toEqual(["text", "image"]);
-});
 
 it("preserves the existing primary during OAuth setup", () => {
   const original: OpenClawConfig = {

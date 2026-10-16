@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -11,6 +10,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 type IndicatorEntry = {
@@ -27,7 +27,7 @@ type SessionPullRequestIndicatorsOptions = {
 };
 
 /** Projects last-known PR snapshots without making sidebar rows poll their checkouts. */
-export class SessionPullRequestIndicatorsController implements ReactiveController {
+export class SessionPullRequestIndicatorsController implements SolidController {
   private readonly states = new Map<string, IndicatorEntry>();
   private gateway: ApplicationGateway | null = null;
   private client: GatewayBrowserClient | null = null;
@@ -37,7 +37,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   private connected = false;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly options: SessionPullRequestIndicatorsOptions,
   ) {
     host.addController(this);

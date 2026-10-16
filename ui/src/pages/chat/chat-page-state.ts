@@ -14,7 +14,7 @@ import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { ChatPageCloseFocus } from "./chat-page-close-focus.ts";
 import { ChatPageDropIndicator } from "./chat-page-drop-indicator.ts";

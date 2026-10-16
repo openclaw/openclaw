@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {

@@ -2,7 +2,7 @@ import { createEffect, createMemo, For, onCleanup, Show, type Accessor } from "s
 import { icons } from "../../../components/icons.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { LitContent } from "./chat-composer-interop.tsx";
 
@@ -128,13 +128,13 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
           <For keyed={(person) => person.profileId} each={people()}>
             {(person, index) => (
               <span class="composer-context-strip__person" title={person().label}>
-                <LitContent
-                  value={renderChatAuthorAvatar({
+                <ChatAuthorAvatar
+                  sender={{
                     id: person().profileId,
                     name: person().name,
                     identity: { type: "profile", id: person().profileId },
                     profileAvatarUrl: person().avatarUrl,
-                  })}
+                  }}
                 />
                 <bdi class="composer-context-strip__person-name">
                   {person().name}

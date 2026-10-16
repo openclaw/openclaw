@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Match, Show, Switch } from "solid-js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsRow,

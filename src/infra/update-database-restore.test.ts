@@ -7,6 +7,10 @@ import { DatabaseSync } from "node:sqlite";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  resolveDaemonRuntimePinStorePath,
+  withDaemonRuntimePinStore,
+} from "../daemon/runtime-pin-store.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -115,6 +119,43 @@ function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = f
     async (state) => run(await createRestoreFixture(state, linked)),
   );
 }
+
+it("captures and restores exact local daemon intent with its independent schema", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-daemon-restore-", scenario: "minimal" },
+    async (state) => {
+      const raw = '{ "version": 999, "broken": ';
+      const key = "daemon-runtime-pin:malformed-intent";
+      withDaemonRuntimePinStore(state.env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(key, raw, 123);
+      });
+      const fixture = await createRestoreFixture(state);
+      try {
+        const pathname = resolveDaemonRuntimePinStorePath(state.env);
+        expect(fixture.backup.databaseOwners).not.toContainEqual(
+          expect.objectContaining({ path: pathname }),
+        );
+        expect(fixture.backup.databases).toContainEqual(
+          expect.objectContaining({ path: pathname, userVersion: 1 }),
+        );
+        withDaemonRuntimePinStore(state.env, true, (db) => {
+          db.prepare("UPDATE daemon_runtime_pins SET value_json = ?, updated_at_ms = ?").run(
+            '{"version":1}',
+            456,
+          );
+        });
+        await fixture.restore();
+        withDaemonRuntimePinStore(state.env, false, (db) => {
+          expect(db.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([
+            { state_key: key, value_json: raw, updated_at_ms: 123 },
+          ]);
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+});
 
 async function unchangedFiles(fixture: RestoreFixture) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(fixture.state.stateDir);

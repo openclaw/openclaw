@@ -6,8 +6,8 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
-import { t } from "../i18n/index.ts";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
+import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
@@ -26,7 +26,7 @@ import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
 
-registerGitHubEnglish();
+registerEnglishCatalog(registerGitHubEnglish);
 
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
@@ -281,18 +281,17 @@ function SessionAttribution(props: SessionHovercardInput) {
 
 function Header(props: SessionHovercardInput & { row: SidebarSessionHovercardRow }) {
   const channel = () => props.row.channelPresentation;
-  const details = createMemo(() =>
-    channel()
-      ? [
-          ...new Set(
-            [channel()?.conversation, channel()?.address].filter(
-              (value) => value && value !== props.row.label,
-            ),
-          ),
-        ]
-      : [],
-  );
-  const age = () => formatSessionAge(props.row.createdAt, false);
+  const details = createMemo(() => [
+    ...new Set(
+      [channel()?.conversation, channel()?.address].filter(
+        (value) => value && value !== props.row.label,
+      ),
+    ),
+  ]);
+  const age = (suffix = false) => {
+    i18nRevision();
+    return formatSessionAge(props.row.createdAt, suffix);
+  };
   return (
     <header class="session-hovercard__header">
       <span class="session-hovercard__heading">
@@ -348,10 +347,7 @@ function Header(props: SessionHovercardInput & { row: SidebarSessionHovercardRow
         </Show>
       </span>
       <Show when={age()}>
-        <span
-          class="session-hovercard__created-age"
-          title={formatSessionAge(props.row.createdAt, true)}
-        >
+        <span class="session-hovercard__created-age" title={age(true)}>
           {age()}
         </span>
       </Show>
@@ -546,7 +542,9 @@ export function SessionHovercard(props: SessionHovercardInput) {
             <span class="session-hovercard__error-icon" aria-hidden="true">
               <Icon name="alertTriangle" />
             </span>
-            <span>{props.row?.attention ? sessionAttentionSubtitle(props.row.attention) : ""}</span>
+            <span>
+              {props.row?.attention ? sessionAttentionSubtitle(props.row.attention, t) : ""}
+            </span>
           </section>
         </Show>
         <Show when={props.progressCard?.markdown?.trim()}>

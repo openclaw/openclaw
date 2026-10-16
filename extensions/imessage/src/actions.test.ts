@@ -503,7 +503,7 @@ describe("imessage message actions", () => {
           partIndex: undefined,
           attachment: {
             kind: "buffer",
-            buffer: Uint8Array.from([0xfb, 0xff]),
+            buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
             filename: "attachment.bin",
           },
           options,
@@ -624,7 +624,7 @@ describe("imessage message actions", () => {
       [
         {
           chatGuid,
-          buffer: Uint8Array.from([0xfb, 0xff]),
+          buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
           filename: "photo.jpg",
           asVoice: true,
           options,
@@ -641,7 +641,9 @@ describe("imessage message actions", () => {
       { senderIsOwner: true },
     );
     expect(runtimeMock.setGroupIcon).toHaveBeenCalledWith(
-      expect.objectContaining({ buffer: Uint8Array.from([0xfb, 0xff]) }),
+      expect.objectContaining({
+        buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
+      }),
     );
   });
 

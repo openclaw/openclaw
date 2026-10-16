@@ -54,6 +54,7 @@ import {
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -201,6 +202,7 @@ function createPublicationBackend(
   ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
+  const vectorIndex = admitMemoryVectorIndex(db);
   // Agent handles are admitted by the database owner; private shadows are checked once on open.
   if (!("kind" in input)) {
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -534,11 +536,8 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
-            db.exec(
-              `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
-                `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
-            );
+            vectorIndex.capability.drop(vectorIndex.index);
+            vectorIndex.capability.create(vectorIndex.index, dimensions);
             if (meta && !meta.vectorDims && !hasIndexedChunks) {
               writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
             }

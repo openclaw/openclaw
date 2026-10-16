@@ -2,7 +2,8 @@ import { For, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context-types.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
@@ -12,8 +13,9 @@ import { registerAvatarGatewayReset } from "../../lib/identity-avatar-context.ts
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { ClawsExplore } from "./claws-explore.tsx";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -29,6 +31,9 @@ type AgentsHomeProps = {
   connected: boolean;
   loading: boolean;
   error: string | null;
+  showExplore: boolean;
+  onOpenCatalog: () => void;
+  onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
 };
 
@@ -70,6 +75,20 @@ export function AgentsHomeView(props: AgentsHomeProps) {
           subtitle={subtitle()}
           actions={
             <>
+              {props.showExplore ? (
+                <button
+                  type="button"
+                  class="btn btn--icon"
+                  data-claws-open-catalog
+                  aria-label={t("clawsCatalog.search")}
+                  title={t("clawsCatalog.search")}
+                  aria-haspopup="dialog"
+                  disabled={!props.connected}
+                  onClick={props.onOpenCatalog}
+                >
+                  <Icon name="search" />
+                </button>
+              ) : undefined}
               {manage()}
               <ReasonedDisabledControl
                 reason={!props.canCreate ? t("custodian.accessRequired") : undefined}
@@ -129,12 +148,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
               >
                 <div class="agents-home__identity">
                   <div class="agents-home__avatar" aria-hidden="true">
-                    <LitContent
-                      render={() => {
-                        avatarContext.revision();
-                        return renderAgentIdentityAvatar(card());
-                      }}
-                    />
+                    <AgentIdentityAvatar agent={(avatarContext.revision(), card())} />
                   </div>
                   <div class="agents-home__name">
                     <h2>{card().name}</h2>
@@ -170,6 +184,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
             )}
           </For>
         </div>
+        {props.showExplore ? <ClawsExplore onSelect={props.onSelectClaw} /> : undefined}
       </section>
     </>
   );

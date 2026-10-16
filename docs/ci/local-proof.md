@@ -72,17 +72,14 @@ in incremental project mode: solution-build mode can miss an added root whose
 timestamp predates restored build information. Frozen targets keep their
 original stripe invocations. Per-graph elapsed times appear in the job log.
 
-The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
-Exact cache keys separate compiler/dependency/configuration versions and CI rows.
-Rows reuse incremental state across source revisions only when those inputs match.
-Compiler, dependency, or configuration changes start with an empty cache: updating
-older state can cost substantially more than a fresh check. The compiler still
-validates current roots, options, source, and dependency contents after restoration.
-The central changed-graph queue also
-restores the five core stripe caches that full runs publish. Every selected graph
-still runs after a hit. Pull requests only restore state, while the existing trusted cache writer policy controls
-publication after successful checks. Cache-off and frozen-target runs retain
-their original behavior. Lint programs do not share these compiler caches.
+CI type jobs start without restored compiler state. Updating older build information
+can require declaration-signature computation and dependency invalidation that a
+fresh check avoids. A same-checkout six-graph comparison with one-hour-old state
+took 295.27 seconds versus 157.81 seconds cold; both runs checked every graph.
+CI therefore does not publish or restore `.artifacts/tsgo-cache`, including in the
+changed-graph queue. Local commands retain incremental state for repeated checks
+in the same checkout. Compiler selection, graph membership, concurrency, and
+frozen-target commands remain unchanged.
 
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional

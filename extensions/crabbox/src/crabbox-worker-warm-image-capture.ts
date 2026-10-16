@@ -409,7 +409,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
               cacheKey: owner.cacheKey,
               purpose: owner.purpose,
               lastDemandAtMs: owner.purpose === "session" ? null : owner.demandAtMs,
-              runtimeIdentity: structuredClone(owner.runtimeIdentity),
+              runtimeIdentity: owner.runtimeIdentity,
               ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
             },
             ...(retiredCheckpointId

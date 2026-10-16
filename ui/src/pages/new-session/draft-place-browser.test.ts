@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";

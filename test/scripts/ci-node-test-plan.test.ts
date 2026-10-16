@@ -85,7 +85,10 @@ import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
-import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
+import {
+  uiE2ePrebuiltParallelTestFiles,
+  uiE2eRealGatewayTestFiles,
+} from "../vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTimerTestFiles,
@@ -159,6 +162,10 @@ describe("Control UI release-only inventories", () => {
     );
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expect(files.toSorted()).toEqual(expectedFiles.toSorted());
+    // Desktop and serial proof must not acquire a second parallel-fixture phase.
+    expect(shards[1]?.groups[0]?.includePatterns.toSorted()).toEqual(
+      expectedFiles.filter((file) => uiE2ePrebuiltParallelTestFiles.includes(file)).toSorted(),
+    );
   }
 
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {

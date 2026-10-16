@@ -25,7 +25,7 @@ import type {
 } from "./provenance.js";
 import type { ClawPackage } from "./types.js";
 
-export type PackageInstallerDeps = {
+type PackageInstallerDeps = {
   installPlugin?: (params: Parameters<typeof installManagedPlugin>[0]) => Promise<void>;
   uninstallPlugin?: (params: Parameters<typeof uninstallPluginWithPolicy>[0]) => Promise<void>;
   probePlugin?: typeof installPluginFromClawHub;

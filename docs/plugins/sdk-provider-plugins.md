@@ -147,6 +147,33 @@ current config. The original login callback does not authorize a later command.
 Let the shared owner report the visibility outcome:
 a saved policy is not proof that the running Gateway applied it.
 
+## Submit JSON requests
+
+Bundled Bearer-key providers use `resolveProviderApiKeyHttpRequestConfig` from
+`openclaw/plugin-sdk/provider-http` to resolve current credentials and HTTP
+request policy together. Pass `req`, `provider`, `missingApiKeyMessage`, and the
+usual HTTP configuration options. JSON content type is the default; set
+`jsonContentType: false` for multipart or other non-JSON requests. Provider-specific
+endpoints, extra headers, and request overrides remain plugin-owned.
+
+Use `postJsonResponse` from `openclaw/plugin-sdk/provider-http` when a JSON POST
+returns a complete JSON response. It uses the guarded POST transport, checks the
+HTTP status, reads bounded JSON, and releases the transport before returning or
+throwing. Polling and generated-asset downloads keep their own request lifetimes.
+
+Pass the usual `postJsonRequest` transport options plus `errorLabel`. Optional
+`responseLabel` changes the JSON parsing error label; it defaults to `errorLabel`.
+`errorOptions` and `readOptions` preserve the options accepted by
+`assertOkOrThrowHttpError` and `readProviderJsonResponse`, including deadlines,
+byte limits, and credential-redaction headers. Set `objectResponse: true` to
+require a JSON object; otherwise use the generic result type and validate the
+vendor response at the plugin boundary. Submission POSTs are not retried unless
+the caller explicitly supplies the existing retry options.
+
+Keep `postJsonRequest` for streaming or binary responses, custom response/error
+parsers, and code that needs to retain the response transport. Those callers
+must release it in `finally`.
+
 ## Walkthrough
 
 <Steps>
@@ -560,6 +587,32 @@ This keeps shared request shaping and output normalization active, including
 MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
+
+Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
+through the existing private `provider-stream-shared` seam. Payload composition
+runs defaults before the caller hook and wire constraints after its result settles;
+each adapter keeps its own replacement/null policy. The stream mapper preserves
+synchronous returns without importing the embedded runner. These are bundled
+implementation helpers, not new third-party SDK contracts.
+
+Injected-client adapters also reuse the Anthropic thinking and output-cap owners
+through the private `provider-transport-runtime` seam. Client creation and
+provider-specific defaults stay with the adapter; the shared request builder
+owns sampling restrictions and cache-marker budgeting.
+
+Local provider transports can report a transient wait through the optional
+`StreamOptions.onProviderWait` callback. Pass `"response"` while waiting for a
+response, or `"slot"` only when backend evidence correlates the current request
+with a slot wait. Pass `null` to clear it. This is status metadata, never assistant
+text or evidence that cancellation released a backend slot.
+
+`createProviderWaitObserver` from `openclaw/plugin-sdk/provider-transport-runtime`
+provides the shared delayed status lifecycle. Call `start()` when dispatching the
+prepared request and `stop()` at the first response event and in cleanup. It emits
+the generic response wait after one second and clears it on cancellation or
+`stop()`. It creates no timer when the caller does not observe waits. A provider
+with request-correlated evidence can call `report("slot")`. Any backend probes
+must be bounded by that request's lifetime; do not add an always-on polling loop.
 
 ## Next steps
 

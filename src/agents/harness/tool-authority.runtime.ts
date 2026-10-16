@@ -3,9 +3,9 @@ import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.st
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import {
   prepareReplyToolAuthority,
-  type ReplyToolAuthorityInput,
   type ReplyToolAuthorityNarrow,
 } from "../../auto-reply/reply/reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "../../auto-reply/reply/reply-tool-authority.types.js";
 import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import {

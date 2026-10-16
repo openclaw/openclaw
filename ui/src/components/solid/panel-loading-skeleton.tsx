@@ -205,3 +205,9 @@ export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-panel-loading-skeleton": PanelLoadingSkeletonElement;
+  }
+}

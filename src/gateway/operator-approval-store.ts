@@ -303,18 +303,6 @@ export function resolveOperatorApproval(
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
   return execute("operatorApprovals.deny", params);
 }
-export function expireDueOperatorApprovals(params: Input<"operatorApprovals.expire">) {
-  return execute("operatorApprovals.expire", params, {
-    read: {
-      command: { type: "operatorApprovals.hasDue", nowMs: params.nowMs ?? Date.now() },
-      // No due rows means no writer transaction behind unrelated foreground writes.
-      project: (result) =>
-        result.type === "operatorApprovals.hasDue" && !result.hasDue
-          ? { affected: 0, records: [] }
-          : undefined,
-    },
-  });
-}
 export function consumeOperatorApprovalAllowOnce(params: Input<"operatorApprovals.consume">) {
   return execute("operatorApprovals.consume", params);
 }

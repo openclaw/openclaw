@@ -33,7 +33,6 @@ import {
   lookupCronStandingGrantInDatabase,
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
-  hasDueOperatorApprovalsInDatabase,
   readOperatorApprovalReplayInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
@@ -73,6 +72,8 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
+import { readPluginStateCommand } from "../plugin-state/plugin-state.worker.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -231,6 +232,9 @@ export function readOpenClawStateDatabaseCommand(
   ) {
     return executeDevicePairingRead(db, input.databasePath, command);
   }
+  if (isPluginStateReadCommand(command)) {
+    return readPluginStateCommand({ db, path: input.databasePath }, command);
+  }
   if (command.type === "pluginBlob.lookup") {
     return {
       type: command.type,
@@ -327,9 +331,6 @@ export function readOpenClawStateDatabaseCommand(
       type: command.type,
       pending: readPendingOperatorApprovalsInDatabase(command.input, db),
     };
-  }
-  if (command.type === "operatorApprovals.hasDue") {
-    return { type: command.type, hasDue: hasDueOperatorApprovalsInDatabase(command.nowMs, db) };
   }
   if (command.type === "operatorApprovals.prepareReplay") {
     return { type: command.type, replay: readOperatorApprovalReplayInDatabase(command.input, db) };

@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { parseWikiMarkdown } from "./markdown.js";
+import { decodeWikiPageUtf8, parseWikiMarkdown } from "./markdown.js";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
@@ -49,6 +49,18 @@ export async function readExistingWikiPage(
   }
 }
 
+export function readExistingWikiPageUtf8(
+  vault: VaultRoot,
+  relativePath: string,
+  fallback: () => string,
+): Promise<string> {
+  return readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await vault.readBytes(relativePath), relativePath),
+    isMissingWikiPageError,
+    fallback,
+  );
+}
+
 export async function writeManagedMarkdownFile(params: {
   rootDir: string;
   relativePath: string;
@@ -60,9 +72,9 @@ export async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
-  const original = await readExistingWikiPage(
-    () => root.readText(params.relativePath),
-    isMissingWikiPageError,
+  const original = await readExistingWikiPageUtf8(
+    root,
+    params.relativePath,
     () => `# ${params.title}\n`,
   );
   params.signal?.throwIfAborted();

@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { createPaneHeaderWorkspaceFixture } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -67,7 +67,7 @@ it.each([
   await refreshPane(pane);
   const container = document.body.appendChild(document.createElement("div"));
   const draw = () =>
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(pane.state),
         selectedChatSessionRow(pane.state),

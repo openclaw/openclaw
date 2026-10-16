@@ -613,6 +613,9 @@ merge_outcome_dispatch_prior_ci_squash() (
 
 merge_read() {
   local mode="$1" pr="$2" repo="${3:-${MERGE_REPO_URL:-}}" first="${MERGE_TRANSPORT:-rest}" second response status query checks_err checks_error
+  if [ "$mode" = projection ] && [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ]; then
+    first=rest
+  fi
   if [ "$mode" = observe ] && [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] &&
     [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     # This complete read reports policy/check facts; prior-CI admission still owns their verdict.
@@ -657,7 +660,7 @@ merge_read() {
           fi
           [ -z "$checks_error" ] || printf '%s\n' "$checks_error" >&2
           ;;
-        observe)
+        observe|projection)
           query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id databaseId url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}'
           ;;
         preview)
@@ -678,6 +681,45 @@ merge_read() {
   done
   echo "Neither GitHub transport can provide $mode evidence; preserve any retained request for reconciliation." >&2
   return 1
+}
+
+merge_wait_for_projection() {
+  local pr="$1" deadline="$2" delay="$3" label="${4:-mergeability}" response projection
+  while true; do
+    if ! pr_merge_pause "$deadline" "$delay"; then
+      merge_outcome_stop "$label remained UNKNOWN through the 60s settle limit; stopped before intent/dispatch"
+      return 1
+    fi
+    [ "$delay" -ge 8 ] || delay=$((delay * 2))
+    # GraphQL's complete observation is already one request; only REST needs a cheap hint.
+    if [ "${MERGE_TRANSPORT:-rest}" != rest ] && [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" != true ]; then
+      MERGE_PROJECTION_DELAY="$delay"
+      return 0
+    fi
+    response=$(merge_read projection "$pr") || {
+      merge_outcome_stop "mergeability hint is unavailable; stopped before intent/dispatch"
+      return 1
+    }
+    projection=$(printf '%s\n' "$response" | jq -ce '
+      select(.payload.errors == null) | .payload.data.repository.pullRequest |
+      {mergeable,mergeStateStatus} |
+      select((.mergeable | IN("MERGEABLE", "CONFLICTING", "UNKNOWN")) and
+        (.mergeStateStatus | type == "string" and length > 0))
+    ') || {
+      merge_outcome_stop "mergeability hint is invalid; stopped before intent/dispatch"
+      return 1
+    }
+    if printf '%s\n' "$projection" | jq -e '.mergeable == "UNKNOWN" or .mergeStateStatus == "UNKNOWN"' >/dev/null; then
+      continue
+    fi
+    if [ "$(pr_merge_now)" -ge "$deadline" ]; then
+      merge_outcome_stop "$label exceeded the 60s settle limit; stopped before intent/dispatch"
+      return 1
+    fi
+    # A hint only wakes the caller's complete snapshot and authority checks.
+    MERGE_PROJECTION_DELAY="$delay"
+    return 0
+  done
 }
 
 merge_outcome_normalize() {
@@ -867,7 +909,8 @@ merge_outcome_stable() {
     settle_delay="${MERGE_PRIOR_CI_UNKNOWN_DELAY:-2}"
   fi
   while true; do
-    if { [ "$prior_ci_round" = true ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
+    # Consume this round's fresh projection before applying a carried deadline.
+    if { [ "$prior_ci_round" = true ] && [ "$observation_attempt" -gt 0 ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
       [ "$(pr_merge_now)" -ge "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" ]; } ||
       { [ "$prior_ci_round" = false ] && [ "$settling" = true ] && [ "$(pr_merge_now)" -ge "$settle_deadline" ]; }; then
       merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
@@ -971,13 +1014,9 @@ merge_outcome_stable() {
           # The in-process snapshot already ended with live authority. Any wait
           # discards it; the caller must collect a fresh snapshot on the next round.
           [ -z "$supplied" ] || return 76
-          if ! pr_merge_pause "$settle_deadline" "$settle_delay"; then
-            merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
-            merge_outcome_stop "mergeability recalculation remained UNKNOWN after $observation_attempt observations in $(( $(pr_merge_now) - settle_start ))s (60s limit); stopped before intent/dispatch"
-            return 1
-          fi
           [ "$observation_attempt" -ne 1 ] || echo "Waiting for mergeability recalculation (60s limit; 2s, 4s, then 8s backoff)."
-          [ "$settle_delay" -ge 8 ] || settle_delay=$((settle_delay * 2))
+          merge_wait_for_projection "$1" "$settle_deadline" "$settle_delay" "mergeability recalculation" || return 1
+          settle_delay="$MERGE_PROJECTION_DELAY"
           [ "$prior_ci_round" = false ] || MERGE_PRIOR_CI_UNKNOWN_DELAY="$settle_delay"
           continue
         fi

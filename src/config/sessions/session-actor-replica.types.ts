@@ -30,6 +30,7 @@ export type ReplicaCell = {
 };
 export type ReplicaPool = {
   cells: Map<string, ReplicaCell>;
+  cellsBySessionKey: Map<string, Set<ReplicaCell>>;
   snapshots: number;
   bytes: number;
   unsubscribe?: () => void;
