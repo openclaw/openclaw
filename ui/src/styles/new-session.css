@@ -1359,8 +1359,8 @@ span.new-session-page__select {
 
   .new-session-page__triggers {
     display: flex;
-    /* Content-sized controls keep labels beside their chevrons. Wrap a dense
-       setup instead of stretching short labels or hiding the selected agent. */
+    /* Content-sized controls keep labels beside their chevrons. Cap each
+       picker at half a row so long names truncate before dense setups wrap. */
     flex-wrap: wrap;
     align-items: center;
     gap: 0 4px;
@@ -1395,7 +1395,7 @@ span.new-session-page__select {
   .new-session-page__triggers > span.new-session-page__select {
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 100%;
+    max-width: calc((100% - 4px) / 2);
   }
 
   .new-session-page__triggers .new-session-page__select--agent openclaw-agent-select {
