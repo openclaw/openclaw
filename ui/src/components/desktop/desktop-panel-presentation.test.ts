@@ -76,6 +76,72 @@ describe("desktop panel presentation lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("admits one same-turn launch and retires pending feedback with the panel", async () => {
+    let launch = createDeferred();
+    const environment = {
+      ...desktopEnvironment,
+      worker: { ...desktopEnvironment.worker, desktopApps: ["browser"] },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.status") {
+        return environment;
+      }
+      if (method === "desktop.observe") {
+        return {
+          transport: "rfb",
+          wsPath: "/desktop/observe?token=launch-test",
+          expiresAtMs: 60_000,
+          control: false,
+        };
+      }
+      if (method === "desktop.launch") {
+        return launch.promise;
+      }
+      throw new Error(`Unexpected Desktop request: ${method}`);
+    });
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return createConnectionHandle();
+    });
+    const panel = createPanel();
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: environment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
+    try {
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-app-button")!;
+      button.click();
+      button.click();
+      expect(request.mock.calls.filter(([method]) => method === "desktop.launch")).toHaveLength(1);
+      await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("true"));
+      launch.reject(new Error("App launch unavailable"));
+      await waitForSolid(() => {
+        expect(panel.renderRoot.textContent).toContain("App launch unavailable");
+        expect(button.disabled).toBe(false);
+      });
+
+      launch = createDeferred();
+      button.click();
+      await waitForSolid(() => {
+        expect(button.getAttribute("aria-busy")).toBe("true");
+        expect(panel.renderRoot.textContent).not.toContain("App launch unavailable");
+      });
+      unmountPanel(panel);
+      launch.reject(new Error("Retired launch failure"));
+      await launch.promise.catch(() => {});
+      await waitForSolid(() => expect(panel.element.childElementCount).toBe(0));
+    } finally {
+      launch.resolve();
+      unmountPanel(panel);
+    }
+  });
+
   it("preserves the desktop panel and returns focus after native fullscreen exits", async () => {
     const fullscreen = mockFullscreen();
     const panel = createPanel();

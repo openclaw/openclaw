@@ -31,8 +31,6 @@ import type {
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-card.ts";
 
-export { renderAsyncQuestionSummary } from "./chat-async-question-summary.ts";
-
 function terminalOutcome(message: unknown): "successful" | "settled" | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);

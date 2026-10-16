@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   isJsonObject,
   type CodexTurn,
@@ -103,6 +104,54 @@ export function fingerprintCodexThreadConfig(
       baseInstructions: initialRequest.baseInstructions ?? null,
       developerInstructions: initialRequest.developerInstructions ?? null,
       config: initialRequest.config ?? {},
+    }),
+  );
+}
+
+/** Exact creation-time identity for a restricted native thread. Persist only its hash. */
+export function fingerprintRestrictedThreadConfig(
+  request: JsonObject,
+  authProfileId: string | undefined,
+  dynamicToolsFingerprint: string,
+  attempt: {
+    sessionKey?: string;
+    toolsAllow?: readonly string[];
+    disableTools?: boolean;
+    delegationCapability?: string;
+    pluginHarnessToolPolicyRestricted?: boolean;
+    pluginHarnessToolPolicyScope?: "conversation" | "turn";
+    pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+  },
+  hostSystemAgentActive: boolean,
+  selection?: Parameters<typeof fingerprintCodexThreadConfig>[3],
+): string {
+  return hashCodexAppServerBindingFingerprint(
+    fingerprintJsonObject({
+      authProfileId: authProfileId ?? null,
+      threadConfigFingerprint: fingerprintCodexThreadConfig(
+        // The live ephemeral owner separately validates generic instructions and
+        // delivers refreshable instructions without replacing its conversation.
+        isIncognitoSessionKey(attempt.sessionKey)
+          ? { ...request, developerInstructions: null }
+          : request,
+        authProfileId,
+        dynamicToolsFingerprint,
+        selection,
+      ),
+      hostSystemAgentActive,
+      toolsAllow:
+        attempt.pluginHarnessToolPolicyScope === "conversation" &&
+        attempt.toolsAllow?.some((entry) => entry.trim() === "*")
+          ? null
+          : attempt.toolsAllow
+            ? [...attempt.toolsAllow]
+            : null,
+      disableTools: attempt.disableTools === true,
+      delegationCapability: attempt.delegationCapability ?? null,
+      pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted === true,
+      pluginHarnessToolPolicySafeDeniedTools: [
+        ...(attempt.pluginHarnessToolPolicySafeDeniedTools ?? []),
+      ].toSorted(),
     }),
   );
 }

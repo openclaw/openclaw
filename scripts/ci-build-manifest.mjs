@@ -693,6 +693,7 @@ const uiWebkitOwners = [
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
   "ui/src/lit/presentation-binding.ts",
+  "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -954,6 +955,9 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "src/state/openclaw-agent-*",
+  "src/config/sessions/**",
+  "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
@@ -1155,15 +1159,31 @@ const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
 const testRuntimePolicy = existsSync(testRuntimePolicyPath)
   ? await importTargetPlan(testRuntimePolicyPath)
   : null;
+const trialRuntimePolicy =
+  workflowEventName === "workflow_dispatch"
+    ? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim()
+    : "";
+if (trialRuntimePolicy && !["bun-all", "dual-all"].includes(trialRuntimePolicy)) {
+  throw new Error("test_runtime_policy must be empty, bun-all, or dual-all");
+}
+if (trialRuntimePolicy && !testRuntimePolicy?.resolveCiTestRuntimePolicy) {
+  throw new Error("The selected checkout does not support test_runtime_policy trials");
+}
+if (trialRuntimePolicy) {
+  testRuntimePolicy.resolveCiTestRuntimePolicy({
+    OPENCLAW_CI_TEST_RUNTIME_POLICY: trialRuntimePolicy,
+  });
+}
 const testRuntimeMode = testRuntimePolicy
-  ? eventName === "pull_request" || releaseGate
-    ? "bun-compatible"
-    : eventName === "workflow_dispatch" && !mainValidation
-      ? "dual"
-      : "node"
+  ? trialRuntimePolicy ||
+    (eventName === "pull_request" || releaseGate
+      ? "bun-compatible"
+      : eventName === "workflow_dispatch" && !mainValidation
+        ? "dual"
+        : "node")
   : "node";
 const uiTestRuntimePolicy =
-  !compatibilityTarget &&
+  (!compatibilityTarget || Boolean(trialRuntimePolicy)) &&
   testRuntimePolicy?.ciTestShardRequiresBun(
     {
       configs: ["ui/vitest.config.ts"],
@@ -1225,10 +1245,11 @@ const nodeTestShards = targetNodeTestShards
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const row = {
       check_name: shard.checkName,
-      test_runtime_policy: testRuntimeMode,
+      test_runtime_policy: trialRuntimePolicy && shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(trialRuntimePolicy) ||
+          Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1239,7 +1260,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
-      timeout_minutes: shard.timeoutMinutes,
+      timeout_minutes:
+        !shard.requiresDist && testRuntimeMode === "dual-all"
+          ? 2 * (shard.timeoutMinutes ?? 60)
+          : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
@@ -1832,7 +1856,7 @@ if (hybridHostedEligible) {
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
+    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),

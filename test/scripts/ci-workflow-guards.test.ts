@@ -4452,7 +4452,7 @@ ${step.run}`,
     { historical: true, hasWatchRtc: false, expected: false },
   ])("prepares Watch RTC by source capability: %j", ({ historical, hasWatchRtc, expected }) => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["ios-build", "ios-screenshot-capture"]) {
       const install = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Install Watch Rust toolchain",
       );
@@ -6226,7 +6226,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Install ripgrep for native grep tests",
     );
 
-    expect(manifestSource).toContain("timeout_minutes: shard.timeoutMinutes");
     expect(manifestSource).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestSource).toContain("requires_ripgrep:");
     expect(manifestSource).toContain("src/agents/sessions/tools/index.test.ts");

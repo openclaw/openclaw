@@ -18,7 +18,6 @@ import {
   type GetReplyOptions,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { slackSetupPlugin } from "../../channel.setup.js";
@@ -34,6 +33,11 @@ import {
   taskUpdate,
   type SlackReplyOptionEvent,
 } from "./dispatch.compact-progress.test-support.js";
+import {
+  createSlackPlatformError,
+  expectMockCallArgFields,
+  requireRecord,
+} from "./dispatch.preview.test-support.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const FINAL_REPLY_TEXT = "final answer";
@@ -85,6 +89,10 @@ const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { message
 const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
+const editSlackMessageMock = vi.fn<typeof import("../../actions.js").editSlackMessage>();
+const editSlackRenderedMessageMock =
+  vi.fn<typeof import("../../actions.js").editSlackRenderedMessage>();
+const deleteSlackMessageMock = vi.fn<typeof import("../../actions.js").deleteSlackMessage>();
 const logVerboseMock = vi.fn();
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
@@ -162,26 +170,12 @@ function requireCapturedTyping() {
   return capturedTyping;
 }
 
-function createSlackPlatformError(error: string, details?: { needed?: string; provided?: string }) {
-  // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
-  return Object.assign(new Error(`An API error occurred: ${error}`), {
-    code: "slack_webapi_platform_error",
-    data: { ok: false, error, ...details },
-  });
-}
-
 function requireCapturedItemEventHandler() {
   const handler = capturedReplyOptions?.onItemEvent;
   if (!handler) {
     throw new Error("expected Slack reply item event handler");
   }
   return handler;
-}
-
-const requireRecord = createRequireRecord("object", "label-not-object");
-
-function expectMockCallArgFields(mock: unknown, index: number, fields: Record<string, unknown>) {
-  expectRecordFields(requireRecord(requireMockCall(mock, index, "call")[0], "params"), fields);
 }
 
 function expectNativeProgressStart(chunks: unknown[]) {
@@ -535,9 +529,13 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("../../actions.js", () => ({
+vi.mock("../../actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../actions.js")>()),
   reactSlackMessage: reactSlackMessageMock,
   removeSlackReaction: removeSlackReactionMock,
+  editSlackMessage: editSlackMessageMock,
+  editSlackRenderedMessage: editSlackRenderedMessageMock,
+  deleteSlackMessage: deleteSlackMessageMock,
 }));
 
 vi.mock("../../draft-stream.js", () => ({
@@ -800,6 +798,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     sendMessageSlackMock.mockReset();
+    editSlackMessageMock.mockReset();
+    editSlackRenderedMessageMock.mockReset();
+    deleteSlackMessageMock.mockReset();
     useRealChannelInboundTurn = false;
     finalizeSlackPreviewEditMock.mockReset();
     normalizeSlackOutboundTextMock.mockClear();
@@ -1423,11 +1424,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const { createSlackDraftStream } =
       await vi.importActual<typeof import("../../draft-stream.js")>("../../draft-stream.js");
     let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
-    const edit = vi.fn(noopAsync);
-    const remove = vi.fn(noopAsync);
+    const edit = editSlackMessageMock.mockImplementation(noopAsync);
+    editSlackRenderedMessageMock.mockImplementation(noopAsync);
+    const remove = deleteSlackMessageMock.mockImplementation(noopAsync);
     createSlackDraftStreamMock.mockImplementationOnce(
       (params: Parameters<typeof createSlackDraftStream>[0]) => {
-        draftStream = createSlackDraftStream({ ...params, edit, remove });
+        draftStream = createSlackDraftStream(params);
         return draftStream;
       },
     );
@@ -1465,6 +1467,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await draftStream?.flush();
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
     expect(edit).not.toHaveBeenCalled();
+    expect(editSlackRenderedMessageMock).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
 
     expect(deliverRepliesMock).not.toHaveBeenCalled();
@@ -2246,27 +2249,27 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       let noteHumanReply = () => {};
       createSlackDraftStreamMock.mockImplementationOnce(
         (params: Parameters<typeof createSlackDraftStream>[0]) => {
-          draftStream = createSlackDraftStream({
-            ...params,
-            send: async (_target, text) => {
-              const messageId = String(nextMessageId++);
-              visibleMessages.set(messageId, text);
-              return {
-                channelId: "C123",
-                messageId,
-                receipt: createMessageReceiptFromOutboundResults({
-                  results: [{ channel: "slack", channelId: "C123", messageId }],
-                  kind: "preview",
-                }),
-              };
-            },
-            edit: async (_channelId, messageId, text) => {
-              visibleMessages.set(messageId, text);
-            },
-            remove: async (_channelId, messageId) => {
-              visibleMessages.delete(messageId);
-            },
+          sendMessageSlackMock.mockImplementation(async (_target, text) => {
+            const messageId = String(nextMessageId++);
+            visibleMessages.set(messageId, text);
+            return {
+              channelId: "C123",
+              messageId,
+              receipt: createMessageReceiptFromOutboundResults({
+                results: [{ channel: "slack", channelId: "C123", messageId }],
+                kind: "preview",
+              }),
+            };
           });
+          const edit = async (_channelId: string, messageId: string, text: string) => {
+            visibleMessages.set(messageId, text);
+          };
+          editSlackMessageMock.mockImplementation(edit);
+          editSlackRenderedMessageMock.mockImplementation(edit);
+          deleteSlackMessageMock.mockImplementation(async (_channelId, messageId) => {
+            visibleMessages.delete(messageId);
+          });
+          draftStream = createSlackDraftStream(params);
           noteHumanReply = () =>
             noteSlackDraftConversationMessage({
               accountId: params.accountId,

@@ -248,7 +248,6 @@ async function inspectCodexComputerUse(
         options: { ...clientOptions, timeoutMs: remainingTimeoutMs() },
         signal: params.signal,
         run: async (readClient, requestOptions) => {
-          const { assertCurrent } = requestOptions();
           return await inspectCodexComputerUseWithoutFence({
             ...params,
             client: readClient,
@@ -263,7 +262,7 @@ async function inspectCodexComputerUse(
                   ? {
                       timeoutMs: options?.timeoutMs ?? operationTimeoutMs,
                       signal: options?.signal,
-                      assertCurrent,
+                      assertCurrent: undefined,
                     }
                   : requestOptions();
               return await requestCodexAppServerClientJson<T>({

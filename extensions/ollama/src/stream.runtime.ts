@@ -146,7 +146,7 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
     return configured;
   }
   const effective = model.contextTokens;
-  if (typeof effective !== "number" || !Number.isFinite(effective) || effective <= 0) {
+  if (effective === undefined || effective <= 0) {
     return undefined;
   }
   return Math.floor(effective);
@@ -462,7 +462,7 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          transformMessages(context.messages ?? [], model),
+          transformMessages(context.messages, model),
           context.systemPrompt,
           toolCallNameOptions,
         );

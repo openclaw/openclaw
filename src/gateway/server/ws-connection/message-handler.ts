@@ -468,36 +468,40 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           broadcastNodePairingResult,
           releasePendingNodePairingCleanup,
         } satisfies GatewayConnectPhaseContext;
-        await GatewayRpcDiagnostics.runHandler(async () => {
-          try {
-            connectPhase = "auth";
-            const authenticated = await authenticateGatewayConnect(phaseContext);
-            if (!authenticated) {
-              return;
+        await GatewayRpcDiagnostics.runHandler(
+          "connect",
+          async () => {
+            try {
+              connectPhase = "auth";
+              const authenticated = await authenticateGatewayConnect(phaseContext);
+              if (!authenticated) {
+                return;
+              }
+              const deviceStartedAt = performance.now();
+              connectPhase = "device";
+              const deviceAuthorized = await authorizeGatewayConnectDevice(
+                phaseContext,
+                authenticated,
+              );
+              phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
+              if (!deviceAuthorized) {
+                return;
+              }
+              connectPhase = "attach";
+              await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+              runDetachedConnectWork(
+                () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+                (error) =>
+                  logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+              );
+            } finally {
+              if (rejectionWrite) {
+                await rejectionWrite;
+              }
             }
-            const deviceStartedAt = performance.now();
-            connectPhase = "device";
-            const deviceAuthorized = await authorizeGatewayConnectDevice(
-              phaseContext,
-              authenticated,
-            );
-            phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
-            if (!deviceAuthorized) {
-              return;
-            }
-            connectPhase = "attach";
-            await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
-            runDetachedConnectWork(
-              () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
-              (error) =>
-                logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
-            );
-          } finally {
-            if (rejectionWrite) {
-              await rejectionWrite;
-            }
-          }
-        }, diagnostics);
+          },
+          diagnostics,
+        );
         return;
       }
       await authenticatedRequestDispatcher.dispatch(

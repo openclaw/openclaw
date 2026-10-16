@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
@@ -342,16 +343,22 @@ it("publishes confirmed removals before identity and row observers without archi
   });
   readSessionEntryCache(database, { cache: true });
   readSessionEntryCache(reader.database, { cache: true });
-  expect(readCommittedSessionEntryCache(database.db)?.has(scope.sessionKey)).toBe(true);
-  expect(readCommittedSessionEntryCache(reader.database.db)?.has(scope.sessionKey)).toBe(true);
+  expect(
+    readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.has(scope.sessionKey),
+  ).toBe(true);
+  expect(
+    readCommittedSessionEntryCache(requireNativeSqliteDatabase(reader.database.db))?.has(
+      scope.sessionKey,
+    ),
+  ).toBe(true);
   expect(sharing.readCurrent()?.entry).toEqual(sharingEntry);
   expect(generation.readCurrent()).toEqual(sharingEntry);
   const order: string[] = [];
   const readFacts = () => ({
     sharing: sharing.readCurrent(),
     generation: generation.readCurrent(),
-    writableCache: readCommittedSessionEntryCache(database.db),
-    readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
+    writableCache: readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db)),
+    readOnlyCache: readCommittedSessionEntryCache(requireNativeSqliteDatabase(reader.database.db)),
   });
   const observedFacts: Array<
     ReturnType<typeof readFacts> & { invalidated: boolean; removed: boolean; ownerTagged: boolean }

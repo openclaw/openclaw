@@ -146,10 +146,8 @@ type ExecutePreparedReplyAgentRunInput = Omit<
   };
 
 export async function executePreparedReplyAgentRun(
-  input: ExecutePreparedReplyAgentRunInput,
+  context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  // Preserve the invocation snapshot across preparation; live session state uses its getters.
-  const context = { ...input };
   const {
     activeSessionStore,
     admitUserTurn,
@@ -338,7 +336,7 @@ export async function executePreparedReplyAgentRun(
       traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           ...context,
-          resolveVisibleReplyDelivery: input.resolveVisibleReplyDelivery,
+          resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         }),
       ),

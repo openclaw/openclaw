@@ -115,12 +115,7 @@ Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plu
 
 ## Streaming
 
-- Assistant deltas stream from the agent runtime as `assistant` events. Consecutive
-  append-only text and producer-confirmed reasoning updates are batched for up to
-  32 ms before entering the embedded agent event pipeline. Snapshot replacements,
-  block boundaries, tool events, and completion flush pending updates immediately;
-  abort also wakes a pending batch. Completed messages retain the same transcript
-  persistence boundary.
+- Assistant deltas stream from the agent runtime as `assistant` events.
 - Adjacent text appends already waiting in the provider event queue can merge before
   agent delivery. This adds no buffering delay; snapshots, content-block changes,
   reasoning, tools, and terminal events remain separate boundaries.

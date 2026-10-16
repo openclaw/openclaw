@@ -159,6 +159,7 @@ describe("MatrixCryptoBootstrapper", () => {
     const { crypto, bootstrapper } = createBootstrapperHarness({
       bootstrapCrossSigning,
       getOwnIdentity: vi.fn(async () => ({
+        free: vi.fn(),
         isVerified: () => false,
         verify: verifyOwnIdentity,
       })),

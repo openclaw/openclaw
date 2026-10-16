@@ -107,6 +107,7 @@ describe("promptCustomApiConfig", () => {
     const prompter = createTestPrompter({
       text: [],
       select: ["plaintext", "openai"],
+      confirm: [true],
     });
     prompter.text.mockImplementationOnce(({ validate }) => {
       expect(prompter.select).not.toHaveBeenCalled();
@@ -122,6 +123,67 @@ describe("promptCustomApiConfig", () => {
     }
 
     await runPromptCustomApi(prompter, {}, undefined, { verification: "deferred" });
+  });
+
+  it("offers no-auth mode when the API key is left blank", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://studio.example.ts.net/v1", "", "qwen3.8", "custom", ""],
+      select: ["plaintext", "openai"],
+      confirm: [true],
+    });
+    stubFetchSequence([]);
+
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+
+    expect(prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("no-auth") }),
+    );
+    expect(result.config.models?.providers?.custom).toMatchObject({ auth: "none" });
+    expect(result.config.models?.providers?.custom?.apiKey).toBeUndefined();
+  });
+
+  it("re-prompts for a key when no-auth mode is declined", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://provider.example/v1", "", "real-key", "model-x", "custom", ""],
+      select: ["plaintext", "plaintext", "openai"],
+      confirm: [false],
+    });
+    stubFetchSequence([]);
+
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+
+    expect(result.config.models?.providers?.custom?.apiKey).toBe("real-key");
+    expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
+  });
+
+  it.each([
+    { baseUrl: "https://claude-compatible.example.ts.net", compatibility: "anthropic" },
+    { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
+  ])("requires a key for the effective adapter at $baseUrl", async ({ baseUrl, compatibility }) => {
+    const prompter = createTestPrompter({
+      text: [
+        baseUrl,
+        "",
+        "qwen3.8",
+        "custom",
+        "",
+        "placeholder-key", // pragma: allowlist secret
+      ],
+      select: ["plaintext", compatibility, "plaintext"],
+      confirm: [true, true],
+    });
+    stubFetchSequence([]);
+
+    const result = await runPromptCustomApi(prompter, {}, undefined, {
+      verification: "deferred",
+    });
+
+    expect(result.config.models?.providers?.custom?.apiKey).toBe("placeholder-key"); // pragma: allowlist secret
+    expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
   });
 
   it("prepares deferred setup without a provider request or a selected default", async () => {

@@ -98,6 +98,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
     async (restriction) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
       const nativeModel = threadStartResult(threadId);
       await testCodexAppServerBindingStore.mutate(identity, {
@@ -112,6 +113,8 @@ describe("Codex app-server adopted thread lifecycle", () => {
       };
       if (restriction === "delegation") {
         params.delegationCapability = "report_only";
+      } else {
+        params.disableTools = true;
       }
       const before = testCodexAppServerBindingStore.read(identity);
       const fixture = await createLeasedCodexLifecycleHarness({
@@ -143,6 +146,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
   it("preserves the cold native thread after host rotation with changed tools", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
     const storePath = path.join(tempDir, "sessions.json");
     params.config = { session: { store: storePath } };
     const scope = { agentId: "main", sessionKey: params.sessionKey!, storePath };
@@ -201,6 +205,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+      params.disableTools = false;
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
       const harness = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),

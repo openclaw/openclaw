@@ -191,8 +191,8 @@ no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
 The Gateway also emits an always-on `main-thread stall` warning after a synchronous
-callback blocks for more than one second. Each line names the longest-running
-known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+callback blocks for at least 250 milliseconds. Each line names the longest-running
+known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Labels cover the synchronous portion of explicit
 task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
@@ -202,7 +202,14 @@ windows, the native histogram is disabled: an unscoped stall that finishes befor
 the next sampling deadline can go unreported. Explicit task scopes and overdue
 idle wakes remain observable. Process suspension
 can also produce an unattributed delay. Reporting is bounded to eight pending
-named stalls, with an omitted count if that limit is exceeded. These warnings
+named stalls per sampling window, with an omitted count if that limit is exceeded.
+With the Prometheus plugin enabled, `openclaw_gateway_main_thread_stall_seconds`
+records these callback durations by `task`; its `_count` counts observed stalls.
+`openclaw_gateway_main_thread_stalls_dropped_total` counts observations omitted
+by the pending limit. Unattributed event-loop window delays remain a separate
+metric because a delayed window can contain several short callbacks rather than
+one blocking task. RPC labels remain available even with diagnostics disabled.
+These warnings
 require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and

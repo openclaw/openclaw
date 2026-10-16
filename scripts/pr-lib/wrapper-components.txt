@@ -356,7 +356,9 @@ src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
+src/infra/database-engine/capability-unavailable.ts
 src/infra/database-engine/context.ts
+src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
@@ -373,6 +375,7 @@ src/infra/database-engine/sqlite-search-schema.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
+src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
@@ -647,6 +650,7 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/session-worker-execution-source.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
@@ -1095,6 +1099,7 @@ src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
 src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
+src/infra/sqlite-file-path.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
 src/infra/sqlite-index-recovery.ts
@@ -1799,6 +1804,7 @@ src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
+src/state/openclaw-agent-db-engine.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
 src/state/openclaw-agent-db-lease-provenance.ts
@@ -1822,6 +1828,7 @@ src/state/openclaw-agent-db-resources.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts
+src/state/openclaw-agent-db-schema-refresh.ts
 src/state/openclaw-agent-db-schema.ts
 src/state/openclaw-agent-db-session-migrations.ts
 src/state/openclaw-agent-db-session-nodes-migration.ts
@@ -1830,6 +1837,7 @@ src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
 src/state/openclaw-agent-db-validation-facts.ts
+src/state/openclaw-agent-db-validation-schema.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
@@ -1847,10 +1855,12 @@ src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
+src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql
 src/state/openclaw-agent-schema.ts
+src/state/openclaw-agent-search-schema.ts
 src/state/openclaw-agent-session-participants-schema.ts
 src/state/openclaw-agent-session-sharing-schema.ts
 src/state/openclaw-agent-session-snapshots-migration.ts
@@ -1925,6 +1935,8 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/postgres-schema.generated/agent-runtime.ts
+src/state/postgres-schema.generated/agent-search-runtime.ts
 src/state/postgres-schema.generated/runtime.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts

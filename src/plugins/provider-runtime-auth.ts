@@ -1,5 +1,6 @@
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { resolveProviderRefOwnership } from "./providers.js";
 import type { ProviderPlugin, ProviderPrepareRuntimeAuthContext } from "./types.js";
@@ -15,6 +16,9 @@ export async function prepareProviderRuntimeAuth(
     context: ProviderPrepareRuntimeAuthContext;
   },
 ) {
+  if (resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "none") {
+    return undefined;
+  }
   const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
   if (!prepareRuntimeAuth) {
     return undefined;

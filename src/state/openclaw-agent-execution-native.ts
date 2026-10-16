@@ -532,7 +532,7 @@ export function createAgentDatabaseNativeGeneration(
       // Raw in-process DDL also invalidates the physical owner's catalog, even when
       // that connection has never borrowed the agent's validation receipt.
       const admittedSchema =
-        createIfMissing && wasPrepared
+        createIfMissing && wasPrepared && !schema?.postgres
           ? getOrLoadSqliteDatabaseAdmissionForPath(pathname, schemaAdmission, () => undefined)
           : undefined;
       const requiresReadmission =
@@ -540,9 +540,10 @@ export function createAgentDatabaseNativeGeneration(
         wasPrepared &&
         (!schema ||
           Atomics.load(new Int32Array(schema.valid), 0) !== 1 ||
-          !admittedSchema ||
-          admittedSchema.schemaVersion !== schema.facts.schemaVersion ||
-          admittedSchema.userVersion !== schema.facts.userVersion ||
+          (!schema.postgres &&
+            (!admittedSchema ||
+              admittedSchema.schemaVersion !== schema.facts.schemaVersion ||
+              admittedSchema.userVersion !== schema.facts.userVersion)) ||
           captureAgentDatabasePreparationJournal(agentId, { env: input.environment }) !==
             undefined);
       if (!nativeIdentity || requiresReadmission) {
