@@ -4,6 +4,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -145,7 +146,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
           summary: params.summary,
           expectedResumeBy,
           state: "suspended",
-        },
+        } satisfies QuotaSuspension,
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },

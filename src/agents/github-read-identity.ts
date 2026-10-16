@@ -88,7 +88,7 @@ export async function readCachedNativeGitHubToken(
   return value;
 }
 
-export async function runGitHubIdentityCommand(
+async function runGitHubIdentityCommand(
   argv: string[],
   env?: NodeJS.ProcessEnv,
   cwd?: string,

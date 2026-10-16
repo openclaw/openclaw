@@ -52,23 +52,9 @@ export function selectDatabaseEngine(
   );
 }
 
-export function getMixedPostgresAgentError(config: DatabaseEngineConfig): string | undefined {
-  if (
-    (config.database?.families?.agent?.engine ?? config.database?.engine) === "postgres" &&
-    stores.some((store) => store.postgres && selectDatabaseEngine(store, config) !== "postgres")
-  ) {
-    return "DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED: Agent PostgreSQL with mixed engines requires the mixed-pair conformance in PR3; select SQLite for agents or use PostgreSQL for every configurable family.";
-  }
-  return undefined;
-}
-
 export function resolveDatabaseFamilyEngines(
   config: DatabaseEngineConfig,
 ): Record<DatabaseEngineFamily, DatabaseEngineId> {
-  const agentError = getMixedPostgresAgentError(config);
-  if (agentError) {
-    throw new Error(agentError);
-  }
   const effectiveEngines: Record<DatabaseEngineFamily, DatabaseEngineId> = {
     state: "sqlite",
     agent: "sqlite",

@@ -37,7 +37,7 @@ function userMessage(sendId: string) {
 function setup() {
   const requestUpdate = vi.fn();
   const controller = createChatState<ChatPageHost>({
-    requestUpdate,
+    invalidate: requestUpdate,
     updateComplete: Promise.resolve(true),
   });
   const dispose = controller.dispose;

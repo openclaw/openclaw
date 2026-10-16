@@ -7,9 +7,9 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
-  assertAgentDatabaseMaintenanceAuthority,
   assertNoOpenClawAgentDatabaseLeases,
 } from "../state/openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,

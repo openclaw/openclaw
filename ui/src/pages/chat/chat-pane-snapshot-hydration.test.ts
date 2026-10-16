@@ -55,7 +55,6 @@ describe("stored chat snapshot hydration", () => {
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-    vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
     pane.context = createInitializationContext(
@@ -149,7 +148,7 @@ describe("stored chat snapshot hydration", () => {
           state.connected = true;
           throw stopAfterAttach;
         });
-        expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
+        expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
         return pane;
       };
       const first = mount();
@@ -302,7 +301,7 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
       expect(request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: targetSessionKey }),
@@ -350,7 +349,7 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
@@ -383,7 +382,6 @@ describe("stored chat snapshot hydration", () => {
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-    vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     const sharedMessages: ChatMessageCache = new Map();
     pane.chatMessagesBySession = sharedMessages;
@@ -411,7 +409,7 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
       expect(attachedState?.chatMessages).toEqual([
         expect.objectContaining({
           role: "user",

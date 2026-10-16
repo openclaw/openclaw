@@ -109,6 +109,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
             linkReader: expect.objectContaining({
               hosts: ["ghe.example.test"],
               sessionScoped: true,
+              progressive: true,
               previewMethod: "github.sessionPreview",
               detailMethod: "github.sessionDetail",
             }),
@@ -158,6 +159,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
             linkReader: expect.objectContaining({
               hosts: ["github.com"],
               detailMethod: "github.detail",
+              progressive: true,
               imageMethod: "github.image",
               previewMethod: "github.preview",
             }),
@@ -256,6 +258,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
     ["github.detail", { url: "https://example.com/owner/repo/issues/1" }],
     ["github.detail", { url: "https://github.com/owner/repo/pull/1/checks" }],
     ["github.preview", { url: "https://github.com/owner/repo/commit/abcdef0" }],
+    ["github.detail", { url: pullUrl, section: "unknown" }],
+    ["github.preview", { url: pullUrl, section: "overview" }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: " " }],
   ])("rejects malformed %s requests before network access", async (method, params) => {
     const respond = await request(method as string, params as Record<string, unknown>);
@@ -277,37 +281,42 @@ describe("GitHub plugin ownership and RPC migration", () => {
     },
   );
 
-  it("uses the host identity adapter for documents and preserves files-page expansion", async () => {
-    vi.stubEnv("GH_TOKEN", "unused-ambient-token");
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-      ok: true,
-      payload: document(),
-    });
-    const url = `${pullUrl}/files?view=split#diff-example`;
-    const respond = await request("github.detail", {
-      url,
-      agentId: "selected-agent",
-      refresh: true,
-    });
-    expectSuccess(
-      respond,
-      expect.objectContaining({
+  it.each([undefined, "overview", "checks", "files", "discussion"])(
+    "uses the host identity adapter for %s documents and preserves files-page expansion",
+    async (section) => {
+      vi.stubEnv("GH_TOKEN", "unused-ambient-token");
+      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+        ok: true,
+        payload: document(),
+      });
+      const url = `${pullUrl}/files?view=split#diff-example`;
+      const respond = await request("github.detail", {
         url,
-        title: "Plugin reader",
-        body: "**Public**",
-        filesExpanded: true,
-      }),
-    );
-    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubDetail", {
-      kind: "pull",
-      owner: "octocat",
-      repo: "repo",
-      number: 1,
-      agentId: "selected-agent",
-      refresh: true,
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+        agentId: "selected-agent",
+        refresh: true,
+        ...(section ? { section } : {}),
+      });
+      expectSuccess(
+        respond,
+        expect.objectContaining({
+          url,
+          title: "Plugin reader",
+          body: "**Public**",
+          filesExpanded: true,
+        }),
+      );
+      expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubDetail", {
+        kind: "pull",
+        owner: "octocat",
+        repo: "repo",
+        number: 1,
+        agentId: "selected-agent",
+        refresh: true,
+        ...(section ? { section } : {}),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([{ ...document(), url: "https://github.com/octocat/private/pull/1" }])(
     "rejects an invalid host document before delivery: %#",

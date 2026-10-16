@@ -95,11 +95,21 @@ afterEach(async () => {
 describe("update readiness generation", () => {
   it.each(
     (["npm", "pnpm", "bun"] as const).flatMap((mode) =>
-      (["ready", "starting", "old-version"] as const).map((state) => ({ mode, state })),
+      (
+        [
+          "ready",
+          "starting",
+          "old-version",
+          "old-build",
+          "missing-build",
+          "retained-identity",
+        ] as const
+      ).map((state) => ({ mode, state })),
     ),
   )(
     "observes a package watcher restart without failing --no-restart ($mode, $state)",
     async ({ mode, state }) => {
+      const verified = state === "ready" || state === "retained-identity";
       mockProcessPlatform("linux");
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
         makeGatewayService({ status: "running", pid: 8000 }),
@@ -117,8 +127,18 @@ describe("update readiness generation", () => {
             }
           : gatewayHealthResponse({
               server: {
-                version: state === "ready" ? "2026.9.8" : "2026.9.7",
-                buildId: "candidate",
+                version:
+                  state === "old-version" || state === "retained-identity"
+                    ? "2026.9.7"
+                    : "2026.9.8",
+                buildId:
+                  state === "missing-build"
+                    ? undefined
+                    : state === "old-build"
+                      ? "previous-build"
+                      : state === "retained-identity"
+                        ? "retained-build"
+                        : "candidate",
                 bootId: "watcher-successor",
               },
             }),
@@ -126,7 +146,7 @@ describe("update readiness generation", () => {
       const result: UpdateRunResult = {
         status: "ok",
         mode,
-        after: { version: "2026.9.8" },
+        after: { version: "2026.9.8", buildId: "candidate" },
         steps: [],
         durationMs: 0,
       };
@@ -135,6 +155,10 @@ describe("update readiness generation", () => {
         opts: { json: true, restart: false, run: { runId: "watcher-restart", env: {} } },
         shouldRestart: false,
         observePackageReplacement: true,
+        expectedGatewayIdentity:
+          state === "retained-identity"
+            ? { version: "2026.9.7", buildId: "retained-build" }
+            : undefined,
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/synthetic-home" },
         gatewayPort: await listen(),
@@ -147,15 +171,28 @@ describe("update readiness generation", () => {
       expect(result.steps[0]?.failureFacts).toBeUndefined();
       expect(result.steps[0]?.termination).toBeUndefined();
       expect(result.steps[0]?.advisory?.message).toEqual(
-        state === "ready" ? undefined : expect.stringContaining("--no-restart"),
+        verified ? undefined : expect.stringContaining("--no-restart"),
       );
       expect(recordUpdateRunVerification).toHaveBeenCalledWith(
         "watcher-restart",
         expect.objectContaining({
-          versionMatch: state === "starting" ? undefined : state === "ready",
+          versionMatch: state === "starting" ? undefined : verified,
         }),
         expect.anything(),
       );
+      const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+      expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(verified);
+      if (state === "old-build") {
+        expect(facts?.runningBuildId).toBe("previous-build");
+        expect(result.steps[0]?.advisory?.message).toContain("candidate");
+        expect(result.steps[0]?.advisory?.message).toContain("previous-build");
+        expect(
+          renderUpdateRunReport({
+            ...updateRunReportInputFromResult(result),
+            verification: facts ?? {},
+          }).markdown,
+        ).toContain("build mismatch");
+      }
     },
   );
 

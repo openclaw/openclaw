@@ -21,7 +21,8 @@ async function handleGitHubRequest(
   if (
     !parsed ||
     (sessionHost && (typeof params.sessionKey !== "string" || !params.sessionKey.trim())) ||
-    (method === "github.preview" && parsed.target.kind === "commit")
+    (method === "github.preview" &&
+      (parsed.target.kind === "commit" || parsed.section !== undefined))
   ) {
     respond(
       false,
@@ -38,6 +39,7 @@ async function handleGitHubRequest(
         ...(sessionHost ? { githubHost: sessionHost, sessionKey: params.sessionKey } : {}),
         ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
         ...(parsed.refresh ? { refresh: true } : {}),
+        ...(parsed.section ? { section: parsed.section } : {}),
       },
     );
     if (!result.ok) {
