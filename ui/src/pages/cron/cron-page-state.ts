@@ -292,7 +292,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
       void refreshCron({ coalesce: true });
     } else if (!cron.cronRuns.length && !cron.cronRunsLoadingMore) {
-      void loadRuns();
+      void runCronTask(loadCronRuns);
     }
     if (forceRefresh || modelSuggestionsRequest?.state !== cron) {
       void loadModelSuggestions(cron);
@@ -374,16 +374,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
     }
-    void loadRuns(options.coalesce);
+    void runCronTask((current) => loadCronRuns(current, options));
     void context().channels.refresh(false);
     await Promise.all([
       runCronTask((current) => loadCronStatus(current, options)),
       runCronTask((current) => loadCronJobsPage(current, { tableFilters: true })),
     ]);
-  }
-
-  function loadRuns(coalesce = false) {
-    return runCronTask((cronState) => loadCronRuns(cronState, { coalesce }));
   }
 
   function updateJobsFilters(patch: Parameters<typeof updateCronJobsFilter>[1]) {
