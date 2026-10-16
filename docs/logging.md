@@ -821,6 +821,10 @@ Measured phases log both their start and elapsed
 duration; `total` is elapsed time from process startup (or the current in-process
 restart). These are wall times, including asynchronous waits, not CPU measurements.
 Nested durations overlap their parent phases; do not add them to the parent total.
+Plugin service starts taking at least 250 ms always log one compact
+`sidecars.plugin-services.<plugin>.<service>` span with elapsed time and a
+`success` or `failure` outcome, even without opt-in tracing. Plugin and service IDs
+use encoded diagnostic segments; the record contains no service payload or error text.
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 

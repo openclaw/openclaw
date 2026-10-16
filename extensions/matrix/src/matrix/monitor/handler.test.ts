@@ -20,6 +20,7 @@ import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-s
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-support.js";
 import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import {
   createMatrixHandlerTestHarness,
@@ -161,6 +162,7 @@ beforeEach(() => {
 afterEach(() => {
   resetSystemEventsForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -366,7 +368,10 @@ async function createDmNoticeHarness(
   const harness = createMatrixHandlerTestHarness({
     isDirectMessage: true,
     ...options,
-    resolveStorePath: () => storePath,
+    cfg: {
+      session: { store: storePath },
+      channels: { matrix: { dm: { allowFrom: options.allowFrom ?? ["*"] } } },
+    },
     client: { ...options.client, sendMessage: sendNotice },
   });
   const receive = (
@@ -875,103 +880,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 });
 
-describe("matrix monitor handler live allowlist reload", () => {
-  it.each(["account override", "startup name", "name matching disabled", "group"])(
-    "revokes live sender access after changing %s configuration",
-    async (scenario) => {
-      const group = scenario === "group";
-      const names = scenario === "startup name" || scenario === "name matching disabled";
-      const matrix: import("../../types.js").MatrixConfig = group
-        ? { groupAllowFrom: ["@alice:example.org", "@bob:example.org"] }
-        : scenario === "account override"
-          ? {
-              dm: { allowFrom: ["@base:example.org"] },
-              accounts: { ops: { dm: { allowFrom: ["@alice:example.org"] } } },
-            }
-          : {
-              ...(names ? { dangerouslyAllowNameMatching: true } : {}),
-              dm: { allowFrom: names ? ["Alice"] : ["*"] },
-            };
-      const cfg = { channels: { matrix } };
-      const dispatchInboundMessage = vi.fn(async () => ({
-        queuedFinal: false,
-        counts: { final: 0, block: 0, tool: 0 },
-      }));
-      const resolveLiveUserAllowlist = vi.fn(
-        async (params: { cfg: unknown; entries?: ReadonlyArray<string | number> }) => {
-          const current = params.cfg as {
-            channels?: { matrix?: { dangerouslyAllowNameMatching?: boolean } };
-          };
-          return current.channels?.matrix?.dangerouslyAllowNameMatching === true
-            ? ["@alice:example.org"]
-            : [];
-        },
-      );
-      const { handler } = createMatrixHandlerTestHarness({
-        cfg,
-        isDirectMessage: !group,
-        dispatchInboundMessage,
-        ...(group
-          ? {
-              groupPolicy: "allowlist",
-              roomsConfig: { "*": {} },
-              groupAllowFrom: ["@alice:example.org", "@bob:example.org"],
-              groupAllowFromResolvedEntries: [
-                { input: "@alice:example.org", id: "@alice:example.org" },
-                { input: "@bob:example.org", id: "@bob:example.org" },
-              ],
-            }
-          : {
-              dmPolicy: "allowlist",
-              allowFrom:
-                scenario === "wildcard"
-                  ? ["*"]
-                  : scenario === "name matching disabled"
-                    ? []
-                    : ["@alice:example.org"],
-              allowFromResolvedEntries:
-                scenario === "account override"
-                  ? [{ input: "@alice:example.org", id: "@alice:example.org" }]
-                  : scenario === "startup name"
-                    ? [{ input: "Alice", id: "@alice:example.org" }]
-                    : [],
-            }),
-        ...(scenario === "name matching disabled" ? { resolveLiveUserAllowlist } : {}),
-      });
-      const receive = (eventId: string, again: boolean) =>
-        handler(
-          group ? "!room:example.org" : "!dm:example.org",
-          createMatrixTextMessageEvent({
-            eventId,
-            sender: "@alice:example.org",
-            body: `${group ? "@room " : ""}hello${again ? " again" : ""}`,
-            ...(group ? { mentions: { room: true } } : {}),
-          }),
-        );
-      await receive("$before", false);
-      expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
-      if (group) {
-        matrix.groupAllowFrom = ["@bob:example.org"];
-      } else if (scenario === "name matching disabled") {
-        matrix.dangerouslyAllowNameMatching = false;
-      } else if (matrix.accounts?.ops?.dm) {
-        matrix.accounts.ops.dm.allowFrom = [];
-      } else if (matrix.dm) {
-        matrix.dm.allowFrom = [];
-      }
-      await receive("$after", true);
-      expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
-      if (scenario === "name matching disabled") {
-        expect(
-          resolveLiveUserAllowlist.mock.calls.filter(
-            ([params]) =>
-              JSON.stringify((params.entries ?? []).map(String)) === JSON.stringify(["Alice"]),
-          ),
-        ).toHaveLength(2);
-      }
-    },
-  );
-});
+registerMatrixLiveAllowlistTests();
 
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {

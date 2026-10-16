@@ -1,11 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
-import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -400,131 +400,114 @@ class SessionPrefetcher {
   }
 }
 
-type SessionPrefetchHost = SolidControllerHost & HTMLElement;
+/** Owns page-lifetime observation; history requests and cache custody stay synchronous. */
+export function createSessionPrefetch(
+  host: HTMLElement,
+  cache: ChatMessageCache,
+  snapshotStore: SessionSnapshotStore,
+  readContext: () => SessionPrefetchContext | undefined,
+): () => void {
+  const prefetcher = new SessionPrefetcher(cache, snapshotStore);
+  let context: SessionPrefetchContext | undefined;
+  let subscriptions: Array<() => void> = [];
+  let intentSessionKey: string | null = null;
+  let paneRoot: Element;
+  let paneListeners: AbortController | undefined;
 
-export class SessionPrefetchController implements SolidController {
-  private readonly prefetcher: SessionPrefetcher;
-  private context: SessionPrefetchContext | undefined;
-  private subscriptions: Array<() => void> = [];
-  private intentSessionKey: string | null = null;
-  private paneRoot: Element;
-
-  constructor(
-    private readonly host: SessionPrefetchHost,
-    cache: ChatMessageCache,
-    snapshotStore: SessionSnapshotStore,
-    private readonly readContext: () => SessionPrefetchContext | undefined,
-  ) {
-    this.paneRoot = host;
-    this.prefetcher = new SessionPrefetcher(cache, snapshotStore);
-  }
-
-  hostConnected(): void {
-    // Home is a sibling of the page. Observe every pane on this socket through
-    // its shell, including lifecycle edges that cannot bubble after removal.
-    this.bindPaneRoot(this.host.closest("openclaw-app-shell") ?? this.host);
-    this.prefetcher.connect();
-    this.sync();
-  }
-
-  hostUpdated(): void {
-    // Solid constructs the page before attachment; its commit supplies the shell.
-    const paneRoot = this.host.closest("openclaw-app-shell") ?? this.host;
-    if (paneRoot !== this.paneRoot) {
-      this.bindPaneRoot(paneRoot);
+  function clearSubscriptions(): void {
+    for (const unsubscribe of subscriptions) {
+      unsubscribe();
     }
-    this.sync();
+    subscriptions = [];
+    context = undefined;
   }
 
-  hostDisconnected(): void {
-    this.unbindPaneRoot();
-    this.clearSubscriptions();
-    this.prefetcher.disconnect();
-  }
-
-  private bindPaneRoot(root: Element): void {
-    this.unbindPaneRoot();
-    this.paneRoot = root;
-    this.paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
-    this.paneRoot.addEventListener("pointerover", this.handleNavigationIntent);
-    this.paneRoot.addEventListener("focusin", this.handleNavigationIntent);
-  }
-
-  private unbindPaneRoot(): void {
-    this.paneRoot.removeEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, this.sync);
-    this.paneRoot.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, this.sync);
-    this.paneRoot.removeEventListener("pointerover", this.handleNavigationIntent);
-    this.paneRoot.removeEventListener("focusin", this.handleNavigationIntent);
-  }
-
-  private readonly handleNavigationIntent = (event: Event) => {
-    const row = event
-      .composedPath()
-      .find(
-        (target): target is HTMLElement =>
-          target instanceof HTMLElement && target.hasAttribute("data-session-key"),
-      );
-    if (row && row.closest("openclaw-app-shell") !== this.paneRoot.closest("openclaw-app-shell")) {
-      return;
-    }
-    const sessionKey = row?.dataset.sessionKey ?? null;
-    if (sessionKey !== this.intentSessionKey) {
-      this.intentSessionKey = sessionKey;
-      this.sync();
-    }
-  };
-
-  private readonly sync = () => {
-    const context = this.readContext();
-    if (context !== this.context) {
-      this.clearSubscriptions();
-      this.context = context;
+  function syncSnapshot(): void {
+    const next = readContext();
+    if (next !== context) {
+      clearSubscriptions();
+      context = next;
       if (context) {
-        this.subscriptions = [
-          context.gateway.subscribe(this.sync),
-          context.sessions.subscribe(this.sync),
+        subscriptions = [
+          context.gateway.subscribe(syncSnapshot),
+          context.sessions.subscribe(syncSnapshot),
         ];
       }
     }
     if (!context) {
       return;
     }
-    const panes = [...this.paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
-      (pane) => pane.closest("openclaw-app-shell") === this.paneRoot.closest("openclaw-app-shell"),
+    const source = context;
+    const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+      (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
     const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));
-    const sessions = context.sessions;
+    const sessions = source.sessions;
     const connection = sessions.captureConnectionScope();
-    this.prefetcher.update({
+    prefetcher.update({
       client: connection?.client ?? null,
       isCurrent: () =>
-        this.context === context &&
-        context.sessions === sessions &&
+        context === source &&
+        source.sessions === sessions &&
         connection !== null &&
         sessions.isConnectionScopeCurrent(connection),
-      listRevision: context.sessions.canonicalListRevision,
+      listRevision: source.sessions.canonicalListRevision,
       openSessionKeys,
-      intentSessionKey: this.intentSessionKey,
+      intentSessionKey,
       presentedTranscriptsReady: !panes.some(
         (pane) => pane.presented !== false && pane.transcriptLoading === true,
       ),
-      rows: context.sessions.state.result?.sessions ?? null,
+      rows: source.sessions.state.result?.sessions ?? null,
       snapshotHost: {
-        settings: context.gateway.connection,
-        client: context.gateway.snapshot.client,
-        assistantAgentId: context.gateway.snapshot.assistantAgentId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
+        settings: source.gateway.connection,
+        client: source.gateway.snapshot.client,
+        assistantAgentId: source.gateway.snapshot.assistantAgentId,
+        agentsList: source.agents.state.agentsList,
+        hello: source.gateway.snapshot.hello,
       },
     });
-  };
-
-  private clearSubscriptions(): void {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
-    this.context = undefined;
   }
+
+  function handleNavigationIntent(event: Event): void {
+    const row = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement && target.hasAttribute("data-session-key"),
+      );
+    if (row && row.closest("openclaw-app-shell") !== paneRoot.closest("openclaw-app-shell")) {
+      return;
+    }
+    const sessionKey = row?.dataset.sessionKey ?? null;
+    if (sessionKey !== intentSessionKey) {
+      intentSessionKey = sessionKey;
+      syncSnapshot();
+    }
+  }
+
+  function sync(): void {
+    // Solid constructs the page before attachment; its commit supplies the shell.
+    const root = host.closest("openclaw-app-shell") ?? host;
+    if (root !== paneRoot) {
+      paneListeners?.abort();
+      paneRoot = root;
+      paneListeners = new AbortController();
+      const options = { signal: paneListeners.signal };
+      paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
+      paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, syncSnapshot, options);
+      paneRoot.addEventListener("pointerover", handleNavigationIntent, options);
+      paneRoot.addEventListener("focusin", handleNavigationIntent, options);
+    }
+    syncSnapshot();
+  }
+
+  onCleanup(() => {
+    paneListeners?.abort();
+    clearSubscriptions();
+    prefetcher.disconnect();
+  });
+  // Start with the page owner, before its first commit can trigger sibling work.
+  sync();
+  prefetcher.connect();
+  return sync;
 }

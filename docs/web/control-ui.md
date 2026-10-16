@@ -171,7 +171,10 @@ Failed replies show **Try again** at the right of the heading. A compact
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker
 in the composer; retrying continues from the existing conversation without
-replaying the original request.
+replaying the original request. Internal updates that return no answer keep their
+failed-run diagnostics without adding a retry notice to an already successful
+conversation. User-requested missing replies and actual provider or storage
+failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
@@ -373,12 +376,12 @@ agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New conversation**, opens an agent menu with avatars and names in
-the same order as the groups; choosing an agent opens New session for that agent.
-Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
+The accented rail **+** below the workspace mark, labeled **New conversation**, opens the New session composer directly with your last-selected agent.
+The selection is remembered in this browser for each Gateway; you can choose a
+different agent inside the composer.
+Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
 agent for chat. Choose a named agent tile in the workspace menu to leave team
-mode with that agent selected, restoring the agent chip, Home row, and direct
-New session button.
+mode with that agent selected, restoring the agent chip and Home row.
 
 Choosing **Show all** defaults the shared page scope to **All agents**. That scope,
 including an explicit **All agents** selection, is saved in this browser for each

@@ -118,10 +118,11 @@ export function markTemplateReadyAsync(
   id: string,
   now: number,
   commitGuard: () => void,
+  content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">,
 ): Promise<boolean> {
   return runTemplateCommand(
     env,
-    { type: "worktrees.templates.ready", input: { id, now } },
+    { type: "worktrees.templates.ready", input: { id, now, content } },
     commitGuard,
   );
 }

@@ -15,14 +15,12 @@ export function useGatewayPage(options: GatewayPageBindingOptions) {
   });
   let connected = false;
   createEffect(options.getGateway, () => {
-    untrack(() => {
-      if (connected) {
-        binding.refresh();
-      } else {
-        connected = true;
-        binding.connect();
-      }
-    });
+    if (connected) {
+      binding.refresh();
+    } else {
+      connected = true;
+      binding.connect();
+    }
   });
   onCleanup(() => untrack(() => binding.dispose()));
   return {

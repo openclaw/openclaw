@@ -22,7 +22,6 @@ import {
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
-import { logDecisionToolRequest } from "./attempt-decision-diagnostics.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -111,7 +110,9 @@ export async function runEmbeddedAttemptPromptPhase(
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
   const observeForegroundRequests = (
-    onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
+    onRequest: (
+      ...args: Parameters<NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>>
+    ) => void,
   ) => {
     const streamFn = activeSession.agent.streamFn;
     activeSession.agent.streamFn = (model, context, options) => {
@@ -531,15 +532,6 @@ export async function runEmbeddedAttemptPromptPhase(
                 : {}),
             });
           }),
-        onPrimaryModelRequest: (tools) => {
-          logDecisionToolRequest({
-            decision: promptAssembly.decisionPrefilter,
-            baseline: promptToolPolicy.readDecisionBaseline(),
-            readFinal: () => tools,
-            requiredNames: promptToolPolicy.decisionRequiredNames,
-            trace: runTrace,
-          });
-        },
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },
@@ -615,9 +607,6 @@ export async function runEmbeddedAttemptPromptPhase(
   } finally {
     activeSession[agentSessionDeferThresholdCompaction] = previousThresholdDeferral;
     stopAcceptingSteerMessages();
-    log.debug(
-      `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
-    );
   }
 
   const pendingMidTurnPrecheckRequest =

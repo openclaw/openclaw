@@ -188,7 +188,11 @@ async function runVitestSpec(
   }
 }
 
-function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: NodeJS.ProcessEnv) {
+function applyDefaultParallelVitestWorkerBudget(
+  specs: VitestRunSpec[],
+  env: NodeJS.ProcessEnv,
+  concurrency: number,
+) {
   if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
@@ -197,7 +201,10 @@ function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: Nod
     ...spec,
     env: {
       ...spec.env,
-      OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
+      // Exclusive plans run alone, so they can spend the otherwise idle shard budget.
+      OPENCLAW_VITEST_MAX_WORKERS: String(
+        isExclusiveCiTestConfig(spec.config) ? concurrency : vitestMaxWorkers,
+      ),
     },
   }));
 }
@@ -606,6 +613,7 @@ export async function runTestProjects(
             env: baseEnv,
           }),
           baseEnv,
+          concurrency,
         );
         console.error(
           `[test] running ${scheduledSpecs.length} Vitest shards with parallelism ${concurrency}`,

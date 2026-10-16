@@ -478,7 +478,6 @@ export type CodexGetAccountResponse = {
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
-  namespaceTools: boolean;
   imageGeneration: boolean;
   webSearch: boolean;
 };

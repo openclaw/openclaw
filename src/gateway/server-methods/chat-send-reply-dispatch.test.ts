@@ -658,17 +658,17 @@ describe("createChatSendReplyDispatch", () => {
       onCommandBlock,
     });
     const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
-    dispatcher.sendBlockReply({ text: "[[reply_to_current]] First instruction" });
+    dispatcher.sendBlockReply({ text: "[[reply_to_current]] First" });
     await dispatcher.waitForIdle();
-    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction");
-    dispatcher.sendBlockReply({ text: "Second instruction" });
-    await dispatcher.waitForIdle();
-    expect(onCommandBlock).toHaveBeenLastCalledWith("First instruction\n\nSecond instruction");
+    for (const text of ["Second", "NO_REPLY", "NO_REPLY.", "ANNOUNCE_SKIP"]) {
+      dispatcher.sendBlockReply({ text });
+      await dispatcher.waitForIdle();
+    }
+    const expected = "First\n\nSecond\n\nNO_REPLY\n\nNO_REPLY.\n\nANNOUNCE_SKIP";
+    expect(onCommandBlock).toHaveBeenLastCalledWith(expected);
 
     onCommandBlock.mockClear();
     dispatcher.sendBlockReply({ text: "hidden reasoning", isReasoning: true });
-    dispatcher.sendBlockReply({ text: "NO_REPLY" });
-    dispatcher.sendBlockReply({ text: "ANNOUNCE_SKIP" });
     dispatcher.sendBlockReply({ text: "side answer", btw: { question: "side question" } });
     await dispatcher.waitForIdle();
     expect(onCommandBlock).not.toHaveBeenCalled();
@@ -767,7 +767,7 @@ describe("createChatSendReplyDispatch", () => {
     { phase: "final_answer", text: "Fixture inspected.", expected: "delivered" },
     { phase: "commentary", text: "Inspecting the fixture.", expected: "missing" },
     { phase: undefined, text: "Inspecting the fixture.", expected: "missing" },
-    { phase: "final_answer", text: "NO_REPLY", expected: "missing" },
+    { phase: "final_answer", text: "NO_REPLY", expected: "delivered" },
     { phase: "final_answer", text: "", expected: "missing" },
   ])(
     "uses committed display answers, not tool progress ($phase, $text)",

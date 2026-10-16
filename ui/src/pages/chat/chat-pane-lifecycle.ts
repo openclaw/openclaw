@@ -1,4 +1,5 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { onCleanup } from "solid-js";
 import {
   validateSessionReactionEvent,
   type SessionSuggestionEvent,
@@ -35,11 +36,11 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
-import { ChatPaneMcpAppController } from "./chat-pane-mcp-app.ts";
+import { createChatPaneMcpApps } from "./chat-pane-mcp-app.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
-import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
+import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   focusChatComposerFromPrintableKeydown,
@@ -75,40 +76,49 @@ import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-messa
 import { closeSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
-  private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
-    current: () => {
-      const state = this.state;
-      return state && this.active && this.presented
-        ? {
-            renderRoot: this.renderRoot,
-            state,
-            linkReaders: availableLinkReaders(this.context.gateway.snapshot),
-            pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
-            updateComplete: this.updateComplete,
-          }
-        : null;
-    },
-    pending: this.pendingPanelToggleRequests,
-    requestUpdate: () => this.requestUpdate(),
-    updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
-  });
+  private panelActions: { syncLaunch: () => void; flush: () => void } | undefined;
 
-  private readonly mcpApps = new ChatPaneMcpAppController({
-    element: this.element,
-    current: () => {
-      const state = this.state;
-      return state
-        ? {
-            context: this.context,
-            state,
-            presented: this.presented,
-            agentId: this.agentId,
-            launch: this.mcpAppLaunch,
-            openFile: (path) => openSessionWorkspaceFile(state, { path }),
-          }
-        : null;
-    },
-  });
+  /** Called by the mounted Solid view, after the runtime has attached its state. */
+  mountPanelActions(): void {
+    const flush = createChatPaneSessionPanelToggles({
+      current: () => {
+        const state = this.state;
+        return state && this.active && this.presented
+          ? {
+              renderRoot: this.renderRoot,
+              state,
+              linkReaders: availableLinkReaders(this.context.gateway.snapshot),
+              pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
+              updateComplete: this.updateComplete,
+            }
+          : null;
+      },
+      pending: this.pendingPanelToggleRequests,
+      requestUpdate: () => this.requestUpdate(),
+      updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+    });
+
+    const syncLaunch = createChatPaneMcpApps({
+      element: this.element,
+      current: () => {
+        const state = this.state;
+        return state
+          ? {
+              context: this.context,
+              state,
+              presented: this.presented,
+              agentId: this.agentId,
+              launch: this.mcpAppLaunch,
+              openFile: (path) => openSessionWorkspaceFile(state, { path }),
+            }
+          : null;
+      },
+    });
+    this.panelActions = { syncLaunch, flush };
+    onCleanup(() => {
+      this.panelActions = undefined;
+    });
+  }
 
   private chatRouteReadyReported = false;
   protected stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
@@ -391,8 +401,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(() =>
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
     );
-    chatState.addCleanup(this.sessionPanelToggles.subscribe());
-    chatState.addCleanup(this.mcpApps.subscribe());
     chatState.addCleanup(
       this.context.gateway.subscribe((next) => {
         this.applyGatewaySnapshot(next);
@@ -594,7 +602,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
-    this.mcpApps.syncLaunch();
+    this.panelActions?.syncLaunch();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
@@ -613,7 +621,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.retireArchivedPresentation();
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
-    this.sessionPanelToggles.flush();
+    this.panelActions?.flush();
     this.activeSessionResources.syncPane({
       state: () => this.state,
       observation: () => this.resourceSessionObservation(),

@@ -204,6 +204,7 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    readPreview: () => undefined,
     readSource: () => undefined,
     readMembership: (query) => describe(query)?.membership,
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.

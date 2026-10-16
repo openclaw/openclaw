@@ -11,6 +11,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -151,6 +152,7 @@ type AgentHarnessSettledTurnFinalizationParams<
 export type AgentHarnessSettledTurnFinalizationResult = {
   /** The single completed assistant answer produced by the isolated operation. */
   assistant: import("../../llm/types.js").AssistantMessage;
+  preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
   /** True when the harness already persisted the assistant into the application transcript. */

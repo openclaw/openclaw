@@ -11,6 +11,7 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -61,9 +62,11 @@ suite.define(() => {
           await page.locator("#cron-name").fill("Keep this draft");
           const automations = page.locator("openclaw-cron-page");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/old"]').count())
             .toBe(1);
+          await page.keyboard.press("Escape");
           await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           await page.locator(".cmd-palette__input").fill("needle");
@@ -95,13 +98,18 @@ suite.define(() => {
           expect(await palette.getByText("Needle current", { exact: true }).count()).toBe(
             hasRows ? 1 : 0,
           );
-          expect(await picker.locator('[role="option"][data-value="fixture/old"]').count()).toBe(0);
           const failure = await readView();
           await page.screenshot({
             path: path.join(suite.artifactDir, `internal-catalog-palette-${hasRows}.png`),
           });
           await page.keyboard.press("Escape");
           await palette.waitFor({ state: "hidden" });
+          await openPicker(picker);
+          expect(await picker.locator('[role="option"][data-value="fixture/old"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/current"]').count(),
+          ).toBe(hasRows ? 1 : 0);
+          await page.keyboard.press("Escape");
           await automations.getByText(warning, { exact: true }).waitFor();
           await page.screenshot({
             path: path.join(suite.artifactDir, `internal-catalog-automations-${hasRows}.png`),
@@ -188,7 +196,7 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill("Keep this draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
-        await picker.locator(".picker-select__trigger").click();
+        await openPicker(picker);
         await picker.locator('[role="option"][data-value="fixture/old"]').waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
         await page.keyboard.press("Escape");
@@ -197,11 +205,11 @@ suite.define(() => {
 
         await gateway.setMethodResponse("models.list", models("fixture/new"));
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await openPicker(picker);
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/new"]').count())
           .toBe(1);
         expect(await picker.locator('[role="option"][data-value="fixture/old"]').count()).toBe(0);
-        await picker.locator(".picker-select__trigger").click();
         await picker.locator('[role="option"][data-value="fixture/new"]').waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "refreshed.png") });
         await page.keyboard.press("Escape");
@@ -212,6 +220,7 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent("config.changed", {});
         await page.getByText("Model suggestions unavailable", { exact: true }).waitFor();
+        await openPicker(picker);
         expect(await picker.locator('[role="option"][data-value="fixture/new"]').count()).toBe(1);
         await page.screenshot({ path: path.join(suite.artifactDir, "failed-refresh.png") });
 
@@ -302,10 +311,10 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill("Keep this roster draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+        await openPicker(picker);
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/main"]').count())
           .toBe(1);
-        await picker.locator(".picker-select__trigger").click();
         await page.screenshot({ path: path.join(suite.artifactDir, "roster-model-main.png") });
         await page.keyboard.press("Escape");
         await picker.getByRole("listbox").waitFor({ state: "hidden" });
@@ -317,12 +326,12 @@ suite.define(() => {
         await gateway.waitForRequest("models.list", {
           match: { agentId: "writer", view: "configured" },
         });
+        await openPicker(picker);
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/writer"]').count())
           .toBe(1);
         expect(await picker.locator('[role="option"][data-value="fixture/main"]').count()).toBe(0);
         expect(await page.locator("#cron-name").inputValue()).toBe("Keep this roster draft");
-        await picker.locator(".picker-select__trigger").click();
         await page.screenshot({ path: path.join(suite.artifactDir, "roster-model-writer.png") });
 
         const requests = await gateway.getRequests();

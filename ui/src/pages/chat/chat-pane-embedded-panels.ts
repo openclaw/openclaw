@@ -1,6 +1,6 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import { icons } from "../../components/icons.ts";
-import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -79,18 +79,19 @@ export function sidebarPanelDefinitions(
             : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
       ),
       content,
-      loading: renderPanelLoadingSkeleton(
-        textKey === "conversation" || textKey === "companion"
-          ? "chat"
-          : textKey === "subagents" || textKey === "processes"
-            ? "file-list"
-            : textKey === "portal"
-              ? "browser"
-              : textKey === "dashboard"
-                ? "board"
-                : textKey,
-        t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
-      ),
+      loading: solidContent(PanelLoadingSkeleton, {
+        variant:
+          textKey === "conversation" || textKey === "companion"
+            ? "chat"
+            : textKey === "subagents" || textKey === "processes"
+              ? "file-list"
+              : textKey === "portal"
+                ? "browser"
+                : textKey === "dashboard"
+                  ? "board"
+                  : textKey,
+        label: t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
+      }),
       empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
       ...actions,
       shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
@@ -132,7 +133,7 @@ export function sidebarPanelDefinitions(
       "detail",
       icons.diff,
       detailContent?.kind === "loading"
-        ? renderPanelLoadingSkeleton("review", t("common.loading"))
+        ? solidContent(PanelLoadingSkeleton, { variant: "review", label: t("common.loading") })
         : detailContent?.kind === "unavailable"
           ? solidContent(UnavailableDetail, { message: detailContent.message })
           : detailContent && params && detailTabPresent
@@ -150,7 +151,10 @@ export function sidebarPanelDefinitions(
       icon: icons.link,
       available: Boolean(params?.linkReaders?.length),
       content: params ? solidContent(LinkReaderPanel, params) : null,
-      loading: renderPanelLoadingSkeleton("files", t("linkReader.loadingPreview")),
+      loading: solidContent(PanelLoadingSkeleton, {
+        variant: "files",
+        label: t("linkReader.loadingPreview"),
+      }),
       empty: { description: t("linkReader.urlPlaceholder") },
     },
     definePanel("portal", icons.globe, portal),
@@ -181,7 +185,7 @@ export function sidebarPanelDefinitions(
             params?.isPluginPanelPresented(slot),
           )
         : null,
-      loading: renderPanelLoadingSkeleton("files", t("common.loading")),
+      loading: solidContent(PanelLoadingSkeleton, { variant: "files", label: t("common.loading") }),
       empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
     })),
   ];

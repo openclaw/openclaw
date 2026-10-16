@@ -29,6 +29,7 @@ import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/ed
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
 import { formatOcPath, isPattern, OcPathError } from "./oc-path.js";
+import { parseMdItemKeyValue } from "./parse.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
 import { slugify } from "./slug.js";
@@ -523,12 +524,8 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     if (blockIdx === -1) {
       return { ok: false, reason: "unresolved" };
     }
-    const kvMatch = /^([^:]+?)\s*:\s*(.+)$/.exec(value);
+    const kv = parseMdItemKeyValue(value);
     const itemLine = `- ${value}`;
-    const kvKey =
-      kvMatch === null ? undefined : expectDefined(kvMatch[1], "Markdown item key capture");
-    const kvValue =
-      kvMatch === null ? undefined : expectDefined(kvMatch[2], "Markdown item value capture");
     const nextBlock = ast.blocks[blockIdx + 1];
     const offset = nextBlock ? sourceLineOffset(ast.raw, nextBlock.line) : ast.raw.length;
     return {
@@ -544,11 +541,9 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
                   ...entry.items,
                   {
                     text: value,
-                    slug: slugify(kvKey ?? value),
+                    slug: slugify(kv?.key ?? value),
                     line,
-                    ...(kvKey !== undefined && kvValue !== undefined
-                      ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
-                      : {}),
+                    ...(kv === undefined ? {} : { kv }),
                   },
                 ],
               },

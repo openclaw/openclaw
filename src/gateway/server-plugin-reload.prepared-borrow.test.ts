@@ -799,6 +799,8 @@ describe("published Gateway plugin services", () => {
           assert(record);
           const gatewayInstance = getPluginInstance(record);
           assert(gatewayInstance);
+          // Startup catalog refresh owns a temporary lease unrelated to the agent run.
+          await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           const retainedBeforeRun = gatewayInstance.retainedWorkCount;
           runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             acquireAgentRunPreparedModelRuntime(

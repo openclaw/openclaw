@@ -441,6 +441,21 @@ describe("IMAP watcher protocol boundary", () => {
     expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(4);
   });
 
+  it("skips a message the parser rejects and dispatches the next email", async () => {
+    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
+    dispatchHookAgentTurn.mockResolvedValue({ ok: true, runId: "mail-run" });
+    // mailparser rejects messages with more than 9,999 MIME child nodes.
+    const part = "--b\r\nContent-Type: text/plain\r\n\r\nx\r\n";
+    server.append(
+      `From: outsider@evil.example\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="b"\r\n\r\n${part.repeat(10_002)}--b--\r\n`,
+    );
+    server.append("From: trusted@example.com\r\nSubject: After\r\n\r\nAdmitted");
+    await waitForCursor(3, 5_000);
+    expect(await state.skips.lookup("inbox:message-parse-failed")).toEqual({ count: 1 });
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchHookAgentTurn.mock.calls[0]?.[0].sessionKey).toBe("hook:imap:inbox:17:3");
+  });
+
   it("serializes reconnect admission with later mailbox wakeups", async () => {
     const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },

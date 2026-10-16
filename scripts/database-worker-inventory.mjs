@@ -26,6 +26,18 @@ const testSuites = new Set([
 ]);
 const reviewed = new Map([
   [
+    "src/daemon/runtime-pin-store.ts",
+    { tier: "T3", evidence: "CLI service owner / Doctor migration; no Gateway runtime." },
+  ],
+  [
+    "src/daemon/runtime-pin-state.ts",
+    { tier: "T3", evidence: "CLI service locks; CLI status and Doctor audits; no Gateway caller." },
+  ],
+  [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
+    { tier: "T3", evidence: "Doctor config-machine-state / pin fence; exclusive migration lock." },
+  ],
+  [
     "src/config/sessions/goals-operations.ts",
     {
       priority: 99,
@@ -3069,6 +3081,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.
   "src/plugin-state/plugin-state.worker.ts", // Only openclaw-state.worker.ts imports and calls this command dispatcher; its nested callbacks share that worker ownership.
   "src/config/sessions/session-suggestion-store.kernel.ts", // session-sharing-store.worker.ts owns add/claim/release/finalize; session-transcript.worker.ts owns list. The host read facade imports only its type.
   "src/config/sessions/session-cold-storage-inventory.ts", // Only session-cold-storage-worker.ts calls readSessionColdStorageInventory, dispatched by session-transcript.worker.ts.

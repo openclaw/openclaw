@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
@@ -87,9 +88,11 @@ suite.define(() => {
           await expect
             .poll(() => decision.locator(".picker-select__trigger").textContent())
             .toContain("Jev");
+          await openPicker(decision);
           expect(
             await decision.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
           ).toBe(1);
+          await page.keyboard.press("Escape");
           const rows = await page
             .locator(".model-providers__defaults .settings-row")
             .evaluateAll((elements) =>
@@ -181,6 +184,7 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
+          await openPicker(decision);
           expect(
             await decision.locator('[role="option"][data-value="openai/account-new"]').count(),
           ).toBe(0);

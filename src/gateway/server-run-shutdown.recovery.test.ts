@@ -314,7 +314,7 @@ it.each(["admission", "queue", "delegated"] as const)(
         });
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
-        expect(transcript.match(/Resume in new session/g)).toHaveLength(1);
+        expect(transcript.match(/use Resume to continue in this session/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
           expect.stringContaining('"reason":"delegated_authority_unavailable"'),
         );

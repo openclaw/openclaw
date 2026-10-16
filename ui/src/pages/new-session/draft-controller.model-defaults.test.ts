@@ -1,9 +1,9 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { NewSessionDraft } from "./draft-controller.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -36,11 +36,11 @@ it.each(["last-used", "configured"] as const)(
     });
     const { context } = fixture;
     Object.assign(context.config.current, { newSessionModelDefaults: policy });
-    const controller = new NewSessionDraftController(
-      new TestReactiveControllerHost(),
+    const controller = new NewSessionDraft(
       () => ({ context, data: undefined, isConnected: true }),
       {
-        requestUpdate: vi.fn(),
+        changed: vi.fn(),
+        updateComplete: () => Promise.resolve(),
         closeTransientUi: vi.fn(),
         querySelector: () => null,
         activeElement: () => null,
@@ -54,7 +54,7 @@ it.each(["last-used", "configured"] as const)(
       workspace: "/workspace",
       folder: "/workspace/remembered",
     });
-    controller.place.setAgentsHydrated(true);
+    controller.place.agentsHydrated = true;
     controller.place.adoptAgentDefaults();
     expect(directoryReads).toBe(1);
     expect(controller.place.folderSubmissionBlocked()).toBe(true);
@@ -75,3 +75,37 @@ it.each(["last-used", "configured"] as const)(
     fixture.flow.disconnect();
   },
 );
+
+it("wakes background discovery only while the draft is connected", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  const { context, request } = createDraftFixture({
+    methods: ["system.info", "environments.list"],
+    request: async (method) =>
+      method === "system.info"
+        ? { machineName: "Visible Gateway" }
+        : { profiles: [], environments: [] },
+  });
+  const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
+    changed: vi.fn(),
+    updateComplete: () => Promise.resolve(),
+    closeTransientUi: vi.fn(),
+    querySelector: () => null,
+    activeElement: () => null,
+    body: () => null,
+    onInvalidate: vi.fn(),
+    onRecoveryReady: vi.fn(),
+  });
+  onTestFinished(() => draft.disconnect());
+  draft.connect();
+  expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
+
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitForFast(() => expect(draft.gateway.gatewayName).toBe("Visible Gateway"));
+
+  draft.disconnect();
+  const reads = request.mock.calls.length;
+  document.dispatchEvent(new Event("visibilitychange"));
+  draft.synchronize();
+  expect(request).toHaveBeenCalledTimes(reads);
+});

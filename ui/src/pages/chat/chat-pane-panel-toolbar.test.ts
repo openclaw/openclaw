@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -10,7 +10,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./components/chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
@@ -26,21 +29,25 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
     {
       slot,
       label: "Fixture notes",
-      icon: html``,
+      icon: sidebarPanelDefinitions()[0]!.icon,
       available: true,
-      content: html`Notes`,
-      loading: html`Loading notes`,
+      content: solidContent(() => document.createTextNode("Notes"), {}),
+      loading: solidContent(() => document.createTextNode("Loading notes"), {}),
       empty: { description: "No notes" },
-      headerAction: html`<button aria-label="Refresh notes" @click=${refresh}>
-        Refresh notes
-      </button>`,
+      headerAction: solidContent(() => {
+        const button = document.createElement("button");
+        button.setAttribute("aria-label", "Refresh notes");
+        button.textContent = "Refresh notes";
+        button.addEventListener("click", refresh);
+        return button;
+      }, {}),
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   const paint = () => {
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },

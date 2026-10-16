@@ -545,7 +545,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         ...completed,
         threadId: "thread-closed-paused",
         turnId: "turn-current",
-        completedTurn: { id: "turn-current", status: "completed", items: [], itemsView: "full" },
+        completedTurn: { id: "turn-current", status: "completed", items: [] },
       },
     ];
     try {

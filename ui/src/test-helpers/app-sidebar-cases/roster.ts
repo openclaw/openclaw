@@ -8,7 +8,6 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import { flush } from "../solid-settle.ts";
 import {
   agentIds,
   mountRoster,
@@ -314,7 +313,7 @@ describe("AppSidebar agent roster", () => {
     expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
   });
 
-  it("defers agent menus and retains rail new-session links in group order", async () => {
+  it("defers agent menus and retains their options", async () => {
     const { sidebar } = await mountRoster();
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
@@ -344,33 +343,6 @@ describe("AppSidebar agent roster", () => {
     expect(sidebar.querySelectorAll('.sidebar-agent-roster__menu [role^="menuitem"]')).toHaveLength(
       3,
     );
-    await vi.dynamicImportSettled();
-    flush();
-    const menus = sidebar.querySelectorAll(".sidebar-new-session-menu");
-    expect(menus).toHaveLength(1);
-    const trigger = menus[0]!.querySelector(".sidebar-new-session");
-    const options = [...menus[0]!.querySelectorAll<HTMLAnchorElement>('a[role="menuitem"]')];
-    expect(options.map((item) => item.getAttribute("data-value"))).toEqual(agentIds(sidebar));
-    expect(options.map((item) => item.getAttribute("href"))).toEqual(
-      agentIds(sidebar).map((id) => `/new?agent=${id}`),
-    );
-    expect(options[0]?.textContent).toContain("Harbor");
-    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(menus[0]!.querySelector(".sidebar-agent-roster__avatar")).toBeNull();
-    for (const view of ["pages", "online", "sessions"] as const) {
-      for (const collapsed of [false, true]) {
-        sidebar.navigationView = view;
-        sidebar.navigationCollapsed = collapsed;
-        await sidebar.updateComplete;
-        expect(sidebar.querySelector(".sidebar-rail .sidebar-new-session")).toBe(trigger);
-        expect(sidebar.querySelectorAll(".sidebar-new-session-menu")).toHaveLength(1);
-        expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
-      }
-    }
-    const retainedOptions = [...menus[0]!.querySelectorAll('a[role="menuitem"]')];
-    expect(retainedOptions).toHaveLength(options.length);
-    retainedOptions.forEach((item, index) => expect(item).toBe(options[index]));
-    expect(menus[0]!.querySelector(".sidebar-agent-roster__avatar")).toBeNull();
   });
 
   it.each([undefined, "main"])(

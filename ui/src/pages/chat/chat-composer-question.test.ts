@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
@@ -59,27 +60,7 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: {
-          component: () =>
-            Object.assign(document.createElement("button"), {
-              type: "button",
-              textContent: "Model",
-            }),
-          model: {
-            activeRunId: null,
-            connected: true,
-            gatewayAvailable: true,
-            loading: false,
-            modelCatalog: [],
-            modelCatalogState: { hasSnapshot: true, status: "ready" },
-            modelSwitching: false,
-            sending: false,
-            sessionKey: "queue-test",
-            selectedSession: undefined,
-            sessionsResult: null,
-            stream: null,
-          },
-        },
+        composerControls: createComposerControlsFixture(),
         onRequestUpdate: vi.fn(),
       });
       composerProps.onDraftChange = (next) => {

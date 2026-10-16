@@ -3,7 +3,7 @@ import { observeScrollState } from "../../../components/scroll-state-observer.ts
 import "../../../components/tooltip.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
@@ -304,7 +304,7 @@ function AttachmentPreviewStrip(props: {
   entries: readonly AttachmentPreviewEntry[];
   controls: ChatAttachmentControlsProps;
 }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let host!: HTMLDivElement;
   createEffect(presented, (active) => {
     if (!active) {

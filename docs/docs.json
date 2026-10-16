@@ -1770,6 +1770,7 @@
               {
                 "group": "Plugin guides",
                 "pages": [
+                  "plugins/agent-guidance",
                   "plugins/agentsapi",
                   {
                     "group": "Codex",
@@ -2017,6 +2018,7 @@
                           "tools/code-mode/maintainers"
                         ]
                       },
+                      "tools/autoreview",
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -3216,6 +3218,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.4",
                   "releases/2026.10.3",
                   "releases/2026.10.2",
                   "releases/2026.10.1",

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 import "../../styles.css";
 
@@ -98,6 +98,7 @@ describe("config appearance preferences", () => {
       if (!select) {
         throw new Error("Missing language select");
       }
+      await openPicker(select);
       if (localeOverride) {
         expect(
           select.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
@@ -132,14 +133,16 @@ describe("config appearance preferences", () => {
     const chat = required(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
       "openclaw-select-picker",
     )!;
+    await openPicker(ui);
     expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · DM Sans",
     );
+    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
+    await openPicker(chat);
     expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · Fraunces",
     );
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
     expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
     await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
@@ -344,6 +347,7 @@ describe("config appearance preferences", () => {
     expect(languageRow.textContent).toContain("Default: Deutsch (German)");
     expect(languageRow.textContent).toContain("Stored in this browser only");
     expect(languageRow.textContent).not.toContain("Synced across your devices");
+    await openPicker(languageRow.querySelector("openclaw-select-picker")!);
     expect(
       languageRow.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
     ).toBe("true");

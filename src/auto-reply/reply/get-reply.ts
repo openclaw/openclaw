@@ -34,7 +34,7 @@ import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaFacts, normalizeMediaFacts } from "../../media/media-facts.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -55,7 +55,6 @@ import {
 } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -293,14 +292,12 @@ async function resolveReplyFromConfig(
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
     const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
-    const typingIntervalSeconds =
-      typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+    const typingIntervalSeconds = configuredTypingSeconds ?? 6;
     const controller = createTypingController({
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
       keepalive: opts?.typingKeepalive ?? true,
-      silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
     opts?.onTypingController?.(controller);
@@ -644,9 +641,7 @@ async function resolveReplyFromConfig(
         channel:
           groupResolution?.channel ??
           sessionDeliveryChannel(sessionEntry) ??
-          (typeof finalized.OriginatingChannel === "string"
-            ? finalized.OriginatingChannel
-            : undefined) ??
+          finalized.OriginatingChannel ??
           finalized.Provider,
         groupId: groupResolution?.id ?? sessionEntry.groupId,
         groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
@@ -936,7 +931,7 @@ async function resolveReplyFromConfig(
 
   let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
     ? new Map(
-        normalizeMediaFacts(finalized.media).flatMap((fact, index) =>
+        (finalized.media ?? []).flatMap((fact, index) =>
           fact.path ? [[index, fact.path] as const] : [],
         ),
       )

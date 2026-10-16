@@ -70,7 +70,7 @@ async function observeShape(sidebar: Locator) {
         ].map((row) => row.textContent?.trim() ?? ""),
         avatarText: [
           ...element.querySelectorAll(
-            "[data-agent-group] .sidebar-agent-roster__row .sidebar-agent-roster__avatar",
+            "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
           ),
         ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",
@@ -533,7 +533,9 @@ suite.define(() => {
             message: "Synthetic plugin catalog temporarily unavailable",
           });
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
           );
@@ -564,7 +566,9 @@ suite.define(() => {
           });
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-          await sidebar.locator(".sidebar-rail button.sidebar-new-session:enabled").waitFor();
+          await sidebar
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
+            .waitFor();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },
       );

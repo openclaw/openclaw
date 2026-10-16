@@ -321,8 +321,11 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
   );
   const selection = projectAgentSelection(untrack(() => props.settingsAgentSelection));
   createEffect(
-    () => props.agentIdentity,
-    (source) => identities.replaceSource(source),
+    () => [props.agentIdentity, selection.read().state.selectedId] as const,
+    ([source, agentId]) => {
+      identities.replaceSource(source);
+      void source.ensure([agentId]);
+    },
   );
   createEffect(
     () => props.settingsAgentSelection,

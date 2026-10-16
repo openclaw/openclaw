@@ -200,7 +200,7 @@
           "type": "string"
         },
         "completionTarget": {
-          "description": "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+          "description": "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
           "enum": ["parent"],
           "type": "string"
         },
@@ -806,7 +806,7 @@
                       "type": "integer"
                     },
                     "expr": {
-                      "description": "Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example \"0 18 * * *\", \"Asia/Shanghai\".",
+                      "description": "Cron wall-time expr; never UTC-convert. Missing tz preserves the existing cron timezone on update; otherwise Gateway local. Example \"0 18 * * *\", \"Asia/Shanghai\".",
                       "type": "string"
                     },
                     "kind": {
@@ -847,7 +847,7 @@
                       "type": "integer"
                     },
                     "tz": {
-                      "description": "IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example \"Asia/Shanghai\".",
+                      "description": "IANA timezone for wall-clock fields. Omit on update to preserve the existing cron timezone; otherwise defaults to Gateway host local timezone. Example \"Asia/Shanghai\".",
                       "type": "string"
                     }
                   },
@@ -1590,11 +1590,11 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End this turn for pending child completion events; this is not a final-result submission. For background tools, follow their result's continuation instructions. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
+        "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Unfinished subagents awaiting an incoming continuation must set waitFor:\"message\". For background tools, follow their continuation instructions. Collector runs require agents_wait instead.",
         "inputSchema": {
           "properties": {
             "acknowledgment": {
-              "description": "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
+              "description": "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
               "type": "string"
             },
             "message": {
@@ -1603,7 +1603,7 @@
             },
             "waitFor": {
               "const": "message",
-              "description": "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
+              "description": "Pause an unfinished subagent until an incoming continuation. Does not send or schedule that message or submit a final result.",
               "type": "string"
             }
           },

@@ -161,15 +161,19 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
           for (const width of [1440, 390]) {
             await page.setViewportSize({ width, height: 1000 });
             expect(await description.textContent()).toBe(skill.description);
-            const layout = await description.evaluate((element) => {
-              const style = getComputedStyle(element);
-              return {
-                lineClamp: style.webkitLineClamp,
-                height: element.getBoundingClientRect().height,
-                lineHeight: Number.parseFloat(style.lineHeight),
-                scrollHeight: element.scrollHeight,
-              };
-            });
+            const layouts = await description.evaluateAll((elements) =>
+              elements.map((element) => {
+                const style = getComputedStyle(element);
+                return {
+                  lineClamp: style.webkitLineClamp,
+                  height: element.getBoundingClientRect().height,
+                  lineHeight: Number.parseFloat(style.lineHeight),
+                  scrollHeight: element.scrollHeight,
+                };
+              }),
+            );
+            expect(layouts).toHaveLength(1);
+            const layout = layouts[0]!;
             expect(layout.lineClamp).toBe("2");
             expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
             expect(layout.scrollHeight).toBeGreaterThan(layout.height);

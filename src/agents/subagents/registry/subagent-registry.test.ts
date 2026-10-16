@@ -136,7 +136,9 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
     countActiveSubagentRunsForSession,
+    getSubagentSessionListRunsSnapshotForSessions,
     prepareSubagentRegistrationRows,
+    prepareSubagentSessionListReadCache,
     publishSubagentRunsAfterAtomicStore,
     rememberRestoredSubagentRunNotification,
   } = await importOriginal<typeof import("./subagent-registry-state.js")>();
@@ -144,7 +146,9 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
     countActiveSubagentRunsForSession,
+    getSubagentSessionListRunsSnapshotForSessions,
     prepareSubagentRegistrationRows,
+    prepareSubagentSessionListReadCache,
     rememberRestoredSubagentRunNotification,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
@@ -1033,6 +1037,7 @@ describe("subagent registry seam flow", () => {
       });
     });
     await settleRootWork();
+    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
     ).toBeGreaterThanOrEqual(2);

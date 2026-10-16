@@ -9,7 +9,6 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -26,10 +25,8 @@ import {
 } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applySessionHints } from "./body.js";
 import { resolveTurnModelOverride } from "./dispatch-from-config.harness-defaults.js";
-import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
@@ -145,16 +142,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           turnModelOverride: resolveTurnModelOverride(opts),
         })
       : sourceReplyDeliveryMode);
-  const silentReplyConversationType = resolveReplyPolicyConversationType(
-    promptSessionCtx,
-    ctx.SessionKey,
-  );
-  const silentReplySettings = resolveSilentReplySettings({
-    cfg,
-    sessionKey: runtimePolicySessionKey,
-    surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
-    conversationType: silentReplyConversationType,
-  });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
     isFastTestEnv: isFastTestRuntimeEnv(),
@@ -200,8 +187,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     buildSourceConversationContext({
       sourceReplyDeliveryMode: mode,
       sessionCtx: promptSessionCtx,
-      silentReplyPolicy: silentReplySettings.policy,
-      silentToken: SILENT_REPLY_TOKEN,
     });
   const sourceConversationContextByMode = {
     automatic: sourceConversationContext("automatic"),
@@ -262,7 +247,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       : {}),
   };
   const silentReplyPromptMode: SilentReplyPromptMode =
-    sessionStableConversationContext || sourceReplyDeliveryMode === "message_tool_only"
+    isInternalPromptChannel ||
+    terminalReplyExpectation === "result-required" ||
+    sessionStableConversationContext ||
+    sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
   const baseBody = sessionCtx.agentText ?? "";

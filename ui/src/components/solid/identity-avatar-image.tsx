@@ -1,5 +1,6 @@
 import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
@@ -11,6 +12,9 @@ type IdentityAvatarImageProps = {
 };
 
 function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
+  if (element.getAttribute("data-avatar-state") === state) {
+    return;
+  }
   element.setAttribute("data-avatar-state", state);
   element.classList.toggle("is-pending", state === "pending");
   element.classList.toggle("is-fallback", state === "none" || state === "failed");
@@ -63,13 +67,13 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
       if (!active) {
         return;
       }
-      if (image.getAttribute("src") !== url || !url) {
+      if (!url || image.getAttribute("src") !== url) {
         state(url ? "pending" : "failed");
-      }
-      if (url) {
-        image.setAttribute("src", url);
-      } else {
-        image.removeAttribute("src");
+        if (url) {
+          image.setAttribute("src", url);
+        } else {
+          image.removeAttribute("src");
+        }
       }
       // Refs run before their wrapper is inserted; cached decodes emit no event.
       queueMicrotask(() =>
@@ -97,15 +101,11 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
       active = false;
     };
   });
-  onCleanup(() => {
-    image.removeEventListener("load", load);
-    image.removeEventListener("error", error);
-    release?.();
-  });
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
   return (element: HTMLImageElement) => {
     image = element;
-    image.addEventListener("load", load);
-    image.addEventListener("error", error);
+    cleanup.push(listen(image, "load", load), listen(image, "error", error));
   };
 }
 

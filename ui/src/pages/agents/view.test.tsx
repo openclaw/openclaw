@@ -10,7 +10,7 @@ import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -338,6 +338,7 @@ describe("renderAgents", () => {
 
     await updatePickers(container);
     const defaultPicker = primaryModelPicker(container);
+    await openPicker(defaultPicker!);
     expect(
       defaultPicker
         ?.querySelector('[role="option"][aria-selected="true"]')
@@ -353,6 +354,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
+    await openPicker(primaryModelPicker(container)!);
     const inheritedSelection = primaryModelPicker(container)?.querySelector(
       '[role="option"][aria-selected="true"]',
     );
@@ -417,6 +419,7 @@ describe("renderAgents", () => {
 
     await updatePickers(container);
     const select = primaryModelPicker(container);
+    await openPicker(select!);
     expect(
       select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
     ).toBe("anthropic/claude-opus-4-8");

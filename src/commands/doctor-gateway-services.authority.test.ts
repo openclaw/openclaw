@@ -14,6 +14,7 @@ import {
   buildSystemdUnitPropertyOutput,
 } from "../daemon/service.test-helpers.js";
 import { buildSystemdUnit } from "../daemon/systemd-unit.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -140,6 +141,14 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     await fs.writeFile(environmentPath, originalEnvironment, { mode: 0o600 });
     if (blockedTarget) {
       await fs.writeFile(installedEnvironmentPath, originalEnvironment, { mode: 0o600 });
+    }
+
+    await seedCompletedRuntimePinMigration(state.env);
+    if (blockedTarget) {
+      await seedCompletedRuntimePinMigration({
+        ...state.env,
+        OPENCLAW_STATE_DIR: installedStateDir,
+      });
     }
 
     // Model one synthetic OS account; the real install-identity guard still runs.

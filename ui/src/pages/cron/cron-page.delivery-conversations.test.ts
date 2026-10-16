@@ -286,7 +286,7 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
 
-    page.cron = { ...page.cron, cronError: "scheduler save failed" };
+    page.cron.cronError = "scheduler save failed";
     page.refreshView();
     await page.settle();
     expect(page.textContent).toContain("scheduler save failed");

@@ -8,9 +8,9 @@ import { buildProviderStreamFamilyHooks } from "../../../../src/plugin-sdk/provi
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import {
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
@@ -181,7 +181,7 @@ function createControlsFixture(
     canSelectFull: scope === "operator.admin",
   });
   const container = document.createElement("div");
-  renderPaneLegacyContent(controls.composerControls, container);
+  renderPaneModelControl(controls.composerControls, container);
   return { state, selectedSession, access, controls, container };
 }
 
@@ -198,7 +198,7 @@ describe("chat pane model-setting permissions", () => {
           defaults: { models: { "openai/gpt-test-a": { params: { serviceTier: tier } } } },
         },
       };
-      renderPaneLegacyContent(renderControls(state).composerControls, container);
+      renderPaneModelControl(renderControls(state).composerControls, container);
       const standard = container.querySelector<HTMLButtonElement>(
         '[data-chat-speed-option="off"]',
       )!;
@@ -235,7 +235,7 @@ describe("chat pane model-setting permissions", () => {
         service_tier: "default",
       });
       state.request.mockClear();
-      renderPaneLegacyContent(renderControls(state).composerControls, container);
+      renderPaneModelControl(renderControls(state).composerControls, container);
       container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!.click();
       expect(state.request).not.toHaveBeenCalled();
     },
@@ -258,7 +258,7 @@ describe("chat pane model-setting permissions", () => {
         available: true,
         serviceTiers: ["default", "priority", "ultrafast"],
       };
-      renderPaneLegacyContent(renderControls(state).composerControls, container);
+      renderPaneModelControl(renderControls(state).composerControls, container);
       container
         .querySelector<HTMLButtonElement>('[data-chat-speed-option="' + value + '"]')!
         .click();
