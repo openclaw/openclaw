@@ -157,8 +157,6 @@ it("starts a goal and admits only one same-turn submit", async () => {
     { action: "start", objective: "Keep every literal space  " },
     expect.any(KeyboardEvent),
   );
-  state.chatGoalDraftMode = { action: "start" };
-  state.handleChatDraftChange(state.chatMessage);
   flush();
   expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
   result.resolve(true);

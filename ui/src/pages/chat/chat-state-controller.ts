@@ -79,8 +79,6 @@ export function createChatState<TState extends ChatPageHost>(
   };
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
-  let publishedReadRevision = 0;
-  let publishedSessionKey: string | undefined;
   const composerPersistence = new ChatComposerPersistence(() => stateValue);
   let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   let previousChatLoading = false;
@@ -145,13 +143,7 @@ export function createChatState<TState extends ChatPageHost>(
     adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
       attachmentReadsValue.abortReads();
       attachmentReadsValue = reads;
-      reads.retarget(api.attachmentInputProps(state), () => {
-        if (disposed) {
-          return;
-        }
-        publishComposerDraft();
-        state.requestUpdate?.();
-      });
+      reads.retarget(api.attachmentInputProps(state), attachmentChanged);
     },
 
     attachmentInputProps(state: TState) {
@@ -174,8 +166,7 @@ export function createChatState<TState extends ChatPageHost>(
         },
         onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
           state.chatAttachments = next;
-          publishComposerDraft();
-          state.requestUpdate?.();
+          attachmentChanged();
         },
       };
     },
@@ -323,8 +314,6 @@ export function createChatState<TState extends ChatPageHost>(
 
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
-    publishedReadRevision = attachmentReadsValue.revision;
-    publishedSessionKey = stateValue?.sessionKey;
     composerDraft.publish();
   }
 
@@ -485,13 +474,11 @@ export function createChatState<TState extends ChatPageHost>(
     const draft = composerDraft.read();
     if (
       !publishedDraft ||
-      stateValue?.sessionKey !== publishedSessionKey ||
       draft.draft !== publishedDraft.draft ||
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||
       draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
-      draft.goalDraftMode !== publishedDraft.goalDraftMode ||
-      attachmentReadsValue.revision !== publishedReadRevision
+      draft.goalDraftMode !== publishedDraft.goalDraftMode
     ) {
       publishComposerDraft();
     }

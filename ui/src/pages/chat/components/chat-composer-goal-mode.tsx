@@ -1,4 +1,4 @@
-import { createMemo, createStore, onCleanup, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import "../../../styles/chat/composer-context-strip.css";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -14,43 +14,14 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
-type GoalMode = { value: ChatGoalDraftMode; key: string; token: symbol };
-
-function sameGoalMode(left: ChatGoalDraftMode | null | undefined, right: ChatGoalDraftMode) {
-  return (
-    left?.action === right.action &&
-    left.sessionId === right.sessionId &&
-    (left.action !== "edit" ||
-      (right.action === "edit" &&
-        left.goalId === right.goalId &&
-        left.previousDraft === right.previousDraft))
-  );
-}
-
 export function createGoalComposer(readProps: () => ChatComposerProps, state: ChatComposerState) {
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
-  const mode = createMemo<GoalMode | null>((previous) => {
-    const props = readProps();
-    const value = props.goalDraftMode;
-    if (!value) {
-      return null;
-    }
-    const key = composerDraftKey(props);
-    return previous?.key === key && sameGoalMode(previous.value, value)
-      ? previous
-      : { value, key, token: Symbol("goal-mode") };
-  });
-  const [request, setRequest] = createStore<{ token: symbol | null }>({ token: null });
-  const pendingNow = (current: GoalMode | null) => {
-    let pending = false;
-    setRequest((draft) => {
-      pending = Boolean(current && draft.token === current.token);
-    });
-    return pending;
-  };
+  const mode = () => readProps().goalDraftMode ?? null;
+  const liveMode = (props: ChatComposerProps) =>
+    (props.draftSource ? props.draftSource.read().goalDraftMode : props.goalDraftMode) ?? null;
+  const [pending, setPending] = createSignal<ChatGoalDraftMode | null>(null);
+  // Updaters read staged writes too, so a second action cannot beat the render flush.
+  const pendingNow = (current: ChatGoalDraftMode | null) =>
+    current !== null && setPending((value) => value) === current;
   const replaceDraft = (draft: string) => {
     commitComposerDraft(readProps(), draft);
     const textarea = state.composerTextarea;
@@ -68,16 +39,16 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     }
   };
   const cancel = () => {
-    const current = mode();
+    const current = liveMode(readProps());
     if (!current || pendingNow(current)) {
       return;
     }
-    clearMode(current.value);
+    clearMode(current);
     focus();
   };
   const begin = (goal?: SessionGoal) => {
     const props = readProps();
-    if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(mode())) {
+    if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(liveMode(props))) {
       return false;
     }
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
@@ -93,7 +64,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
   };
   const activateDraft = (draft: string, submitting = false) => {
     const props = readProps();
-    if (mode() || !props.connected || !props.canSend || !props.onGoalSubmit) {
+    if (liveMode(props) || !props.connected || !props.canSend || !props.onGoalSubmit) {
       return false;
     }
     const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
@@ -108,16 +79,16 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       return mode() !== null;
     },
     get pending() {
-      return Boolean(mode() && request.token === mode()?.token);
+      return Boolean(mode() && pending() === mode());
     },
     get submissionLabel() {
       const current = mode();
       return current
-        ? t(current.value.action === "edit" ? "chat.goals.save" : "chat.goals.start")
+        ? t(current.action === "edit" ? "chat.goals.save" : "chat.goals.start")
         : undefined;
     },
     get mode() {
-      return mode()?.value ?? null;
+      return mode();
     },
     begin,
     activateDraft,
@@ -133,57 +104,46 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     },
     cancel,
     async submit(submissionAction?: Event) {
-      const current = mode();
       const props = readProps();
+      const current = liveMode(props);
+      const key = composerDraftKey(props);
       const objective = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
       if (!current || !props.onGoalSubmit || !objective.trim()) {
         return;
       }
       let admitted = false;
-      // Store draft reads include earlier same-turn admissions, before rendering commits.
-      setRequest((draft) => {
-        if (draft.token === current.token) {
-          return;
+      setPending((previous) => {
+        if (previous === current) {
+          return previous;
         }
-        draft.token = current.token;
         admitted = true;
+        return current;
       });
       if (!admitted) {
         return;
       }
       replaceDraft(objective);
       try {
-        const active = current.value;
         const submitted = await props.onGoalSubmit(
           {
-            ...(active.sessionId ? { sessionId: active.sessionId } : {}),
-            ...(active.action === "start"
+            ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+            ...(current.action === "start"
               ? { action: "start", objective }
-              : { action: "edit", goalId: active.goalId, objective }),
+              : { action: "edit", goalId: current.goalId, objective }),
           },
           submissionAction,
         );
         const live = readProps();
-        const liveMode = live.draftSource
-          ? live.draftSource.read().goalDraftMode
-          : live.goalDraftMode;
         if (
           submitted &&
-          mode() === current &&
-          state.composerDraftScope?.key === current.key &&
-          composerDraftKey(live) === current.key &&
-          sameGoalMode(liveMode, active)
+          state.composerDraftScope?.key === key &&
+          composerDraftKey(live) === key &&
+          liveMode(live) === current
         ) {
-          clearMode(active);
+          clearMode(current);
         }
       } finally {
-        if (!disposed) {
-          setRequest((draft) => {
-            if (draft.token === current.token) {
-              draft.token = null;
-            }
-          });
-        }
+        setPending((previous) => (previous === current ? null : previous));
       }
     },
   };
