@@ -50,14 +50,12 @@ async function withInputs(
       ...(store === "shared" ? { path: state.statePath("shared-withdrawal.sqlite") } : {}),
     });
     const scope = { ...target, ...(store === "shared" ? { storePath: database.path } : {}) };
-    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
     const inputs = createInputs(database, scope);
+    inputs.write();
     try {
       await run(inputs);
     } finally {
-      for (const receipt of inputs.receipts) {
-        receipt.finish("cancelled");
-      }
+      inputs.receipts.forEach((receipt) => receipt.finish("cancelled"));
       await Promise.all(inputs.receipts.map(async (receipt) => receipt.settled?.()));
     }
   });
@@ -65,31 +63,38 @@ async function withInputs(
 
 function createInputs(database: OpenClawAgentDatabase, scope: WithdrawalScope) {
   const receipts: SessionPendingInputReceipt[] = [];
+  const rows = getSessionKysely(database.db).selectFrom("session_pending_inputs").selectAll();
+  const write = (inputScope = scope, updatedAt = 1) =>
+    writeSessionEntry(database, inputScope.sessionKey, {
+      sessionId: inputScope.sessionId,
+      updatedAt,
+    });
   const stage = async (runId: string, inputScope = scope) => {
+    const input = { runId, message: message(runId), requestFingerprint, assertCurrent };
     const receipt = expectDefined(
-      await stageSessionPendingInput(inputScope, {
-        runId,
-        message: message(runId),
-        requestFingerprint,
-        assertCurrent,
-      }),
+      await stageSessionPendingInput(inputScope, input),
       "Expected accepted input custody",
     );
     receipts.push(receipt);
     return receipt;
   };
   return {
-    database,
     scope,
     receipts,
     stage,
-    read: (inputId: string) => readPendingRow(database, inputId),
+    write,
+    read: (inputId: string) =>
+      expectDefined(
+        executeSqliteQueryTakeFirstSync(database.db, rows.where("input_id", "=", inputId)),
+        "Expected retained pending input",
+      ),
     discard: (runId: string, current = assertCurrent) =>
       discardSessionPendingInput(scope, runId, current),
   };
 }
 
-function expectWithdrawn(original: ReturnType<typeof readPendingRow>, withdrawn: typeof original) {
+type PendingRow = ReturnType<ReturnType<typeof createInputs>["read"]>;
+function expectWithdrawn(original: PendingRow, withdrawn: PendingRow) {
   expect(withdrawn).toEqual({ ...original, state: "cancelled", message_json: expect.any(String) });
   expect(parseSessionPendingInputMessage(withdrawn.message_json)).toEqual({
     ...parseSessionPendingInputMessage(original.message_json),
@@ -97,32 +102,16 @@ function expectWithdrawn(original: ReturnType<typeof readPendingRow>, withdrawn:
   });
 }
 
-function readPendingRow(database: OpenClawAgentDatabase, inputId: string) {
-  return expectDefined(
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("session_pending_inputs")
-        .selectAll()
-        .where("input_id", "=", inputId),
-    ),
-    "Expected retained pending input",
-  );
-}
-
 it.each(["default", "shared"] as const)(
   "withdraws only the exact unconsumed input through the %s database worker",
   async (store) => {
-    await withInputs(async ({ database, scope, stage, read, discard }) => {
+    await withInputs(async ({ scope, stage, read, discard, write }) => {
       const siblingScope = {
         ...scope,
         sessionKey: "agent:main:withdrawal-sibling",
         sessionId: "withdrawal-sibling-session",
       };
-      writeSessionEntry(database, siblingScope.sessionKey, {
-        sessionId: siblingScope.sessionId,
-        updatedAt: 1,
-      });
+      write(siblingScope);
 
       const removed = await stage("removed");
       const retained = await stage("retained");
@@ -154,11 +143,11 @@ it.each(["default", "shared"] as const)(
 it.each(["consumed", "superseded"] as const)(
   "preserves %s input custody on withdrawal",
   async (state) => {
-    await withInputs(async ({ database, receipts, stage, read, discard }) => {
+    await withInputs(async ({ receipts, stage, read, discard, write }) => {
       const runId = "reused-run";
       const first = await stage(runId);
       let original = read(first.inputId);
-      let successor: ReturnType<typeof readPendingRow> | undefined;
+      let successor: PendingRow | undefined;
       if (state === "consumed") {
         const second = await stage("second");
         const collected = expectDefined(
@@ -171,10 +160,7 @@ it.each(["consumed", "superseded"] as const)(
         expect(original.consumed_event_id).toBe(collected.inputId);
       } else {
         const successorScope = { ...target, sessionId: "successor-session" };
-        writeSessionEntry(database, target.sessionKey, {
-          sessionId: successorScope.sessionId,
-          updatedAt: 2,
-        });
+        write(successorScope, 2);
         const receipt = await stage(runId, successorScope);
         successor = read(receipt.inputId);
         expect(read(first.inputId)).toEqual(original);
@@ -219,56 +205,54 @@ it("recovers the committed withdrawal when delivery of the worker result fails",
   await withInputs(async ({ stage, read, discard }) => {
     const receipt = await stage("lost-result");
     const before = read(receipt.inputId);
-    const deliveryFailure = new Error("Withdrawal committed but its result was lost");
+    const lostResult = new Error("Withdrawal committed but its result was lost");
     let verifiedCommits = 0;
     const original = workerStore.runSqliteWorkerStoreOperation;
     const observer = vi
       .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation(
-        (store, operation, stateContext, assertOperationCurrent, createAdmission) => {
-          let withdrawing = false;
-          let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-          let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
-          return original(
-            store,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  withdrawing = command.type === "session.pendingInputs.withdraw";
-                  const result = await worker.execute(command, options);
-                  if (!withdrawing) {
-                    return result;
-                  }
-                  expect(nativeAdmission?.committed).toEqual({
-                    facts: {
-                      kind: "session-pending-input-withdrawal",
-                      sessionKey: target.sessionKey,
-                      sessionId: target.sessionId,
-                      runId: "lost-result",
-                      withdrawn: true,
-                    },
-                  });
-                  expect(nativeAdmission?.settlement).toMatchObject({ kind: "completed" });
-                  expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
-                  expectWithdrawn(before, read(receipt.inputId));
-                  verifiedCommits++;
-                  throw deliveryFailure;
-                },
-              }),
-            stateContext,
-            assertOperationCurrent,
-            createAdmission &&
-              ((retained) => {
-                const owned = createAdmission(retained);
-                if (withdrawing) {
-                  nativeAdmission = owned.admission;
-                  nativeRetention = retained;
+      .mockImplementation((store, operation, context, current, admit) => {
+        let withdrawing = false;
+        let grant: admission.SqliteWorkerOperationAdmission | undefined;
+        let retention: RetainedWorkerTransactionAdmission | undefined;
+        return original(
+          store,
+          (worker) =>
+            operation({
+              execute: async (command, options) => {
+                withdrawing = command.type === "session.pendingInputs.withdraw";
+                const result = await worker.execute(command, options);
+                if (!withdrawing) {
+                  return result;
                 }
-                return owned;
-              }),
-          );
-        },
-      );
+                expect(grant?.committed).toEqual({
+                  facts: {
+                    kind: "session-pending-input-withdrawal",
+                    sessionKey: target.sessionKey,
+                    sessionId: target.sessionId,
+                    runId: "lost-result",
+                    withdrawn: true,
+                  },
+                });
+                expect(grant?.settlement).toMatchObject({ kind: "completed" });
+                expect(await retention?.settled).toEqual({ kind: "completed" });
+                expectWithdrawn(before, read(receipt.inputId));
+                verifiedCommits++;
+                throw lostResult;
+              },
+            }),
+          context,
+          current,
+          admit &&
+            ((retained) => {
+              const owned = admit(retained);
+              if (withdrawing) {
+                grant = owned.admission;
+                retention = retained;
+              }
+              return owned;
+            }),
+        );
+      });
     try {
       await expect(discard("lost-result")).resolves.toBe(true);
       expect(verifiedCommits).toBe(1);

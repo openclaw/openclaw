@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -34,6 +34,13 @@ import {
 import { maintenanceLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
+const restorers: Array<() => void> = [];
+afterEach(() => {
+  for (const restore of restorers.splice(0)) {
+    restore();
+  }
+  vi.restoreAllMocks();
+});
 
 function setup() {
   const fixture = createFixture();
@@ -75,33 +82,30 @@ it("compares retained history without acquiring Doctor deletion custody", () => 
       if (/\b(?:session_pending_inputs|session_input_completions)\b/.test(sql)) {
         return "input";
       }
-      return /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/.test(
-        sql,
-      ) || sql.startsWith('select "legacy_acp_migration_json" ')
+      const node =
+        /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/;
+      return node.test(sql) || sql.startsWith('select "legacy_acp_migration_json" ')
         ? "node"
         : null;
     },
   );
-  try {
-    const comparison = readComparisonClaim(database, store, key, "agent:ops:chat");
-    expect(comparison).toMatchObject({
-      canonicalKey: "agent:ops:chat",
-      key,
-      entry: { sessionId: "session-agent-main-chat" },
-      generations: [expect.anything()],
-    });
-    expect(observed.counts).toEqual({ node: 0, input: 0 });
-    const custody = readClaim(database, store, key, "agent:ops:chat");
-    expect(custody?.generations[0]?.contentFingerprint).toBe(
-      comparison?.generations[0]?.contentFingerprint,
-    );
-    expect(custody?.nodeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(custody?.generations[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(observed.counts.node).toBeGreaterThan(0);
-    expect(observed.counts.input).toBe(2);
-  } finally {
-    observed.restore();
-  }
+  restorers.push(observed.restore);
+  const comparison = readComparisonClaim(database, store, key, "agent:ops:chat");
+  expect(comparison).toMatchObject({
+    canonicalKey: "agent:ops:chat",
+    key,
+    entry: { sessionId: "session-agent-main-chat" },
+    generations: [expect.anything()],
+  });
+  expect(observed.counts).toEqual({ node: 0, input: 0 });
+  const custody = readClaim(database, store, key, "agent:ops:chat");
+  expect(custody?.generations[0]?.contentFingerprint).toBe(
+    comparison?.generations[0]?.contentFingerprint,
+  );
+  expect(custody?.nodeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  expect(custody?.generations[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  expect(observed.counts.node).toBeGreaterThan(0);
+  expect(observed.counts.input).toBe(2);
 });
 
 it("keeps detailed legacy detection current after a foreign transcript commit", async () => {
@@ -118,14 +122,12 @@ it("keeps detailed legacy detection current after a foreign transcript commit", 
       mode: "detect",
       forceScan: true,
     });
-  expect((await detect()).outcomes).toEqual([
-    {
-      kind: "canonical-exists-identical",
-      canonicalKey: "agent:ops:chat",
-      paths: [sourcePath],
-      sourceKeys: ["agent:main:chat"],
-    },
-  ]);
+  const outcome = (kind: string, paths: string[], sourceKeys: string[]) => [
+    { kind, canonicalKey: "agent:ops:chat", paths, sourceKeys },
+  ];
+  expect((await detect()).outcomes).toEqual(
+    outcome("canonical-exists-identical", [sourcePath], ["agent:main:chat"]),
+  );
   runOpenClawAgentWriteTransaction((database) => {
     appendTranscriptEventInTransaction(
       database,
@@ -139,14 +141,13 @@ it("keeps detailed legacy detection current after a foreign transcript commit", 
   }, fixture.options());
   const changed = await detect();
   expect(changed).toMatchObject({ complete: false, ledgerComplete: false, changes: [] });
-  expect(changed.outcomes).toEqual([
-    {
-      kind: "divergent-canonical",
-      canonicalKey: "agent:ops:chat",
-      paths: [destinationPath, sourcePath],
-      sourceKeys: ["agent:ops:chat", "agent:main:chat"],
-    },
-  ]);
+  expect(changed.outcomes).toEqual(
+    outcome(
+      "divergent-canonical",
+      [destinationPath, sourcePath],
+      ["agent:ops:chat", "agent:main:chat"],
+    ),
+  );
   expect(changed.warnings).toContain(
     `session: divergent-canonical for agent:ops:chat; preserved claims ${destinationPath}#agent:ops:chat, ${sourcePath}#agent:main:chat. Run openclaw doctor --fix to quarantine the losing claims.`,
   );
@@ -159,12 +160,9 @@ it("lists workspace keys off-thread and rejects a captured absence after a forei
   fixture.seed();
   await expect(readAbsent.read({ operation: "keys" })).rejects.toThrow("identity changed");
   const observed = observeHostDataSql();
-  try {
-    expect(await fixture.list()).toEqual(["agent:ops:chat"]);
-    expect(observed.queries.filter((sql) => /\bsession_nodes\b/.test(sql))).toEqual([]);
-  } finally {
-    observed.restore();
-  }
+  restorers.push(observed.restore);
+  expect(await fixture.list()).toEqual(["agent:ops:chat"]);
+  expect(observed.queries.filter((sql) => /\bsession_nodes\b/.test(sql))).toEqual([]);
   fixture.seed("agent:ops:later");
   expect(await fixture.list()).toEqual(["agent:ops:chat", "agent:ops:later"]);
   const ownerStorePath = `${fixture.store().path}.json`;
@@ -215,34 +213,32 @@ it.each(["refusal", "eviction"] as const)(
     const writerSettled = createDeferredCore();
     const readFailure = new Error("Retirement reader failed after dispatch");
     let following: Promise<string> | undefined;
-    const cleanup = vi.spyOn(maintenanceLane.pool, "rotate").mockImplementation(() => {
+    vi.spyOn(maintenanceLane.pool, "rotate").mockImplementation(() => {
       cleanupEntered.resolve();
       return Promise.race([writerSettled.promise, releaseCleanup.promise]);
     });
-    const pools = [maintenanceLane, targetDiscoveryLane].flatMap(({ pool }) => {
+    for (const { pool } of [maintenanceLane, targetDiscoveryLane]) {
       const run = pool.run.bind(pool);
-      return [
-        vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false),
-        vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-          const request = typeof input === "function" ? await input() : input;
-          if (request.kind !== "session-retirement-read") {
-            return run(request, controls);
-          }
-          following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
-            writerSettled.resolve();
-            return "following writer";
-          });
-          if (settlement === "refusal") {
-            throw readFailure;
-          }
-          return {
-            ok: true,
-            value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
-            closedHistoryDatabase: request.database,
-          };
-        }),
-      ];
-    });
+      vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
+      vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind !== "session-retirement-read") {
+          return run(request, controls);
+        }
+        following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
+          writerSettled.resolve();
+          return "following writer";
+        });
+        if (settlement === "refusal") {
+          throw readFailure;
+        }
+        return {
+          ok: true,
+          value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
+          closedHistoryDatabase: request.database,
+        };
+      });
+    }
     const reading = fixture.list();
     try {
       const outcome = await Promise.race([
@@ -260,10 +256,6 @@ it.each(["refusal", "eviction"] as const)(
     } finally {
       releaseCleanup.resolve();
       await Promise.allSettled([reading, following]);
-      cleanup.mockRestore();
-      for (const spy of pools) {
-        spy.mockRestore();
-      }
     }
   },
 );

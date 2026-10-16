@@ -60,16 +60,6 @@ function recovery(
   };
 }
 
-function clearedRecovery(entry: SessionEntry, overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    ...entry,
-    updatedAt: 2,
-    abortedLastRun: false,
-    mainRestartRecovery: undefined,
-    ...overrides,
-  };
-}
-
 describe("session snapshot merge", () => {
   it("projects same-provider model changes as an atomic pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
@@ -450,13 +440,19 @@ describe("session snapshot merge", () => {
     "$name",
     ({ initial: before, next, current, clear = true, expected, reassertAbortedLastRun }) => {
       const latest = snapshot(before, 3, current);
-      const proposed = clear
-        ? clearedRecovery(before, {
-            restartRecoveryRuns: undefined,
-            restartRecoveryForceSafeTools: undefined,
-            ...next,
-          })
-        : snapshot(before, 2, next);
+      const proposed = snapshot(
+        before,
+        2,
+        clear
+          ? {
+              abortedLastRun: false,
+              mainRestartRecovery: undefined,
+              restartRecoveryRuns: undefined,
+              restartRecoveryForceSafeTools: undefined,
+              ...next,
+            }
+          : next,
+      );
       expect(
         mergeSessionSnapshotChanges({
           initial: before,

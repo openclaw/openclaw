@@ -22,6 +22,13 @@ import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcrip
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "./types.js";
 
+function listen(listener: (change: SessionRowChange) => void, projection = false) {
+  const stop = projection
+    ? sessionChanges.subscribeProjection(listener)
+    : sessionChanges.subscribe(listener);
+  return { stop, [Symbol.dispose]: stop };
+}
+
 it("publishes only committed durable entry changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:row-change" };
@@ -32,58 +39,50 @@ it("publishes only committed durable entry changes", async () => {
     const snapshot = readSessionEntryCache(database, { cache: true });
     const prepared: Array<string | undefined> = [];
     const projections: SessionRowChange[] = [];
-    const seen: Array<{
-      change: SessionRowChange;
-      label?: string;
-      transaction: boolean;
-      prepared: Array<string | undefined>;
-    }> = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      seen.push({
+    const seen: Array<[SessionRowChange, string | undefined, boolean, Array<string | undefined>]> =
+      [];
+    using observer = listen((change) => {
+      seen.push([
         change,
-        label: snapshot.entries.get(scope.sessionKey)?.label,
-        transaction: database.db.isTransaction,
-        prepared: [...prepared],
-      });
+        snapshot.entries.get(scope.sessionKey)?.label,
+        database.db.isTransaction,
+        [...prepared],
+      ]);
     });
-    const stopProjection = sessionChanges.subscribeProjection((change) => {
+    using projection = listen((change) => {
       projections.push(change);
       prepared.push(snapshot.entries.get(scope.sessionKey)?.label);
-    });
+    }, true);
     const write = (label: string) => {
       replaceEntry(scope, { ...entry, label });
       expect({ seen, projections }).toEqual({ seen: [], projections: [] });
     };
-    try {
-      expect(() =>
-        transaction(() => {
-          write("rolled-back");
-          throw new Error("rollback");
-        }, options),
-      ).toThrow("rollback");
-      expect({ seen, prepared, projections }).toEqual({ seen: [], prepared: [], projections: [] });
+    expect(() =>
       transaction(() => {
-        write("intermediate");
-        write("committed");
-      }, options);
-      expect(seen).toEqual(
-        Array.from({ length: 2 }, () => ({
-          change: { ...scope, storePath: database.path, scope: "session-entry" },
-          label: "committed",
-          transaction: false,
-          prepared: ["committed", "committed"],
-        })),
-      );
-      seen.length = 0;
-      publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
-      expect(seen.map(({ change }) => change)).toEqual([{ ...scope, storePath: database.path }]);
-      unsubscribe();
-      replaceEntry(scope, entry);
-      expect(seen).toHaveLength(1);
-    } finally {
-      unsubscribe();
-      stopProjection();
-    }
+        write("rolled-back");
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect({ seen, prepared, projections }).toEqual({ seen: [], prepared: [], projections: [] });
+    transaction(() => {
+      write("intermediate");
+      write("committed");
+    }, options);
+    expect(seen).toEqual(
+      Array.from({ length: 2 }, () => [
+        { ...scope, storePath: database.path, scope: "session-entry" },
+        "committed",
+        false,
+        ["committed", "committed"],
+      ]),
+    );
+    seen.length = 0;
+    publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
+    expect(seen.map(([change]) => change)).toEqual([{ ...scope, storePath: database.path }]);
+    observer.stop();
+    replaceEntry(scope, entry);
+    expect(seen).toHaveLength(1);
+    projection.stop();
   });
 });
 
@@ -113,11 +112,11 @@ it("publishes committed memory changes after projection without exposing private
     ).resolves.toMatchObject({ kind: "committed" });
     const original = storage.readCurrent({ type: "session.entry.read", input: {} }, authority);
     const events: Array<["projection" | "observer", SessionRowChange]> = [];
-    const stopProjection = sessionChanges.subscribeProjection((change) => {
+    using projection = listen((change) => {
       events.push(["projection", change]);
       expect(owner.readSession(scope.sessionKey, authority)?.entry?.updatedAt).toBe(2);
-    });
-    const unsubscribe = sessionChanges.subscribe((change) => events.push(["observer", change]));
+    }, true);
+    using observer = listen((change) => events.push(["observer", change]));
     const write = (rollback: boolean) =>
       storage.mutate(
         {
@@ -142,25 +141,22 @@ it("publishes committed memory changes after projection without exposing private
       expect(owner.readSession(scope.sessionKey, authority)?.entry?.updatedAt).toBe(1);
       expect(events).toEqual([]);
       await expect(write(false)).resolves.toMatchObject({ kind: "committed" });
+      const replacement = {
+        ...scope,
+        facts: {
+          kind: "replacement",
+          communicationBinding: JSON.stringify([entry.sessionId, ...Array(11).fill(null)]),
+          membership: [scope.sessionKey, null, [], {}, entry.sessionId],
+          lifecycleChanged: false,
+        },
+      };
       expect(events).toEqual([
-        [
-          "projection",
-          {
-            ...scope,
-            facts: {
-              kind: "replacement",
-              communicationBinding:
-                '["private-row-change",null,null,null,null,null,null,null,null,null,null,null]',
-              membership: [scope.sessionKey, null, [], {}, entry.sessionId],
-              lifecycleChanged: false,
-            },
-          },
-        ],
+        ["projection", replacement],
         ["observer", scope],
       ]);
     } finally {
-      unsubscribe();
-      stopProjection();
+      observer.stop();
+      projection.stop();
       await actor.release();
       memorySessionActorOwners.closeDatabase(owner);
     }
@@ -181,28 +177,25 @@ it.each(["delete", "retain-windows", "first-transcript"] as const)(
       }
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
       const changes: SessionRowChange[] = [];
-      const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-      try {
-        transaction((writer) => {
-          if (operation === "first-transcript") {
-            ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-change" }, 2);
-          } else {
-            deleteSessionEntryRows(writer, scope.sessionKey, {
-              deleteOwnedWindows: operation === "delete",
-            });
-          }
-          expect(changes).toEqual([]);
-        }, scope);
-        expect(changes).toEqual([
-          {
-            ...scope,
-            storePath: database.path,
-            ...(operation !== "first-transcript" ? { scope: "session-entry" } : {}),
-          },
-        ]);
-      } finally {
-        unsubscribe();
-      }
+      using observer = listen((change) => changes.push(change));
+      transaction((writer) => {
+        if (operation === "first-transcript") {
+          ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-change" }, 2);
+        } else {
+          deleteSessionEntryRows(writer, scope.sessionKey, {
+            deleteOwnedWindows: operation === "delete",
+          });
+        }
+        expect(changes).toEqual([]);
+      }, scope);
+      expect(changes).toEqual([
+        {
+          ...scope,
+          storePath: database.path,
+          ...(operation !== "first-transcript" ? { scope: "session-entry" } : {}),
+        },
+      ]);
+      observer.stop();
     });
   },
 );
@@ -212,35 +205,32 @@ it("publishes committed registry changes while discarding a rolled-back agent re
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const target = { agentId: "main", path: database.path };
     const changes: SessionRowChange[] = [];
-    const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-    try {
-      const mutations: Array<Parameters<typeof stateTransaction>[0]> = [
-        () => registerOpenClawAgentDatabase(target),
-        () => unregisterOpenClawAgentDatabase(target),
-        () => unregisterOpenClawAgentDatabases({ agentId: "main" }),
-        (state) => unregisterOpenClawAgentDatabases({ agentId: "main", database: state }),
-      ];
-      for (const mutate of mutations) {
-        expect(() =>
-          stateTransaction((state) => {
-            mutate(state);
-            expect(changes).toEqual([]);
-            throw new Error("rollback");
-          }),
-        ).toThrow("rollback");
-        expect(changes).toEqual([]);
-      }
-      unregisterOpenClawAgentDatabase(target);
-      registerOpenClawAgentDatabase(target);
-      unregisterOpenClawAgentDatabases({ agentId: "main" });
-      expect(changes).toEqual(
-        Array.from({ length: 3 }, () => ({
-          all: true,
-          scope: { agentId: "main", topology: true },
-        })),
-      );
-    } finally {
-      unsubscribe();
+    using observer = listen((change) => changes.push(change));
+    const mutations: Array<Parameters<typeof stateTransaction>[0]> = [
+      () => registerOpenClawAgentDatabase(target),
+      () => unregisterOpenClawAgentDatabase(target),
+      () => unregisterOpenClawAgentDatabases({ agentId: "main" }),
+      (state) => unregisterOpenClawAgentDatabases({ agentId: "main", database: state }),
+    ];
+    for (const mutate of mutations) {
+      expect(() =>
+        stateTransaction((state) => {
+          mutate(state);
+          expect(changes).toEqual([]);
+          throw new Error("rollback");
+        }),
+      ).toThrow("rollback");
+      expect(changes).toEqual([]);
     }
+    unregisterOpenClawAgentDatabase(target);
+    registerOpenClawAgentDatabase(target);
+    unregisterOpenClawAgentDatabases({ agentId: "main" });
+    expect(changes).toEqual(
+      Array.from({ length: 3 }, () => ({
+        all: true,
+        scope: { agentId: "main", topology: true },
+      })),
+    );
+    observer.stop();
   });
 });

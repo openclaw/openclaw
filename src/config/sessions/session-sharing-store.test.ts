@@ -22,7 +22,7 @@ import {
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
-import { createSessionMaintenanceFinalizationOperation } from "./session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenanceFinalizationOperation as finalization } from "./session-accessor.sqlite-reclamation.js";
 import { readSessionMembersInWorker } from "./session-sharing-store.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
@@ -33,16 +33,31 @@ function memberRow(identityId: string, addedAt: number, addedBy = "owner") {
 
 type Scope = { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
 const readMembers = async (scope: Scope) => (await readSessionMembersInWorker(scope)).members;
+function sharing(scope: Scope) {
+  return {
+    add: (identityId: string, addedAt = 2, expectedSessionId?: string) =>
+      addSessionMember(scope, { ...memberRow(identityId, addedAt), expectedSessionId }),
+    remove: (
+      identityId: string,
+      expected?: Parameters<typeof removeSessionMember>[2],
+      sessionId?: string,
+    ) => removeSessionMember(scope, identityId, expected, sessionId),
+    read: () => readMembers(scope),
+    entry: () => loadSessionEntry(scope),
+    update: (sessionId: string, updatedAt: number, visibility?: "read-only") =>
+      upsertSessionEntryCore(scope, { sessionId, updatedAt, visibility }),
+  };
+}
 
 async function withSharingState(
-  run: (scope: Scope) => Promise<void>,
+  run: (scope: Scope, operations: ReturnType<typeof sharing>) => Promise<void>,
   entry: Parameters<typeof upsertSessionEntryCore>[1] = { sessionId: "session-main", updatedAt: 1 },
 ) {
   await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
     await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, entry);
-    await run(scope);
+    await run(scope, sharing(scope));
   });
 }
 
@@ -58,14 +73,15 @@ it("joins exited maintenance leases before removing sharing fixture state", asyn
   vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
     (data, nativeLocations) => {
       const worker = spawn(data, nativeLocations);
+      const databaseOptions = expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
+      });
       if (
         expect
           .objectContaining({
             type: "sqlite-transcript-archive-v2",
             operation: "reclaim",
-            databaseOptions: expect.objectContaining({
-              env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
-            }),
+            databaseOptions,
           })
           .asymmetricMatch(data)
       ) {
@@ -93,9 +109,7 @@ it("joins exited maintenance leases before removing sharing fixture state", asyn
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     const sql = observeHostDataSql();
     try {
-      await expect((await maintenance.promise).raw).resolves.toMatchObject({
-        kind: "maintenance-plan",
-      });
+      expect(await (await maintenance.promise).raw).toMatchObject({ kind: "maintenance-plan" });
       expect(
         sql.queries.filter((query) =>
           /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
@@ -107,7 +121,7 @@ it("joins exited maintenance leases before removing sharing fixture state", asyn
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     await expect(
       reclamation.runSqliteSessionReclamation({
-        plan: createSessionMaintenanceFinalizationOperation({
+        plan: finalization({
           agentId: scope.agentId,
           databaseOptions: scope,
           entries: [],
@@ -128,9 +142,15 @@ it("joins exited maintenance leases before removing sharing fixture state", asyn
 });
 
 it("publishes membership changes only after their containing transaction commits", async () => {
-  await withSharingState(async (scope) => {
+  await withSharingState(async (scope, { add, remove }) => {
     const changes: SessionRowChange[] = [];
     const members: string[][] = [];
+    const fact = (identityId: string, present: boolean) => ({
+      kind: "member",
+      sessionId: "session-main",
+      identityId,
+      present,
+    });
     const database = openOpenClawAgentDatabase(scope);
     const stopFacts = sessionChanges.subscribeFacts((change) => changes.push(change));
     const stop = sessionChanges.subscribe(() => {
@@ -140,7 +160,7 @@ it("publishes membership changes only after their containing transaction commits
     });
     try {
       runOpenClawAgentWriteTransaction(() => {
-        addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
+        add("guest");
         expect(changes).toEqual([]);
       }, scope);
       expect(changes).toEqual([
@@ -148,12 +168,7 @@ it("publishes membership changes only after their containing transaction commits
           agentId: scope.agentId,
           sessionKey: scope.sessionKey,
           storePath: resolveOpenClawAgentSqlitePath(scope),
-          facts: {
-            kind: "member",
-            sessionId: "session-main",
-            identityId: "guest",
-            present: true,
-          },
+          facts: fact("guest", true),
         }),
       ]);
       expect(members).toEqual([["guest"]]);
@@ -161,26 +176,25 @@ it("publishes membership changes only after their containing transaction commits
       members.length = 0;
       expect(() =>
         runOpenClawAgentWriteTransaction(() => {
-          removeSessionMember(scope, "guest");
+          remove("guest");
           expect(changes).toEqual([]);
           throw new Error("rollback");
         }, scope),
       ).toThrow("rollback");
       expect(changes).toEqual([]);
-      removeSessionMember(scope, "guest");
+      remove("guest");
       expect(members).toEqual([[]]);
       changes.length = 0;
       members.length = 0;
       runOpenClawAgentWriteTransaction(() => {
-        addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
-        removeSessionMember(scope, "transient");
+        add("transient");
+        remove("transient");
         expect(changes).toEqual([]);
       }, scope);
       expect(members).toEqual([[], []]);
-      expect(changes.map((change) => ("sessionKey" in change ? change.facts : undefined))).toEqual([
-        { kind: "member", sessionId: "session-main", identityId: "transient", present: true },
-        { kind: "member", sessionId: "session-main", identityId: "transient", present: false },
-      ]);
+      expect(changes.map((change) => ("sessionKey" in change ? change.facts : undefined))).toEqual(
+        [true, false].map((present) => fact("transient", present)),
+      );
     } finally {
       stop();
       stopFacts();
@@ -202,25 +216,6 @@ it("reads existing and missing memberships without opening or creating writable 
     expect(await readMembers(missingScope)).toEqual([]);
     expect(fs.existsSync(missingPath)).toBe(false);
   });
-});
-
-it("keeps deterministic membership rows", async () => {
-  await withSharingState(
-    async (scope) => {
-      expect(loadSessionEntry(scope)?.visibility).toBe("shared");
-
-      expect(await readMembers(scope)).toEqual([]);
-      expect(addSessionMember(scope, memberRow("zoe", 2)).inserted).toBe(true);
-      expect(addSessionMember(scope, memberRow("alice", 3)).inserted).toBe(true);
-
-      expect(await readMembers(scope)).toEqual([memberRow("alice", 3), memberRow("zoe", 2)]);
-      expect(removeSessionMember(scope, "alice", { addedBy: "owner", addedAt: 2 })).toBeNull();
-      expect(await readMembers(scope)).toHaveLength(2);
-      expect(removeSessionMember(scope, "alice")).toEqual(memberRow("alice", 3));
-      expect(removeSessionMember(scope, "alice")).toBeNull();
-    },
-    { sessionId: "session-main", updatedAt: 1, visibility: "shared" },
-  );
 });
 
 it("does not recreate a missing canonical membership table", async () => {
@@ -251,40 +246,33 @@ it("does not recreate a missing canonical membership table", async () => {
 });
 
 it("does not remove a newer membership grant using an older grant", async () => {
-  await withSharingState(async (scope) => {
-    const original = addSessionMember(scope, memberRow("guest", 2)).member;
-    expect(removeSessionMember(scope, "guest", original)).toEqual(original);
-    const replacement = addSessionMember(scope, memberRow("guest", 3)).member;
+  await withSharingState(
+    async (_, { add, remove, read, entry }) => {
+      expect(entry()?.visibility).toBe("shared");
+      expect(await read()).toEqual([]);
+      const original = add("guest").member;
+      expect(remove("guest", original)).toEqual(original);
+      const replacement = add("guest", 3).member;
 
-    expect(removeSessionMember(scope, "guest", original)).toBeNull();
-    expect(await readMembers(scope)).toEqual([replacement]);
-    expect(removeSessionMember(scope, "guest", replacement)).toEqual(replacement);
-    expect(await readMembers(scope)).toEqual([]);
-  });
+      expect(remove("guest", original)).toBeNull();
+      expect(await read()).toEqual([replacement]);
+      expect(remove("guest", replacement)).toEqual(replacement);
+      expect(await read()).toEqual([]);
+      expect(remove("guest")).toBeNull();
+    },
+    { sessionId: "session-main", updatedAt: 1, visibility: "shared" },
+  );
 });
 
 it("refuses member writes whose expected session instance no longer matches", async () => {
   await withSharingState(
-    async (scope) => {
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "stale",
-          addedBy: "owner",
-          expectedSessionId: "session-a",
-        }),
-      ).toThrow(/session changed/);
-      expect(await readMembers(scope)).toEqual([]);
+    async (_, { add, remove, read }) => {
+      expect(() => add("stale", 2, "session-a")).toThrow(/session changed/);
+      expect(await read()).toEqual([]);
 
-      expect(
-        addSessionMember(scope, {
-          ...memberRow("ok", 2),
-          expectedSessionId: "session-b",
-        }).inserted,
-      ).toBe(true);
-      expect(() => removeSessionMember(scope, "ok", undefined, "session-a")).toThrow(
-        /session changed/,
-      );
-      expect(await readMembers(scope)).toEqual([expect.objectContaining({ identityId: "ok" })]);
+      expect(add("ok", 2, "session-b").inserted).toBe(true);
+      expect(() => remove("ok", undefined, "session-a")).toThrow(/session changed/);
+      expect(await read()).toEqual([expect.objectContaining({ identityId: "ok" })]);
     },
     { sessionId: "session-b", updatedAt: 1 },
   );
@@ -304,8 +292,8 @@ it.each([
   "preserves membership identity checks for %s",
   async (_, sessionId, entryJson, valid) => {
     await withSharingState(
-      async (scope) => {
-        addSessionMember(scope, memberRow("existing", 2));
+      async (scope, { add, remove }) => {
+        add("existing");
         const database = openOpenClawAgentDatabase(scope);
         database.db
           .prepare(
@@ -313,14 +301,14 @@ it.each([
           )
           .run(sessionId, entryJson, scope.sessionKey);
 
-        const add = () => addSessionMember(scope, memberRow("new", 3));
-        const remove = () => removeSessionMember(scope, "existing");
+        const addNew = () => add("new", 3);
+        const removeExisting = () => remove("existing");
         if (valid) {
-          expect(add().inserted).toBe(true);
-          expect(remove()).toEqual(memberRow("existing", 2));
+          expect(addNew().inserted).toBe(true);
+          expect(removeExisting()).toEqual(memberRow("existing", 2));
         } else {
-          expect(add).toThrow("session changed before sharing mutation");
-          expect(remove).toThrow("session changed before sharing mutation");
+          expect(addNew).toThrow("session changed before sharing mutation");
+          expect(removeExisting).toThrow("session changed before sharing mutation");
           expect(listSessionMembersInDatabase(database, scope.sessionKey)).toEqual([
             memberRow("existing", 2),
           ]);
@@ -333,18 +321,14 @@ it.each([
 
 it("drops members when the session instance is replaced under the same key", async () => {
   await withSharingState(
-    async (scope) => {
-      expect(addSessionMember(scope, memberRow("guest", 2)).inserted).toBe(true);
-      await upsertSessionEntryCore(scope, {
-        sessionId: "session-b",
-        updatedAt: 3,
-        visibility: "read-only",
-      });
-      expect(await readMembers(scope)).toEqual([]);
-      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
-      expect(addSessionMember(scope, memberRow("guest", 4)).inserted).toBe(true);
-      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 5 });
-      expect(await readMembers(scope)).toEqual([expect.objectContaining({ identityId: "guest" })]);
+    async (_, { add, read, entry, update }) => {
+      expect(add("guest").inserted).toBe(true);
+      await update("session-b", 3, "read-only");
+      expect(await read()).toEqual([]);
+      expect(entry()?.visibility).toBeUndefined();
+      expect(add("guest", 4).inserted).toBe(true);
+      await update("session-b", 5);
+      expect(await read()).toEqual([expect.objectContaining({ identityId: "guest" })]);
     },
     { sessionId: "session-a", updatedAt: 1, visibility: "read-only" },
   );
@@ -352,8 +336,8 @@ it("drops members when the session instance is replaced under the same key", asy
 
 it("rejects stale member writes after entry-only deletion leaves a placeholder", async () => {
   await withSharingState(
-    async (scope) => {
-      expect(addSessionMember(scope, memberRow("guest", 2)).inserted).toBe(true);
+    async (scope, { add, read, entry, update }) => {
+      expect(add("guest").inserted).toBe(true);
 
       await deleteSessionEntryLifecycle({
         agentId: "main",
@@ -362,24 +346,13 @@ it("rejects stale member writes after entry-only deletion leaves a placeholder",
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       });
 
-      expect(loadSessionEntry(scope)).toBeUndefined();
-      expect(await readMembers(scope)).toEqual([]);
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "stale",
-          addedBy: "owner",
-          expectedSessionId: "session-a",
-        }),
-      ).toThrow(/session changed/);
-      expect(() =>
-        addSessionMember(scope, {
-          identityId: "planted",
-          addedBy: "owner",
-        }),
-      ).toThrow(/session changed/);
+      expect(entry()).toBeUndefined();
+      expect(await read()).toEqual([]);
+      expect(() => add("stale", 2, "session-a")).toThrow(/session changed/);
+      expect(() => add("planted")).toThrow(/session changed/);
 
-      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 3 });
-      expect(await readMembers(scope)).toEqual([]);
+      await update("session-b", 3);
+      expect(await read()).toEqual([]);
     },
     { sessionId: "session-a", updatedAt: 1 },
   );

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
@@ -91,90 +90,84 @@ async function readContext() {
   return ctx;
 }
 
-it("lists current membership evidence while transcript reads wait", async () => {
-  await withState(async () => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = mainScope("worker-members");
-    const entry = { sessionId: "worker-members", updatedAt: 1 };
-    await patchSessionEntryCore(scope, () => entry, {
-      fallbackEntry: entry,
-      skipMaintenance: true,
-    });
-    await addSessionMember(scope, memberRow("zoe", 2, "actor-evidence:unknown"));
-    await addSessionMember(scope, memberRow("alice", 3, "actor-evidence:unattributed"));
-    const requestContext = await readContext();
-    await getSessionRowProjection(requestContext)!.ensureMaterialized();
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const historyEntered = createDeferredCore();
-    const historyContended = createDeferredCore();
-    const releaseHistory = createDeferredCore();
-    const runHistory = historyLane.pool.run.bind(historyLane.pool);
-    let historyRequests = 0;
-    const historyRun = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      if (++historyRequests === 1) {
-        historyEntered.resolve();
-      } else {
-        historyContended.resolve();
-      }
-      await releaseHistory.promise;
-      return await runHistory(...args);
-    });
-    const historyRead = withSessionHistoryWorkerDatabase({ agentId: "main" }, (owner) =>
-      owner.readEntryPresence({ ...scope, databaseAgentId: "main", storePath: database.path }),
-    );
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
-    const methods = [
-      vi.spyOn(prototype, "all"),
-      vi.spyOn(prototype, "get"),
-      vi.spyOn(prototype, "iterate"),
-      vi.spyOn(prototype, "run"),
-      vi.spyOn(databasePrototype, "exec"),
-    ];
-    let membersRead: ReturnType<typeof call> | undefined;
-    try {
-      await Promise.race([historyEntered.promise, historyRead]);
-      expect(historyRequests).toBe(1);
-      membersRead = call(
-        "session.members.listEvidence",
-        { sessionKey: scope.sessionKey },
-        requestContext,
-      );
-      // A queued dependency signals contention directly; no timing threshold decides success.
-      expect(
-        await Promise.race([
-          membersRead.then((responses) => responses[0]?.[1]),
-          historyContended.promise.then(() => ({ blockedByTranscript: true })),
-        ]),
-      ).toMatchObject({
-        members: [
-          { identityId: "alice", addedAt: 3 },
-          { identityId: "zoe", addedByState: "unknown", addedAt: 2 },
-        ],
+it.each(["session.members.list", "session.members.listEvidence"] as const)(
+  "%s reads current cached membership while transcript reads wait",
+  async (method) => {
+    await withState(async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = mainScope("worker-members");
+      const entry = { sessionId: "worker-members", updatedAt: 1 };
+      await patchSessionEntryCore(scope, () => entry, {
+        fallbackEntry: entry,
+        skipMaintenance: true,
       });
-      for (const method of methods) {
-        expect(method).not.toHaveBeenCalled();
+      const evidenceAware = method === "session.members.listEvidence";
+      const zoe = memberRow("zoe", 2, evidenceAware ? "actor-evidence:unknown" : "owner");
+      const alice = memberRow("alice", 3, evidenceAware ? "actor-evidence:unattributed" : "owner");
+      await addSessionMember(scope, zoe);
+      await addSessionMember(scope, alice);
+      const expected = evidenceAware
+        ? [
+            { identityId: "alice", addedAt: 3 },
+            { identityId: "zoe", addedByState: "unknown", addedAt: 2 },
+          ]
+        : [alice, zoe];
+      const requestContext = await readContext();
+      await getSessionRowProjection(requestContext)!.ensureMaterialized();
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const historyEntered = createDeferredCore();
+      const historyContended = createDeferredCore();
+      const releaseHistory = createDeferredCore();
+      const runHistory = historyLane.pool.run.bind(historyLane.pool);
+      let historyRequests = 0;
+      const historyRun = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        if (++historyRequests === 1) {
+          historyEntered.resolve();
+        } else {
+          historyContended.resolve();
+        }
+        await releaseHistory.promise;
+        return await runHistory(...args);
+      });
+      const historyRead = withSessionHistoryWorkerDatabase({ agentId: "main" }, (owner) =>
+        owner.readEntryPresence({ ...scope, databaseAgentId: "main", storePath: database.path }),
+      );
+      const sql = observeHostDataSql();
+      let membersRead: ReturnType<typeof call> | undefined;
+      try {
+        await Promise.race([historyEntered.promise, historyRead]);
+        expect(historyRequests).toBe(1);
+        for (let round = 0; round < 2; round++) {
+          membersRead = call(method, { sessionKey: scope.sessionKey }, requestContext);
+          expect(
+            await Promise.race([
+              membersRead.then((responses) => responses[0]?.[1]),
+              historyContended.promise.then(() => ({ blockedByTranscript: true })),
+            ]),
+          ).toMatchObject({ members: expected });
+          if (evidenceAware && round === 0) {
+            expect(sql.queries).toEqual([]);
+          }
+          expect(
+            sql.queries.filter((query) => /from ["`]?session_members["`]?/i.test(query)),
+          ).toEqual([]);
+          sql.queries.length = 0;
+        }
+      } finally {
+        sql.restore();
+        releaseHistory.resolve();
+        await Promise.allSettled([historyRead, membersRead]);
+        historyRun.mockRestore();
       }
-    } finally {
-      for (const method of methods) {
-        method.mockRestore();
-      }
-      releaseHistory.resolve();
-      await Promise.allSettled([historyRead, membersRead]);
-      historyRun.mockRestore();
-    }
-    expect(await historyRead).toBe(true);
-    await addSessionMember(scope, memberRow("bob", 4));
-    expect(await readMembers(scope)).toEqual([
-      memberRow("alice", 3, "actor-evidence:unattributed"),
-      memberRow("bob", 4),
-      memberRow("zoe", 2, "actor-evidence:unknown"),
-    ]);
-    const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
-    expect(await readMembers(missing)).toEqual([]);
-    expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "missing" }))).toBe(false);
-  });
-});
+      expect(await historyRead).toBe(true);
+      await addSessionMember(scope, memberRow("bob", 4));
+      expect(await readMembers(scope)).toEqual([alice, memberRow("bob", 4), zoe]);
+      const missing = { agentId: "missing", sessionKey: "agent:missing:main" };
+      expect(await readMembers(missing)).toEqual([]);
+      expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "missing" }))).toBe(false);
+    });
+  },
+);
 
 it("retains the physical owner and logical partition of a shared member store", async () => {
   await withState(async (state) => {
@@ -224,41 +217,6 @@ async function call(
   });
   return responses;
 }
-
-it.each(["session.members.list", "session.members.listEvidence"] as const)(
-  "%s reads full member rows off the Gateway thread, including cached statements",
-  async (method) => {
-    await withState(async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = mainScope("worker-members");
-      await upsertSessionEntryCore(scope, { sessionId: "worker-members", updatedAt: 1 });
-      await addSessionMember(scope, memberRow("zoe", 2));
-      await addSessionMember(scope, memberRow("alice", 3));
-      const requestContext = await readContext();
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-      // Observe native execution, including statements prepared before the request.
-      const all = vi.spyOn(prototype, "all");
-      const iterate = vi.spyOn(prototype, "iterate");
-      try {
-        for (let round = 0; round < 2; round++) {
-          const result = await call(method, { sessionKey: scope.sessionKey }, requestContext);
-          expect(result[0]?.[1]).toMatchObject({
-            members: [memberRow("alice", 3), memberRow("zoe", 2)],
-          });
-        }
-        expect(
-          [...all.mock.contexts, ...iterate.mock.contexts]
-            .map((statement) => (statement as StatementSync).sourceSQL)
-            .filter((sql) => /from ["`]?session_members["`]?/i.test(sql)),
-        ).toEqual([]);
-      } finally {
-        all.mockRestore();
-        iterate.mockRestore();
-      }
-    });
-  },
-);
 
 it("rechecks the current manager after the membership read yields", async () => {
   await withState(async () => {
@@ -587,21 +545,18 @@ it.each([
               type: keyof Operations,
               run: () => Promise<T>,
             ): Promise<T> => {
-              const selected = type === (mutation === "category" ? "category.apply" : "remove");
-              if (selected) {
-                mutations++;
+              if (type !== (mutation === "category" ? "category.apply" : "remove")) {
+                return run();
               }
-              const result = await run();
-              if (selected) {
-                if (closeBeforeFailure) {
-                  expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
-                    true,
-                  );
-                  expect(database.db.isOpen).toBe(false);
-                }
-                throw failure;
+              mutations++;
+              await run();
+              if (closeBeforeFailure) {
+                expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
+                  true,
+                );
+                expect(database.db.isOpen).toBe(false);
               }
-              return result;
+              throw failure;
             };
             const interrupted: typeof worker = {
               ...worker,
