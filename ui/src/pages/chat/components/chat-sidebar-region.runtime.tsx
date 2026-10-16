@@ -1,7 +1,7 @@
 import "../../../styles/chat/side-panel.css";
 import "./chat-files-panel.tsx";
 import { render } from "@solidjs/web";
-import { For, Show, createEffect, createSignal, getOwner, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, getOwner, onCleanup } from "solid-js";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -404,16 +404,17 @@ function Region(props: RegionProps, host: RegionElement) {
     () => [props.layout, props.panelDefinitions, hostedRevision()],
     scheduleGeometryCommit,
   );
-  // Transfer browser focus when the narrow-pane presentation changes.
-  createEffect(
+  // Only lock transitions transfer focus; other facts are sampled then, preserving active menus.
+  const focusTransition = createMemo(
     () => ({
       locked: props.sideFocusLocked,
       managed: props.sideFocusManaged,
       origin: props.sideFocusOrigin,
       open: props.layout.open === true,
     }),
-    moveFocusWithSideLock,
+    { equals: (before, after) => before.locked === after.locked },
   );
+  createEffect(focusTransition, moveFocusWithSideLock);
   onCleanup(() => {
     disposed = true;
     dispose?.();

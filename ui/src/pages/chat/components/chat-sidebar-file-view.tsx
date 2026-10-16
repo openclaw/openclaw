@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -103,7 +103,8 @@ function FileAction(props: {
       <button
         class={["btn btn--sm sidebar-file-view__action", props.class]}
         type="button"
-        ref={(element) => props.ref?.(element)}
+        // Capture the mount callback; teardown must not read disposed Show props.
+        ref={untrack(() => props.ref)}
         aria-label={props.label}
         aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
         disabled={props.disabled}
@@ -277,7 +278,8 @@ export function SidebarFile(props: {
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
               type="search"
-              ref={(element) => controls().searchInputRef?.(element)}
+              // The control snapshot can retire before the input ref is released.
+              ref={untrack(() => controls().searchInputRef)}
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
               value={controls().query}
@@ -354,7 +356,8 @@ export function SidebarFile(props: {
         </Show>
         <Show when={mountIdentity()} keyed>
           {(_identity) => (
-            <div class="file-view__mount" ref={(element) => props.controls?.editorRef?.(element)} />
+            // The editor mount retains its callback through control replacement.
+            <div class="file-view__mount" ref={untrack(() => props.controls?.editorRef)} />
           )}
         </Show>
         <Show when={props.controls?.loadingEditor}>
