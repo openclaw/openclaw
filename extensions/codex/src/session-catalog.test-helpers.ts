@@ -75,12 +75,7 @@ import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
-import {
-  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
-  createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
-  createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
-  createCodexSessionCatalogNodeInvokePolicies,
-} from "./session-catalog.js";
+import * as catalog from "./session-catalog.js";
 
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -93,7 +88,7 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
 ] as const;
 const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
-const catalogFactories = new Set<ReturnType<typeof createCodexSessionCatalogControlRuntime>>();
+const catalogFactories = new Set<ReturnType<typeof catalog.createCodexSessionCatalogControl>>();
 
 beforeEach(() => {
   const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "codex-catalog-owner-"));
@@ -103,12 +98,10 @@ beforeEach(() => {
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
+  pinnedConnectionMocks.getClient.mockReset().mockResolvedValue(pinnedConnectionMocks.client);
   pinnedConnectionMocks.releaseClient.mockReset();
   pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset().mockResolvedValue({
     importedMessages: 0,
     omittedMessages: 0,
   });
@@ -127,13 +120,13 @@ afterEach(async () => {
   process.env.PATH = originalPath;
 });
 
-function createCodexSessionCatalogControlFactory(
-  params: Omit<
-    Parameters<typeof createCodexSessionCatalogControlRuntime>[0],
-    "resolveRuntimeOptions"
-  >,
-) {
-  const factory = createCodexSessionCatalogControlRuntime({
+type ControlFactoryParams = Omit<
+  Parameters<typeof catalog.createCodexSessionCatalogControl>[0],
+  "resolveRuntimeOptions"
+>;
+
+function createControlFactory(params: ControlFactoryParams) {
+  const factory = catalog.createCodexSessionCatalogControl({
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
@@ -153,11 +146,9 @@ function createCodexCatalogHomeResolver(
   });
 }
 
-export function createCodexSessionCatalogControl(
-  params: Parameters<typeof createCodexSessionCatalogControlFactory>[0],
-): CodexSessionCatalogControl {
+export function createCodexSessionCatalogControl(params: ControlFactoryParams) {
   const config = params.getRuntimeConfig() ?? {};
-  return createCodexSessionCatalogControlFactory(params).forRequest(
+  return createControlFactory(params).forRequest(
     resolveSessionAgentIdsStrict({ config }).sessionAgentId,
   );
 }
@@ -249,7 +240,7 @@ export function readCodexSessionTranscript(
 
 export function registerCodexSessionCatalog(
   params: Omit<
-    Parameters<typeof registerCodexSessionCatalogRuntime>[0],
+    Parameters<typeof catalog.registerCodexSessionCatalog>[0],
     "control" | "getPluginConfig" | "resolveRuntimeOptions"
   > & {
     control: CatalogControlInput;
@@ -266,7 +257,7 @@ export function registerCodexSessionCatalog(
     });
     control = { ...control, homesForAgent: (agentId) => resolver.forAgent(agentId) };
   }
-  return registerCodexSessionCatalogRuntime({
+  return catalog.registerCodexSessionCatalog({
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     control,
@@ -278,7 +269,7 @@ export function createCodexSessionCatalogNodeHostCommands(
   control: CatalogControlInput,
   bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), bindingStore);
+  return catalog.createCodexSessionCatalogNodeHostCommands(asControlFactory(control), bindingStore);
 }
 
 type SessionRuntime = PluginRuntime["agent"]["session"];
@@ -294,31 +285,24 @@ type CatalogMethodName = "list" | "read" | "continueSession" | "archive" | "open
 type CatalogMethod<K extends CatalogMethodName> = (
   params: OptionalCatalogAgent<Parameters<NonNullable<RegisteredSessionCatalogProvider[K]>>[0]>,
 ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider[K]>>;
-type SessionCatalogProvider = Omit<RegisteredSessionCatalogProvider, CatalogMethodName> & {
-  list: CatalogMethod<"list">;
-  read: CatalogMethod<"read">;
-  continueSession?: CatalogMethod<"continueSession">;
-  archive?: CatalogMethod<"archive">;
-  openTerminal?: CatalogMethod<"openTerminal">;
+type SessionCatalogProvider = {
+  [K in keyof RegisteredSessionCatalogProvider]: K extends CatalogMethodName
+    ? CatalogMethod<K>
+    : RegisteredSessionCatalogProvider[K];
 };
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
+  const forAgent = <P extends { agentId?: string }>(params: P) => ({ agentId: "main", ...params });
   return {
     ...provider,
-    list: (params) => provider.list({ agentId: "main", ...params }),
-    read: (params) => provider.read({ agentId: "main", ...params }),
+    list: (params) => provider.list(forAgent(params)),
+    read: (params) => provider.read(forAgent(params)),
     ...(provider.continueSession
-      ? {
-          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
-        }
+      ? { continueSession: (params) => provider.continueSession!(forAgent(params)) }
       : {}),
-    ...(provider.archive
-      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
-      : {}),
+    ...(provider.archive ? { archive: (params) => provider.archive!(forAgent(params)) } : {}),
     ...(provider.openTerminal
-      ? {
-          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
-        }
+      ? { openTerminal: (params) => provider.openTerminal!(forAgent(params)) }
       : {}),
   } as SessionCatalogProvider;
 }
@@ -653,9 +637,9 @@ export {
   sessionBindingIdentity,
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,
-  createCodexSessionCatalogControlFactory,
-  createCodexSessionCatalogNodeInvokePolicies,
+  createControlFactory as createCodexSessionCatalogControlFactory,
 };
+export { createCodexSessionCatalogNodeInvokePolicies } from "./session-catalog.js";
 export type {
   CodexAppServerBindingStore,
   CodexAppServerThreadBinding,
