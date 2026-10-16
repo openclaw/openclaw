@@ -507,9 +507,9 @@ describe("CI changed lint", () => {
   );
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "executes the generated Lit ratchet against a depth-one merge checkout for %s",
+    "executes the generated controller guard against a depth-one merge checkout for %s",
     (file) => {
-      const { cwd: source, write } = fixture("ci-lit-merge-source-");
+      const { cwd: source, write } = fixture("ci-controller-merge-source-");
       const env = createNestedGitEnv();
       const git = (cwd: string, args: string[]) =>
         execFileSync(
@@ -522,8 +522,7 @@ describe("CI changed lint", () => {
             stdio: ["ignore", "pipe", "pipe"],
           },
         ).trim();
-      const legacy = 'import { html } from "lit"; export const view = html`<div />`;\n';
-      write("ui/src/view.ts", legacy);
+      write("ui/src/view.ts", "export {};\n");
       git(source, ["init"]);
       git(source, ["add", "."]);
       git(source, ["commit", "-m", "base"]);
@@ -538,7 +537,7 @@ describe("CI changed lint", () => {
       git(source, ["commit", "-m", "main"]);
       const checkoutBase = git(source, ["rev-parse", "HEAD"]);
       git(source, ["merge", "--no-ff", "candidate", "-m", "PR merge"]);
-      const cwd = tempDirs.make("ci-lit-merge-shallow-");
+      const cwd = tempDirs.make("ci-controller-merge-shallow-");
       git(cwd, ["clone", "--depth=1", "--branch=merge", pathToFileURL(source).href, "."]);
       git(cwd, ["fetch", "--depth=1", "origin", checkoutBase]);
       const ancestry = spawnSync("git", ["merge-base", "HEAD", checkoutBase], { cwd, env });
@@ -556,14 +555,14 @@ describe("CI changed lint", () => {
             fullGroups: ["scripts"],
             central: true,
           },
-        }).commands.find(({ args }) => args[0] === "check:control-ui-lit-ratchet");
+        }).commands.find(({ args }) => args[0] === "check:control-ui-controllers");
         expect(command).toBeDefined();
         return spawnSync(
           process.execPath,
           [
             "--import",
             path.resolve("scripts/tsx.mjs"),
-            path.resolve("scripts/check-control-ui-lit-ratchet.mts"),
+            path.resolve("scripts/check-control-ui-controllers.mts"),
             ...command!.args.slice(1),
           ],
           { cwd, env, encoding: "utf8" },
@@ -572,8 +571,8 @@ describe("CI changed lint", () => {
       const retained = run(checkoutBase);
       expect(retained.error).toBeUndefined();
       expect(retained.status, retained.stderr).toBe(0);
-      expect(retained.stdout).toContain("Control UI Lit ratchet OK");
-      writeFileSync(path.join(cwd, "ui/src/new.ts"), legacy);
+      expect(retained.stdout).toContain("Control UI controller guard OK");
+      writeFileSync(path.join(cwd, "ui/src/new.ts"), "class NewController {}\n");
       const added = run(checkoutBase);
       expect(added.error).toBeUndefined();
       expect(added.status, added.stderr).toBe(1);
