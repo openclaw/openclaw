@@ -118,6 +118,10 @@ URL, author handle, and sender tier. The session's system instructions include
 that origin and require manual approval before replying to X. This applies
 whether or not automatic public sharing is enabled.
 
+Visible descendants retain the same origin and approval instructions, including
+when the work is delegated through a hidden helper. They cannot widen the X reply
+target beyond the original conversation.
+
 When the session has a finding, fix, PR, or a clear "can't reproduce" result, it
 drafts a reply of at most 280 characters and asks whether to post it. Tell the
 session explicitly to post the draft; after approval, the visible session uses
