@@ -24,6 +24,7 @@ import {
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
+import { compareProviderAuthChoiceGroups } from "../../plugins/provider-auth-choice-order.js";
 import {
   createProviderAuthConfigPatch,
   writeProviderAuthConfig,
@@ -881,7 +882,8 @@ async function runModelsAuthLoginFlow(
     (await prompter
       .select({
         message: "Select a provider",
-        options: authProviders.map((provider) => ({
+        searchable: true,
+        options: authProviders.toSorted(compareProviderAuthChoiceGroups).map((provider) => ({
           value: provider.id,
           label: provider.label,
           hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,

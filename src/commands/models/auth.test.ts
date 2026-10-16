@@ -1268,7 +1268,7 @@ describe("modelsAuthLoginCommand", () => {
       "Provider auth",
     );
     expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select a provider" }),
+      expect.objectContaining({ message: "Select a provider", searchable: true }),
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
     expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
@@ -1279,6 +1279,44 @@ describe("modelsAuthLoginCommand", () => {
       2,
       expect.not.objectContaining({ providerRefs: expect.anything() }),
     );
+  });
+
+  it("offers searchable providers with preferred providers first without changing selection", async () => {
+    const runSelected = vi.fn().mockResolvedValue({ profiles: [] });
+    const runOther = vi.fn().mockResolvedValue({ profiles: [] });
+    const select = vi.fn().mockResolvedValue("beta-first");
+    mocks.createClackPrompter.mockReturnValue({ note: vi.fn(async () => {}), select });
+    mocks.resolvePluginProvidersCore.mockReturnValue(
+      (
+        [
+          ["zeta", "Zeta"],
+          ["xai", "xAI"],
+          ["beta-second", "Beta"],
+          ["alpha", "Alpha"],
+          ["openai", "OpenAI"],
+          ["beta-first", "Beta"],
+        ] as const
+      ).map(([id, label]) =>
+        createProvider({ id, label, run: id === "beta-first" ? runSelected : runOther }),
+      ),
+    );
+
+    await modelsAuthLoginCommand({}, createRuntime());
+
+    expect(select).toHaveBeenCalledWith({
+      message: "Select a provider",
+      searchable: true,
+      options: [
+        { value: "openai", label: "OpenAI", hint: undefined },
+        { value: "xai", label: "xAI", hint: undefined },
+        { value: "alpha", label: "Alpha", hint: undefined },
+        { value: "beta-first", label: "Beta", hint: undefined },
+        { value: "beta-second", label: "Beta", hint: undefined },
+        { value: "zeta", label: "Zeta", hint: undefined },
+      ],
+    });
+    expect(runSelected).toHaveBeenCalledOnce();
+    expect(runOther).not.toHaveBeenCalled();
   });
 
   it("rejects the retired manual auth provider codex-cli", async () => {

@@ -92,7 +92,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           id: "oauth",
           kind: "oauth",
           label: "Codex login (browser)",
-          hint: "Sign in to Codex locally with your ChatGPT account",
+          hint: "Sign in to Codex with your ChatGPT account in a browser",
           matchesPersonalAccount,
           credentialImport: CODEX_CHATGPT_IMPORT,
           wizard: {
@@ -104,7 +104,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           id: "device-code",
           kind: "device_code",
           label: "Codex login (device code)",
-          hint: "Use a browser code when OpenClaw runs on a remote VM",
+          hint: "Use a device code when OpenClaw runs on a remote machine",
           matchesPersonalAccount,
           credentialImport: CODEX_CHATGPT_IMPORT,
           wizard: {
@@ -128,7 +128,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           id: "api-key",
           kind: "api_key",
           label: "OpenAI API Key",
-          hint: "Use your OpenAI API key directly",
+          hint: "OpenAI Platform API billing (separate from ChatGPT)",
           credentialImport: CODEX_API_KEY_IMPORT,
           wizard: {
             choiceId: "openai-api-key",

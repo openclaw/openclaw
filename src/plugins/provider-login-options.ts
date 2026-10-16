@@ -66,22 +66,29 @@ export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMeta
   );
 }
 
+/** Keep sign-in menus on the same provider and method order as onboarding. */
+export function compareProviderLoginChoices(
+  a: ProviderAuthChoiceMetadata,
+  b: ProviderAuthChoiceMetadata,
+): number {
+  return (
+    compareProviderAuthChoiceGroups(
+      { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
+      { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
+    ) ||
+    (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+    Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
+    a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
+    a.choiceId.localeCompare(b.choiceId)
+  );
+}
+
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
   return choices
     .filter(isEligible)
-    .toSorted(
-      (a, b) =>
-        compareProviderAuthChoiceGroups(
-          { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
-          { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
-        ) ||
-        (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
-        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
-        a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
-        a.choiceId.localeCompare(b.choiceId),
-    )
+    .toSorted(compareProviderLoginChoices)
     .flatMap((choice): ProviderLoginOption[] => {
       const kind = loginKind(choice);
       if (!kind) {
