@@ -61,6 +61,10 @@ export async function requestChatSend(
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
+  const attachments = buildChatApiAttachments(params.attachments);
+  const hasAudio = attachments?.some((attachment) =>
+    attachment.mimeType.toLowerCase().startsWith("audio/"),
+  );
   const payload = await state.client!.request(
     "chat.send",
     {
@@ -79,10 +83,11 @@ export async function requestChatSend(
         ? { expectedLeafEntryId: params.expectedLeafEntryId }
         : {}),
       idempotencyKey: params.runId,
-      attachments: buildChatApiAttachments(params.attachments),
+      attachments,
     },
-    // This bounds receipt of the admission ACK, not execution of the admitted turn.
-    { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    // Audio transcription is part of durable input admission and can exceed the
+    // ordinary ACK deadline. The connection lifetime still owns this wait.
+    { timeoutMs: hasAudio ? null : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
   );
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;

@@ -271,6 +271,7 @@ export async function handleChatSendWithStorage(
       client,
       logGateway: context.logGateway,
       getConfig: context.getRuntimeConfig,
+      assertInputCurrent: assertInputAdmissionCurrent,
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;

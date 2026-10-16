@@ -799,7 +799,7 @@ class GatewaySession(
   suspend fun request(
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): String = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs).payloadOrThrow()
 
   suspend fun loadImageArtifact(
@@ -888,7 +888,7 @@ class GatewaySession(
     expectedEndpointStableId: String,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): String = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs).payloadOrThrow()
 
   private fun RpcResult.payloadOrThrow(): String {
@@ -930,7 +930,7 @@ class GatewaySession(
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
-    timeoutMs: Long = 15_000,
+    timeoutMs: Long? = null,
   ): RpcResult =
     requestDetailed(
       expectedEndpointStableId = null,
@@ -943,7 +943,7 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long,
+    timeoutMs: Long?,
   ): RpcResult {
     val conn = readyConnection(expectedEndpointStableId) ?: throw GatewayRequestNotEnqueued("not connected")
     return requestDetailed(conn, method, paramsJson, timeoutMs)
@@ -953,13 +953,27 @@ class GatewaySession(
     conn: Connection,
     method: String,
     paramsJson: String?,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     withEnqueue: (() -> Unit) -> Unit = { it() },
   ): RpcResult {
     val params = parseRequestParams(paramsJson)
+    val hasAudio =
+      method == "chat.send" &&
+        params.asObjectOrNull()?.get("attachments").asArrayOrNull()?.any { attachment ->
+          attachment
+            .asObjectOrNull()
+            ?.get("mimeType")
+            .asStringOrNull()
+            ?.lowercase()
+            ?.startsWith("audio/") == true
+        } == true
+    // Audio transcription precedes durable admission. Disconnect and caller
+    // cancellation still settle the request while it waits for that ACK.
+    val requestTimeoutMs = timeoutMs ?: if (hasAudio) 0L else 15_000L
     val enqueue = guardRequestEnqueue(conn, withEnqueue)
-    if (method != "talk.catalog") return conn.request(method, params, timeoutMs, enqueue)
-    var remainingMs = minOf(timeoutMs, 10_000)
+    if (method != "talk.catalog") return conn.request(method, params, requestTimeoutMs, enqueue)
+    // A disabled RPC deadline must not disable the catalog's bounded warm-up budget.
+    var remainingMs = if (requestTimeoutMs == 0L) 10_000L else minOf(requestTimeoutMs, 10_000)
     val deadline = SystemClock.elapsedRealtime() + remainingMs
     while (true) {
       val result = conn.request(method, params, remainingMs, enqueue)
@@ -1186,7 +1200,7 @@ class GatewaySession(
       val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
-        return withTimeout(timeoutMs) { deferred.await() }
+        return if (timeoutMs == 0L) deferred.await() else withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
         if (method == GatewayMethod.Connect.rawValue) {
           throw GatewayConnectFailure(gatewayNetworkConnectError(timedOut = true))
