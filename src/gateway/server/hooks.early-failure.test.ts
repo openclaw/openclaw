@@ -68,6 +68,22 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => ({
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
   await import("./hooks.js");
 
+function mockStartedRun(result: RunCronAgentTurnResult) {
+  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+    async (params: { onExecutionStarted?: () => void }) => {
+      params.onExecutionStarted?.();
+      return result;
+    },
+  );
+}
+
+const privateRunData = {
+  outputText: "private output",
+  summary: "private summary",
+  sessionId: "private-session",
+  sessionKey: "private-session-key",
+};
+
 const pluginHookTurn = {
   name: "IMAP fastmail",
   agentId: "hooks",
@@ -130,45 +146,23 @@ async function postAgentHook(
     info: vi.fn(options.logger?.info),
     error: vi.fn(),
   };
-  const handler = createGatewayHooksRequestHandler({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    deps: {} as never,
-    getHooksConfig: () => hooksConfig,
-    getClientIpConfig: () => ({}),
-    bindHost: "127.0.0.1",
-    port: 18789,
-    logHooks: logHooks as never,
-    agentStartAdmissionTimeoutMs: options.admissionTimeoutMs,
-  });
-  const req = Object.assign(
-    Readable.from([JSON.stringify({ message: "Dispatch", name: "Recovery", agentId: "hooks" })]),
-    {
-      method: "POST",
-      url: options.mapping ? "/hooks/terminal" : "/hooks/agent",
-      headers: {
-        authorization: "Bearer hook-secret",
-        "content-type": "application/json",
-      },
-      socket: { remoteAddress: "127.0.0.1" },
-    },
-  ) as unknown as IncomingMessage;
-  let responseBody = "";
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn((chunk: string) => {
-      responseBody = chunk;
-    }),
-  } as unknown as ServerResponse;
-
+  const handler = createHandler(options.admissionTimeoutMs, hooksConfig, logHooks);
   if (options.rejectInitialConfig !== false) {
     mocks.getRuntimeConfig.mockImplementationOnce(() => {
       throw new Error("required system config unavailable");
     });
   }
   mocks.getRuntimeConfig.mockReturnValue(config);
-  expect(await handler(req, res)).toBe(true);
-  return { body: JSON.parse(responseBody) as { runId: string }, status: res.statusCode, logHooks };
+  const response = await post(handler, options.mapping ? "/hooks/terminal" : "/hooks/agent", {
+    message: "Dispatch",
+    name: "Recovery",
+    agentId: "hooks",
+  });
+  return {
+    body: JSON.parse(response.body()) as { runId: string },
+    status: response.res.statusCode,
+    logHooks,
+  };
 }
 
 describe("gateway hook early-failure recovery", () => {
@@ -493,12 +487,7 @@ describe("gateway hook early-failure recovery", () => {
 
   it("announces successful plugin hook turns through the ordinary event owner", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        return { status: "ok", summary: "New email summarized" };
-      },
-    );
+    mockStartedRun({ status: "ok", summary: "New email summarized" });
     const { dispatcher } = createPluginHookDispatcher();
 
     await expect(
@@ -644,8 +633,16 @@ const config: OpenClawConfig = {
   },
 };
 
-function createHandler(admissionTimeoutMs: number) {
-  const hooksConfig = resolveHooksConfig(config);
+function createHandler(
+  admissionTimeoutMs: number | undefined,
+  hooksConfig = resolveHooksConfig(config),
+  logHooks: Pick<ReturnType<typeof createSubsystemLogger>, "warn" | "debug" | "info" | "error"> = {
+    warn: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+) {
   if (!hooksConfig) {
     throw new Error("expected resolved hooks config");
   }
@@ -656,7 +653,7 @@ function createHandler(admissionTimeoutMs: number) {
     getClientIpConfig: () => ({}),
     bindHost: "127.0.0.1",
     port: 18789,
-    logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+    logHooks: logHooks as never,
     agentStartAdmissionTimeoutMs: admissionTimeoutMs,
   });
 }
@@ -812,22 +809,14 @@ describe("hook background admission", () => {
     "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
     async ({ deliverySuppressionReason, replyDisposition }) => {
       mocks.getRuntimeConfig.mockReturnValue(config);
-      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-        async (params: { onExecutionStarted?: () => void }) => {
-          params.onExecutionStarted?.();
-          return {
-            status: "ok" as const,
-            delivered: false,
-            deliveryAttempted: true,
-            deliverySuppressionReason,
-            replyDisposition,
-            outputText: "private output",
-            summary: "private summary",
-            sessionId: "private-session",
-            sessionKey: "private-session-key",
-          };
-        },
-      );
+      mockStartedRun({
+        status: "ok" as const,
+        delivered: false,
+        deliveryAttempted: true,
+        deliverySuppressionReason,
+        replyDisposition,
+        ...privateRunData,
+      });
       const handler = createHandler(100);
 
       const response = await post(handler, "/hooks/agent", {
@@ -854,22 +843,14 @@ describe("hook background admission", () => {
   it("returns categorical delivery failure without private run data", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     const secret = "fake-secret-value-that-must-not-leak";
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        return {
-          status: "ok" as const,
-          replyDisposition: "visible" as const,
-          delivered: false,
-          deliveryAttempted: true,
-          deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
-          outputText: "private output",
-          summary: "private summary",
-          sessionId: "private-session",
-          sessionKey: "private-session-key",
-        };
-      },
-    );
+    mockStartedRun({
+      status: "ok" as const,
+      replyDisposition: "visible" as const,
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
+      ...privateRunData,
+    });
     const handler = createHandler(100);
 
     const response = await post(handler, "/hooks/agent", {

@@ -1,4 +1,3 @@
-// Event-loop health tests cover sampling ownership and delay/load classification.
 import type { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -89,6 +88,10 @@ function createMonitorHarness(params?: {
     isIdle: params?.isIdle,
   });
   monitors.push(monitor);
+  const elapseWithoutSampling = (elapsedMs: number) => {
+    nowMs += elapsedMs;
+    nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
+  };
   const sample = async (elapsedMs = 20) => {
     nowMs += elapsedMs;
     nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
@@ -106,10 +109,20 @@ function createMonitorHarness(params?: {
         await sample(elapsedMs);
       }
     },
-    elapseWithoutSampling: (elapsedMs: number) => {
-      nowMs += elapsedMs;
-      nativeDelay.max = Math.max(nativeDelay.max, elapsedMs * 1_000_000);
-    },
+    elapseWithoutSampling,
+    stall: (elapsedMs: number, nativeTimerCaughtUp = true) =>
+      scheduler.schedule({
+        id: "maintenance:synthetic-work",
+        delayMs: 0,
+        run: () => {
+          elapseWithoutSampling(elapsedMs);
+          // The native timer may not have observed the blocked callback yet.
+          if (!nativeTimerCaughtUp) {
+            nativeDelay.max = 20_000_000;
+          }
+        },
+      }),
+    expectHealth: (expected: object) => expect(monitor.snapshot()).toMatchObject(expected),
   };
 }
 
@@ -135,7 +148,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     idle = false;
     await harness.samples(500);
     await harness.samples(50);
-    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, delayMaxMs: 20 });
+    harness.expectHealth({ intervalMs: 1_000, delayMaxMs: 20 });
   });
 
   it("detects a late idle wake with separate wall and elapsed clocks", async () => {
@@ -152,11 +165,11 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       });
       await harness.samples(50);
       await harness.samples(450);
-      expect(harness.monitor.snapshot()).toMatchObject({ degraded: false });
+      harness.expectHealth({ degraded: false });
       harness.elapseWithoutSampling(12_000);
       nativeDelay.max = 20_000_000;
       await harness.sample();
-      expect(harness.monitor.snapshot()).toMatchObject({
+      harness.expectHealth({
         degraded: true,
         delayMaxMs: 2_020,
         reasons: ["event_loop_delay"],
@@ -169,11 +182,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
   it("keeps idle callback stalls and resumes one-second sampling after degradation", async () => {
     const harness = createMonitorHarness({ isIdle: () => true });
     await harness.samples(50);
-    harness.scheduler.schedule({
-      id: "maintenance:synthetic-work",
-      delayMs: 0,
-      run: () => harness.elapseWithoutSampling(1_200),
-    });
+    harness.stall(1_200);
     await harness.sample();
     await harness.samples(389);
     const stalledSample = harness.monitor.snapshot();
@@ -183,7 +192,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     });
     expect(stalledSample?.delayMaxMs).toBe(1_200);
     await harness.samples(50);
-    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000, degraded: false });
+    harness.expectHealth({ intervalMs: 1_000, degraded: false });
   });
 
   it("logs the blocking scheduler job once when its callback also contains the overdue sample", async () => {
@@ -193,15 +202,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     loggingState.rawConsole = { ...console, warn };
     try {
       const harness = createMonitorHarness();
-      harness.scheduler.schedule({
-        id: "maintenance:synthetic-work",
-        delayMs: 0,
-        run: () => {
-          harness.elapseWithoutSampling(1_200);
-          // The native timer has not observed the blocked callback yet.
-          nativeDelay.max = 20_000_000;
-        },
-      });
+      harness.stall(1_200, false);
       await harness.sample();
       await harness.sample();
       await harness.sample();
@@ -227,11 +228,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const unsubscribePublic = onDiagnosticEvent((event) => publicEvents.push(event));
     try {
       const harness = createMonitorHarness();
-      harness.scheduler.schedule({
-        id: "maintenance:synthetic-work",
-        delayMs: 0,
-        run: () => harness.elapseWithoutSampling(250),
-      });
+      harness.stall(250);
       await harness.samples(100);
       await waitForDiagnosticEventsDrained();
       expect(internal).toEqual([
@@ -274,7 +271,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     await harness.samples(49);
     expect(harness.monitor.snapshot()).toBeUndefined();
     await harness.sample();
-    expect(harness.monitor.snapshot()).toMatchObject({
+    harness.expectHealth({
       degraded: false,
       reasons: [],
       intervalMs: 1_000,
@@ -291,7 +288,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
   ])("preserves load classification with delay co-evidence: $reasons", async (params) => {
     const harness = createMonitorHarness(params);
     await harness.samples(34, 30);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    harness.expectHealth({
       degraded: true,
       degradedSinceMs: 0,
       intervalMs: 1_020,
@@ -303,16 +300,9 @@ describe("createGatewayEventLoopHealthMonitor", () => {
 
   it("retains sub-second blocking co-evidence before the native timer catches up", async () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
-    harness.scheduler.schedule({
-      id: "maintenance:synthetic-work",
-      delayMs: 0,
-      run: () => {
-        harness.elapseWithoutSampling(30);
-        nativeDelay.max = 20_000_000;
-      },
-    });
+    harness.stall(30, false);
     await harness.samples(50);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    harness.expectHealth({
       delayMaxMs: 30,
       reasons: ["event_loop_utilization", "cpu"],
     });
@@ -339,7 +329,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
   it("tracks persistent degradation at completed samples and clears on recovery", async () => {
     const harness = createMonitorHarness();
     await harness.sample(1_500);
-    expect(harness.monitor.snapshot()).toMatchObject({ degraded: true, degradedSinceMs: 0 });
+    harness.expectHealth({ degraded: true, degradedSinceMs: 0 });
     await harness.sample(59_999);
     expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
     await harness.sample(1_000);
@@ -352,7 +342,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.monitor.snapshot()).toBe(degraded);
     expect(harness.monitor.persistentDegradationSnapshot()).toBe(degraded);
     await harness.sample();
-    expect(harness.monitor.snapshot()).toMatchObject({ degraded: false, degradedSinceMs: null });
+    harness.expectHealth({ degraded: false, degradedSinceMs: null });
     expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
   });
 
@@ -363,7 +353,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.monitor.reset();
     expect(harness.monitor.snapshot()).toBeUndefined();
     await harness.samples(50);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    harness.expectHealth({
       degraded: false,
       intervalMs: 1_000,
       delayMaxMs: 20,

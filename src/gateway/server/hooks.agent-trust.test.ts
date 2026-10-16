@@ -15,6 +15,7 @@ import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/c
 import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import type { HookAgentDispatchPayload } from "../hooks.js";
 
 const enqueueSystemEventMock = vi.fn();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
@@ -129,31 +130,46 @@ function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number }
   };
 }
 
-function buildAgentPayload(name: string, agentId?: string) {
+function buildAgentPayload(name: string, overrides: Partial<HookAgentDispatchPayload> = {}) {
   return {
     message: "test message",
     name,
-    agentId,
-    effectiveAgentId: agentId ?? "main",
-    idempotencyKey: undefined,
+    effectiveAgentId: "main",
     wakeMode: "now" as const,
     sessionKey: "session-1",
     sessionMode: "isolated" as const,
     sourcePath: "/hooks/agent",
     deliver: false,
     channel: "last" as const,
-    to: undefined,
     delivery: { mode: "none" as const },
-    model: undefined,
-    thinking: undefined,
-    timeoutSeconds: undefined,
-    allowUnsafeExternalContent: undefined,
-    externalContentSource: undefined,
+    ...overrides,
   };
 }
 
-function dispatchAgentHook(payload: unknown): unknown {
-  return resolveDispatchAgentHook()(payload);
+function completedRun(summary = "done") {
+  return { status: "ok", summary, delivered: false };
+}
+
+function dispatchAgentHook(
+  name: string,
+  overrides: Partial<HookAgentDispatchPayload> = {},
+): unknown {
+  return resolveDispatchAgentHook()(buildAgentPayload(name, overrides));
+}
+
+function deliveryPayload(accountId?: string): Partial<HookAgentDispatchPayload> {
+  return {
+    deliver: true,
+    channel: "telegram",
+    to: "123456",
+    ...(accountId ? { accountId } : {}),
+    delivery: {
+      mode: "announce",
+      channel: "telegram",
+      to: "123456",
+      ...(accountId ? { accountId } : {}),
+    },
+  };
 }
 
 function dispatchWakeHook(payload: unknown, agentId: string): unknown {
@@ -282,7 +298,7 @@ describe("dispatchAgentHook trust handling", () => {
     );
 
     await withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
-      dispatchAgentHook(buildAgentPayload("Gateway context")),
+      dispatchAgentHook("Gateway context"),
     );
 
     expect(observed).toBe(gatewayContext);
@@ -296,19 +312,7 @@ describe("dispatchAgentHook trust handling", () => {
       throw new Error('Unknown account "missing" for channel telegram.');
     });
 
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Invalid account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "missing",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-        accountId: "missing",
-      },
-    });
+    const result = await dispatchAgentHook("Invalid account", deliveryPayload("missing"));
 
     expect(result).toMatchObject({
       ok: false,
@@ -326,17 +330,7 @@ describe("dispatchAgentHook trust handling", () => {
       delivered: true,
     });
 
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Default account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-      },
-    });
+    const result = await dispatchAgentHook("Default account", deliveryPayload());
 
     expect(result).toMatchObject({ ok: true });
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
@@ -356,19 +350,7 @@ describe("dispatchAgentHook trust handling", () => {
         throw new Error('Unknown account "removed" for channel telegram.');
       });
 
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Removed account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "removed",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-        accountId: "removed",
-      },
-    });
+    const result = await dispatchAgentHook("Removed account", deliveryPayload("removed"));
 
     expect(result).toMatchObject({
       ok: false,
@@ -426,25 +408,19 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("serializes canonical aliases for the same session in dispatch order", async () => {
-    const dispatch = resolveDispatchAgentHook();
+    const dispatch = dispatchAgentHook;
     const firstGate = createDeferred();
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
+      return completedRun("first done");
     });
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(completedRun("second done"));
 
-    dispatch({
-      ...buildAgentPayload("First"),
+    dispatch("First", {
       message: "first",
       sessionKey: "main",
     });
-    dispatch({
-      ...buildAgentPayload("Second"),
+    dispatch("Second", {
       message: "second",
       sessionKey: "agent:main:main",
     });
@@ -466,14 +442,14 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("runs different sessions in parallel", async () => {
-    const dispatch = resolveDispatchAgentHook();
+    const dispatch = dispatchAgentHook;
     const firstGate = createDeferred();
     const secondGate = createDeferred();
     runCronIsolatedAgentTurnMock.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
         params.onExecutionStarted?.();
         await firstGate.promise;
-        return { status: "ok", summary: "first done", delivered: false };
+        return completedRun("first done");
       },
     );
 
@@ -485,13 +461,11 @@ describe("dispatchAgentHook trust handling", () => {
       },
     );
 
-    const firstAdmission = dispatch({
-      ...buildAgentPayload("First"),
+    const firstAdmission = dispatch("First", {
       message: "first",
       sessionKey: "agent:main:session-a",
     });
-    const secondAdmission = dispatch({
-      ...buildAgentPayload("Second"),
+    const secondAdmission = dispatch("Second", {
       message: "second",
       sessionKey: "agent:main:session-b",
     });
@@ -512,22 +486,18 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("uses fresh config when a queued hook starts after reload", async () => {
-    const dispatch = resolveDispatchAgentHook();
+    const dispatch = dispatchAgentHook;
     let currentConfig = mainRosterConfig();
     loadConfigMock.mockImplementation(() => currentConfig);
     const firstGate = createDeferred();
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
+      return completedRun("first done");
     });
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(completedRun("second done"));
 
-    dispatch({ ...buildAgentPayload("First"), message: "first", sessionKey: "main" });
-    dispatch({ ...buildAgentPayload("Second"), message: "second", sessionKey: "main" });
+    dispatch("First", { message: "first", sessionKey: "main" });
+    dispatch("Second", { message: "second", sessionKey: "main" });
     await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
 
     currentConfig = { ...mainRosterConfig(), session: { mainKey: "reloaded" } };
@@ -544,21 +514,15 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("continues a same-session hook queue after a failed run", async () => {
-    const dispatch = resolveDispatchAgentHook();
+    const dispatch = dispatchAgentHook;
     runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(completedRun("second done"));
 
-    dispatch({
-      ...buildAgentPayload("First"),
+    dispatch("First", {
       message: "first",
       sessionKey: "shared-session",
     });
-    dispatch({
-      ...buildAgentPayload("Second"),
+    dispatch("Second", {
       message: "second",
       sessionKey: "shared-session",
     });
@@ -584,7 +548,7 @@ describe("dispatchAgentHook trust handling", () => {
       admissionDisposition: "session-conflict",
     });
 
-    const result = await dispatchAgentHook(buildAgentPayload("Conflict"));
+    const result = await dispatchAgentHook("Conflict");
 
     expect(result).toMatchObject({
       ok: false,
@@ -611,20 +575,18 @@ describe("dispatchAgentHook trust handling", () => {
         params.onExecutionStarted?.();
         firstRunStarted.resolve();
         await releaseFirstRun.promise;
-        return { status: "ok", summary: "first done", delivered: false };
+        return completedRun("first done");
       },
     );
 
-    const firstAdmission = dispatchAgentHook({
-      ...buildAgentPayload("First"),
+    const firstAdmission = dispatchAgentHook("First", {
       message: "first",
       sessionKey: "shared-session",
     });
     await firstRunStarted.promise;
     await expect(firstAdmission).resolves.toMatchObject({ ok: true });
 
-    const timedOutAdmission = dispatchAgentHook({
-      ...buildAgentPayload("Second"),
+    const timedOutAdmission = dispatchAgentHook("Second", {
       message: "second",
       sessionKey: "shared-session",
     });
@@ -661,8 +623,7 @@ describe("dispatchAgentHook trust handling", () => {
       delivered: false,
     });
 
-    dispatchAgentHook({
-      ...buildAgentPayload("Model hook"),
+    dispatchAgentHook("Model hook", {
       model: "anthropic/claude-sonnet-4-6",
     });
 
