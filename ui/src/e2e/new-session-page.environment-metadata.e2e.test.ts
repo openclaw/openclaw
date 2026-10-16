@@ -19,6 +19,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const command = "codex.exec-server.stdio.v1";
 const updateIssue = {
   code: "update-required",
   action: "update-and-reconnect",
@@ -38,17 +39,21 @@ function runtimeModel(
   id: string,
   name: string,
   provider: string,
-  runtime: Omit<
-    NonNullable<ModelCatalogEntry["agentRuntime"]>,
-    "source" | "cloudPlacementSupported"
-  >,
+  runtimeId: string,
+  placement: NonNullable<ModelCatalogEntry["agentRuntime"]>["devicePlacement"],
 ): ModelCatalogEntry {
   return {
     available: true,
     id,
     name,
     provider,
-    agentRuntime: { ...runtime, cloudPlacementSupported: true, source: "model" },
+    agentRuntime: {
+      id: runtimeId,
+      devicePlacementSupported: placement !== undefined,
+      devicePlacement: placement,
+      cloudPlacementSupported: true,
+      source: "model",
+    },
   };
 }
 
@@ -58,46 +63,31 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         agentModel: "anthropic/claude-sonnet-4-6",
         models: [
-          runtimeModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic", {
-            id: "openclaw",
-            devicePlacementSupported: true,
-            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          runtimeModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic", "openclaw", {
+            requiredNodeCommands: [],
+            consumesWorkerSlot: true,
           }),
-          runtimeModel("gpt-5.6-sol", "GPT-5.6 Sol", "openai", {
-            id: "codex",
-            devicePlacementSupported: true,
-            devicePlacement: {
-              requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-              consumesWorkerSlot: false,
-            },
+          runtimeModel("gpt-5.6-sol", "GPT-5.6 Sol", "openai", "codex", {
+            requiredNodeCommands: [command],
+            consumesWorkerSlot: false,
           }),
-          runtimeModel("claude-opus-4-6", "Claude Opus 4.6", "anthropic", {
-            id: "cloud-only",
-            devicePlacementSupported: false,
-          }),
+          runtimeModel("claude-opus-4-6", "Claude Opus 4.6", "anthropic", "cloud-only", undefined),
         ],
         methodResponses: {
           "environments.list": {
-            environments: [
-              deviceEnvironment("node:build-mac", "Build Mac", {
-                workerSlots: { total: 2, available: 0 },
-                capabilities: ["codex.exec-server.stdio.v1"],
-                invocableCommands: ["codex.exec-server.stdio.v1"],
-                requiredNodeCommand: {
-                  command: "codex.exec-server.stdio.v1",
-                  state: "invocable",
-                },
+            environments: (
+              [
+                ["build-mac", "Build Mac", 0, true],
+                ["restricted-mac", "Restricted Mac", 1, false],
+              ] as const
+            ).map(([id, label, available, authorized]) =>
+              deviceEnvironment(`node:${id}`, label, {
+                workerSlots: { total: 2, available },
+                capabilities: [command],
+                invocableCommands: authorized ? [command] : [],
+                requiredNodeCommand: { command, state: authorized ? "invocable" : "unauthorized" },
               }),
-              deviceEnvironment("node:restricted-mac", "Restricted Mac", {
-                workerSlots: { total: 2, available: 1 },
-                capabilities: ["codex.exec-server.stdio.v1"],
-                invocableCommands: [],
-                requiredNodeCommand: {
-                  command: "codex.exec-server.stdio.v1",
-                  state: "unauthorized",
-                },
-              }),
-            ],
+            ),
             profiles: [],
           },
         },
@@ -110,6 +100,15 @@ suite.define(() => {
       const device = where.locator('[data-value="device:build-mac"]');
       const restrictedDevice = where.locator('[data-value="device:restricted-mac"]');
       const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const selectModel = async (id: string, label?: string) => {
+        await page.keyboard.press("Escape");
+        await modelSelect.click();
+        await selectChatModelOption(page.locator(`[data-chat-model-option="${id}"]`));
+        if (label) {
+          await pollText(modelSelect).toContain(label);
+        }
+        await whereTrigger.click();
+      };
       await whereTrigger.click();
       await device.waitFor();
       expect(await device.isDisabled()).toBe(true);
@@ -118,11 +117,7 @@ suite.define(() => {
       );
       expect(await restrictedDevice.isEnabled()).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "01-embedded-device-capacity-gated.png");
-      await page.keyboard.press("Escape");
-      await modelSelect.click();
-      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
-      await pollText(modelSelect).toContain("GPT-5.6 Sol");
-      await whereTrigger.click();
+      await selectModel("openai/gpt-5.6-sol", "GPT-5.6 Sol");
       await pollEnabled(device).toBe(true);
       await pollDisabled(restrictedDevice).toBe(true);
       await expect
@@ -140,25 +135,14 @@ suite.define(() => {
         page,
         "02-codex-zero-slot-enabled-denied-command-disabled.png",
       );
-      await page.keyboard.press("Escape");
-      await modelSelect.click();
-      await selectChatModelOption(
-        page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]'),
-      );
-      await pollText(modelSelect).toContain("Claude Opus 4.6");
-      await whereTrigger.click();
+      await selectModel("anthropic/claude-opus-4-6", "Claude Opus 4.6");
       await pollDisabled(device).toBe(true);
       expect(await device.locator(".session-menu__description").count()).toBe(0);
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
       await captureDeviceRuntimeUiProof(suite, page, "03-cloud-only-device-disabled.png");
-      await page.keyboard.press("Escape");
-      await modelSelect.click();
-      await selectChatModelOption(
-        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-      );
-      await whereTrigger.click();
+      await selectModel("anthropic/claude-sonnet-4-6");
       await pollDisabled(device).toBe(true);
       await pollEnabled(restrictedDevice).toBe(true);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
@@ -223,28 +207,22 @@ suite.define(() => {
       expect(
         await details("saturated").locator(".new-session-page__capacity-caption").count(),
       ).toBe(0);
-      expect(await row("missing-capacity").isDisabled()).toBe(true);
-      expect(await row("offline").isDisabled()).toBe(true);
+      for (const id of ["missing-capacity", "offline", "disabled", "outdated"]) {
+        expect(await row(id).isDisabled()).toBe(true);
+      }
       expect(await row("offline").locator(".session-menu__description").count()).toBe(0);
       expect(
         await row("offline")
           .locator("..")
           .evaluate((element) => element.tagName),
       ).not.toBe("OPENCLAW-TOOLTIP");
-      expect(await row("disabled").isDisabled()).toBe(true);
-      expect(await row("outdated").isDisabled()).toBe(true);
       const selectedRow = row("alpha-device");
       const selectionLayout = () =>
         selectedRow.evaluate((element) =>
           [
             element,
-            ...[".session-menu__text", ".session-menu__check"].map((selector) => {
-              const part = element.querySelector(selector);
-              if (!part) {
-                throw new Error(`Missing environment row part: ${selector}`);
-              }
-              return part;
-            }),
+            element.querySelector(".session-menu__text")!,
+            element.querySelector(".session-menu__check")!,
           ].map((part) => {
             const { x, width } = part.getBoundingClientRect();
             return { x, width };
@@ -291,12 +269,17 @@ suite.define(() => {
       }
       await page.keyboard.press("Tab");
       await selectedRow.focus();
+      const emitInventory = async (count = 1) => {
+        for (let index = 0; index < count; index += 1) {
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "alpha-device",
+          });
+        }
+      };
       await gateway.deferNext("environments.list");
-      await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
+      await emitInventory();
       await gateway.waitForRequest("environments.list", { after: beforeRefresh });
-      for (let index = 0; index < 31; index += 1) {
-        await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
-      }
+      await emitInventory(31);
       expect(await gateway.getRequests("environments.list")).toHaveLength(beforeRefresh + 1);
       await pollDisabled(selectedRow).toBe(true);
       await captureDeviceRuntimeUiProof(suite, page, "04-device-refresh-focus.png");
@@ -323,11 +306,7 @@ suite.define(() => {
         );
         expect(await selectedRow.isDisabled()).toBe(true);
         if (cycle < 4) {
-          for (let index = 0; index < 8; index += 1) {
-            await gateway.emitGatewayEvent("node.runnerInventory.changed", {
-              nodeId: "alpha-device",
-            });
-          }
+          await emitInventory(8);
         }
       }
       await gateway.resolveDeferred("environments.list", catalog("available", 0));
@@ -336,33 +315,29 @@ suite.define(() => {
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       expect(await selectedControl.evaluate((element) => element.isConnected)).toBe(true);
       await selectedControl.dispose();
-      for (const connected of [false, true]) {
-        const previousRequests = (await gateway.getRequests("environments.list")).length;
-        await gateway.setMethodResponse(
-          "environments.list",
-          catalog(connected ? "available" : "unavailable", 4),
-        );
-        await gateway.emitGatewayEvent("presence", {
-          presence: [
-            {
-              deviceId: "alpha-device",
-              mode: "node",
-              roles: ["node"],
-              reason: connected ? "connect" : "disconnect",
-            },
-          ],
-        });
-        await gateway.waitForRequest("environments.list", { after: previousRequests });
-        await pollEnabled(selectedRow).toBe(connected);
-      }
-      for (const sessionHost of [false, true]) {
-        const previousRequests = (await gateway.getRequests("environments.list")).length;
-        const next = catalog("available", 4);
-        next.environments[0]!.sessionHost = sessionHost;
-        await gateway.setMethodResponse("environments.list", next);
-        await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
-        await gateway.waitForRequest("environments.list", { after: previousRequests });
-        await pollEnabled(selectedRow).toBe(sessionHost);
+      for (const source of ["presence", "hosting"]) {
+        for (const enabled of [false, true]) {
+          const previousRequests = (await gateway.getRequests("environments.list")).length;
+          const next = catalog(source === "presence" && !enabled ? "unavailable" : "available", 4);
+          next.environments[0]!.sessionHost = source === "presence" || enabled;
+          await gateway.setMethodResponse("environments.list", next);
+          if (source === "hosting") {
+            await emitInventory();
+          } else {
+            await gateway.emitGatewayEvent("presence", {
+              presence: [
+                {
+                  deviceId: "alpha-device",
+                  mode: "node",
+                  roles: ["node"],
+                  reason: enabled ? "connect" : "disconnect",
+                },
+              ],
+            });
+          }
+          await gateway.waitForRequest("environments.list", { after: previousRequests });
+          await pollEnabled(selectedRow).toBe(enabled);
+        }
       }
     });
   });

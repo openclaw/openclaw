@@ -29,38 +29,39 @@ async function chooseCloud(page: Page) {
   await page.locator('[data-value="cloud:aws"]').click();
 }
 
-function cloudResponses(overrides: Record<string, unknown>) {
-  return {
-    "agents.list": cloudAgents,
-    "environments.list": { environments: [], profiles: [{ id: "aws", providerId: "crabbox" }] },
-    "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
-    ...overrides,
-  };
+async function openCloudPage(page: Page, overrides: Record<string, unknown>) {
+  const gateway = await installMockGateway(page, {
+    workspaceGit: true,
+    methodResponses: {
+      "agents.list": cloudAgents,
+      "environments.list": { environments: [], profiles: [{ id: "aws", providerId: "crabbox" }] },
+      "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+      ...overrides,
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  return gateway;
 }
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        workspaceGit: true,
-        methodResponses: cloudResponses({
-          "agents.list": {
-            ...cloudAgents,
-            agents: [
-              ...cloudAgents.agents,
-              {
-                id: "local",
-                identity: { name: "Local" },
-                name: "Local",
-                workspace: "/home/peter/local",
-                workspaceGit: false,
-              },
-            ],
-          },
-        }),
+      const gateway = await openCloudPage(page, {
+        "agents.list": {
+          ...cloudAgents,
+          agents: [
+            ...cloudAgents.agents,
+            {
+              id: "local",
+              identity: { name: "Local" },
+              name: "Local",
+              workspace: "/home/peter/local",
+              workspaceGit: false,
+            },
+          ],
+        },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       await chooseCloud(page);
       const trigger = page.locator("#new-session-where-trigger");
       await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
@@ -96,29 +97,24 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:cloud:reload-recovery";
       const message = "resume this cloud task after reload";
-      const gateway = await installMockGateway(page, {
-        workspaceGit: true,
-        methodResponses: cloudResponses({
-          "sessions.create": { key: sessionKey },
-          "sessions.dispatch": {
-            placement: { state: "active", generation: 1 },
-          },
-          "sessions.list": {
-            count: 1,
-            defaults: SESSION_LIST_DEFAULTS,
-            path: "",
-            sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
-            ts: Date.now(),
-          },
-          "chat.history": {
-            messages: [],
-            sessionId: "session-reload-recovery",
-            sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
-          },
-        }),
+      const gateway = await openCloudPage(page, {
+        "sessions.create": { key: sessionKey },
+        "sessions.dispatch": {
+          placement: { state: "active", generation: 1 },
+        },
+        "sessions.list": {
+          count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          ts: Date.now(),
+        },
+        "chat.history": {
+          messages: [],
+          sessionId: "session-reload-recovery",
+          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+        },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       await chooseCloud(page);
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
@@ -227,29 +223,20 @@ suite.define(() => {
 
   it("reconciles an accepted turn added while disconnected without locking the new-session page", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        workspaceGit: true,
-        methodResponses: cloudResponses({
-          "chat.history": {
-            messages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "restore after reconnect" }],
-                __openclaw: { idempotencyKey: "message-offline-recovery:user" },
-              },
-            ],
-            sessionId: "session-offline-recovery",
-          },
-        }),
+      const gateway = await openCloudPage(page, {
+        "chat.history": {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "restore after reconnect" }],
+              __openclaw: { idempotencyKey: "message-offline-recovery:user" },
+            },
+          ],
+          sessionId: "session-offline-recovery",
+        },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       const recoveryIdentity = await evaluateControlUiContext(page, async (application) => {
-        const gatewaySnapshot = application.gateway;
-        const gatewayUrl = gatewaySnapshot.connection.gatewayUrl;
-        if (!gatewayUrl) {
-          throw new Error("Gateway recovery identity is unavailable");
-        }
+        const gatewayUrl = application.gateway.connection.gatewayUrl;
         const digest = await crypto.subtle.digest(
           "SHA-256",
           new TextEncoder().encode("e2e-device-token"),

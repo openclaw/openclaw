@@ -29,13 +29,13 @@ const gitRepository = {
   repositoryStatus: "git",
 };
 
-const pairedRunner = () => ({
+const pairedRunner = (status = "available", available = 1) => ({
   id: "node:paired-runner",
   type: "node",
   label: "Paired runner",
-  status: "available",
+  status,
   sessionHost: true,
-  workerSlots: { total: 2, available: 1 },
+  workerSlots: { total: 2, available },
 });
 const offlineRunner = () => ({
   id: "node:offline-runner",
@@ -45,6 +45,41 @@ const offlineRunner = () => ({
   sessionHost: true,
 });
 const deviceEnvironments = () => [pairedRunner(), offlineRunner()];
+const busyRunner = () => ({
+  ...pairedRunner("available", 0),
+  id: "node:offline-runner",
+  label: "Offline runner",
+});
+
+function rememberedTarget(kind: "device" | "auto-device" | "cloud", id?: string) {
+  return {
+    preference: { kind, ...(id ? { id } : {}) },
+    attribute: `data-${kind === "cloud" ? "cloud-profile" : kind === "device" ? "device-id" : kind}`,
+    value: id ?? "true",
+    target: {
+      [kind === "device" ? "deviceId" : kind === "cloud" ? "profileId" : "autoDevice"]: id ?? true,
+    },
+  };
+}
+
+async function openDevicePage(
+  page: Page,
+  scenario: NonNullable<Parameters<typeof installMockGateway>[1]>,
+) {
+  const gateway = await installMockGateway(page, {
+    operatorScopes: ["operator.read", "operator.write"],
+    workspace: WORKSPACE,
+    workspaceGit: true,
+    ...scenario,
+    methodResponses: {
+      "environments.list": { environments: deviceEnvironments(), profiles: [] },
+      ...scenario.methodResponses,
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  return gateway;
+}
 
 async function rememberDestination(
   page: Page,
@@ -76,10 +111,8 @@ suite.define(() => {
   it("groups environments and selects Auto before named devices", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const trigger = page.locator("#new-session-where-trigger");
-      const gateway = await installMockGateway(page, {
+      await openDevicePage(page, {
         operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-        workspace: WORKSPACE,
-        workspaceGit: true,
         methodResponses: {
           "environments.list": {
             environments: deviceEnvironments(),
@@ -87,8 +120,6 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       await trigger.click();
       const picker = page.locator(".new-session-page__where-popover");
       const destinations = picker.locator(".new-session-page__environment-list");
@@ -137,10 +168,7 @@ suite.define(() => {
   it.each(deviceTargets)("dispatches the $name device", async ({ value, target }) => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:device-dispatch";
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        workspace: WORKSPACE,
-        workspaceGit: true,
+      const gateway = await openDevicePage(page, {
         methodResponses: {
           "environments.list": {
             environments: [
@@ -171,8 +199,6 @@ suite.define(() => {
           "sessions.send": { runId: "run-device-dispatch", status: "started" },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page.locator(`[data-value="${value}"]`).click();
       await page.locator(".new-session-page__message").fill("run on the paired device");
@@ -221,30 +247,16 @@ suite.define(() => {
         },
         async ({ page }) => {
           const environment = pairedRunner();
-          const gateway = await installMockGateway(page, {
-            operatorScopes: ["operator.read", "operator.write"],
-            workspace: WORKSPACE,
-            workspaceGit: true,
+          const gateway = await openDevicePage(page, {
             methodResponses: {
               "environments.list": {
-                environments: [
-                  environment,
-                  {
-                    ...environment,
-                    id: "node:offline-runner",
-                    label: "Offline runner",
-                    status: "available",
-                    workerSlots: { total: 2, available: 0 },
-                  },
-                ],
+                environments: [environment, busyRunner()],
                 profiles: [],
               },
               "sessions.create": { key: "agent:main:stale-device-capacity" },
               "worktrees.branches": gitRepository,
             },
           });
-          await page.goto(`${suite.server.baseUrl}new`);
-          await gateway.waitForRequest("environments.list");
           const where = page.locator("#new-session-where-trigger");
           await where.click();
           await page.locator(`[data-value="${value}"]`).click();
@@ -297,16 +309,7 @@ suite.define(() => {
           await page.clock.runFor(1);
           await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 1 });
           await gateway.resolveDeferred("environments.list", {
-            environments: [
-              { ...environment, workerSlots: { total: 2, available: 0 } },
-              {
-                ...environment,
-                id: "node:offline-runner",
-                label: "Offline runner",
-                status: "available",
-                workerSlots: { total: 2, available: 0 },
-              },
-            ],
+            environments: [pairedRunner("available", 0), busyRunner()],
             profiles: [],
           });
           await pollDisabled(start).toBe(true);
@@ -328,34 +331,15 @@ suite.define(() => {
   );
 
   it.each([
-    {
-      name: "paired device",
-      preference: { kind: "device", id: "paired-runner" },
-      attribute: "data-device-id",
-      value: "paired-runner",
-      target: { deviceId: "paired-runner" },
-    },
-    {
-      name: "automatic device",
-      preference: { kind: "auto-device" },
-      attribute: "data-auto-device",
-      value: "true",
-      target: { autoDevice: true },
-    },
-    {
-      name: "cloud worker",
-      preference: { kind: "cloud", id: "aws" },
-      attribute: "data-cloud-profile",
-      value: "aws",
-      target: { profileId: "aws" },
-    },
+    { name: "paired device", ...rememberedTarget("device", "paired-runner") },
+    { name: "automatic device", ...rememberedTarget("auto-device") },
+    { name: "cloud worker", ...rememberedTarget("cloud", "aws") },
   ])(
     "does not start locally while a remembered $name destination is being restored",
     async ({ preference, attribute, value, target }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         if (preference.kind === "cloud") {
-          // Browser recovery hydration must not restart the authenticated catalog
-          // request or let a remembered remote destination fall back to Local.
+          // Recovery hydration must neither restart the catalog nor fall back to Local.
           await page.addInitScript(() => {
             const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
             const delayed = new Promise<void>((resolve) => {
@@ -378,11 +362,9 @@ suite.define(() => {
           profiles: [{ id: "aws", providerId: "crabbox" }],
         };
         await rememberDestination(page, preference);
-        const gateway = await installMockGateway(page, {
+        const gateway = await openDevicePage(page, {
           heldMethods: ["environments.list"],
           operatorScopes: ["operator.read", "operator.write", "operator.admin"],
-          workspace: WORKSPACE,
-          workspaceGit: true,
           methodResponses: {
             "environments.list": catalog,
             "worktrees.branches": gitRepository,
@@ -392,8 +374,6 @@ suite.define(() => {
             "sessions.send": { runId: "run-restored-remote", status: "started" },
           },
         });
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("environments.list");
         await pollAttribute(page.locator("#new-session-checkout-trigger"), "data-worktree").toBe(
           "false",
         );
@@ -429,20 +409,16 @@ suite.define(() => {
   it.each([
     {
       name: "offline paired device",
-      preference: { kind: "device", id: "paired-runner" },
+      ...rememberedTarget("device", "paired-runner"),
       status: "unavailable",
       availableSlots: 1,
-      attribute: "data-device-id",
-      value: "paired-runner",
       reason: "Device unavailable",
     },
     {
       name: "automatic device without worker capacity",
-      preference: { kind: "auto-device" },
+      ...rememberedTarget("auto-device"),
       status: "available",
       availableSlots: 0,
-      attribute: "data-auto-device",
-      value: "true",
       reason: "No worker slots are available",
     },
   ])(
@@ -451,30 +427,16 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const sessionKey = "agent:main:explicit-local-choice";
         await rememberDestination(page, preference);
-        const gateway = await installMockGateway(page, {
-          operatorScopes: ["operator.read", "operator.write"],
-          workspace: WORKSPACE,
-          workspaceGit: true,
+        const gateway = await openDevicePage(page, {
           methodResponses: {
             "environments.list": {
-              environments: [
-                {
-                  id: "node:paired-runner",
-                  type: "node",
-                  label: "Paired runner",
-                  status,
-                  sessionHost: true,
-                  workerSlots: { total: 2, available: availableSlots },
-                },
-              ],
+              environments: [pairedRunner(status, availableSlots)],
               profiles: [],
             },
             "sessions.create": { key: sessionKey },
             "sessions.list": createdSessionListResult(sessionKey),
           },
         });
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("environments.list");
         const where = page.locator("#new-session-where-trigger");
         await pollAttribute(where, attribute).toBe(value);
         await page.locator(".new-session-page__message").fill("run only where I choose");
@@ -502,10 +464,7 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:research:local-after-agent-switch";
       await rememberDestination(page, { kind: "local" }, "research", false);
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        workspace: WORKSPACE,
-        workspaceGit: true,
+      const gateway = await openDevicePage(page, {
         methodResponses: {
           "agents.list": {
             agents: [
@@ -516,16 +475,10 @@ suite.define(() => {
             mainKey: "main",
             scope: "agent",
           },
-          "environments.list": {
-            environments: deviceEnvironments(),
-            profiles: [],
-          },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
       const where = page.locator("#new-session-where-trigger");
       await where.click();
       await page.locator('[data-value="device:paired-runner"]').click();
@@ -558,21 +511,15 @@ suite.define(() => {
     async ({ value, target }) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const message = "resume on the paired device";
-        const gateway = await installMockGateway(page, {
+        const gateway = await openDevicePage(page, {
           deferredMethods: ["sessions.create"],
-          workspace: WORKSPACE,
+          operatorScopes: undefined,
           workspaceGit: false,
           methodResponses: {
-            "environments.list": {
-              environments: deviceEnvironments(),
-              profiles: [],
-            },
             "sessions.dispatch": { placement: { state: "active", generation: 1 } },
             "sessions.send": { runId: "run-device-recovery", status: "started" },
           },
         });
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page.locator(`[data-value="${value}"]`).click();
         await page.locator(".new-session-page__message").fill(message);

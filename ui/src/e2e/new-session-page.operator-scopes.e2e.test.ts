@@ -25,17 +25,29 @@ const suite = createNewSessionPageE2eSuite();
 type Draft = { page: Page; gateway: MockGatewayControls };
 const writeScopes = ["operator.read", "operator.write"];
 const adminScopes = ["operator.admin", ...writeScopes];
+const chatMethods = ["chat.metadata", "chat.startup"];
+const workspace = "/home/peter/openclaw";
+const directory = (
+  path: string,
+  entries: { name: string; path: string }[] = [],
+  home = "/home/peter",
+  parent?: string,
+) => ({ path, home, entries, ...(parent ? { parent } : {}) });
+const expectCreated = async (gateway: MockGatewayControls, params: Record<string, unknown>) =>
+  expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({ params });
+
+async function selectFullAccess(page: Page) {
+  const permission = page.locator('[data-chat-permission-select="true"]');
+  await permission.click();
+  await page.locator('[data-chat-permission-option="full"]').click();
+  await pollAttribute(permission, "data-chat-select-value").toBe("full");
+  return permission;
+}
 
 async function withDraft(
   operatorScopes: string[],
   run: (draft: Draft) => Promise<void>,
-  featureMethods = [
-    "chat.metadata",
-    "chat.startup",
-    "projects.list",
-    "sessions.create",
-    "sessions.dispatch",
-  ],
+  featureMethods = [...chatMethods, "projects.list", "sessions.create", "sessions.dispatch"],
 ) {
   return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
     const gateway = await installMockGateway(page, {
@@ -66,23 +78,41 @@ async function withDraft(
   });
 }
 
-function folderScenario(scenario: ControlUiMockGatewayScenario): ControlUiMockGatewayScenario {
-  return {
-    workspaceGit: true,
-    operatorScopes: writeScopes,
-    featureMethods: [
-      "chat.metadata",
-      "chat.startup",
-      "fs.listDir",
-      "sessions.create",
-      "worktrees.branches",
-    ],
-    ...scenario,
-    methodResponses: {
-      "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
-      ...scenario.methodResponses,
-    },
-  };
+async function withFolder(
+  scenario: ControlUiMockGatewayScenario,
+  run: (draft: Draft) => Promise<void>,
+) {
+  return suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    const gateway = await installMockGateway(page, {
+      workspace,
+      workspaceGit: true,
+      operatorScopes: writeScopes,
+      featureMethods: [...chatMethods, "fs.listDir", "sessions.create", "worktrees.branches"],
+      ...scenario,
+      methodResponses: {
+        "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
+        "fs.listDir": directory(scenario.workspace ?? workspace),
+        "sessions.create": { key: "agent:main:folder-proof" },
+        ...scenario.methodResponses,
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await page.locator("#new-session-project-trigger").click();
+    const browse = page.getByRole("button", { name: "Browse folders" });
+    await pollEnabled(browse).toBe(true);
+    await browse.click();
+    await run({ page, gateway });
+  });
+}
+
+async function useFolderAndSubmit(page: Page, message: string) {
+  const useFolder = page.getByRole("button", { name: "Use this folder" });
+  await pollEnabled(useFolder).toBe(true);
+  await useFolder.click();
+  await page.locator(".new-session-page__message").fill(message);
+  const submit = page.getByRole("button", { name: "Start session" });
+  await pollEnabled(submit).toBe(true);
+  await submit.click();
 }
 
 suite.define(() => {
@@ -113,9 +143,9 @@ suite.define(() => {
             }
             await submit.click({ force: true });
             if (reason === "read-only") {
-              const requests = await gateway.getRequests("projects.list");
-              expect(requests).toHaveLength(1);
-              expect(requests[0]?.params).toEqual({});
+              expect(
+                (await gateway.getRequests("projects.list")).map(({ params }) => params),
+              ).toEqual([{}]);
             }
             expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           } finally {
@@ -124,16 +154,14 @@ suite.define(() => {
             }
           }
         },
-        reason === "missing-method" ? ["chat.metadata", "chat.startup"] : undefined,
+        reason === "missing-method" ? chatMethods : undefined,
       );
     },
   );
 
   it("allows write-scoped Fast Mode creation while keeping incognito admin-only", async () => {
     await withDraft(writeScopes, async ({ gateway, page }) => {
-      await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({
-        params: {},
-      });
+      await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({ params: {} });
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
@@ -158,33 +186,34 @@ suite.define(() => {
       );
       await pollAttribute(fastMode, "aria-checked").toBe("true");
       await submit.click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", fastMode: true, message: "scope proof" },
-      });
+      await expectCreated(gateway, { agentId: "main", fastMode: true, message: "scope proof" });
     });
   });
 
-  it("creates a Full-access session when the connected operator has admin scope", async () => {
+  it.each(["full", "incognito"] as const)("allows admin-scoped %s creation", async (mode) => {
     await withDraft(adminScopes, async ({ gateway, page }) => {
-      const permission = page.locator('[data-chat-permission-select="true"]');
-      await permission.click();
-      await page.locator('[data-chat-permission-option="full"]').click();
-      await pollAttribute(permission, "data-chat-select-value").toBe("full");
+      if (mode === "full") {
+        await selectFullAccess(page);
+      } else {
+        const incognito = page.getByRole("switch", { name: "Incognito" });
+        await pollEnabled(incognito).toBe(true);
+        await incognito.click();
+      }
       await page.getByRole("button", { name: "Start session" }).click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "scope proof", permissionMode: "full" },
+      await expectCreated(gateway, {
+        message: "scope proof",
+        ...(mode === "full" ? { agentId: "main", permissionMode: "full" } : { incognito: true }),
       });
-      await expect.poll(() => page.url()).toContain("/chat/");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      if (mode === "full") {
+        await expect.poll(() => page.url()).toContain("/chat/");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      }
     });
   });
 
   it("rejects a retained Full-access selection after reconnecting without admin scope", async () => {
     await withDraft(adminScopes, async ({ gateway, page }) => {
-      const permission = page.locator('[data-chat-permission-select="true"]');
-      await permission.click();
-      await page.locator('[data-chat-permission-option="full"]').click();
-      await pollAttribute(permission, "data-chat-select-value").toBe("full");
+      const permission = await selectFullAccess(page);
       await gateway.setOperatorScopes(writeScopes);
       await gateway.closeLatest(1001, "permission scope downgraded");
       await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
@@ -241,191 +270,120 @@ suite.define(() => {
   });
 
   it("lets write-scoped operators browse and restore only workspace-contained folders", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const workspace = "/home/peter/openclaw";
-      const contained = `${workspace}/packages/app`;
-      const gateway = await installMockGateway(
-        page,
-        folderScenario({
-          workspace,
-          methodResponses: {
-            "fs.listDir": {
-              path: workspace,
-              home: "/home/peter",
-              entries: [{ name: "packages", path: `${workspace}/packages` }],
-            },
-            "sessions.list": {
-              count: 2,
-              defaults: SESSION_LIST_DEFAULTS,
-              path: "",
-              sessions: [
-                { key: "agent:main:inside", kind: "direct", updatedAt: 2, execCwd: contained },
-                {
-                  key: "agent:main:outside",
-                  kind: "direct",
-                  updatedAt: 1,
-                  execCwd: "/private/repo",
-                },
-              ],
-              ts: Date.now(),
-            },
-            "sessions.create": { key: "agent:main:write-workspace" },
+    const contained = `${workspace}/packages/app`;
+    await withFolder(
+      {
+        methodResponses: {
+          "fs.listDir": directory(workspace, [{ name: "packages", path: `${workspace}/packages` }]),
+          "sessions.list": {
+            count: 2,
+            defaults: SESSION_LIST_DEFAULTS,
+            path: "",
+            sessions: [
+              { key: "agent:main:inside", kind: "direct", updatedAt: 2, execCwd: contained },
+              { key: "agent:main:outside", kind: "direct", updatedAt: 1, execCwd: "/private/repo" },
+            ],
+            ts: Date.now(),
           },
-        }),
-      );
-      await page.goto(`${suite.server.baseUrl}new`);
-      const trigger = page.locator("#new-session-project-trigger");
-      await trigger.click();
-      const browse = page.getByRole("button", { name: "Browse folders" });
-      await pollEnabled(browse).toBe(true);
-      await browse.click();
-      await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
-        params: { path: workspace },
-      });
-      await page.getByRole("button", { name: "Parent folder" }).click();
-      await page.getByRole("button", { name: "app", exact: true }).click();
-      expect(await page.locator('[data-value="recent:/private/repo"]').count()).toBe(0);
-      await page.locator(".new-session-page__message").fill("work in the package");
-      await page.getByRole("button", { name: "Start session" }).click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { cwd: contained, message: "work in the package" },
-      });
-    });
+        },
+      },
+      async ({ page, gateway }) => {
+        await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
+          params: { path: workspace },
+        });
+        await page.getByRole("button", { name: "Parent folder" }).click();
+        await page.getByRole("button", { name: "app", exact: true }).click();
+        expect(await page.locator('[data-value="recent:/private/repo"]').count()).toBe(0);
+        await page.locator(".new-session-page__message").fill("work in the package");
+        await page.getByRole("button", { name: "Start session" }).click();
+        await expectCreated(gateway, { cwd: contained, message: "work in the package" });
+      },
+    );
   });
 
   it("explains when browsing outside the workspace requires admin scope", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const workspace = "/home/peter/openclaw";
-      const gateway = await installMockGateway(
-        page,
-        folderScenario({
-          workspace,
-          featureMethods: ["chat.metadata", "chat.startup", "fs.listDir", "worktrees.branches"],
-          methodResponses: { "fs.listDir": { path: workspace, home: "/home/peter", entries: [] } },
-        }),
-      );
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-project-trigger").click();
-      await page.getByRole("button", { name: "Browse folders" }).click();
-      await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
-        params: { path: workspace },
-      });
-      const pathInput = page.locator("input.new-session-page__browser-path");
-      await pollValue(pathInput).toBe(workspace);
-      await page
-        .locator(".new-session-page__browser")
-        .getByText("No subfolders", { exact: true })
-        .waitFor();
-      await gateway.deferNext("fs.listDir", { path: "/tmp" });
-      await pathInput.fill("/tmp");
-      await pathInput.press("Enter");
-      await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(2);
-      expect((await gateway.getRequests("fs.listDir"))[1]?.params).toEqual({ path: "/tmp" });
-      await gateway.rejectDeferred("fs.listDir", {
-        code: "FORBIDDEN",
-        message: "Folder access was denied.",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      });
-      await pollLocatorText(
-        page.locator(".new-session-page__browser .new-session-page__error"),
-      ).toContain(
-        "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-      );
-      expect(await pathInput.inputValue()).toBe("/tmp");
-      expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
-    });
+    await withFolder(
+      { featureMethods: [...chatMethods, "fs.listDir", "worktrees.branches"] },
+      async ({ page, gateway }) => {
+        await expect(gateway.waitForRequest("fs.listDir")).resolves.toMatchObject({
+          params: { path: workspace },
+        });
+        const pathInput = page.locator("input.new-session-page__browser-path");
+        await pollValue(pathInput).toBe(workspace);
+        await page
+          .locator(".new-session-page__browser")
+          .getByText("No subfolders", { exact: true })
+          .waitFor();
+        await gateway.deferNext("fs.listDir", { path: "/tmp" });
+        await pathInput.fill("/tmp");
+        await pathInput.press("Enter");
+        await expect.poll(async () => (await gateway.getRequests("fs.listDir")).length).toBe(2);
+        expect((await gateway.getRequests("fs.listDir"))[1]?.params).toEqual({ path: "/tmp" });
+        await gateway.rejectDeferred("fs.listDir", {
+          code: "FORBIDDEN",
+          message: "Folder access was denied.",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        });
+        await pollLocatorText(
+          page.locator(".new-session-page__browser .new-session-page__error"),
+        ).toContain(
+          "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
+        );
+        expect(await pathInput.inputValue()).toBe("/tmp");
+        expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
+      },
+    );
   });
 
   it("keeps a canonical browser selection submittable for a symlinked workspace alias", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const workspaceAlias = "/var/folders/openclaw/workspace-alias";
-      const canonicalWorkspace = "/private/var/folders/openclaw/workspace";
-      const canonicalFolder = `${canonicalWorkspace}/packages`;
-      const gateway = await installMockGateway(
-        page,
-        folderScenario({
-          workspace: workspaceAlias,
-          methodResponses: {
-            "fs.listDir": {
-              cases: [
-                {
-                  match: { path: workspaceAlias },
-                  response: {
-                    path: canonicalWorkspace,
-                    home: "/Users/peter",
-                    entries: [{ name: "packages", path: canonicalFolder }],
-                  },
-                },
-                {
-                  match: { path: canonicalFolder },
-                  response: {
-                    path: canonicalFolder,
-                    parent: canonicalWorkspace,
-                    home: "/Users/peter",
-                    entries: [],
-                  },
-                },
-              ],
-            },
-            "sessions.create": { key: "agent:main:symlinked-workspace" },
+    const workspaceAlias = "/var/folders/openclaw/workspace-alias";
+    const canonicalWorkspace = "/private/var/folders/openclaw/workspace";
+    const canonicalFolder = `${canonicalWorkspace}/packages`;
+    await withFolder(
+      {
+        workspace: workspaceAlias,
+        methodResponses: {
+          "fs.listDir": {
+            cases: [
+              {
+                match: { path: workspaceAlias },
+                response: directory(
+                  canonicalWorkspace,
+                  [{ name: "packages", path: canonicalFolder }],
+                  "/Users/peter",
+                ),
+              },
+              {
+                match: { path: canonicalFolder },
+                response: directory(canonicalFolder, [], "/Users/peter", canonicalWorkspace),
+              },
+            ],
           },
-        }),
-      );
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-project-trigger").click();
-      await page.getByRole("button", { name: "Browse folders" }).click();
-      await page.getByRole("option", { name: "packages" }).click();
-      const useFolder = page.getByRole("button", { name: "Use this folder" });
-      await pollEnabled(useFolder).toBe(true);
-      await useFolder.click();
-      await page.locator(".new-session-page__message").fill("inspect the canonical checkout");
-      const submit = page.getByRole("button", { name: "Start session" });
-      await pollEnabled(submit).toBe(true);
-      await submit.click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: {
+        },
+      },
+      async ({ page, gateway }) => {
+        await page.getByRole("option", { name: "packages" }).click();
+        await useFolderAndSubmit(page, "inspect the canonical checkout");
+        await expectCreated(gateway, {
           cwd: canonicalFolder,
           message: "inspect the canonical checkout",
-        },
-      });
-    });
+        });
+      },
+    );
   });
 
   it("submits an unvalidated typed folder so the Gateway error stays actionable", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const workspace = "/home/peter/openclaw";
-      const typedFolder = "/private/repo";
-      const gateway = await installMockGateway(
-        page,
-        folderScenario({
-          workspace,
-          deferredMethods: ["sessions.create"],
-          methodResponses: {
-            "fs.listDir": { path: workspace, home: "/home/peter", entries: [] },
-            "sessions.create": { key: "agent:main:typed-folder" },
-          },
-        }),
-      );
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator("#new-session-project-trigger").click();
-      await page.getByRole("button", { name: "Browse folders" }).click();
+    const typedFolder = "/private/repo";
+    await withFolder({ deferredMethods: ["sessions.create"] }, async ({ page, gateway }) => {
       const pathInput = page.locator("input.new-session-page__browser-path");
       await pollValue(pathInput).toBe(workspace);
       await pathInput.fill(typedFolder);
-      const useFolder = page.getByRole("button", { name: "Use this folder" });
-      await pollEnabled(useFolder).toBe(true);
-      await useFolder.click();
-      await page.locator(".new-session-page__message").fill("let the Gateway decide");
-      const submit = page.getByRole("button", { name: "Start session" });
-      await pollEnabled(submit).toBe(true);
-      await submit.click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { cwd: typedFolder, message: "let the Gateway decide" },
-      });
+      await useFolderAndSubmit(page, "let the Gateway decide");
+      await expectCreated(gateway, { cwd: typedFolder, message: "let the Gateway decide" });
       await gateway.rejectDeferred("sessions.create", {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
@@ -433,18 +391,6 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__error")).toContain(
         "missing scope: operator.admin",
       );
-    });
-  });
-
-  it("allows admin-scoped incognito creation with exact dynamic parameters", async () => {
-    await withDraft(adminScopes, async ({ gateway, page }) => {
-      const incognito = page.getByRole("switch", { name: "Incognito" });
-      await pollEnabled(incognito).toBe(true);
-      await incognito.click();
-      await page.getByRole("button", { name: "Start session" }).click();
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { incognito: true, message: "scope proof" },
-      });
     });
   });
 });

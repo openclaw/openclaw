@@ -20,22 +20,20 @@ import {
 } from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Configured fresh-session defaults",
-});
+const suite = createControlUiE2eSuite({ name: "Configured fresh-session defaults" });
 const thinkingLevels = ["low", "medium", "high"].map((id) => ({ id, label: id }));
 const preference = { model: "openai/gpt-4.1-mini", thinkingLevel: "low", fastMode: true };
+const sessionKey = "agent:main:configured-defaults-proof";
+const requiredProfile = { id: "dedicated", providerId: "device", executionModes: ["worker-turn"] };
 
 // Serialized into the browser: keep all IndexedDB dependencies inside this function.
 async function draftStorage(action: "read-old" | "seed-old" | "read-selection") {
+  const once = (target: EventTarget, event: string, listener: () => void) =>
+    target.addEventListener(event, listener, { once: true });
   const read = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(request.error ?? new Error("IndexedDB request failed")),
-        { once: true },
-      );
+      once(request, "success", () => resolve(request.result));
+      once(request, "error", () => reject(request.error ?? new Error("IndexedDB request failed")));
     });
   const db = await read(indexedDB.open("openclaw-control-ui"));
   try {
@@ -44,48 +42,40 @@ async function draftStorage(action: "read-old" | "seed-old" | "read-selection") 
         const transaction = db.transaction("composerDrafts", "readwrite");
         const store = transaction.objectStore("composerDrafts");
         const request = store.getAll();
-        request.addEventListener(
-          "success",
-          () => {
-            const old = request.result.find((row) => row.text === "Unsent before upgrade");
-            if (!old) {
-              transaction.abort();
-              return;
-            }
-            // Exact pre-change serializer fields (60d9d1042375f014944b94006f4b1c2b2f5af9c0).
-            store.put({
-              key: old.key,
-              ownerKey: old.ownerKey,
-              gatewayOwner: old.gatewayOwner,
-              recoveryScope: old.recoveryScope,
-              scopeKey: old.scopeKey,
-              revision: old.revision,
-              writeId: old.writeId,
-              updatedAt: old.updatedAt,
-              text: "Unsent before upgrade",
-              attachments: [
-                {
-                  blob: new Blob(["Keep these attachment bytes"], { type: "text/plain" }),
-                  mimeType: "text/plain",
-                  origin: "file",
-                  fileName: "upgrade-notes.txt",
-                  sizeBytes: 27,
-                },
-              ],
-            });
-          },
-          { once: true },
+        once(request, "success", () => {
+          const old = request.result.find((row) => row.text === "Unsent before upgrade");
+          if (!old) {
+            transaction.abort();
+            return;
+          }
+          // Exact pre-change serializer fields (60d9d1042375f014944b94006f4b1c2b2f5af9c0).
+          store.put({
+            key: old.key,
+            ownerKey: old.ownerKey,
+            gatewayOwner: old.gatewayOwner,
+            recoveryScope: old.recoveryScope,
+            scopeKey: old.scopeKey,
+            revision: old.revision,
+            writeId: old.writeId,
+            updatedAt: old.updatedAt,
+            text: "Unsent before upgrade",
+            attachments: [
+              {
+                blob: new Blob(["Keep these attachment bytes"], { type: "text/plain" }),
+                mimeType: "text/plain",
+                origin: "file",
+                fileName: "upgrade-notes.txt",
+                sizeBytes: 27,
+              },
+            ],
+          });
+        });
+        once(transaction, "complete", () => resolve());
+        once(transaction, "abort", () =>
+          reject(transaction.error ?? new Error("Legacy fixture missing")),
         );
-        transaction.addEventListener("complete", () => resolve(), { once: true });
-        transaction.addEventListener(
-          "abort",
-          () => reject(transaction.error ?? new Error("Legacy fixture missing")),
-          { once: true },
-        );
-        transaction.addEventListener(
-          "error",
-          () => reject(transaction.error ?? new Error("Legacy fixture failed")),
-          { once: true },
+        once(transaction, "error", () =>
+          reject(transaction.error ?? new Error("Legacy fixture failed")),
         );
       });
       return;
@@ -180,21 +170,10 @@ suite.define(() => {
                   defaultId: "main",
                   mainKey: "main",
                   scope: "agent",
-                  sessionPlacement: required
-                    ? {
-                        requiredProfile: {
-                          id: "dedicated",
-                          providerId: "device",
-                          executionModes: ["worker-turn"],
-                        },
-                      }
-                    : {},
+                  sessionPlacement: required ? { requiredProfile } : {},
                 },
                 "sessions.describe": {
-                  session: {
-                    key: "agent:main:configured-defaults-proof",
-                    placement: { state: "active" },
-                  },
+                  session: { key: sessionKey, placement: { state: "active" } },
                 },
                 "sessions.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
@@ -202,10 +181,7 @@ suite.define(() => {
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
                 },
                 "users.prefs.set": { status: "ok" },
-                "sessions.create": {
-                  key: "agent:main:configured-defaults-proof",
-                  runStarted: true,
-                },
+                "sessions.create": { key: sessionKey, runStarted: true },
               },
             });
             await page.route("**/control-ui-config.json", (route) =>
@@ -233,8 +209,7 @@ suite.define(() => {
                 animations: "disabled",
               });
             }
-            // Configured model metadata can render before the independent identity
-            // preference request mirrors its result into browser storage.
+            // Identity preferences mirror to storage independently of model rendering.
             await expect
               .poll(() =>
                 page.evaluate(
@@ -246,8 +221,6 @@ suite.define(() => {
               .toBe("low");
             if (configuredDefaults) {
               if (source === "browser") {
-                // A draft with no explicit model choice has exactly the pre-change row
-                // format: content and blobs, without the optional modelSelection field.
                 await draftInput.fill("Unsent before upgrade");
                 await page.locator(".agent-chat__file-input").setInputFiles({
                   name: "upgrade-notes.txt",
@@ -261,8 +234,7 @@ suite.define(() => {
                     hasModelSelection: false,
                     attachmentText: "Keep these attachment bytes",
                   });
-                // Remove the running app before seeding the old serializer shape. Only
-                // its already-scoped identity/fence fields are reused; no new row fields.
+                // Unmount before seeding the legacy row with its existing identity/fences.
                 await page.route("**/legacy-draft-seed", (route) =>
                   route.fulfill({
                     contentType: "text/html",
@@ -295,8 +267,7 @@ suite.define(() => {
             await draftInput.fill("Start with the selected defaults");
             await page.getByRole("button", { name: "Start session", exact: true }).click();
             const request = await gateway.waitForRequest("sessions.create");
-            expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
-            expect(request.params).toHaveProperty("fastMode", true);
+            expect(request.params).toMatchObject(preference);
             const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
             if (configuredDefaults && source === "browser") {
               expect(initialTurn.params).toMatchObject({
