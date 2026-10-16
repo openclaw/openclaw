@@ -17,6 +17,10 @@ import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.j
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
+function writeJson(filename: string, value: unknown) {
+  return fs.writeFile(filename, JSON.stringify(value, null, 2));
+}
+
 export const installedStatusSchema = z.object({
   service: z.object({
     loaded: z.literal(true),
@@ -112,33 +116,26 @@ export function createInstalledProgressRecorder(params: {
   return async (phase: string, error?: Error) => {
     progressFailure = error ?? progressFailure;
     // Persist settled commands and the original error before native cleanup can be interrupted.
-    await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
-    await fs.writeFile(
-      proofPath,
-      JSON.stringify(
+    await writeJson(path.join(rootDir, "commands.json"), commands);
+    await writeJson(proofPath, {
+      result: progressFailure ? "failed" : "in-progress",
+      head: input.toolingSha,
+      candidate: input.candidate,
+      published: input.published,
+      cell: key,
+      cells: [
         {
-          result: progressFailure ? "failed" : "in-progress",
-          head: input.toolingSha,
-          candidate: input.candidate,
-          published: input.published,
-          cell: key,
-          cells: [
-            {
-              key,
-              phase,
-              commands,
-              observations,
-              failure: progressFailure && describeFailure(progressFailure),
-            },
-          ],
-          cleanupComplete: false,
-          elapsedMs: performance.now() - progressStarted,
-          recordedAt: new Date().toISOString(),
+          key,
+          phase,
+          commands,
+          observations,
+          failure: progressFailure && describeFailure(progressFailure),
         },
-        null,
-        2,
-      ),
-    );
+      ],
+      cleanupComplete: false,
+      elapsedMs: performance.now() - progressStarted,
+      recordedAt: new Date().toISOString(),
+    });
     // Only fixed labels reach stdout; command arguments and diagnostics stay in the proof.
     let outputPhase = "fixture";
     if (phase.startsWith("command:")) {
@@ -486,19 +483,12 @@ async function prepareInstalledLifecycle(inputPath: string) {
   await fs.mkdir(evidence, { recursive: true });
   const before = await recordCapacityBoundary(inputPath, input, key, "before-preparation");
   const space = requiredCellSpace(key);
-  await fs.writeFile(
-    path.join(evidence, "capacity-forecast.json"),
-    JSON.stringify(
-      {
-        cell: key,
-        basis: "finite conservative planning allowances; not measured capacity",
-        ...space,
-        observedAvailableBytes: before.availableBytes,
-      },
-      null,
-      2,
-    ),
-  );
+  await writeJson(path.join(evidence, "capacity-forecast.json"), {
+    cell: key,
+    basis: "finite conservative planning allowances; not measured capacity",
+    ...space,
+    observedAvailableBytes: before.availableBytes,
+  });
   assert.ok(
     before.availableBytes >= space.neededBytes,
     `Cell ${key} needs ${space.neededBytes} available bytes under its provisional forecast; observed ${before.availableBytes}; no install started`,
@@ -553,28 +543,18 @@ async function prepareInstalledLifecycle(inputPath: string) {
       cells.push({ key: name, installRoot, installed });
       await recordCapacityBoundary(inputPath, input, key, `installed-${name}`);
     }
-    await fs.writeFile(
-      path.join(evidence, "prepared.json"),
-      JSON.stringify(
-        {
-          cell: key,
-          inputSha256: await hashFile(inputPath),
-          preparationRoot: prep,
-          cells,
-          commands,
-        },
-        null,
-        2,
-      ),
-    );
+    await writeJson(path.join(evidence, "prepared.json"), {
+      cell: key,
+      inputSha256: await hashFile(inputPath),
+      preparationRoot: prep,
+      cells,
+      commands,
+    });
   } catch (error) {
     failure = toErrorObject(error, "Installed Scheduled Task fixture failed");
   }
   try {
-    await fs.writeFile(
-      path.join(evidence, "preparation-commands.json"),
-      JSON.stringify(commands, null, 2),
-    );
+    await writeJson(path.join(evidence, "preparation-commands.json"), commands);
     await recordCapacityBoundary(inputPath, input, key, "preparation-finished");
   } catch (error) {
     failure = new AggregateError(
@@ -650,23 +630,16 @@ async function retireInstalledLifecycle(inputPath: string) {
   }
   try {
     await recordCapacityBoundary(inputPath, input, key, "after-retirement");
-    await fs.writeFile(
-      path.join(evidence, "retirement.json"),
-      JSON.stringify(
-        {
-          result: retired.length === targets.length ? "pass" : "incomplete",
-          cell: key,
-          inputSha256: await hashFile(inputPath),
-          proofSha256,
-          artifactId,
-          artifactDigest,
-          targets,
-          retired,
-        },
-        null,
-        2,
-      ),
-    );
+    await writeJson(path.join(evidence, "retirement.json"), {
+      result: retired.length === targets.length ? "pass" : "incomplete",
+      cell: key,
+      inputSha256: await hashFile(inputPath),
+      proofSha256,
+      artifactId,
+      artifactDigest,
+      targets,
+      retired,
+    });
   } catch (error) {
     failure = new AggregateError(
       failure ? [failure, error] : [error],

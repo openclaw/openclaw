@@ -82,16 +82,17 @@ function mockGatewayProcess(alive: () => boolean, onKill: (forced: boolean) => v
   });
 }
 
+function prepareDoctorAdmission(env: GatewayFixture["env"]) {
+  env.OPENCLAW_STATE_DIR = path.join(expectDefined(env.USERPROFILE, "fixture home"), ".openclaw");
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
+  return resolveDoctorUpdateAdmission(env);
+}
+
 describe("Scheduled Task stop/restart cleanup", () => {
   it("restores an ownerless task in state 4 while revalidating Doctor's state admission", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      env.OPENCLAW_STATE_DIR = path.join(
-        expectDefined(env.USERPROFILE, "fixture home"),
-        ".openclaw",
-      );
-      openOpenClawStateDatabase({ env });
-      closeOpenClawStateDatabaseForTest();
-      const admission = resolveDoctorUpdateAdmission(env);
+      const admission = prepareDoctorAdmission(env);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       let clock = 0;
       vi.spyOn(Date, "now").mockImplementation(() => clock);
@@ -124,13 +125,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     ["stop and cleanup", true],
   ] as const)("preserves %s failures without activating the task", async (_name, failStop) => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      env.OPENCLAW_STATE_DIR = path.join(
-        expectDefined(env.USERPROFILE, "fixture home"),
-        ".openclaw",
-      );
-      openOpenClawStateDatabase({ env });
-      closeOpenClawStateDatabaseForTest();
-      const admission = resolveDoctorUpdateAdmission(env);
+      const admission = prepareDoctorAdmission(env);
       const acquire = gatewayStateOwner.tryAcquireGatewayStateOwner;
       const captured: { exclusion: ReturnType<typeof acquire> } = { exclusion: null };
       vi.spyOn(gatewayStateOwner, "tryAcquireGatewayStateOwner").mockImplementation(
