@@ -6,7 +6,7 @@ import {
   selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
-import { SessionDetailsController } from "./session-details-controller.ts";
+import { SessionDetailsOwner } from "./session-details-owner.ts";
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -33,7 +33,7 @@ export class SessionMenuSettings {
     host: SolidControllerHost,
     private readonly options: SessionMenuSettingsOptions,
   ) {
-    this.settingsDetails = new SessionDetailsController(() => host.requestUpdate(), {
+    this.settingsDetails = new SessionDetailsOwner(() => host.requestUpdate(), {
       captureScope: () => {
         const context = this.options.context();
         const connection = context?.sessions.captureConnectionScope();
