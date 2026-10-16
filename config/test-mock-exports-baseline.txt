@@ -7207,7 +7207,6 @@
 ["src/gateway/server-methods/update-hold.test.ts","../../infra/update-status-state.js","0ea6dc94259f71fed053bbf4c608182ca0cc560c19c629044b2db6ec241ba864",1]
 ["src/gateway/server-methods/update-hold.test.ts","./validation.js","72f12e6adc3b1b5496a62bc3df456214c6750957864d04eb3a8602d56f01efe9",1]
 ["src/gateway/server-methods/update-owner.test.ts","../../agents/tools/gateway.js","607e2caad6bc0fe5d61402d27afa1d77391c38de9f34f2f1b867b1297c2788d6",1]
-["src/gateway/server-methods/update-owner.test.ts","../server-plugin-in-process-dispatch.js","9b78ace98f28a3ca8dd72694d175fce40b6d9a13982c9ab3e0def1b7ef2777c1",1]
 ["src/gateway/server-methods/update-report.test.ts","../../infra/update-failure-report.js","7918c5aa4597351d21051b64c91b19b916365e4472813bc93bf37002a3143498",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../config/commands.flags.js","b310a9ab07e411f36ee8e5d83d21a1410391247f777cd42f5afde02f48cfb381",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../config/config.js","1dabc39bc3317fb1c591d1f4d0c0fe18ad6270730c16ae8add27557a824c7ca3",1]

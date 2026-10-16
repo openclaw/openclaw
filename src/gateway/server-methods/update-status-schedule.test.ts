@@ -344,7 +344,16 @@ it("keeps the optional schedule unknown when local identity cannot resolve its c
 
 it("omits app-owned install and stale package targets from the protocol schedule", async () => {
   stalePackageSchedule("dev", false);
-  install.mockResolvedValue(installAt("host", "/opt/OpenClaw.app/openclaw"));
+  install.mockResolvedValue(
+    installAt("host", "/opt/OpenClaw.app/openclaw", {
+      installOwner: {
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      },
+    }),
+  );
 
   const result = await status(makeConfig(), { refreshCheckout: true });
 

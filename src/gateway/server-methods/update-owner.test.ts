@@ -337,7 +337,7 @@ it.each(["discovery", "acknowledgement", "scheduled admission"] as const)(
         ...ownerFailure,
         origin: expect.objectContaining({ nextAction: summary.message }),
       });
-      expectNoHandoff();
+      expectNoUpdate();
     } else {
       const result = await runOwnerTool(ownerTool());
       expectOwnerRefusal(result.details, acknowledged);
