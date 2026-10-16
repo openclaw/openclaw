@@ -52,6 +52,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const label = "ai.openclaw.gateway";
 const programArguments = ["node", "gateway.js"];
 const environment = { HOME: "/service-home", OPENCLAW_STATE_DIR: "/service-state" };
+const missingJob = { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
 const renderPlist = (args: string[]) => {
   const contents = buildLaunchAgentPlist({
     label,
@@ -93,12 +94,7 @@ describe("native service command inspection", () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-command-"));
     env = { HOME: root, USERPROFILE: root, OPENCLAW_LAUNCHD_LABEL: label };
-    native.launchctl.mockReset().mockResolvedValue({
-      code: 113,
-      termination: "exit",
-      stdout: "",
-      stderr: "Could not find service",
-    });
+    native.launchctl.mockReset().mockResolvedValue(missingJob);
     native.scheduler.mockReset().mockReturnValue({ status: 1, stdout: "-2147024894" });
     native.plists.clear();
     native.plutil.mockReset().mockImplementation(async (_command, args, options) => {
@@ -119,6 +115,11 @@ describe("native service command inspection", () => {
     await fs.writeFile(filename, contents);
   }
 
+  const strictTask = (options: GatewayServiceReadOptions = {}) =>
+    readScheduledTaskCommand(env, { requireEffective: true, ...options });
+  const strictPlist = () => readLaunchAgentProgramArguments(env, { requireEffective: true });
+  const unreadable = (name: string) => `Effective ${name} service command could not be inspected.`;
+
   describe.each(readers)("$name", ({ name, read, resolvePath, render }) => {
     it.each(["dangling", "directory", "empty", "registered", "unavailable"])(
       "keeps a %s definition distinct from proven absence",
@@ -135,7 +136,7 @@ describe("native service command inspection", () => {
         } else {
           native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
             args[1]?.startsWith("system/")
-              ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
+              ? missingJob
               : condition === "registered"
                 ? {
                     code: 0,
@@ -159,14 +160,44 @@ describe("native service command inspection", () => {
         if (condition !== "empty") {
           await expect(read(env)).resolves.toBeNull();
         }
-        await expect(read(env, { requireEffective: true })).rejects.toThrow(
-          `Effective ${name} service command could not be inspected.`,
-        );
+        await expect(read(env, { requireEffective: true })).rejects.toThrow(unreadable(name));
       },
     );
   });
 
   describe("Windows aggregate Scheduler timeout transport", () => {
+    async function windowsFixture(present: boolean, onRead: () => void) {
+      mockProcessPlatform("win32");
+      const windowsEnv = {
+        ...env,
+        APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
+        OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
+      };
+      const scriptPath = resolveTaskScriptPath(windowsEnv);
+      const backingScriptPath = path.join(root, "gateway.cmd");
+      if (present) {
+        await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
+      }
+      const inspectedPath = present ? scriptPath : resolveStartupEntryPaths(windowsEnv)[0];
+      const readFile = fs.readFile;
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        if (args[0] === inspectedPath) {
+          onRead();
+        }
+        return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
+      });
+      const run = vi
+        .spyOn(await import("../process/exec.js"), "runCommandWithTimeout")
+        .mockRejectedValue(new Error("Unexpected legacy Scheduler registration query"));
+      const observe = (timeoutMs?: number) =>
+        readGatewayServiceState(resolveGatewayService(), {
+          env: windowsEnv,
+          requireEffective: true,
+          requireLoadedCommand: true,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+      return { scriptPath, run, observe };
+    }
     const registeredTask = (scriptPath: string, state: number) => ({
       status: 0,
       stdout: JSON.stringify({
@@ -185,30 +216,14 @@ describe("native service command inspection", () => {
     ])(
       "preserves native $condition state with fractional elapsed time ($placement, explicit=$explicit)",
       async ({ placement, condition, explicit }) => {
-        mockProcessPlatform("win32");
-        const windowsEnv = {
-          ...env,
-          APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
-          OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
-        };
-        const scriptPath = resolveTaskScriptPath(windowsEnv);
-        const backingScriptPath = path.join(root, "gateway.cmd");
-        if (condition !== "absent") {
-          // Native state remains useful even when the command cannot identify its process.
-          await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
-        }
         let now = 0;
         let firstRead = true;
-        const inspectedPath =
-          condition === "absent" ? resolveStartupEntryPaths(windowsEnv)[0] : scriptPath;
         vi.spyOn(performance, "now").mockImplementation(() => now);
-        const readFile = fs.readFile;
-        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          if (args[0] === inspectedPath && firstRead) {
+        const { scriptPath, run, observe } = await windowsFixture(condition !== "absent", () => {
+          if (firstRead) {
             firstRead = false;
             now += 100.25;
           }
-          return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
         });
         const schedulerAllowances: Array<{ timeout: number | undefined; remaining: number }> = [];
         native.scheduler.mockImplementation(
@@ -228,26 +243,17 @@ describe("native service command inspection", () => {
               : registeredTask(scriptPath, condition === "running" ? 4 : 3);
           },
         );
-        const run = vi
-          .spyOn(await import("../process/exec.js"), "runCommandWithTimeout")
-          .mockRejectedValue(new Error("Unexpected legacy Scheduler registration query"));
-        const observe = () =>
-          readGatewayServiceState(resolveGatewayService(), {
-            env: windowsEnv,
-            requireEffective: true,
-            requireLoadedCommand: true,
-            ...(explicit ? { timeoutMs: 1_000 } : {}),
-          });
+        const readState = () => observe(explicit ? 1_000 : undefined);
         const { withGatewayServiceUpdateAuthority } = await import("./service-update-authority.js");
         const state =
           placement === "delegated serial"
-            ? await withGatewayServiceUpdateAuthority(undefined, observe, {
+            ? await withGatewayServiceUpdateAuthority(undefined, readState, {
                 updateOwned: false,
                 nativeCommand: async () => {
                   throw new Error("Unexpected delegated command");
                 },
               })
-            : await observe();
+            : await readState();
 
         if (condition === "absent") {
           expect(state).toMatchObject({
@@ -284,54 +290,21 @@ describe("native service command inspection", () => {
       },
     );
 
-    it.each([{ condition: "installed", elapsed: 1_000 }])(
-      "does not launch further native work after reading $condition consumes $elapsed ms",
-      async ({ condition, elapsed }) => {
-        mockProcessPlatform("win32");
-        const windowsEnv = {
-          ...env,
-          APPDATA: `C:\\openclaw-test\\${path.basename(root)}\\AppData`,
-          OPENCLAW_TASK_SCRIPT: `C:\\openclaw-test\\${path.basename(root)}\\gateway.cmd`,
-        };
-        const scriptPath = resolveTaskScriptPath(windowsEnv);
-        const backingScriptPath = path.join(root, "gateway.cmd");
-        if (condition === "installed") {
-          await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
-        }
-        let now = 0;
-        vi.spyOn(performance, "now").mockImplementation(() => now);
-        const inspectedPath =
-          condition === "absent" ? resolveStartupEntryPaths(windowsEnv)[0] : scriptPath;
-        const readFile = fs.readFile;
-        vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-          if (args[0] === inspectedPath) {
-            now = elapsed;
-          }
-          return readFile(args[0] === scriptPath ? backingScriptPath : args[0], args[1]);
-        });
-        // Registration is inspected first; the later launcher read consumes its remaining budget.
-        native.scheduler.mockReturnValue(
-          condition === "absent"
-            ? { status: 1, stdout: "-2147024894", stderr: "" }
-            : registeredTask(scriptPath, 3),
-        );
-        const run = vi
-          .spyOn(await import("../process/exec.js"), "runCommandWithTimeout")
-          .mockRejectedValue(new Error("Unexpected legacy Scheduler registration query"));
-        const result = readGatewayServiceState(resolveGatewayService(), {
-          env: windowsEnv,
-          requireEffective: true,
-          requireLoadedCommand: true,
-          timeoutMs: 1_000,
-        });
-        await expect(result).rejects.toMatchObject({
-          reason: "windows-task-inspection-failed",
-          cause: { kind: "timeout", timeoutMs: 0 },
-        });
-        expect(native.scheduler).toHaveBeenCalledOnce();
-        expect(run).not.toHaveBeenCalled();
-      },
-    );
+    it("does not launch further native work after reading the installed script consumes 1000 ms", async () => {
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const { scriptPath, run, observe } = await windowsFixture(true, () => {
+        now = 1_000;
+      });
+      // Registration is inspected first; the later launcher read consumes its remaining budget.
+      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
+      await expect(observe(1_000)).rejects.toMatchObject({
+        reason: "windows-task-inspection-failed",
+        cause: { kind: "timeout", timeoutMs: 0 },
+      });
+      expect(native.scheduler).toHaveBeenCalledOnce();
+      expect(run).not.toHaveBeenCalled();
+    });
 
     it("rejects a late missing Scheduler result after the strict reader deadline", async () => {
       let now = 0;
@@ -341,9 +314,7 @@ describe("native service command inspection", () => {
         return { status: 1, stdout: "-2147024894", stderr: "" };
       });
 
-      await expect(
-        readScheduledTaskCommand(env, { requireEffective: true, timeoutMs: 1_000 }),
-      ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+      await expect(strictTask({ timeoutMs: 1_000 })).rejects.toThrow(unreadable("Scheduled Task"));
       expect(native.scheduler).toHaveBeenCalledOnce();
     });
   });
@@ -352,7 +323,7 @@ describe("native service command inspection", () => {
     for (const pathname of resolveStartupEntryPaths(env)) {
       await writeFile(pathname, "@echo off\n");
     }
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow();
+    await expect(strictTask()).rejects.toThrow();
   });
 
   it.each([
@@ -473,16 +444,15 @@ describe("native service command inspection", () => {
     async ({ lines, environment: expectedEnvironment }) => {
       await writeFile(resolveTaskScriptPath(env), lines.join("\r\n"));
       if (expectedEnvironment) {
-        await expect(
-          readScheduledTaskCommand(env, { requireEffective: true }),
-        ).resolves.toMatchObject({ programArguments, environment: expectedEnvironment });
+        await expect(strictTask()).resolves.toMatchObject({
+          programArguments,
+          environment: expectedEnvironment,
+        });
       } else {
         await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
           environment: { HOME: "/partial-home" },
         });
-        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-          "Effective Scheduled Task service command could not be inspected.",
-        );
+        await expect(strictTask()).rejects.toThrow(unreadable("Scheduled Task"));
       }
     },
   );
@@ -515,9 +485,7 @@ describe("native service command inspection", () => {
           : decodeLaunchAgentPlistFixture(options.input, args[1]),
       );
     }
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
+    await expect(strictPlist()).rejects.toThrow(unreadable("LaunchAgent"));
   });
 
   it.each([
@@ -556,9 +524,7 @@ describe("native service command inspection", () => {
       renderPlist([LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapper, envFile, ...programArguments]),
     );
     if (scenario === "literal") {
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).resolves.toMatchObject({
+      await expect(strictPlist()).resolves.toMatchObject({
         programArguments,
         environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
       });
@@ -567,9 +533,7 @@ describe("native service command inspection", () => {
         programArguments,
         ...(recovering ? { environment: { OPENCLAW_STATE_DIR: "/recovered-state" } } : {}),
       });
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).rejects.toThrow("Effective LaunchAgent service command could not be inspected.");
+      await expect(strictPlist()).rejects.toThrow(unreadable("LaunchAgent"));
     }
   });
 });

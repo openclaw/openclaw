@@ -114,26 +114,23 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it.each(["EPERM"])(
-    "preserves a Windows launcher when rename-over is denied with %s",
-    async (code) => {
-      const f = await fixture("win32", true);
-      const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
-      const rename = fs.rename.bind(fs);
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        if (args[1] === f.sourcePath) {
-          throw Object.assign(new Error(`launcher is open: ${code}`), { code });
-        }
-        return rename(...args);
-      });
-      await expect(f.install()).rejects.toThrow(code);
-      await f.capture.compensate();
-      expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
-      expect(
-        native.task.mock.calls.some(([args]) => args[0] === "/Create" || args[0] === "/Run"),
-      ).toBe(false);
-    },
-  );
+  it("preserves a Windows launcher when rename-over is denied with EPERM", async () => {
+    const f = await fixture("win32", true);
+    const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (args[1] === f.sourcePath) {
+        throw Object.assign(new Error("launcher is open: EPERM"), { code: "EPERM" });
+      }
+      return rename(...args);
+    });
+    await expect(f.install()).rejects.toThrow("EPERM");
+    await f.capture.compensate();
+    expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+    expect(
+      native.task.mock.calls.some(([args]) => args[0] === "/Create" || args[0] === "/Run"),
+    ).toBe(false);
+  });
 
   it.each(["same bytes", "different bytes"])(
     "preserves a later replacement with %s instead of adopting it as the prepared publication",

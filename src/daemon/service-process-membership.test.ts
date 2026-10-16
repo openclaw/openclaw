@@ -47,6 +47,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("launchd process membership", () => {
+  const pidRecord = uncontained(process.pid);
+  const jobRecord = coalition(1203, "ai.openclaw.gateway");
+  const malformedPid = (body: string) => pidRecord.replace("type = pid", body);
   const cases: Array<{
     label: string;
     caller: string;
@@ -62,44 +65,29 @@ describe("launchd process membership", () => {
       gateway: "",
       expected: "inside",
     },
-    ...[
-      { label: "same coalition", callerId: 1203, callerName: "example.child", expected: "inside" },
-      {
-        label: "same native job",
-        callerId: 1204,
-        callerName: "ai.openclaw.gateway",
-        expected: "inside",
-      },
-      {
-        label: "distinct native jobs",
-        callerId: 1204,
-        callerName: "com.apple.Terminal",
-        expected: "outside",
-      },
-      {
-        label: "same coalition with opaque service rows",
-        callerId: 1203,
-        callerName: "example.child",
-        expected: "inside",
-        services:
-          "  services = {\n    42 0 example.synthetic.worker (A)\n    43 0 example.synthetic.helper (D)\n  }",
-      },
-    ].map(({ label, expected, callerId, callerName, services }) => ({
+    ...(
+      [
+        ["same coalition", 1203, "example.child", "inside"],
+        ["same native job", 1204, "ai.openclaw.gateway", "inside"],
+        ["distinct native jobs", 1204, "com.apple.Terminal", "outside"],
+        ["same coalition with opaque service rows", 1203, "example.child", "inside", true],
+      ] satisfies Array<[string, number, string, string, boolean?]>
+    ).map(([label, callerId, callerName, expected, services]) => ({
       label,
       expected,
-      caller: coalition(callerId, callerName).replace(/\n}$/, `\n${services ?? ""}\n}`),
+      caller: coalition(callerId, callerName).replace(
+        /\n}$/,
+        `\n${services ? "  services = {\n    42 0 example.synthetic.worker (A)\n    43 0 example.synthetic.helper (D)\n  }" : ""}\n}`,
+      ),
       gateway: coalition(1203, "ai.openclaw.gateway", gatewayPid),
     })),
-    ...[
-      { label: "neither PID has a coalition", caller: false, gateway: false, expected: "absent" },
-      {
-        label: "only the caller has a coalition",
-        caller: true,
-        gateway: false,
-        expected: "absent",
-      },
-      { label: "caller outside the known job", caller: false, gateway: true, expected: "outside" },
-    ].map(({ label, expected, caller, gateway }) => ({
+    ...(
+      [
+        ["neither PID has a coalition", false, false, "absent"],
+        ["only the caller has a coalition", true, false, "absent"],
+        ["caller outside the known job", false, true, "outside"],
+      ] satisfies Array<[string, boolean, boolean, string]>
+    ).map(([label, caller, gateway, expected]) => ({
       label,
       expected,
       caller: caller ? coalition(1203, "ai.openclaw.gateway") : uncontained(process.pid),
@@ -120,48 +108,31 @@ describe("launchd process membership", () => {
       gateway: "",
       expected: "unknown",
     })),
-    ...[
-      { label: "empty response", stdout: "" },
-      { label: "wrong PID", stdout: uncontained(gatewayPid + 1) },
-      { label: "truncated PID record", stdout: uncontained(process.pid).slice(0, -1) },
-      {
-        label: "wrong record type",
-        stdout: uncontained(process.pid).replace("type = pid", "type = domain"),
-      },
-      {
-        label: "malformed record",
-        stdout: uncontained(process.pid).replace("type = pid", "type = pid\n  unreadable"),
-      },
-      {
-        label: "wrong coalition type",
-        stdout: coalition(1203, "ai.openclaw.gateway").replace("type = resource", "type = jetsam"),
-      },
-      {
-        label: "duplicate coalition",
-        stdout: coalition(1203, "a").replace(
-          /\n}$/,
-          `\n${coalition(1204, "b").split("\n").slice(2, -1).join("\n")}\n}`,
-        ),
-      },
-      {
-        label: "malformed coalition",
-        stdout: uncontained(process.pid).replace(
-          "type = pid",
-          "type = pid\n  resource coalition = unavailable",
-        ),
-      },
-      {
-        label: "duplicate identity",
-        stdout: coalition(1203, "a").replace("ID = 1203", "ID = 1203\n    ID = 1204"),
-      },
-      { label: "missing name", stdout: coalition(1203, "") },
-      { label: "failed query", stdout: coalition(1203, "ai.openclaw.gateway"), status: 1 },
-      {
-        label: "truncated query",
-        stdout: coalition(1203, "ai.openclaw.gateway"),
-        error: new Error("maxBuffer"),
-      },
-    ].map(({ label, stdout, ...query }) => ({
+    ...(
+      [
+        ["empty response", ""],
+        ["wrong PID", uncontained(gatewayPid + 1)],
+        ["truncated PID record", pidRecord.slice(0, -1)],
+        ["wrong record type", malformedPid("type = domain")],
+        ["malformed record", malformedPid("type = pid\n  unreadable")],
+        ["wrong coalition type", jobRecord.replace("type = resource", "type = jetsam")],
+        [
+          "duplicate coalition",
+          coalition(1203, "a").replace(
+            /\n}$/,
+            `\n${coalition(1204, "b").split("\n").slice(2, -1).join("\n")}\n}`,
+          ),
+        ],
+        ["malformed coalition", malformedPid("type = pid\n  resource coalition = unavailable")],
+        [
+          "duplicate identity",
+          coalition(1203, "a").replace("ID = 1203", "ID = 1203\n    ID = 1204"),
+        ],
+        ["missing name", coalition(1203, "")],
+        ["failed query", jobRecord, { status: 1 }],
+        ["truncated query", jobRecord, { error: new Error("maxBuffer") }],
+      ] satisfies Array<[string, string, { status?: number; error?: Error }?]>
+    ).map(([label, stdout, query]) => ({
       label,
       query,
       caller: stdout,
@@ -206,52 +177,20 @@ describe("launchd process membership when launchctl denies PID domains", () => {
   };
 
   it.each([
-    {
-      label: "an external terminal",
-      caller: nativeRow(1204, "com.apple.Terminal"),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "outside",
+    ["an external terminal", nativeRow(1204, "com.apple.Terminal"), "outside"],
+    ["a process in the Gateway coalition", nativeRow(1203), "inside", nativeRow(1203)],
+    ["a child of an earlier Gateway instance", nativeRow(1204, "ai.openclaw.gateway"), "inside"],
+    ["distinct coalitions without job names", nativeRow(1204), "unknown"],
+    ["an unavailable native probe", new Error("unavailable"), "unknown"],
+    ["an invalid coalition ID", nativeRow(0, "com.apple.Terminal"), "unknown"],
+    ["a denied native query", new Error("access denied"), "unknown"],
+  ] satisfies Array<[string, object, string, object?]>)(
+    "classifies %s from native coalitions",
+    (_label, caller, expected, gateway = nativeRow(1203, "ai.openclaw.gateway")) => {
+      observe(caller, gateway);
+      expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
     },
-    {
-      label: "a process in the Gateway coalition",
-      caller: nativeRow(1203),
-      gateway: nativeRow(1203),
-      expected: "inside",
-    },
-    {
-      label: "a child of an earlier Gateway instance",
-      caller: nativeRow(1204, "ai.openclaw.gateway"),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "inside",
-    },
-    {
-      label: "distinct coalitions without job names",
-      caller: nativeRow(1204),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "unknown",
-    },
-    {
-      label: "an unavailable native probe",
-      caller: new Error("unavailable"),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "unknown",
-    },
-    {
-      label: "an invalid coalition ID",
-      caller: nativeRow(0, "com.apple.Terminal"),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "unknown",
-    },
-    {
-      label: "a denied native query",
-      caller: new Error("access denied"),
-      gateway: nativeRow(1203, "ai.openclaw.gateway"),
-      expected: "unknown",
-    },
-  ])("classifies $label from native coalitions", ({ caller, gateway, expected }) => {
-    observe(caller, gateway);
-    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
-  });
+  );
 
   it("does not query natively when launchctl itself fails to run", () => {
     observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"), {
@@ -333,40 +272,30 @@ describe("systemd process membership", () => {
     })),
     ...(
       [
-        ["unified namespace root", "0::/", "0::/", "absent", undefined],
+        ["unified namespace root", "0::/", "0::/", "absent"],
         ["observed root ControlGroup", "0::/", "0::/", "absent", "/"],
-        [
-          "legacy systemd hierarchy root",
-          "1:name=systemd:/",
-          "1:name=systemd:/",
-          "absent",
-          undefined,
-        ],
+        ["legacy systemd hierarchy root", "1:name=systemd:/", "1:name=systemd:/", "absent"],
         [
           "valid v1 without systemd",
           "2:cpu,cpuacct:/caller\n3:memory:/caller",
           "2:cpu,cpuacct:/\n3:memory:/",
           "absent",
-          undefined,
         ],
         [
           "non-root v1 without systemd",
           "2:cpu,cpuacct:/caller\n3:memory:/caller",
           "2:cpu,cpuacct:/gateway\n3:memory:/",
           "unknown",
-          undefined,
         ],
-        ["unobserved non-root unit", "0::/", cg, "unknown", undefined],
-        ["empty proc response", "", "", "unknown", undefined],
-        ["malformed v1 row", "2:cpu:/\nunreadable", "2:cpu:/", "unknown", undefined],
-        ["duplicate hierarchy", "0::/\n0::/", "0::/", "unknown", undefined],
-        ["invalid v1 controller", "2::/", "2::/", "unknown", undefined],
-        ["mismatched hierarchy", "0::/", "1:name=systemd:/", "unknown", undefined],
-        ["denied caller proc", undefined, "0::/", "unknown", undefined],
-        ["vanished Gateway proc", "0::/", undefined, "unknown", undefined],
-      ] satisfies Array<
-        [string, string | undefined, string | undefined, string, string | undefined]
-      >
+        ["unobserved non-root unit", "0::/", cg, "unknown"],
+        ["empty proc response", "", "", "unknown"],
+        ["malformed v1 row", "2:cpu:/\nunreadable", "2:cpu:/", "unknown"],
+        ["duplicate hierarchy", "0::/\n0::/", "0::/", "unknown"],
+        ["invalid v1 controller", "2::/", "2::/", "unknown"],
+        ["mismatched hierarchy", "0::/", "1:name=systemd:/", "unknown"],
+        ["denied caller proc", undefined, "0::/", "unknown"],
+        ["vanished Gateway proc", "0::/", undefined, "unknown"],
+      ] satisfies Array<[string, string | undefined, string | undefined, string, string?]>
     ).map(([label, caller, gateway, expected, controlGroup]) => ({
       label,
       caller,
@@ -378,20 +307,19 @@ describe("systemd process membership", () => {
     })),
     ...(
       [
-        ["reparented same group", procStat(process.pid, 900), "inside", undefined],
-        ["distinct groups without ps", procStat(process.pid, 901), "absent", undefined],
+        ["reparented same group", procStat(process.pid, 900), "inside"],
+        ["distinct groups without ps", procStat(process.pid, 901), "absent"],
         [
           "command with parentheses and newline",
           procStat(process.pid, 901, "worker ) (child\nprocess)"),
           "absent",
-          undefined,
         ],
-        ["wrong PID", procStat(gatewayPid, 901), "unknown", undefined],
-        ["zero group", procStat(process.pid, 0), "unknown", undefined],
-        ["unsafe group", procStat(process.pid, Number.MAX_SAFE_INTEGER + 1), "unknown", undefined],
-        ["unreadable caller", undefined, "unknown", undefined],
+        ["wrong PID", procStat(gatewayPid, 901), "unknown"],
+        ["zero group", procStat(process.pid, 0), "unknown"],
+        ["unsafe group", procStat(process.pid, Number.MAX_SAFE_INTEGER + 1), "unknown"],
+        ["unreadable caller", undefined, "unknown"],
         ["vanished Gateway", procStat(process.pid, 901), "unknown", true],
-      ] satisfies Array<[string, string | undefined, string, boolean | undefined]>
+      ] satisfies Array<[string, string | undefined, string, boolean?]>
     ).map(([label, callerStat, expected, missingGateway]) => ({
       label,
       callerStat,
