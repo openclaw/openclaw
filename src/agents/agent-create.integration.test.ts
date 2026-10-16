@@ -126,6 +126,47 @@ function authBatch(
   };
 }
 
+const expectCreation = async (params: Parameters<typeof createAgent>[0], result: object) =>
+  expect(await createAgent(params)).toMatchObject(result);
+
+async function expectMissing(...paths: string[]) {
+  for (const file of paths) {
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+
+function claimAuthority(label: string) {
+  const authority = claimAgentRunDelegatedAuthority({ instanceId: label, runId: label });
+  onTestFinished(() => {
+    releaseAgentRunDelegatedAuthority(authority);
+  });
+  return authority;
+}
+
+const legacyRoster: OpenClawConfigWithLegacyRoster = {
+  agents: {
+    list: [
+      { id: "main", default: true },
+      { id: "ops", workspace: "/srv/ops" },
+    ],
+  },
+};
+
+const settle = <T>(operation: Promise<T>) =>
+  operation.then(
+    (result) => ({ result }),
+    (error: unknown) => ({ error }),
+  );
+
+async function observeSql(run: (queries: string[]) => Promise<void>) {
+  const observation = observeHostDataSql();
+  try {
+    await run(observation.queries);
+  } finally {
+    observation.restore();
+  }
+}
+
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
   const state = await createState("held-agent-restore");
 
@@ -141,27 +182,26 @@ it("restores only the configured held store after explicit creation, never throu
     openOpenClawAgentDatabase({ agentId: "alias", path: aliasPath, env: state.env }),
   ).toThrow("belongs to agent main; requested agent alias");
   const params = { name: "main", workspace: state.workspaceDir };
-  const observation = observeHostDataSql();
-  try {
-    expect(
-      await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
-    ).toMatchObject({
+  await observeSql(async (queries) => {
+    await expectCreation(
+      { ...params, agentDir: path.dirname(recovery.held[1]!.path) },
+      {
+        status: "error",
+        reason: "already-exists",
+      },
+    );
+    expect(queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
+  });
+  expect(recovery.readHolds()).toEqual(recovery.held);
+  await expectCreation({ ...params, bootstrapMain: true }, { status: "existing" });
+  expect(recovery.readHolds()).toEqual(recovery.held);
+  await expectCreation(
+    { ...params, bootstrapFirstAgent: true },
+    {
       status: "error",
       reason: "already-exists",
-    });
-    expect(observation.queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-  expect(recovery.readHolds()).toEqual(recovery.held);
-  expect(await createAgent({ ...params, bootstrapMain: true })).toMatchObject({
-    status: "existing",
-  });
-  expect(recovery.readHolds()).toEqual(recovery.held);
-  expect(await createAgent({ ...params, bootstrapFirstAgent: true })).toMatchObject({
-    status: "error",
-    reason: "already-exists",
-  });
+    },
+  );
   expect(recovery.readHolds()).toEqual(recovery.held);
   await expect(
     createAgent({
@@ -173,10 +213,7 @@ it("restores only the configured held store after explicit creation, never throu
   ).rejects.toThrow("restore authority closed");
   expect(recovery.readHolds()).toEqual(recovery.held);
 
-  expect(await createAgent(params)).toMatchObject({
-    status: "existing",
-    agentDir: state.agentDir(),
-  });
+  await expectCreation(params, { status: "existing", agentDir: state.agentDir() });
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
   const isHeld = createRetainedAgentDatabaseMatcher(state.env, () =>
     resolveConfiguredAgentDatabaseTargets(cfg, { env: state.env }),
@@ -228,9 +265,8 @@ it.each(["added", "removed"] as const)(
       setHeld(change === "removed");
       await withOpenClawStateDatabaseReadSnapshot(
         async () => {
-          const observation = observeHostDataSql();
           let changed = false;
-          try {
+          await observeSql(async (queries) => {
             const result = await createAgent({
               name: "main",
               bootstrapMain: true,
@@ -248,13 +284,11 @@ it.each(["added", "removed"] as const)(
             );
             expect(changed).toBe(true);
             expect(
-              observation.queries.filter(
+              queries.filter(
                 (sql) => /^\s*select\b/i.test(sql) && /\bmigration_sources\b/i.test(sql),
               ),
             ).toEqual([]);
-          } finally {
-            observation.restore();
-          }
+          });
         },
         { env: state.env },
       );
@@ -278,17 +312,15 @@ it("restores a held custom filename only after its session store configuration s
     workspace: state.path("restored-workspace"),
     agentDir: path.dirname(target.path),
   };
-  expect(await createAgent(params)).toMatchObject({
+  await expectCreation(params, {
     status: "error",
     reason: "already-exists",
     message: expect.stringContaining("session.store"),
   });
   expect(await state.readConfig()).toBe(originalConfig);
-  await expect(fs.stat(path.join(params.agentDir, "openclaw-agent.sqlite"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectMissing(path.join(params.agentDir, "openclaw-agent.sqlite"));
   await state.writeConfig({ ...config, session: { store: target.path } });
-  expect(await createAgent(params)).toMatchObject({ status: "created", agentId: target.agentId });
+  await expectCreation(params, { status: "created", agentId: target.agentId });
   expect(recovery.readHolds()).toEqual([]);
   expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
 });
@@ -312,7 +344,8 @@ it.each(["missing", "un-authored"] as const)(
     const workspace = state.path("onboarding-workspace");
 
     await expect(ensureOnboardingAgent({ config, workspace })).rejects.toThrow("held databases");
-    expect(await createAgent({ name: "main", workspace, bootstrapMain: true })).toMatchObject(
+    await expectCreation(
+      { name: "main", workspace, bootstrapMain: true },
       configState === "missing"
         ? {
             status: "error",
@@ -323,12 +356,11 @@ it.each(["missing", "un-authored"] as const)(
     );
 
     if (configState === "missing") {
-      await expect(fs.stat(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(state.configPath);
     } else {
       expect(await state.readConfig()).toBe(originalConfig);
     }
-    await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(state.agentDir())).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(workspace, state.agentDir());
     expect(recovery.readHolds()).toEqual([target]);
     expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
   },
@@ -373,10 +405,7 @@ it.each(["bootstrap", "explicit"])(
     expect(await state.readConfig()).toBe(originalConfig);
     expect(rollback).toHaveBeenCalledOnce();
     expect(commit).not.toHaveBeenCalled();
-    await expect(fs.stat(stagedFile)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(state.agentDir(target.agentId))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(stagedFile, state.agentDir(target.agentId));
     expect(recovery?.readHolds()).toEqual([target]);
     expect(await fs.readFile(target.path)).toEqual(recovery?.bytes[0]);
   },
@@ -437,7 +466,7 @@ it.each([
     expect(rollback).toHaveBeenCalledOnce();
   }
   if (!change.startsWith("replaced")) {
-    await expect(fs.stat(target.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(target.path);
   }
 });
 
@@ -478,10 +507,7 @@ it("keeps a restored main agent held until its new config entry is published", a
 
 it("does not create an agent after delegated authority closes while awaiting the config lock", async () => {
   const state = await createState("agent-create-closed-authority");
-  const authority = claimAgentRunDelegatedAuthority({
-    instanceId: "creation-instance",
-    runId: "creation-run",
-  });
+  const authority = claimAuthority("creation");
   const lockEntered = createDeferred();
   const releaseLock = createDeferred();
   const creationEntered = createDeferred();
@@ -508,10 +534,7 @@ it("does not create an agent after delegated authority closes while awaiting the
         },
       },
     );
-    const outcome = creation.then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = settle(creation);
     await creationEntered.promise;
     expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
     releaseLock.resolve();
@@ -529,7 +552,6 @@ it("does not create an agent after delegated authority closes while awaiting the
     releaseLock.resolve();
     await lock;
     await creation?.catch(() => undefined);
-    releaseAgentRunDelegatedAuthority(authority);
   }
 });
 
@@ -537,10 +559,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
   "stops delegated creation after authority closes during %s preparation",
   async (phase, { signal }) => {
     const state = await createState(`agent-create-${phase}-authority`);
-    const authority = claimAgentRunDelegatedAuthority({
-      instanceId: "preparation-instance",
-      runId: "preparation-run",
-    });
+    const authority = claimAuthority("preparation");
     const entered = createDeferred<typeof phase>();
     const resume = createDeferred();
     const workspace = state.path("prepared-workspace");
@@ -564,10 +583,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       beforePersistentApply: () => assertAuthority(authority),
       prepareConfigCommit,
     });
-    const outcome = creation.then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = settle(creation);
     try {
       // The finally block restores process-wide spies and env; a stalled wait must still reach it.
       expect(
@@ -603,43 +619,35 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       resume.resolve();
       await outcome;
       restoreWorkspacePreparation();
-      releaseAgentRunDelegatedAuthority(authority);
     }
   },
 );
 
 it("finishes creation bookkeeping when delegated authority closes after successful publication", async () => {
   const state = await createState("agent-create-published");
-  const authority = claimAgentRunDelegatedAuthority({
-    instanceId: "published",
-    runId: "published",
-  });
+  const authority = claimAuthority("published");
   const workspace = state.path("published-workspace");
   completeDeletion(state, "published", workspace);
   const rollback = vi.fn();
   const commit = vi.fn();
-  try {
-    const created = await createAgent({
-      name: "published",
-      workspace,
-      beforePersistentApply: () => assertAuthority(authority),
-      prepareConfigCommit: async () => ({ commit, rollback }),
-      transformConfig: async (params) => {
-        const result = await transformConfigFileWithRetry(params);
-        releaseAgentRunDelegatedAuthority(authority);
-        return result;
-      },
-    });
+  const created = await createAgent({
+    name: "published",
+    workspace,
+    beforePersistentApply: () => assertAuthority(authority),
+    prepareConfigCommit: async () => ({ commit, rollback }),
+    transformConfig: async (params) => {
+      const result = await transformConfigFileWithRetry(params);
+      releaseAgentRunDelegatedAuthority(authority);
+      return result;
+    },
+  });
 
-    expect(created).toMatchObject({ status: "created", agentId: "published" });
-    expect(await state.readJsonConfig()).toHaveProperty("agents.entries.published");
-    expect(readAgentDeletionJournal("published")).toBeUndefined();
-    expect(commit).toHaveBeenCalledOnce();
-    expect(rollback).not.toHaveBeenCalled();
-    expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
-  } finally {
-    releaseAgentRunDelegatedAuthority(authority);
-  }
+  expect(created).toMatchObject({ status: "created", agentId: "published" });
+  expect(await state.readJsonConfig()).toHaveProperty("agents.entries.published");
+  expect(readAgentDeletionJournal("published")).toBeUndefined();
+  expect(commit).toHaveBeenCalledOnce();
+  expect(rollback).not.toHaveBeenCalled();
+  expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
 });
 
 it.each(["commit", "rollback", "close-failure"] as const)(
@@ -766,71 +774,51 @@ it.each(["commit", "rollback", "close-failure"] as const)(
 );
 
 describe("agent roster persistence", () => {
-  async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
-    const state = await createState("agent-roster-write", {
-      layout: "state-only",
-      scenario: "empty",
-    });
-
-    await state.writeConfig(config);
-    const result = await createAgent({ name: "Worker", workspace: state.path("worker") });
-    expect(result).toMatchObject({
-      status: "created",
-      agentId: "worker",
-      configPath: state.configPath,
-    });
-    return await state.readJsonConfig();
-  }
-
-  it("writes injected main and a new worker as one complete keyed roster", async () => {
-    const persisted = await addWorkerToConfig({ gateway: { mode: "local" } });
-
-    expect(persisted.agents?.entries).toMatchObject({
-      main: { workspace: expect.any(String) },
-      worker: { workspace: expect.any(String) },
-    });
-    expect(Object.values(persisted.agents?.entries ?? {})).not.toContainEqual(
-      expect.objectContaining({ default: expect.anything() }),
-    );
-  });
-
-  it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
-    const legacy: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "ops", workspace: "/srv/ops" },
-        ],
-      },
-    };
-    const migrated = migrateLegacyConfig(legacy, { sourceConfigBeforeMigrations: legacy });
-    const persisted = await addWorkerToConfig(
-      expectDefined(migrated.config, "Doctor migrated roster"),
-    );
-
-    expect(persisted.agents).not.toHaveProperty("list");
-    expect(persisted.agents?.entries).toMatchObject({
-      main: { workspace: expect.any(String) },
-      ops: { workspace: "/srv/ops" },
-      worker: { workspace: expect.any(String) },
-    });
-  });
+  it.each([false, true])(
+    "persists a complete keyed roster (Doctor migration=%s)",
+    async (migrate) => {
+      const state = await createState("agent-roster-write", {
+        layout: "state-only",
+        scenario: "empty",
+      });
+      let config: OpenClawConfig = { gateway: { mode: "local" } };
+      if (migrate) {
+        config = expectDefined(
+          migrateLegacyConfig(legacyRoster, { sourceConfigBeforeMigrations: legacyRoster }).config,
+          "Doctor migrated roster",
+        );
+      }
+      await state.writeConfig(config);
+      await expectCreation(
+        { name: "Worker", workspace: state.path("worker") },
+        {
+          status: "created",
+          agentId: "worker",
+          configPath: state.configPath,
+        },
+      );
+      const persisted = await state.readJsonConfig();
+      expect(persisted.agents?.entries).toMatchObject({
+        main: { workspace: expect.any(String) },
+        worker: { workspace: expect.any(String) },
+      });
+      if (migrate) {
+        expect(persisted.agents).not.toHaveProperty("list");
+        expect(persisted.agents?.entries?.ops).toMatchObject({ workspace: "/srv/ops" });
+      } else {
+        expect(Object.values(persisted.agents?.entries ?? {})).not.toContainEqual(
+          expect.objectContaining({ default: expect.anything() }),
+        );
+      }
+    },
+  );
 
   it("refuses a non-roster mutation without changing an unmigrated legacy list", async () => {
     const state = await createState("legacy-roster-non-roster-write", {
       layout: "state-only",
       scenario: "empty",
     });
-    const list = [
-      { id: "main", default: true },
-      { id: "ops", workspace: "/srv/ops" },
-    ];
-    const legacy: OpenClawConfigWithLegacyRoster = {
-      agents: { list },
-      gateway: { port: 18789 },
-    };
-
-    await state.writeConfig(legacy);
+    await state.writeConfig({ ...legacyRoster, gateway: { port: 18789 } });
     const original = await state.readConfig();
     await expect(
       mutateConfigFileWithRetry({
@@ -841,10 +829,6 @@ describe("agent roster persistence", () => {
     ).rejects.toThrow("doctor --fix");
 
     expect(await state.readConfig()).toBe(original);
-    const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(await state.readConfig());
-    expect(persisted.agents).toEqual({ list });
-    expect(persisted.agents).not.toHaveProperty("entries");
-    expect(persisted.gateway).toEqual({ port: 18789 });
   });
 });
 

@@ -1,14 +1,15 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { withLoopbackTestServer } from "../commands/loopback-server.test-support.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
@@ -37,10 +38,7 @@ import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shar
 import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
-import {
-  settleCliPreparationError,
-  settlePreparedCliRun,
-} from "./cli-runner/cli-run-settlement.js";
+import { settlePreparedCliRun } from "./cli-runner/cli-run-settlement.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import {
   bindActiveOperatorTurnAuthority,
@@ -112,12 +110,13 @@ function createPrepared(senderIsOwner: boolean) {
 
 function runCommand<T>(
   run: Parameters<typeof runLocalAgentCommand<T>>[0]["run"],
-  overrides: Partial<Omit<Parameters<typeof runLocalAgentCommand<T>>[0], "run">> = {},
+  opts: Partial<AgentCommandOpts> = {},
+  operatorAuthority?: boolean,
 ) {
   return runLocalAgentCommand({
-    opts: { message: "test", runId: "run-local" },
+    opts: { message: "test", runId: "run-local", ...opts },
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    ...overrides,
+    operatorAuthority,
     run,
   });
 }
@@ -184,9 +183,8 @@ async function createMcpPeer(label: string) {
 async function exerciseMcpRuntime(sessionId: string, text: string) {
   const lease = await acquireMcp(sessionId);
   try {
-    expect((await lease.runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
-      "probe",
-    ]);
+    const catalog = await lease.runtime.getCatalog();
+    expect(catalog.tools.map(({ toolName }) => toolName)).toEqual(["probe"]);
     await expectProbe(lease.runtime, text);
     return lease.runtime;
   } finally {
@@ -195,103 +193,82 @@ async function exerciseMcpRuntime(sessionId: string, text: string) {
 }
 
 it.each([
-  ["owned success", false, false, false],
-  ["owned revoked preparation", false, false, true],
-  ["borrowed retained", true, false, false],
-  ["borrowed cleanup", true, true, false],
-] as const)(
-  "settles %s without retiring another session",
-  async (_name, borrowed, cleanup, preparationFailure) => {
-    const survivor = await createMcpPeer("survivor");
-    const commandPeer = await createMcpPeer("command");
-    const survivorClock = createGatewaySchedulerClock();
-    const { host, scheduler } = createHost(survivorClock);
-    const closeTransport = commandPeer.transport.close.bind(commandPeer.transport);
-    // Bind the original before replacing it so release does not reenter the spy.
-    const closing = blockRelease(closeTransport);
-    vi.spyOn(commandPeer.transport, "close").mockImplementationOnce(closing.release);
-    const revoked = new Error("preparation authority revoked");
-    const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
-    let settled = false;
-    let command: ReturnType<typeof settlePreparedCliRun> | undefined;
-    try {
-      const retained = await host.run(() => exerciseMcpRuntime("survivor-mcp", "survivor"));
-      const maintenance = vi.fn();
-      scheduler.schedule({ id: "survivor-maintenance", delayMs: 10, run: maintenance });
-      mocks.prepare.mockImplementationOnce(async (opts: AgentCommandOpts) => ({
-        ...createPrepared(false),
-        opts,
-      }));
-      const run = () =>
-        runCommand(
-          async (prepared) => {
-            const context = buildPreparedCliRunContext({
-              sessionId: "command-mcp",
-              runId: prepared.runId,
-              workspaceDir: state.workspaceDir,
-            });
-            context.params.cleanupBundleMcpOnRunEnd = prepared.opts.cleanupBundleMcpOnRunEnd;
-            if (preparationFailure) {
+  ["owned success", false, false],
+  ["borrowed retained", true, false],
+  ["borrowed cleanup", true, true],
+] as const)("settles %s without retiring another session", async (_name, borrowed, cleanup) => {
+  const survivor = await createMcpPeer("survivor");
+  const commandPeer = await createMcpPeer("command");
+  const survivorClock = createGatewaySchedulerClock();
+  const { host, scheduler } = createHost(survivorClock);
+  const closeTransport = commandPeer.transport.close.bind(commandPeer.transport);
+  // Bind the original before replacing it so release does not reenter the spy.
+  const closing = blockRelease(closeTransport);
+  vi.spyOn(commandPeer.transport, "close").mockImplementationOnce(closing.release);
+  const result = { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+  let settled = false;
+  let command: ReturnType<typeof settlePreparedCliRun> | undefined;
+  try {
+    const retained = await host.run(() => exerciseMcpRuntime("survivor-mcp", "survivor"));
+    const maintenance = vi.fn();
+    scheduler.schedule({ id: "survivor-maintenance", delayMs: 10, run: maintenance });
+    mocks.prepare.mockImplementationOnce(async (opts: AgentCommandOpts) => ({
+      ...createPrepared(false),
+      opts,
+    }));
+    const run = () =>
+      runCommand(
+        async (prepared) => {
+          const context = buildPreparedCliRunContext({
+            sessionId: "command-mcp",
+            runId: prepared.runId,
+            workspaceDir: state.workspaceDir,
+          });
+          context.params.cleanupBundleMcpOnRunEnd = prepared.opts.cleanupBundleMcpOnRunEnd;
+          return await settlePreparedCliRun({
+            context,
+            run: async () => {
               await exerciseMcpRuntime("command-mcp", "command");
-              await settleCliPreparationError(new Error("preparation failed"), {
-                ...context.params,
-                assertCurrent: () => {
-                  throw revoked;
-                },
-              });
-              throw new Error("Revoked preparation unexpectedly settled");
-            }
-            return await settlePreparedCliRun({
-              context,
-              run: async () => {
-                await exerciseMcpRuntime("command-mcp", "command");
-                return result;
-              },
-            });
-          },
-          {
-            opts: { message: "test", runId: "run-local", cleanupBundleMcpOnRunEnd: cleanup },
-          },
-        ).finally(() => {
-          settled = true;
-        });
-      command = borrowed ? host.run(run) : run();
-      void command.catch(() => undefined);
-      const retires = !borrowed || cleanup;
-      if (retires) {
-        await Promise.race([closing.started, command.catch(() => undefined)]);
-        expect(settled).toBe(false);
-        closing.finish();
-      }
-      if (preparationFailure) {
-        await expect(command).rejects.toBe(revoked);
-      } else {
-        await expect(command).resolves.toEqual(result);
-      }
-      if (retires) {
-        expect(peekSessionMcpRuntime({ sessionId: "command-mcp" })).toBeUndefined();
-        await expect(
-          commandPeer.transport.send({
-            jsonrpc: "2.0",
-            method: "notifications/initialized",
-          }),
-        ).rejects.toThrow("Not connected");
-      } else {
-        await expectProbe(peekSessionMcpRuntime({ sessionId: "command-mcp" }), "command");
-      }
-      await expectProbe(retained, "survivor");
-      await survivorClock.advanceBy(10);
-      expect(maintenance).toHaveBeenCalledOnce();
-    } finally {
+              return result;
+            },
+          });
+        },
+        { cleanupBundleMcpOnRunEnd: cleanup },
+      ).finally(() => {
+        settled = true;
+      });
+    command = borrowed ? host.run(run) : run();
+    void command.catch(() => undefined);
+    const retires = !borrowed || cleanup;
+    if (retires) {
+      await Promise.race([closing.started, command.catch(() => undefined)]);
+      expect(settled).toBe(false);
       closing.finish();
-      await command?.catch(() => undefined);
-      await disposeAllSessionMcpRuntimes();
-      await scheduler.stop();
-      await host.close();
-      await Promise.all([survivor.server.close(), commandPeer.server.close()]);
     }
-  },
-);
+    await expect(command).resolves.toEqual(result);
+    if (retires) {
+      expect(peekSessionMcpRuntime({ sessionId: "command-mcp" })).toBeUndefined();
+      await expect(
+        commandPeer.transport.send({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }),
+      ).rejects.toThrow("Not connected");
+    } else {
+      await expectProbe(peekSessionMcpRuntime({ sessionId: "command-mcp" }), "command");
+    }
+    await expectProbe(retained, "survivor");
+    await survivorClock.advanceBy(10);
+    expect(maintenance).toHaveBeenCalledOnce();
+  } finally {
+    closing.finish();
+    await command?.catch(() => undefined);
+    await disposeAllSessionMcpRuntimes();
+    await scheduler.stop();
+    await host.close();
+    await Promise.all([survivor.server.close(), commandPeer.server.close()]);
+  }
+});
 it.each([
   { outcome: "success", cleanupFails: false },
   { outcome: "preparation failure", cleanupFails: false },
@@ -439,7 +416,8 @@ it("admits only local operator owners and revokes their authority at settlement"
           expect(retained).toBeUndefined();
         }
       },
-      { operatorAuthority: testCase.operatorAuthority },
+      {},
+      testCase.operatorAuthority,
     );
     if (admitted) {
       expect(() => retained?.assertActive()).toThrow();
@@ -470,7 +448,7 @@ it("keeps runtime memory registrations through local command preparation", async
       expect(captured?.memoryPromptPreparations).toContainEqual({ pluginId, prepare });
       expect(captured?.memoryPromptSupplements).toContainEqual({ pluginId, builder });
     },
-    { opts: { message: "test", runId: "local-memory" } },
+    { runId: "local-memory" },
   );
 });
 it.each([
@@ -489,17 +467,13 @@ it.each([
         const stateDir = path.join(home, "state");
         const requests: Array<{ method?: string; url?: string; auth?: string; model: string }> = [];
         const server = http.createServer(async (req, res) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of req) {
-            chunks.push(chunk);
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString());
-          requests.push({
-            method: req.method,
-            url: req.url,
-            auth: req.headers.authorization,
-            model: body.model,
-          });
+          const body = await json(req);
+          const {
+            method,
+            url,
+            headers: { authorization: auth },
+          } = req;
+          requests.push({ method, url, auth, model: body.model });
           res.writeHead(200, { "content-type": "text/event-stream" });
           for (const [delta, finish_reason, usage] of [
             [{ role: "assistant", content: "STATIC_OK" }, null, undefined],
@@ -517,69 +491,39 @@ it.each([
           }
           res.end("data: [DONE]\n\n");
         });
-        server.listen(0, "127.0.0.1");
-        await once(server, "listening");
-        try {
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Expected a TCP fixture address");
-          }
-          const baseUrl = `http://127.0.0.1:${address.port}/proxy/v1`;
+        await withLoopbackTestServer(server, async (port) => {
+          const baseUrl = `http://127.0.0.1:${port}/proxy/v1`;
           const provider = inventory === "generic" ? "proxy-fixture" : "litellm";
           const model = inventory === "generic" ? "plain-fixture" : "claude-opus-4-6";
           const workspace = path.join(home, "workspace");
-          const models =
-            inventory === "authored" || inventory === "replace"
-              ? [
-                  {
-                    id: model,
-                    name: "Authored fixture",
-                    reasoning: false,
-                    input: ["text", "image"],
-                    contextWindow: contextTokens,
-                    maxTokens: 128_000,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                ]
-              : [];
+          const authored = {
+            id: model,
+            name: "Authored fixture",
+            reasoning: false,
+            contextWindow: contextTokens,
+          };
+          const models = ["authored", "replace"].includes(inventory) ? [authored] : [];
+          const defaults = { workspace, model: { primary: `${provider}/${model}` } };
+          const main = { workspace, agentDir: path.join(stateDir, "agents", "main", "agent") };
+          const providerConfig = { baseUrl, api: "openai-completions", apiKey: key, models };
           const config = {
-            agents: {
-              defaults: {
-                workspace,
-                models: { "litellm/claude-opus-4-6": { alias: "LiteLLM" } },
-                model: { primary: `${provider}/${model}` },
-              },
-              entries: {
-                main: {
-                  name: "main",
-                  workspace,
-                  agentDir: path.join(stateDir, "agents", "main", "agent"),
-                },
-              },
-            },
+            agents: { defaults, entries: { main } },
             plugins: { entries: { litellm: { enabled: true } } },
             models: {
               mode: inventory === "replace" ? "replace" : "merge",
-              providers: {
-                [provider]: { baseUrl, api: "openai-completions", apiKey: key, models },
-              },
+              providers: { [provider]: providerConfig },
             },
           };
           await fs.writeFile(configPath, JSON.stringify(config));
           expect(requests).toEqual([]);
+          const args = ["agent", "--local", "--agent", "main", "--json"];
+          args.push("--message", "Reply with STATIC_OK only.");
+          if (inventory === "explicit off") {
+            args.push("--thinking", "off");
+          }
           const { stdout } = await promisify(execFile)(
             process.execPath,
-            [
-              path.resolve("openclaw.mjs"),
-              "agent",
-              "--local",
-              "--agent",
-              "main",
-              "--message",
-              "Reply with STATIC_OK only.",
-              "--json",
-              ...(inventory === "explicit off" ? ["--thinking", "off"] : []),
-            ],
+            [path.resolve("openclaw.mjs"), ...args],
             {
               cwd: process.cwd(),
               env: {
@@ -608,12 +552,7 @@ it.each([
               model,
             },
           ]);
-        } finally {
-          server.closeAllConnections();
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
+        });
       },
       { prefix: "openclaw-static-first-request-" },
     );

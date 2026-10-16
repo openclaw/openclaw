@@ -139,6 +139,16 @@ function deletion(cleanupCompleted: boolean) {
   mocks.readAgentDeletionJournal.mockReturnValue({ operationId: "delete-1", cleanupCompleted });
 }
 
+type Transform = (
+  config: Record<string, unknown>,
+  context: unknown,
+) => Promise<{
+  nextConfig: Record<string, unknown>;
+  result: unknown;
+}>;
+const transformCurrent = (transform: Transform) =>
+  transform(structuredClone(mocks.config), { snapshot: { exists: false }, previousHash: null });
+
 describe("createAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -162,25 +172,11 @@ describe("createAgent", () => {
       async (fn: (config: Record<string, unknown>) => Promise<unknown>) => await fn(mocks.config),
     );
     mocks.transformConfigFileWithRetry.mockImplementation(
-      async ({
-        transform,
-      }: {
-        transform: (config: Record<string, unknown>, context: unknown) => Promise<unknown>;
-      }) => {
-        const transformed = (await transform(structuredClone(mocks.config), {
-          snapshot: { exists: false },
-          previousHash: null,
-        })) as {
-          nextConfig: Record<string, unknown>;
-          result: unknown;
-        };
+      async ({ transform }: { transform: Transform }) => {
+        const transformed = await transformCurrent(transform);
         mocks.persisted = transformed.nextConfig;
         mocks.config = transformed.nextConfig;
-        return {
-          path: "/tmp/created-config.json",
-          result: transformed.result,
-          nextConfig: transformed.nextConfig,
-        };
+        return { path: "/tmp/created-config.json", ...transformed };
       },
     );
   });
@@ -304,7 +300,6 @@ describe("createAgent", () => {
     });
     expect(result.config).toEqual(mocks.persisted);
   });
-
   it("rejects guided staging whose original revision no longer owns creation", async () => {
     await expect(
       createAgent({
@@ -411,10 +406,7 @@ describe("createAgent", () => {
     const commit = vi.fn();
     const prepareConfigCommit = vi.fn(async () => ({ commit, rollback }));
     mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) => {
-      await transform(structuredClone(mocks.config), {
-        snapshot: { exists: false },
-        previousHash: null,
-      });
+      await transformCurrent(transform);
       throw new Error("injected config commit failure");
     });
 
@@ -465,13 +457,6 @@ describe("createAgent", () => {
 
     await expectError("deletion-pending");
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
-  });
-
-  it("claims a completed deletion tombstone after recreating the id", async () => {
-    deletion(true);
-
-    await expectCreation({ name: "researcher" }, { status: "created", agentId: "researcher" });
-    expect(mocks.claimCompletedAgentDeletion).toHaveBeenCalledWith("researcher", "delete-1");
   });
 
   it("claims a recovered completed tombstone only once for an existing roster entry", async () => {

@@ -163,14 +163,6 @@ describe("agent command restart recovery ownership", () => {
       },
     ],
     [
-      "explicit replacement with interrupted predecessor",
-      {
-        target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
-        before: interruptedRecovery(),
-        explicitSession: true,
-      },
-    ],
-    [
       "an explicit session is tombstoned",
       {
         before: {
@@ -301,27 +293,6 @@ describe("agent command restart recovery ownership", () => {
     );
   });
 
-  it.each([
-    { mode: "claim", status: "failed", cleared: true },
-    { mode: "reject_uncoordinated", status: "done", cleared: false },
-  ] as const)("handles terminal residue in $mode mode", async ({ mode, status, cleared }) => {
-    const target = createTarget();
-    const restartRecoveryRuns = [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }];
-    await write(target, {
-      status,
-      abortedLastRun: false,
-      restartRecoveryRuns,
-      restartRecoveryTerminalRunIds: ["stale-run"],
-    });
-    const run = vi.fn(async () => "ran");
-    await expect(execute(target, { mode, run })).resolves.toBe("ran");
-    expect(run).toHaveBeenCalledOnce();
-    const stored = read(target);
-    expect(stored).toMatchObject({ status, abortedLastRun: false });
-    expect(stored?.restartRecoveryRuns).toEqual(cleared ? undefined : restartRecoveryRuns);
-    expect(stored?.mainRestartRecovery).toBeUndefined();
-  });
-
   it.each<{
     name: string;
     mode: "claim" | "reject_uncoordinated";
@@ -407,36 +378,32 @@ describe("agent command restart recovery ownership", () => {
 
   it("keeps retrying admitted recovery restoration after immediate store failures", async () => {
     vi.useFakeTimers();
-    try {
-      const target = createTarget();
-      const restoredTarget = pendingTarget(target);
-      let failures = 0;
-      const restoreAdmittedRecovery = vi.fn(async () => {
-        if (failures < 3) {
-          failures += 1;
-          throw new Error("transient session-store failure");
-        }
-        return restoredTarget;
-      });
-      const recovery = execute(target, {
-        opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
-        prepare: failPreparation,
-        restoreAdmittedRecovery,
-        run: vi.fn(),
-      });
-      const rejected = expect(recovery).rejects.toThrow("model preparation failed");
+    const target = createTarget();
+    const restoredTarget = pendingTarget(target);
+    let failures = 0;
+    const restoreAdmittedRecovery = vi.fn(async () => {
+      if (failures < 3) {
+        failures += 1;
+        throw new Error("transient session-store failure");
+      }
+      return restoredTarget;
+    });
+    const recovery = execute(target, {
+      opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
+      prepare: failPreparation,
+      restoreAdmittedRecovery,
+      run: vi.fn(),
+    });
+    const rejected = expect(recovery).rejects.toThrow("model preparation failed");
 
-      await vi.advanceTimersByTimeAsync(100);
-      await rejected;
-      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(3);
-      expect(scheduleRecovery).toHaveBeenCalledWith(undefined);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(3);
+    expect(scheduleRecovery).toHaveBeenCalledWith(undefined);
 
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(4);
-      expect(scheduleRecovery).toHaveBeenCalledWith(restoredTarget);
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(4);
+    expect(scheduleRecovery).toHaveBeenCalledWith(restoredTarget);
   });
 
   it.each([

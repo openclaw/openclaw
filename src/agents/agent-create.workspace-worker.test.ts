@@ -29,19 +29,13 @@ function addRecoveryHold(agentId: string, heldPath: string) {
   });
 }
 
-async function createState(
-  options: Parameters<typeof createOpenClawTestState>[0] = { scenario: "minimal" },
-) {
-  const state = await createOpenClawTestState(options);
+async function createState(layout?: "state-only", scenario: "minimal" | "empty" = "minimal") {
+  const state = await createOpenClawTestState({ layout, scenario });
   onTestFinished(async () => {
     vi.restoreAllMocks();
     await state.cleanup();
   });
   return state;
-}
-
-function stateOnly(scenario: "minimal" | "empty" = "minimal") {
-  return createState({ layout: "state-only", scenario });
 }
 
 function holdDuring(state: Awaited<ReturnType<typeof createState>>, stage: "root" | "read") {
@@ -112,7 +106,7 @@ it("refuses bootstrap publication when a recovery hold arrives during root prepa
 });
 
 it("records operator and agent creation provenance after roster commits", async () => {
-  const state = await stateOnly("empty");
+  const state = await createState("state-only", "empty");
   const ensureWorkspace = ensureAgentWorkspace;
   const preparation = vi
     .spyOn(workspaceModule, "ensureAgentWorkspace")
@@ -162,8 +156,8 @@ it("records operator and agent creation provenance after roster commits", async 
   expect(grants).toBeGreaterThan(0);
 });
 
-it("preserves env references from guided staging when preparation changes the environment", async () => {
-  const state = await stateOnly();
+it("publishes guided staging atomically with env references preserved across preparation", async () => {
+  const state = await createState("state-only");
   vi.stubEnv("GUIDED_STAGE_TOKEN", "synthetic-read-value");
   onTestFinished(() => vi.unstubAllEnvs());
   const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
@@ -174,25 +168,46 @@ it("preserves env references from guided staging when preparation changes the en
   const writeSnapshot = await readConfigFileSnapshotForWrite();
   const staged = writeSnapshot.snapshot.sourceConfig;
   expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
+  const workspace = state.path("guided-workspace");
+  const agentDir = state.path("guided-agent");
+  staged.agents = {
+    ...staged.agents,
+    entries: { ...staged.agents?.entries, guided: { workspace } },
+  };
+  staged.channels = { telegram: { enabled: true } };
+  const publication = vi.fn();
+  onTestFinished(registerConfigWriteListener(publication));
   await Promise.resolve();
   process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
   const created = await createAgent({
-    name: "guided",
-    workspace: state.path("guided-workspace"),
+    entry: {
+      id: "guided",
+      name: "Guided",
+      workspace,
+      agentDir,
+      model: "openai/gpt-5.5",
+      identity: { name: "Guided", emoji: "🔎" },
+    },
     stagedConfig: { config: staged, writeSnapshot },
     prepareConfigCommit: async () => {
       await Promise.resolve();
       process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
     },
   });
-  expect(created).toMatchObject({ status: "created", agentId: "guided" });
+  expect(created).toMatchObject({ status: "created", agentId: "guided", workspace, agentDir });
+  expect(publication).toHaveBeenCalledOnce();
   const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-  expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
-  expect(saved.agents?.entries?.guided).toBeDefined();
+  expect(saved).toMatchObject({
+    gateway: { auth: { token: "${GUIDED_STAGE_TOKEN}" } },
+    agents: { entries: { main: expect.any(Object), guided: { model: "openai/gpt-5.5" } } },
+    channels: { telegram: { enabled: true } },
+  });
+  expect(saved.agents).not.toHaveProperty("list");
+  expect(created).toHaveProperty("config", publication.mock.calls[0]?.[0]?.sourceConfig);
 });
 
 it("keeps a fresh named workspace pending through the first run setup", async () => {
-  const state = await stateOnly();
+  const state = await createState("state-only");
   const workspace = state.path("named-workspace");
 
   const created = await createAgent({ name: "Researcher", workspace });

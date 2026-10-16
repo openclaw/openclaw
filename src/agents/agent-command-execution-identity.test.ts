@@ -48,48 +48,45 @@ function prepareIdentity(
   return identity;
 }
 
-describe("sanitizePublicAgentCommandIngressOpts", () => {
-  it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
-    const forgedCapability = {
+it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
+  const hostOwned = {
+    privateCompletion: true,
+    replyExpectation: "optional",
+    cronCreatorAuthorityCapability: {
       active: true,
       runId: "forged-run",
       signal: new AbortController().signal,
       grantTokens: new Set<string>(),
       abort: () => undefined,
-    };
-    const hostOwned = {
-      privateCompletion: true,
-      replyExpectation: "optional",
-      cronCreatorAuthorityCapability: forgedCapability,
-      skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
-      pinnedWidgetAuthoring: true,
-      clientCaps: ["ui-commands", "task-suggestions"],
-      gatewayUiCommandTarget: { connId: "forged-browser", profileId: "forged-profile" },
-      toolBindings: { browser: { kind: "tab", targetId: "forged-target" } },
-      taskSuggestionDeliveryMode: "gateway",
-      assertSourceCurrent: () => {},
-      beforeTerminalDelivery: async () => {},
-      isTerminalOutcomeObserved: () => true,
-      prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
-      internalDeliverySuppressErrors: true,
-      operatorAuthority: {
-        profileId: "forged",
-        scopes: ["operator.admin"],
-        assertCurrent: () => {},
-      },
-    };
+    },
+    skillLibraryAuthoring: { target: "personal", invoke: async () => ({}) },
+    pinnedWidgetAuthoring: true,
+    clientCaps: ["ui-commands", "task-suggestions"],
+    gatewayUiCommandTarget: { connId: "forged-browser", profileId: "forged-profile" },
+    toolBindings: { browser: { kind: "tab", targetId: "forged-target" } },
+    taskSuggestionDeliveryMode: "gateway",
+    assertSourceCurrent: () => {},
+    beforeTerminalDelivery: async () => {},
+    isTerminalOutcomeObserved: () => true,
+    prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
+    internalDeliverySuppressErrors: true,
+    operatorAuthority: {
+      profileId: "forged",
+      scopes: ["operator.admin"],
+      assertCurrent: () => {},
+    },
+  };
 
-    expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
-    const sanitized = sanitizePublicAgentCommandIngressOpts({
-      message: "create an automation",
-      allowModelOverride: false,
-      ...hostOwned,
-    });
-    expect(sanitized.message).toBe("create an automation");
-    for (const key of Object.keys(hostOwned)) {
-      expect(sanitized).toHaveProperty(key, undefined);
-    }
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
+  const sanitized = sanitizePublicAgentCommandIngressOpts({
+    message: "create an automation",
+    allowModelOverride: false,
+    ...hostOwned,
   });
+  expect(sanitized.message).toBe("create an automation");
+  for (const key of Object.keys(hostOwned)) {
+    expect(sanitized).toHaveProperty(key, undefined);
+  }
 });
 
 describe("Gateway agent command execution identity", () => {
@@ -155,6 +152,8 @@ describe("Gateway agent command execution identity", () => {
           },
           prepared.onRuntimeTurnStarted,
         );
+        const event = (phase = "start") =>
+          callbacks.onAgentEvent({ stream: "lifecycle", data: { phase } });
         const admission = prepared.admit("embedded");
         const settled = admission.catch(() => undefined);
         await admittedCallback.promise;
@@ -167,7 +166,7 @@ describe("Gateway agent command execution identity", () => {
         await settled;
         if (outcome === "closed-before-admission") {
           await expect(admission).rejects.toThrow("closed during admission");
-          await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+          await event();
           expect(recovery()).toMatchObject(sessionEntry.mainRestartRecovery);
           expect(recovery()).not.toHaveProperty("startedAttempt");
           return;
@@ -190,15 +189,12 @@ describe("Gateway agent command execution identity", () => {
             },
           );
         }
-        await callbacks.onAgentEvent({
-          stream: "lifecycle",
-          data: { phase: outcome === "startup-failed" ? "error" : "start" },
-        });
+        await event(outcome === "startup-failed" ? "error" : "start");
         if (outcome !== "started") {
           expect(recovery()).not.toHaveProperty("startedAttempt");
           return;
         }
-        await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+        await event();
         expect(recovery()).toMatchObject({
           chargedAttempts: 3,
           startedAttempt: 3,
@@ -230,22 +226,11 @@ describe("Gateway agent command execution identity", () => {
 
   it("preserves trusted spawn facts across internal option preparation", () => {
     const facts = {
-      ingress: {
-        kind: "api" as const,
-        boundary: "sessions_spawn.subagent",
-        state: "present" as const,
-      },
-      invoker: { state: "present" as const, kind: "agent" as const, rawPrincipalRef: "main" },
-      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" as const }],
-      assurance: [],
+      ingress: { kind: "api", boundary: "sessions_spawn.subagent", state: "present" },
       spawnAdmission: "[null,[]]",
-    };
+    } as const;
     const prepared = {
-      ...withAgentCommandExecutionIdentitySpawnFacts(
-        { message: "spawn", allowModelOverride: false },
-        facts,
-      ),
-      lifecycleGeneration: "generation-1",
+      ...withAgentCommandExecutionIdentitySpawnFacts({ message: "spawn" }, facts),
     };
 
     expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
@@ -265,28 +250,27 @@ describe("Gateway agent command execution identity", () => {
         message: "attribute this run",
         allowModelOverride: false,
       };
-      const facts = {
+      attachAgentCommandAdmissionFacts(opts, {
         ingress: {
-          kind: "gateway-client" as const,
+          kind: "gateway-client",
           boundary: "gateway.ws.authenticated-connect",
-          state: "present" as const,
+          state: "present",
           rawSourceRef: "profile-ada",
         },
         invoker: {
-          state: "present" as const,
-          kind: "person" as const,
+          state: "present",
+          kind: "person",
           rawPrincipalRef: "profile-ada",
           displayLabel,
         },
         assurance: [
           {
-            kind: "durable-profile" as const,
+            kind: "durable-profile",
             rawEvidenceRef: "profile-ada",
-            strength: "boundary-verified" as const,
+            strength: "boundary-verified",
           },
         ],
-      };
-      attachAgentCommandAdmissionFacts(opts, facts);
+      });
       const prepared = prepareIdentity(opts, audit);
 
       await prepared.admit("embedded");
