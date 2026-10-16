@@ -86,6 +86,17 @@ function buildTranscriptWithToolResult(toolResult: AgentMessage): SessionTreeEnt
   return messages.map((message, index) => messageEntry(message, index));
 }
 
+function buildProtectedTurn(rounds: number): SessionTreeEntry[] {
+  const messages: AgentMessage[] = [
+    userText("preserve this exact unresolved request", 1),
+    ...Array.from({ length: rounds }, (_, round): AgentMessage[] => [
+      assistantText(`round ${round}`, 2 + round * 2),
+      toolResultText("x".repeat(12_000), 3 + round * 2),
+    ]).flat(),
+  ];
+  return messages.map((message, index) => messageEntry(message, index));
+}
+
 describe("findCutPoint", () => {
   it("preserves the pending suffix before a foreground budget exists", () => {
     const pending = messageEntry(userText("first admitted input", 3), 2);
@@ -99,6 +110,32 @@ describe("findCutPoint", () => {
     expect(
       findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: pending.id }),
     ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
+  });
+
+  it("splits a protected turn whose processed rounds exceed the retained budget", () => {
+    const entries = buildProtectedTurn(8);
+
+    expect(
+      findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS, {
+        preserveFromEntryId: entries[0]?.id,
+        budget: { maxTokens: 7000, reserveTokens: 2000, estimateTokens },
+      }),
+    ).toEqual({
+      firstKeptEntryIndex: entries.length - 2,
+      turnStartIndex: 0,
+      isSplitTurn: true,
+    });
+  });
+
+  it("keeps the preserved entry retained while its turn still fits the budget", () => {
+    const entries = buildProtectedTurn(2);
+
+    expect(
+      findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS, {
+        preserveFromEntryId: entries[0]?.id,
+        budget: { maxTokens: 7000, reserveTokens: 2000, estimateTokens },
+      }),
+    ).toEqual({ firstKeptEntryIndex: 0, turnStartIndex: -1, isSplitTurn: false });
   });
 
   it("trims the prefix instead of keeping the whole transcript", () => {

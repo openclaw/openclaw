@@ -274,6 +274,62 @@ describe("session-entry compaction budgeting", () => {
     expect(JSON.stringify(entries)).toContain("private output");
   });
 
+  it("splits an in-flight protected turn whose processed rounds exceed the retained budget", () => {
+    const request = "Preserve this exact unresolved request.";
+    const rounds = 8;
+    const messages: AgentMessage[] = [{ role: "user", content: request, timestamp: 1 }];
+    for (let round = 0; round < rounds; round++) {
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call-${round}`, name: "bash", arguments: {} }],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage: createUsage(1),
+        stopReason: "toolUse",
+        timestamp: 2 + round * 2,
+      } as unknown as AssistantMessage);
+      messages.push({
+        role: "toolResult",
+        toolCallId: `call-${round}`,
+        toolName: "bash",
+        content: [{ type: "text", text: "x".repeat(12_000) }],
+        isError: false,
+        timestamp: 3 + round * 2,
+      });
+    }
+    const entries = messages.map((message, index) => createMessageEntry(message, index));
+    const budget = { maxTokens: 7000, reserveTokens: 2000, estimateTokens };
+
+    const preparation = prepareCompaction(
+      entries,
+      { enabled: true, reserveTokens: 8192, keepRecentTokens: 20_000 },
+      "unresolved",
+      { preserveFromEntryId: "entry-0", budget },
+    );
+
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok || !preparation.value) {
+      throw new Error("expected the protected in-flight turn to stay compactable");
+    }
+    expect(preparation.value).toMatchObject({
+      firstKeptEntryId: `entry-${rounds * 2 - 1}`,
+      isSplitTurn: true,
+      latestUnresolvedUserRequest: request,
+    });
+    expect(preparation.value.messagesToSummarize).toEqual([]);
+    expect(preparation.value.turnPrefixMessages).toHaveLength(rounds * 2 - 1);
+    expect(preparation.value.turnPrefixMessages[0]).toMatchObject({ role: "user" });
+    const retainedTailTokens = entries
+      .slice(-2)
+      .reduce(
+        (total, entry) =>
+          total + (entry.type === "message" ? budget.estimateTokens(entry.message) : 0),
+        0,
+      );
+    expect(retainedTailTokens).toBeLessThanOrEqual(budget.maxTokens);
+  });
+
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "start", timestamp: 1 }, 0),

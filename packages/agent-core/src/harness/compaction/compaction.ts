@@ -431,24 +431,35 @@ export function findCutPoint(
   }
   cutIndex = Math.min(cutIndex, lastAllowedCut);
   if (retention) {
-    let retainedTokens = 0;
-    let fittingCut = endIndex;
-    let tailLimit = retention.maxTokens;
-    for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries[i];
-      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      retainedTokens += message ? retention.estimateTokens(message) : 0;
-      if (retainedTokens > tailLimit) {
-        break;
-      }
-      if (i <= lastAllowedCut && message && isCutPointMessage(message)) {
-        if (fittingCut === endIndex) {
-          // The summary maximum is a reservation, not a minimum: small windows
-          // retain one complete atom and give the summary the remaining room.
-          tailLimit = Math.max(retainedTokens, retention.maxTokens - retention.reserveTokens);
+    const searchFloor: number = cutIndex;
+    const findFittingCut = (maxCutIndex: number): number => {
+      let retainedTokens = 0;
+      let fittingCut = endIndex;
+      let tailLimit = retention.maxTokens;
+      for (let i = endIndex - 1; i >= searchFloor; i--) {
+        const entry = entries[i];
+        const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+        retainedTokens += message ? retention.estimateTokens(message) : 0;
+        if (retainedTokens > tailLimit) {
+          break;
         }
-        fittingCut = i;
+        if (i <= maxCutIndex && message && isCutPointMessage(message)) {
+          if (fittingCut === endIndex) {
+            // The summary maximum is a reservation, not a minimum: small windows
+            // retain one complete atom and give the summary the remaining room.
+            tailLimit = Math.max(retainedTokens, retention.maxTokens - retention.reserveTokens);
+          }
+          fittingCut = i;
+        }
       }
+      return fittingCut;
+    };
+    let fittingCut = findFittingCut(lastAllowedCut);
+    if (fittingCut === endIndex && lastAllowedCut < endIndex - 1) {
+      // A protected turn can outgrow the retained budget on its own. Splitting it
+      // at its latest atomic boundary keeps the completed call/result groups
+      // summarized and the unresolved request carried, instead of failing.
+      fittingCut = findFittingCut(endIndex - 1);
     }
     if (fittingCut === endIndex) {
       return { firstKeptEntryIndex: endIndex, turnStartIndex: -1, isSplitTurn: false };
