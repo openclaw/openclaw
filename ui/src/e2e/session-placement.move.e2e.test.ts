@@ -161,7 +161,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
       await gateway.deferNext("sessions.move");
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
-      await page.getByText("Move session…", { exact: true }).click();
+      await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
       await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
       await page.locator('[data-value="gateway"]').waitFor();
       await page.locator('[data-value="device:writer-runner"]').waitFor();
@@ -759,7 +759,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
-        await page.getByText("Move session…", { exact: true }).click();
+        await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
         const profile = page.locator('[data-value="cloud:aws"]');
         await profile.click();
         await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
