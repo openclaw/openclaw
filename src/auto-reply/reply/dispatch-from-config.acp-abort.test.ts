@@ -92,6 +92,37 @@ function createOperation(sessionKey: string, sessionId: string) {
   return createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
 }
 
+function acpEntry(
+  sessionKey: string,
+  agent: string,
+  runtimeSessionName: string,
+  entry: Record<string, unknown> = {},
+) {
+  return {
+    sessionKey,
+    storeSessionKey: sessionKey,
+    cfg: {},
+    storePath: "/tmp/mock-sessions.json",
+    entry,
+    acp: {
+      backend: "acpx",
+      agent,
+      runtimeSessionName,
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: Date.now(),
+    },
+  };
+}
+
+function dispatchReply(
+  ctx: Parameters<typeof dispatchReplyFromConfig>[0]["ctx"],
+  dispatcher: Parameters<typeof dispatchReplyFromConfig>[0]["dispatcher"],
+  overrides: Partial<Parameters<typeof dispatchReplyFromConfig>[0]> = {},
+) {
+  return dispatchReplyFromConfig({ ctx, dispatcher, cfg: createDispatchConfig(), ...overrides });
+}
+
 function expectNoReplies(dispatcher: ReturnType<typeof createDispatcher>) {
   expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
@@ -180,33 +211,16 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       await releaseTurn.promise;
       yield { type: "done" } as AcpRuntimeEvent;
     });
-    acpMocks.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      cfg: {},
-      storePath: "/tmp/mock-sessions.json",
-      entry: {},
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:1",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime,
-    });
+    acpMocks.readAcpSessionEntry.mockReturnValue(
+      acpEntry("agent:codex-acp:session-1", "codex", "runtime:1"),
+    );
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
 
     const abortController = new AbortController();
     const dispatcher = createDispatcher();
     const ctx = createDiscordCtx("agent:codex-acp:session-1", "write a test");
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
+    const dispatchPromise = dispatchReply(ctx, dispatcher, {
       cfg: createAcpDispatchConfig(),
-      dispatcher,
       replyOptions: { abortSignal: abortController.signal },
     });
 
@@ -240,9 +254,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
   it("completes the dispatch-owned operation when ACP tail dispatch handles the turn", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async (eventUnknown: unknown) => {
-      const event = eventUnknown as {
-        isTailDispatch?: boolean;
-      };
+      const event = eventUnknown as { isTailDispatch?: boolean };
       if (event.isTailDispatch === true) {
         return { handled: true, queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       }
@@ -251,10 +263,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     const dispatcher = createDispatcher();
     const ctx = createDiscordCtx("agent:main:regular-tail", "/reset continue");
-    const result = await dispatchReplyFromConfig({
-      ctx,
+    const result = await dispatchReply(ctx, dispatcher, {
       cfg: createAcpDispatchConfig(true),
-      dispatcher,
       replyResolver: async (resolverCtx) => {
         resolverCtx.AcpDispatchTailAfterReset = true;
         return undefined;
@@ -292,12 +302,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       );
       let operation = existing ? createOperation(sessionKey, "active-session") : undefined;
       const dispatcher = createDispatcher();
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createDiscordCtx(sessionKey, "hang in reply dispatch"),
-        cfg: createDispatchConfig(),
+      const dispatchPromise = dispatchReply(
+        createDiscordCtx(sessionKey, "hang in reply dispatch"),
         dispatcher,
-        replyResolver: vi.fn(),
-      });
+        { replyResolver: vi.fn() },
+      );
       try {
         await hook.started;
         operation ??= replyRunRegistry.get(sessionKey);
@@ -363,21 +372,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
       params.sessionKey === boundAcpSessionKey
-        ? {
-            sessionKey: boundAcpSessionKey,
-            storeSessionKey: boundAcpSessionKey,
-            cfg: {},
-            storePath: "/tmp/mock-sessions.json",
-            entry: sessionStore[boundAcpSessionKey],
-            acp: {
-              backend: "acpx",
-              agent: "codex",
-              runtimeSessionName: "runtime:bound",
-              mode: "persistent",
-              state: "idle",
-              lastActivityAt: Date.now(),
-            },
-          }
+        ? acpEntry(boundAcpSessionKey, "codex", "runtime:bound", sessionStore[boundAcpSessionKey])
         : null,
     );
 
@@ -412,10 +407,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       SessionKey: sourceSessionKey,
       BodyForAgent: "/reset continue",
     });
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
+    const dispatchPromise = dispatchReply(ctx, dispatcher, {
       cfg: createAcpDispatchConfig(true),
-      dispatcher,
       replyResolver: async (resolverCtx) => {
         resolverCtx.AcpDispatchTailAfterReset = true;
         return undefined;
@@ -473,10 +466,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           })
         : createDiscordCtx(source, "hang in before dispatch");
       const dispatcher = createDispatcher();
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx,
+      const dispatchPromise = dispatchReply(ctx, dispatcher, {
         cfg: createDispatchConfig(native),
-        dispatcher,
         replyResolver: vi.fn(),
       });
       let operation: ReturnType<typeof createReplyOperation> | undefined;
@@ -537,12 +528,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       "hook handles while an operation is already active",
     );
 
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyResolver: vi.fn(),
-    });
+    const dispatchPromise = dispatchReply(ctx, dispatcher, { replyResolver: vi.fn() });
 
     await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(mocks.routeReply).not.toHaveBeenCalled();
@@ -564,35 +550,16 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         yield { type: "text_delta", stream: "output", text: "Successor reply" };
         yield { type: "done", status: "completed" };
       });
-      acpMocks.readAcpSessionEntry.mockReturnValue({
-        sessionKey,
-        storeSessionKey: sessionKey,
-        cfg: {},
-        storePath: "/tmp/mock-sessions.json",
-        entry: {},
-        acp: {
-          backend: "acpx",
-          agent: "main",
-          runtimeSessionName: "runtime:successor",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      });
+      acpMocks.readAcpSessionEntry.mockReturnValue(
+        acpEntry(sessionKey, "main", "runtime:successor"),
+      );
       acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
-      const predecessor = createReplyOperation({
-        sessionKey,
-        sessionId: "predecessor-session",
-        resetTriggered: false,
-      });
+      const predecessor = createOperation(sessionKey, "predecessor-session");
       const caller = new AbortController();
       const dispatcher = createDispatcher();
       const dispatch = dispatchLowLevelChannelReplyFromConfig({
         ctx: createDiscordCtx(sessionKey, "Retry the interrupted task"),
-        cfg: {
-          acp: { enabled: true, dispatch: { enabled: true } },
-          session: { sendPolicy: { default: "allow" } },
-        },
+        cfg: createAcpDispatchConfig(),
         dispatcher,
         replyOptions: { abortSignal: caller.signal },
       });
@@ -628,62 +595,46 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     },
   );
 
-  it("suppresses reply resolver runs after active source abort", async () => {
-    const existingOperation = createOperation(
-      "agent:main:already-active-resolver",
-      "active-session",
+  it.each([false, true])("suppresses waiting resolver after caller abort=%s", async (caller) => {
+    const key = caller
+      ? "agent:main:already-active-caller-abort"
+      : "agent:main:already-active-resolver";
+    const operation = createOperation(key, "active-session");
+    if (!caller) {
+      operation.setPhase("running");
+    }
+    const controller = new AbortController();
+    const replyResolver = vi.fn(async () =>
+      caller ? { text: "late final should not send" } : undefined,
     );
-    existingOperation.setPhase("running");
-    const replyResolver = vi.fn(async () => undefined);
     const dispatcher = createDispatcher();
-    const ctx = createDiscordCtx(
-      "agent:main:already-active-resolver",
-      "resolver waits behind active operation",
-    );
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
+    const result = dispatchReply(
+      createDiscordCtx(
+        key,
+        caller
+          ? "resolver should honor caller abort too"
+          : "resolver waits behind active operation",
+      ),
       dispatcher,
-      replyResolver,
-    });
-
-    expect(replyRunRegistry.abort("agent:main:already-active-resolver")).toBe(true);
-
-    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-    expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      {
+        replyResolver,
+        ...(caller ? { replyOptions: { abortSignal: controller.signal } } : {}),
+      },
+    );
+    if (caller) {
+      controller.abort();
+    } else {
+      expect(replyRunRegistry.abort(key)).toBe(true);
+    }
+    await expect(result).resolves.toMatchObject(expectedNoQueuedReplyResult());
+    expect(operation.result).toEqual(caller ? null : { kind: "aborted", code: "aborted_by_user" });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    existingOperation.complete();
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
-
-  it("keeps caller abort active while waiting for an active source operation", async () => {
-    const existingOperation = createOperation(
-      "agent:main:already-active-caller-abort",
-      "active-session",
-    );
-    const callerAbort = new AbortController();
-    const replyResolver = vi.fn(async () => ({ text: "late final should not send" }));
-    const dispatcher = createDispatcher();
-    const ctx = createDiscordCtx(
-      "agent:main:already-active-caller-abort",
-      "resolver should honor caller abort too",
-    );
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyOptions: { abortSignal: callerAbort.signal },
-      replyResolver,
-    });
-
-    callerAbort.abort();
-
-    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-    expect(existingOperation.result).toBeNull();
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    existingOperation.abortByUser();
+    if (caller) {
+      operation.abortByUser();
+    } else {
+      operation.complete();
+    }
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
@@ -700,13 +651,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       const runState: ReplyOperationRunState = {};
       const dispatcher = createDispatcher();
       const ctx = createDiscordCtx("agent:main:resolver-abort", "hang in resolver");
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx,
-        cfg: {
-          diagnostics: { enabled: true },
-          session: { sendPolicy: { default: "allow" } },
-        } as OpenClawConfig,
-        dispatcher,
+      const dispatchPromise = dispatchReply(ctx, dispatcher, {
         replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
         replyResolver: async (_resolverCtx, options) => {
           resolverStarted.resolve();
@@ -742,9 +687,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         await replyRunRegistry.waitForIdle("agent:main:resolver-abort");
       }
 
-      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expectNoReplies(dispatcher);
       expect(getActiveReplyRunCount()).toBe(0);
     },
   );
@@ -754,10 +697,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     const dispatcher = createDispatcher();
     const ctx = createDiscordCtx("agent:main:resolver-abort-error", "abort in resolver");
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
+    const dispatchPromise = dispatchReply(ctx, dispatcher, {
       replyResolver: async (_resolverCtx, options) => {
         resolverStarted();
         const abortSignal = options?.abortSignal;
@@ -813,12 +753,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       BodyForAgent: "/stop",
     });
 
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: createDispatchConfig(),
-      dispatcher,
-      replyResolver,
-    });
+    const dispatchPromise = dispatchReply(ctx, dispatcher, { replyResolver });
 
     type DispatchOutcome =
       | { status: "settled"; result: Awaited<typeof dispatchPromise> }
@@ -847,10 +782,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     const replyResolver = vi.fn();
 
     await expect(
-      dispatchReplyFromConfig({
-        ctx,
-        cfg: createDispatchConfig(),
-        dispatcher,
+      dispatchReply(ctx, dispatcher, {
         replyOptions: { sourceReplyDeliveryMode: "automatic" },
         replyResolver,
         fastAbortResolver: async () => {

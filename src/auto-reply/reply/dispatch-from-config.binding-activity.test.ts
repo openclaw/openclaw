@@ -28,6 +28,8 @@ const touch = sessionBindingMocks.touch;
 const claim = hookMocks.runner.runInboundClaimForPluginOutcome;
 const received = hookMocks.runner.runMessageReceived;
 const abortMessage = mocks.tryFastAbortFromMessage;
+const failedActivity = "replacement activity failed";
+const changedActivity = "conversation binding changed while recording activity";
 
 beforeAll(globalBeforeAll0);
 
@@ -58,6 +60,33 @@ function expectNotCalled(...callbacks: Array<{ mock: { calls: unknown[] } }>) {
   }
 }
 
+function acpBinding(bindingId: string): SessionBindingRecord {
+  return {
+    bindingId,
+    targetSessionKey: "agent:main:acp:before",
+    targetKind: "session",
+    status: "active",
+    boundAt: 1,
+    conversation: { channel: "discord", accountId: "default", conversationId: "C123" },
+  };
+}
+
+function dispatchCase(
+  ctx: Parameters<typeof dispatchReplyFromConfig>[0]["ctx"],
+  cfg = emptyConfig,
+  includeResolver = true,
+) {
+  const dispatcher = createDispatcher();
+  const replyResolver = vi.fn();
+  const params = { ctx, cfg, dispatcher, ...(includeResolver ? { replyResolver } : {}) };
+  return { params, dispatcher, replyResolver, dispatch: dispatchReplyFromConfig(params) };
+}
+
+function discordContext(To: string, Body = "") {
+  const SessionKey = `agent:main:discord:${To.replace(/^discord:/, "")}`;
+  return buildTestCtx({ Provider: "discord", Surface: "discord", To, Body, SessionKey });
+}
+
 describe("dispatch binding activity settlement", () => {
   beforeEach(() => {
     describe0BeforeEach0();
@@ -65,15 +94,15 @@ describe("dispatch binding activity settlement", () => {
   });
 
   it.each([
-    { mode: "plugin claim", fail: false, aborted: false, stoppedSubagents: 0 },
-    { mode: "plugin claim", fail: true, aborted: false, stoppedSubagents: 0 },
-    { mode: "fast abort", fail: false, aborted: true, stoppedSubagents: 0 },
-    { mode: "fast abort", fail: true, aborted: true, stoppedSubagents: 0 },
-    { mode: "fast abort", fail: true, aborted: false, stoppedSubagents: 1 },
-    { mode: "fast abort", fail: true, aborted: false, stoppedSubagents: 0 },
-  ])(
-    "awaits binding activity before $mode (failure: $fail, aborted: $aborted, stopped: $stoppedSubagents)",
-    async ({ mode, fail, aborted, stoppedSubagents }) => {
+    ["plugin claim", false, false, 0],
+    ["plugin claim", true, false, 0],
+    ["fast abort", false, true, 0],
+    ["fast abort", true, true, 0],
+    ["fast abort", true, false, 1],
+    ["fast abort", true, false, 0],
+  ] as const)(
+    "awaits binding activity before %s (failure: %s, aborted: %s, stopped: %s)",
+    async (mode, fail, aborted, stoppedSubagents) => {
       setNoAbort();
       mockPluginBindingClaim();
       const binding = pluginBinding("binding-await-activity", "activity");
@@ -81,30 +110,14 @@ describe("dispatch binding activity settlement", () => {
       rejectSyncBindingRead();
       readBinding.mockResolvedValue(binding).mockImplementationOnce(lookup.wait);
       if (mode === "fast abort") {
-        abortMessage.mockResolvedValue({
-          handled: true,
-          aborted,
-          stoppedSubagents,
-        });
+        abortMessage.mockResolvedValue({ handled: true, aborted, stoppedSubagents });
       }
       const mutation = createDispatchGate();
       touch.mockImplementationOnce(mutation.wait);
-      const dispatcher = createDispatcher();
-      const replyResolver = vi.fn(async () => ({ text: "should not run" }));
-      const params = {
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          To: "channel:activity",
-          Body: mode === "fast abort" ? "/stop" : "hello",
-          SessionKey: "agent:main:discord:channel:activity",
-          MessageSid: "binding-activity-message",
-        }),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver,
-      };
-      const dispatch = dispatchReplyFromConfig(params);
+      const { params, dispatcher, replyResolver, dispatch } = dispatchCase({
+        ...discordContext("channel:activity", mode === "fast abort" ? "/stop" : "hello"),
+        MessageSid: "binding-activity-message",
+      });
       await Promise.race([lookup.started, dispatch]);
       expectNotCalled(touch, claim, received, dispatcher.sendFinalReply);
       lookup.resolve(binding);
@@ -133,19 +146,19 @@ describe("dispatch binding activity settlement", () => {
   );
 
   it.each([
-    { owner: "ACP", change: "bindingId", outcome: "complete" },
-    { owner: "ACP", change: "bindingId", outcome: "fail" },
-    { owner: "ACP", change: "bindingId", outcome: "replace-again" },
-    { owner: "ACP", change: "boundAt", outcome: "complete" },
-    { owner: "ACP", change: "targetSessionKey", outcome: "complete" },
-    { owner: "ACP", change: "targetKind", outcome: "complete" },
-    { owner: "plugin", change: "bindingId", outcome: "complete" },
-    { owner: "plugin", change: "targetSessionKey", outcome: "complete" },
-    { owner: "plugin", change: "boundAt", outcome: "complete" },
-    { owner: "plugin", change: "targetKind", outcome: "complete" },
+    ["ACP", "bindingId", ""],
+    ["ACP", "bindingId", failedActivity],
+    ["ACP", "bindingId", changedActivity],
+    ["ACP", "boundAt", ""],
+    ["ACP", "targetSessionKey", ""],
+    ["ACP", "targetKind", ""],
+    ["plugin", "bindingId", ""],
+    ["plugin", "targetSessionKey", ""],
+    ["plugin", "boundAt", ""],
+    ["plugin", "targetKind", ""],
   ] as const)(
-    "settles replacement $owner ownership after $change changes: $outcome",
-    async ({ owner, change, outcome }) => {
+    "settles replacement %s ownership after %s changes: %s",
+    async (owner, change, failure) => {
       const plugin = owner === "plugin";
       if (plugin) {
         setNoAbort();
@@ -155,26 +168,17 @@ describe("dispatch binding activity settlement", () => {
       }
       const original: SessionBindingRecord = plugin
         ? pluginBinding("binding-owner-before", "before")
-        : {
-            bindingId: "binding-acp-before",
-            targetSessionKey: "agent:main:acp:before",
-            targetKind: "session",
-            status: "active",
-            boundAt: 1,
-            conversation: { channel: "discord", accountId: "default", conversationId: "C123" },
-          };
-      const replacement: SessionBindingRecord = {
-        ...original,
-        bindingId: change === "bindingId" ? "binding-owner-after" : original.bindingId,
-        boundAt: change === "boundAt" ? original.boundAt + 1 : original.boundAt,
-        targetSessionKey:
-          change === "targetSessionKey" || (plugin && change === "bindingId")
-            ? plugin
-              ? "plugin-binding:test:after"
-              : "agent:main:acp:after"
-            : original.targetSessionKey,
-        targetKind: change === "targetKind" ? "subagent" : original.targetKind,
-      };
+        : acpBinding("binding-acp-before");
+      const changes = {
+        bindingId: "binding-owner-after",
+        boundAt: original.boundAt + 1,
+        targetSessionKey: plugin ? "plugin-binding:test:after" : "agent:main:acp:after",
+        targetKind: "subagent",
+      } as const;
+      const replacement = { ...original, [change]: changes[change] };
+      if (plugin && change === "bindingId") {
+        replacement.targetSessionKey = changes.targetSessionKey;
+      }
       let current = original;
       if (!plugin) {
         rejectSyncBindingRead();
@@ -185,20 +189,12 @@ describe("dispatch binding activity settlement", () => {
       touch
         .mockImplementationOnce(firstActivity.wait)
         .mockImplementationOnce(replacementActivity.wait);
-      const dispatcher = createDispatcher();
-      const replyResolver = vi.fn();
-      const dispatch = dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          To: plugin ? "channel:activity" : "discord:C123",
-          SessionKey: plugin ? "agent:main:discord:channel:activity" : "agent:main:discord:C123",
-          ...(plugin ? { Body: "hello" } : {}),
-        }),
-        cfg: emptyConfig,
-        dispatcher,
-        ...(plugin ? {} : { replyResolver }),
-      });
+      const { dispatcher, replyResolver, dispatch } = dispatchCase(
+        discordContext(plugin ? "channel:activity" : "discord:C123", plugin ? "hello" : ""),
+        emptyConfig,
+        !plugin,
+      );
+      const rejected = failure ? expect(dispatch).rejects.toThrow(failure) : undefined;
       await Promise.race([firstActivity.started, dispatch]);
       current = replacement;
       firstActivity.resolve();
@@ -214,36 +210,26 @@ describe("dispatch binding activity settlement", () => {
         );
         expectNotCalled(abortMessage, dispatcher.sendFinalReply);
       }
-      const failure =
-        outcome === "complete"
-          ? undefined
-          : expect(dispatch).rejects.toThrow(
-              outcome === "fail"
-                ? "replacement activity failed"
-                : "conversation binding changed while recording activity",
-            );
-      if (outcome === "fail") {
-        replacementActivity.reject(new Error("replacement activity failed"));
+      if (failure === failedActivity) {
+        replacementActivity.reject(new Error(failure));
       } else {
-        if (outcome === "replace-again") {
+        if (failure === changedActivity) {
           current = { ...replacement, bindingId: "binding-acp-third" };
         }
         replacementActivity.resolve();
       }
-      if (failure) {
-        await failure;
+      if (rejected) {
+        await rejected;
         expectNotCalled(abortMessage, dispatcher.sendFinalReply);
       } else {
         await dispatch;
         if (plugin) {
+          const { bindingId, boundAt } = current;
           expect(claim).toHaveBeenCalledExactlyOnceWith(
             "openclaw-codex-app-server",
             expect.anything(),
             expect.objectContaining({
-              pluginBinding: expect.objectContaining({
-                bindingId: current.bindingId,
-                boundAt: current.boundAt,
-              }),
+              pluginBinding: expect.objectContaining({ bindingId, boundAt }),
             }),
           );
         } else {
@@ -260,34 +246,29 @@ describe("dispatch binding activity settlement", () => {
 });
 
 describe("channel-derived ACP route admission", () => {
-  const binding: SessionBindingRecord = {
-    bindingId: "route-before",
-    targetSessionKey: "agent:main:acp:before",
-    targetKind: "session",
-    status: "active",
-    boundAt: 1,
-    conversation: { channel: "discord", accountId: "default", conversationId: "C123" },
-  };
+  const binding = acpBinding("route-before");
+  const cfg = { acp: { enabled: true, dispatch: { enabled: true } } };
+  function acpCase(ctx: Parameters<typeof dispatchCase>[0], includeResolver = true) {
+    const runtime = createAcpRuntime([{ type: "done" }]);
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+    return { runtime, ...dispatchCase(ctx, cfg, includeResolver) };
+  }
 
   function prepareContext(bound = true, threadId?: string) {
-    const baseRoute = {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: bound ? "agent:main:discord:C123" : binding.targetSessionKey,
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session" as const,
-      matchedBy: "default" as const,
-    };
     const { route } = inspectRuntimeConversationBindingRoute({
-      route: baseRoute,
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: bound ? "agent:main:discord:C123" : binding.targetSessionKey,
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session" as const,
+        matchedBy: "default" as const,
+      },
       inspection: { status: "available", binding: bound ? binding : null },
     });
-    const finalizedRoute = threadId
-      ? { ...route, sessionKey: `${route.sessionKey}:thread:${threadId}` }
-      : route;
-    // Bundled channels carry route facts into the shared builder; finalization and
-    // dispatch also accept copies of the finalized context.
+    const sessionKey = threadId ? `${route.sessionKey}:thread:${threadId}` : route.sessionKey;
+    // Exercise channel route facts through a copied, finalized inbound context.
     return {
       ...buildChannelInboundEventContext({
         channel: "discord",
@@ -295,7 +276,7 @@ describe("channel-derived ACP route admission", () => {
         from: "discord:user:U1",
         sender: { id: "U1" },
         conversation: { kind: "channel", id: "C123" },
-        route: { ...finalizedRoute, routeSessionKey: finalizedRoute.sessionKey },
+        route: { ...route, sessionKey, routeSessionKey: sessionKey },
         reply: { to: "discord:C123", messageThreadId: threadId },
         message: { rawBody: "continue the work" },
       }),
@@ -306,14 +287,7 @@ describe("channel-derived ACP route admission", () => {
     describe0BeforeEach0();
     setNoAbort();
     acpMocks.readAcpSessionEntry.mockReturnValue({
-      acp: {
-        backend: "acpx",
-        agent: "main",
-        runtimeSessionName: "runtime:route",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 1,
-      },
+      acp: { agent: "main", runtimeSessionName: "runtime:route" },
     });
   });
 
@@ -327,9 +301,6 @@ describe("channel-derived ACP route admission", () => {
   ] as const)(
     "rejects $change binding during $phase before dispatching the prepared target",
     async ({ change, phase }) => {
-      const ctx = prepareContext();
-      const runtime = createAcpRuntime([{ type: "done" }]);
-      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
       let current: SessionBindingRecord | null = binding;
       const activity = createDispatchGate();
       readBinding.mockImplementation(async () => current);
@@ -339,18 +310,9 @@ describe("channel-derived ACP route admission", () => {
           return current;
         });
       } else {
-        touch.mockImplementationOnce(async () => {
-          await activity.wait();
-        });
+        touch.mockImplementationOnce(activity.wait);
       }
-      const dispatcher = createDispatcher();
-      const replyResolver = vi.fn();
-      const dispatch = dispatchReplyFromConfig({
-        ctx,
-        cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
-        dispatcher,
-        replyResolver,
-      });
+      const { runtime, dispatcher, replyResolver, dispatch } = acpCase(prepareContext());
       // Attach settlement immediately so an intended rejection never becomes unhandled.
       const result = dispatch.then(
         () => ({ error: undefined }),
@@ -383,16 +345,11 @@ describe("channel-derived ACP route admission", () => {
   ])(
     "preserves the prepared ACP target (bound: $bound, thread: $threadId)",
     async ({ bound, threadId, target }) => {
-      const runtime = createAcpRuntime([{ type: "done" }]);
-      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
       readBinding.mockImplementation(async (ref) =>
         bound && ref.conversationId === binding.conversation.conversationId ? binding : null,
       );
-      await dispatchReplyFromConfig({
-        ctx: prepareContext(bound, threadId),
-        cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
-        dispatcher: createDispatcher(),
-      });
+      const { runtime, dispatch } = acpCase(prepareContext(bound, threadId), false);
+      await dispatch;
       expect(runtime.runTurn).toHaveBeenCalledOnce();
       expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(target);
     },

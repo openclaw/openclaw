@@ -1,4 +1,3 @@
-// Shared fixtures for dispatch runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -54,23 +53,20 @@ const sessions = sessionStoreMocks;
 const bindings = sessionBindingMocks;
 const diagnostics = diagnosticMocks;
 const runtimePlugins = runtimePluginMocks;
+const currentEntry = () => sessions.currentEntry;
 
 export type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
-
 export const automaticGroupReplyConfig = {
   messages: { groupChat: { visibleReplies: "automatic" } },
 } as const satisfies OpenClawConfig;
-
 export const messageToolGroupReplyConfig = {
   messages: { groupChat: { visibleReplies: "message_tool" } },
 } as const satisfies OpenClawConfig;
-
 export const automaticDirectReplyConfig = {
   messages: { visibleReplies: "automatic" },
 } as const satisfies OpenClawConfig;
-
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
@@ -80,19 +76,16 @@ let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testi
 export let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 export let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-admission.js").runWithReplyOperationLifecycleAdmission;
 
-type DispatchReplyArgs = Parameters<
-  typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
->[0];
+type TestMock = ReturnType<typeof vi.fn>;
+type ApprovalPrompt = {
+  cfg: OpenClawConfig;
+  payload: ReplyPayload;
+  hint?: { kind?: string; approvalKind?: string; nativeRouteActive?: boolean };
+};
+type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
-  const event = eventUnknown as {
-    sessionKey?: string;
-    ctx?: {
-      SessionKey?: string;
-      CommandTargetSessionKey?: string;
-      AcpDispatchTailAfterReset?: boolean;
-    };
-  };
+  const event = eventUnknown as Parameters<typeof hooks.runReplyDispatch>[0];
   if (event.ctx?.AcpDispatchTailAfterReset) {
     return true;
   }
@@ -156,7 +149,7 @@ type MockAcpRuntime = AcpRuntime & {
 };
 
 export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
-  const runtime = {
+  return {
     ensureSession: vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
       sessionKey: input.sessionKey,
       agentId: input.agentId,
@@ -164,14 +157,11 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
       runtimeSessionName: `${input.sessionKey}:${input.mode}`,
     })),
     runTurn: vi.fn<AcpRuntime["runTurn"]>(async function* (_input) {
-      for (const event of events) {
-        yield event;
-      }
+      yield* events;
     }),
     cancel: vi.fn<AcpRuntime["cancel"]>(async () => {}),
     close: vi.fn<AcpRuntime["close"]>(async () => {}),
-  } satisfies AcpRuntime;
-  return runtime as MockAcpRuntime;
+  };
 }
 
 type SessionLookup = Pick<AcpRunTurnInput, "cfg" | "sessionKey" | "agentId">;
@@ -181,9 +171,8 @@ type MockTurn = Pick<
 > &
   Required<Pick<AcpRunTurnInput, "onEvent">>;
 
-function readSessionMeta(params: SessionLookup) {
-  return (acpMocks.readAcpSessionEntry(params) as { acp?: SessionAcpMeta } | null)?.acp;
-}
+const readSessionMeta = (params: SessionLookup) =>
+  (acpMocks.readAcpSessionEntry(params) as { acp?: SessionAcpMeta } | null)?.acp;
 
 export function createMockAcpSessionManager({
   staleAgentSessions = true,
@@ -194,11 +183,7 @@ export function createMockAcpSessionManager({
       const target = resolveAcpSessionTarget(params);
       const meta = readSessionMeta({ cfg: params.cfg, ...target });
       if (meta) {
-        return {
-          kind: "ready",
-          ...target,
-          meta,
-        };
+        return { kind: "ready", ...target, meta };
       }
       return staleAgentSessions && target.sessionKey.startsWith("agent:")
         ? {
@@ -209,21 +194,15 @@ export function createMockAcpSessionManager({
               `ACP metadata is missing for ${target.sessionKey}.`,
             ),
           }
-        : {
-            kind: "none",
-            ...target,
-          };
+        : { kind: "none", ...target };
     },
     getObservabilitySnapshot: () => ({
       runtimeCache: { activeSessions: 0 },
       turns: { queueDepth: 0 },
     }),
     runTurn: vi.fn(async (params: MockTurn) => {
-      const meta = readSessionMeta({
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      });
+      const { cfg, sessionKey, agentId, text, attachments, mode, requestId, signal } = params;
+      const meta = readSessionMeta({ cfg, sessionKey, agentId });
       const { runtime } = acpMocks.requireAcpRuntimeBackend() as {
         runtime?: ReturnType<typeof createAcpRuntime>;
       };
@@ -231,37 +210,29 @@ export function createMockAcpSessionManager({
         throw new Error("ACP runtime backend not mocked");
       }
       const handle = await runtime.ensureSession({
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
+        sessionKey,
+        agentId,
         mode: meta?.mode || "persistent",
         agent: meta?.agent || "codex",
       });
-      const stream = runtime.runTurn({
+      for await (const event of runtime.runTurn({
         handle,
-        text: params.text ?? "",
-        attachments: params.attachments,
-        mode: params.mode,
-        requestId: params.requestId,
-        signal: params.signal,
-      });
-      for await (const event of stream) {
+        text: text ?? "",
+        attachments,
+        mode,
+        requestId,
+        signal,
+      })) {
         await params.onEvent(event);
       }
       if (closeOneshot && meta?.mode === "oneshot") {
-        await runtime.close({
-          handle,
-          reason: "oneshot-complete",
-        });
+        await runtime.close({ handle, reason: "oneshot-complete" });
       }
     }),
   };
 }
 
-export function firstMockCall(
-  mockFn: ReturnType<typeof vi.fn>,
-  label: string,
-  index = 0,
-): unknown[] {
+export function firstMockCall(mockFn: TestMock, label: string, index = 0): unknown[] {
   const call = mockFn.mock.calls[index] as unknown[] | undefined;
   if (!call) {
     throw new Error(`expected ${label} call #${index + 1}`);
@@ -269,12 +240,7 @@ export function firstMockCall(
   return call;
 }
 
-export function firstMockArg(
-  mockFn: ReturnType<typeof vi.fn>,
-  label: string,
-  index = 0,
-  argIndex = 0,
-): unknown {
+export function firstMockArg(mockFn: TestMock, label: string, index = 0, argIndex = 0): unknown {
   return firstMockCall(mockFn, label, index)[argIndex];
 }
 
@@ -283,7 +249,7 @@ function firstDispatcherPayload(
   kind: "sendToolResult" | "sendFinalReply",
 ): ReplyPayload | undefined {
   return firstMockArg(
-    dispatcher[kind] as ReturnType<typeof vi.fn>,
+    dispatcher[kind] as TestMock,
     kind === "sendToolResult" ? "tool result" : "final reply",
   ) as ReplyPayload;
 }
@@ -302,11 +268,7 @@ export function firstRouteReplyCall(): Record<string, unknown> {
 
 function testRegistry(...plugins: Array<{ id: string }>) {
   return createTestRegistry(
-    plugins.map((plugin) => ({
-      pluginId: plugin.id,
-      source: "test",
-      plugin,
-    })),
+    plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
   );
 }
 
@@ -341,35 +303,23 @@ export function installCaptionedVoiceTestPlugin(id: string) {
   runtimePlugins.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
 }
 
-export function requireToolResultHandler(
-  handler: GetReplyOptions["onToolResult"] | undefined,
-): NonNullable<GetReplyOptions["onToolResult"]> {
+function requireHandler<T>(handler: T, name: string): NonNullable<T> {
   if (typeof handler !== "function") {
-    throw new Error("expected onToolResult handler");
+    throw new Error(`expected ${name} handler`);
   }
   return handler;
 }
 
-export function requireBlockReplyHandler(
-  handler: GetReplyOptions["onBlockReply"] | undefined,
-): NonNullable<GetReplyOptions["onBlockReply"]> {
-  if (typeof handler !== "function") {
-    throw new Error("expected onBlockReply handler");
-  }
-  return handler;
-}
+export const requireToolResultHandler = (handler: GetReplyOptions["onToolResult"]) =>
+  requireHandler(handler, "onToolResult");
+export const requireBlockReplyHandler = (handler: GetReplyOptions["onBlockReply"]) =>
+  requireHandler(handler, "onBlockReply");
 
 export async function dispatchTwiceWithFreshDispatchers(
   params: Omit<DispatchReplyArgs, "dispatcher">,
 ) {
-  const first = await dispatchReplyFromConfig({
-    ...params,
-    dispatcher: createDispatcher(),
-  });
-  const second = await dispatchReplyFromConfig({
-    ...params,
-    dispatcher: createDispatcher(),
-  });
+  const first = await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+  const second = await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
   return [first, second] as const;
 }
 
@@ -401,7 +351,7 @@ export function resetDispatchSessionMocks() {
   bindings.resolveByConversation.mockReset().mockReturnValue(null);
   bindings.touch.mockReset();
   sessions.currentEntry = undefined;
-  sessions.loadSessionStoreEntry.mockReset().mockImplementation(() => sessions.currentEntry);
+  sessions.loadSessionStoreEntry.mockReset().mockImplementation(currentEntry);
   sessions.resolveSessionStorePathCore.mockReset().mockReturnValue("/tmp/mock-sessions.json");
   agentEventMocks.emitAgentEvent.mockReset();
   agentEventMocks.emitAgentAuditEvent.mockReset();
@@ -411,7 +361,6 @@ export const describe0BeforeEach0 = () => {
   clearAgentHarnesses();
   clearPluginCommands();
   resetPluginTtsAndThreadMocks();
-  // This suite keeps richer channel registry and ACP hook wiring local.
   const approvalPlugins = ["discord", "signal"].map((id) =>
     Object.assign(
       createChannelTestPluginBase({
@@ -421,15 +370,7 @@ export const describe0BeforeEach0 = () => {
       {
         outbound: {
           deliveryMode: "direct" as const,
-          shouldSuppressLocalPayloadPrompt: ({
-            cfg,
-            payload,
-            hint,
-          }: {
-            cfg: OpenClawConfig;
-            payload: ReplyPayload;
-            hint?: { kind?: string; approvalKind?: string; nativeRouteActive?: boolean };
-          }) =>
+          shouldSuppressLocalPayloadPrompt: ({ cfg, payload, hint }: ApprovalPrompt) =>
             (id === "discord" ||
               (hint?.kind === "approval-pending" &&
                 hint.approvalKind === "exec" &&
@@ -509,7 +450,7 @@ export const describe0BeforeEach0 = () => {
   messageAuditMocks.emitTrustedMessageAuditEvent.mockReset();
   bindings.resolveByConversationAsync.mockReset();
   sessions.entriesBySessionKey.clear();
-  sessions.loadSessionEntry.mockReset().mockImplementation(() => sessions.currentEntry);
+  sessions.loadSessionEntry.mockReset().mockImplementation(currentEntry);
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset().mockResolvedValue({ staged: new Map() });
@@ -551,17 +492,14 @@ export const describe2BeforeEach0 = () => {
     .mockReset()
     .mockReturnValue(activeRegistry ? { ...activeRegistry } : createTestRegistry([]));
   resetInboundDedupe();
-  // Same routeReply reset as the sibling suite setups: queued once-values and
-  // persistent overrides must not leak between tests.
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessions.currentEntry = undefined;
   placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
   placementContextMocks.resolveSessionWorkerPlacementContext
     .mockReset()
     .mockReturnValue(placementContextMocks.context);
-  bindings.resolveByConversation.mockReset();
+  bindings.resolveByConversation.mockReset().mockReturnValue(null);
   bindings.resolveByConversationAsync.mockReset();
-  bindings.resolveByConversation.mockReturnValue(null);
   bindings.touch.mockReset();
   hookMocks.registry.plugins = [];
   hooks.runInboundClaimForPluginOutcome.mockClear().mockResolvedValue({ status: "no_handler" });
