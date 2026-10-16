@@ -6,6 +6,7 @@ import type {
 } from "../service/notification-intents.js";
 import type {
   CronCompletionStatus,
+  CronDeliveryAdmission,
   CronFailureNotificationDelivery,
   CronJobExecutionResult,
   CronResolvedDeliveryState,
@@ -95,6 +96,12 @@ export type CronRuntimeMutationInputs = {
   "cron.markDeliveryStarted": {
     storeKey: string;
     handle: CronRunReceiptHandle;
+    deliveryAdmission?: CronDeliveryAdmission;
+  };
+  "cron.releaseDeliveryAdmission": {
+    storeKey: string;
+    handle: CronRunReceiptHandle;
+    admission: CronDeliveryAdmission;
   };
   "cron.finalizeRuns": {
     storeKey: string;
@@ -208,7 +215,12 @@ export type CronRuntimeMutationContracts = {
   "cron.markDeliveryStarted": {
     input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
     snapshot: Record<string, never>;
-    outcome: Record<string, never>;
+    outcome: { job?: CronJob };
+  };
+  "cron.releaseDeliveryAdmission": {
+    input: CronRuntimeMutationInputs["cron.releaseDeliveryAdmission"];
+    snapshot: Record<string, never>;
+    outcome: { job?: CronJob };
   };
   "cron.finalizeRuns": {
     input: CronRuntimeMutationInputs["cron.finalizeRuns"];

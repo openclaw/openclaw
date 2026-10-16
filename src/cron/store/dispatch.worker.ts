@@ -82,9 +82,12 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     });
   }
   if (
-    ["cron.markDeliveryStarted", "cron.removeStaleFamily", "cron.bindReceiptExecution"].includes(
-      String(type),
-    ) &&
+    [
+      "cron.markDeliveryStarted",
+      "cron.releaseDeliveryAdmission",
+      "cron.removeStaleFamily",
+      "cron.bindReceiptExecution",
+    ].includes(String(type)) &&
     !receipts
   ) {
     return loadReceipts().then((loaded) => {
@@ -129,6 +132,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.mutateJobs":
     case "cron.recordRun":
     case "cron.markDeliveryStarted":
+    case "cron.releaseDeliveryAdmission":
     case "cron.bindReceiptExecution":
     case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
@@ -221,6 +225,7 @@ export function executeCronStateCommand(
       }
       return finalization.finalizeCronRunsInWorker(database, command.input);
     case "cron.markDeliveryStarted":
+    case "cron.releaseDeliveryAdmission":
     case "cron.bindReceiptExecution":
     case "cron.removeStaleFamily":
       if (!receipts) {
@@ -231,6 +236,8 @@ export function executeCronStateCommand(
           return receipts.bindCronRunReceiptExecutionInWorker(database, command.input);
         case "cron.markDeliveryStarted":
           return receipts.markCronDeliveryStartedInWorker(database, command.input);
+        case "cron.releaseDeliveryAdmission":
+          return receipts.releaseCronDeliveryAdmissionInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return receipts.removeStaleCronFamilyInWorker(database, command.input);
       }

@@ -127,6 +127,7 @@ async function createCompletionFixture(
     handle: receipt,
     activeJobMarker: marker,
     signal: controller.signal,
+    immediate: false,
   });
   const cfg: OpenClawConfig = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
