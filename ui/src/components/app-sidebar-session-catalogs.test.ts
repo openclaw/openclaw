@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -13,30 +13,47 @@ import {
   projectSidebarSessionCatalogs,
 } from "./app-sidebar-session-catalogs.ts";
 
+const session = (threadId: string, name: string) => ({
+  threadId,
+  name,
+  status: "idle",
+  archived: false,
+  canContinue: true,
+  canArchive: false,
+});
+const host = (sessions: SessionCatalogHost["sessions"], remote = false): SessionCatalogHost => ({
+  hostId: remote ? "node:remote" : "gateway:codex",
+  label: remote ? "Remote node" : "Local Codex",
+  kind: remote ? "node" : "gateway",
+  connected: true,
+  sessions,
+});
+const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
+  id: "codex",
+  label: "Codex",
+  capabilities: { continueSession: true, archive: false },
+  hosts,
+});
+
 describe("formatSidebarTimestamp", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
+  });
   afterEach(async () => {
     vi.useRealTimers();
     await i18n.setLocale("en");
   });
 
   it("keeps the localized current-time label for recent sessions", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
-
     expect(formatSidebarTimestamp(Date.now() - 10_000)).toBe("now");
   });
 
   it("uses compact localized units for older sessions", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
-
     expect(formatSidebarTimestamp(Date.now() - 5 * 60_000)).toBe("5m");
   });
 
   it("preserves direction for timestamps in the future", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
-
     expect(formatSidebarTimestamp(Date.now() + 30_000)).toBe("in 30s");
     expect(formatSidebarTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
   });
@@ -44,50 +61,34 @@ describe("formatSidebarTimestamp", () => {
 
 describe("findCatalogSessionHovercardRow", () => {
   it("preserves adopted naming while distinguishing repository and workspace context", () => {
-    const catalogSession = (threadId: string, name: string) => ({
-      threadId,
-      name,
-      status: "idle",
-      archived: false,
-      canContinue: true,
-      canArchive: false,
-    });
-    const catalog: SessionCatalog = {
-      id: "codex",
-      label: "Codex",
-      capabilities: { continueSession: true, archive: true },
-      hosts: [
+    const source = catalog([
+      host([
         {
-          hostId: "gateway:codex",
-          label: "Local Codex",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            {
-              ...catalogSession("project", "Renamed upstream"),
-              sessionKey: "agent:main:adopted-project",
-              cwd: "/work/openclaw",
-              gitBranch: "feature/hovercard",
-            },
-            {
-              ...catalogSession("colored", "Colored CLI session"),
-              color: "cyan",
-            },
-            {
-              ...catalogSession("workspace", "Workspace"),
-              cwd: "/work/release-notes",
-            },
-            {
-              ...catalogSession("pull-request", "Pull request"),
-              cwd: "/work/pull-request",
-              pullRequest: { numbers: [125068], state: "open" },
-            },
-          ],
+          ...session("project", "Renamed upstream"),
+          sessionKey: "agent:main:adopted-project",
+          cwd: "/work/openclaw",
+          gitBranch: "feature/hovercard",
         },
-      ],
-    };
+        {
+          ...session("colored", "Colored CLI session"),
+          color: "cyan",
+        },
+        {
+          ...session("workspace", "Workspace"),
+          cwd: "/work/release-notes",
+        },
+        {
+          ...session("pull-request", "Pull request"),
+          cwd: "/work/pull-request",
+          pullRequest: { numbers: [125068], state: "open" },
+        },
+      ]),
+    ]);
+    source.capabilities.archive = true;
+    const find = (sessionKey: string) =>
+      findCatalogSessionHovercardRow({ catalogs: [source], sessionKey });
 
-    const colorInput = { catalogs: [catalog], sessionKey: "catalog:codex:gateway%3Acodex:colored" };
+    const colorInput = { catalogs: [source], sessionKey: "catalog:codex:gateway%3Acodex:colored" };
     expect(findCatalogSessionHovercardRow(colorInput)).toMatchObject({
       color: "cyan",
       hasActiveRun: false,
@@ -107,7 +108,7 @@ describe("findCatalogSessionHovercardRow", () => {
     ).toBe("red");
     expect(
       findCatalogSessionHovercardRow({
-        catalogs: [catalog],
+        catalogs: [source],
         sessionKey: "agent:main:adopted-project",
         liveRow: { label: "Operator chosen label", hasAutomation: false, hasActiveRun: true },
       }),
@@ -121,37 +122,20 @@ describe("findCatalogSessionHovercardRow", () => {
         branch: "feature/hovercard",
       },
     });
-    expect(
-      findCatalogSessionHovercardRow({
-        catalogs: [catalog],
-        sessionKey: "catalog:codex:gateway%3Acodex:workspace",
-      })?.workContext,
-    ).toEqual({ kind: "workspace", name: "release-notes", path: "/work/release-notes" });
-    expect(
-      findCatalogSessionHovercardRow({
-        catalogs: [catalog],
-        sessionKey: "catalog:codex:gateway%3Acodex:pull-request",
-      })?.workContext,
-    ).toEqual({ kind: "project", name: "pull-request", path: "/work/pull-request" });
+    expect(find("catalog:codex:gateway%3Acodex:workspace")?.workContext).toEqual({
+      kind: "workspace",
+      name: "release-notes",
+      path: "/work/release-notes",
+    });
+    expect(find("catalog:codex:gateway%3Acodex:pull-request")?.workContext).toEqual({
+      kind: "project",
+      name: "pull-request",
+      path: "/work/pull-request",
+    });
   });
 });
 
 describe("projectSidebarSessionCatalogs", () => {
-  const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
-    id: "codex",
-    label: "Codex",
-    capabilities: { continueSession: true, archive: false },
-    hosts,
-  });
-  const session = (threadId: string, name: string) => ({
-    threadId,
-    name,
-    status: "idle",
-    archived: false,
-    canContinue: true,
-    canArchive: false,
-  });
-
   it.each([
     ["active", 100, ["native"]],
     ["all", 100, ["native", "adopted"]],
@@ -163,18 +147,14 @@ describe("projectSidebarSessionCatalogs", () => {
         kind: "direct",
         snoozedUntil: 200,
       };
-      const hosts: SessionCatalogHost[] = [
-        {
-          hostId: "gateway:local",
-          label: "Gateway",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            session("native", "Native"),
-            { ...session("adopted", "Adopted"), sessionKey: row.key },
-          ],
-        },
+      const hosts = [
+        host([
+          session("native", "Native"),
+          { ...session("adopted", "Adopted"), sessionKey: row.key },
+        ]),
       ];
+      hosts[0]!.hostId = "gateway:local";
+      hosts[0]!.label = "Gateway";
       const visibility = projectSidebarArchiveVisibility({
         sessionData: {
           sessionsAgentId: "main",
@@ -199,8 +179,8 @@ describe("projectSidebarSessionCatalogs", () => {
       );
       expect(
         projected.flatMap((entry) =>
-          entry.visibleHosts.flatMap((host) =>
-            host.sessions.map((threadRow) => threadRow.threadId),
+          entry.visibleHosts.flatMap((visibleHost) =>
+            visibleHost.sessions.map((threadRow) => threadRow.threadId),
           ),
         ),
       ).toEqual(expected);
@@ -208,13 +188,9 @@ describe("projectSidebarSessionCatalogs", () => {
   );
 
   it("filters sessions by effective owner without inferring host identity", () => {
-    const hosts: SessionCatalogHost[] = [
-      {
-        hostId: "node:remote",
-        label: "Remote node",
-        kind: "node",
-        connected: true,
-        sessions: [
+    const hosts = [
+      host(
+        [
           {
             ...session("mine", "Mine"),
             createdActor: { id: "operator:mine", type: "human" },
@@ -224,7 +200,8 @@ describe("projectSidebarSessionCatalogs", () => {
             createdActor: { id: "operator:theirs", type: "human" },
           },
         ],
-      },
+        true,
+      ),
     ];
 
     expect(projectSidebarSessionCatalogs([catalog(hosts)], "operator:mine", [])).toEqual([
@@ -234,20 +211,17 @@ describe("projectSidebarSessionCatalogs", () => {
 
   it("uses a live adopted session owner before catalog creator provenance", () => {
     const adoptedKey = "agent:main:adopted";
-    const hosts: SessionCatalogHost[] = [
-      {
-        hostId: "node:remote",
-        label: "Remote node",
-        kind: "node",
-        connected: true,
-        sessions: [
+    const hosts = [
+      host(
+        [
           {
             ...session("adopted", "Adopted"),
             sessionKey: adoptedKey,
             createdActor: { id: "operator:creator", type: "human" },
           },
         ],
-      },
+        true,
+      ),
     ];
 
     expect(

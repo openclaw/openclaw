@@ -3,6 +3,7 @@ import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
@@ -50,7 +51,38 @@ async function fixture() {
     sidebar.sidebarEntries = entries;
   };
   await sidebar.updateComplete;
-  return { sidebar, sessions, gateway, result, context, provider };
+  const publish = (patch: Partial<GatewaySessionRow>, key = "agent:main:mine") =>
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+      },
+    });
+  return { sidebar, sessions, gateway, result, publish, context, provider };
+}
+
+type Sidebar = Awaited<ReturnType<typeof mountSidebar>>["sidebar"];
+async function click(sidebar: Sidebar, selector: string) {
+  sidebar.querySelector<HTMLElement>(selector)!.click();
+  await sidebar.updateComplete;
+}
+
+function mockMobile(matches: (query: string) => boolean) {
+  vi.spyOn(globalThis, "matchMedia").mockImplementation((media) => ({
+    media,
+    matches: matches(media),
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent: () => true,
+  }));
+}
+
+function rail(sidebar: Sidebar, entry: string) {
+  return sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="${entry}"]`);
 }
 
 function drag(target: Element, type: string, transfer: ReturnType<typeof createDataTransferStub>) {
@@ -75,8 +107,7 @@ describe("personal navigation rail", () => {
     expect(bottom.querySelector(".sidebar-identity-card")).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home")).toBeNull();
     expect(sidebar.querySelector(".sidebar-shell__footer .sidebar-identity-card")).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="pages"]')!.click();
-    await sidebar.updateComplete;
+    await click(sidebar, '[data-navigation-view="pages"]');
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();
     expect(sidebar.querySelector(".sidebar-session-content")).toBeNull();
     expect(sidebar.querySelector("aside.sidebar")).toBe(frame);
@@ -84,19 +115,8 @@ describe("personal navigation rail", () => {
   });
 
   it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
-    const { sidebar, result, sessions } = await fixture();
-    const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.with(mainIndex, {
-          ...result.sessions[mainIndex]!,
-          hasActiveRun: true,
-          status: "running",
-        }),
-      },
-    });
+    const { sidebar, publish } = await fixture();
+    publish({ hasActiveRun: true, status: "running" }, "agent:main:main");
     sidebar.storedOutboxes = {
       total: 2,
       attentionCountForSession: (key) => (key === "agent:main:main" ? 2 : 0),
@@ -136,9 +156,7 @@ describe("personal navigation rail", () => {
     expect(pin!.closest(".session-row-host")?.classList.contains("session-row-host--pinned")).toBe(
       true,
     );
-    expect(
-      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="session:agent:main:mine"]'),
-    ).not.toBeNull();
+    expect(rail(sidebar, "session:agent:main:mine")).not.toBeNull();
     expect(sessions.sessions.patch).not.toHaveBeenCalled();
     pin!.click();
     await sidebar.updateComplete;
@@ -150,16 +168,8 @@ describe("personal navigation rail", () => {
   });
 
   it("adds a session to an empty rail and shows the drop affordance only during its drag", async () => {
-    const { sidebar, sessions, result } = await fixture();
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === "agent:main:mine" ? Object.assign({}, row, { label: "Release Notes" }) : row,
-        ),
-      },
-    });
+    const { sidebar, sessions, publish } = await fixture();
+    publish({ label: "Release Notes" });
     await sidebar.updateComplete;
     const pins = sidebar.querySelector(".sidebar-rail__pins")!;
     expect(pins.children).toHaveLength(0);
@@ -201,21 +211,11 @@ describe("personal navigation rail", () => {
       monogram: undefined,
     },
   ])("uses the session artwork or title initials for $label", async ({ label, icon, monogram }) => {
-    const { sidebar, sessions, result } = await fixture();
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === "agent:main:mine" ? Object.assign({}, row, { label, icon }) : row,
-        ),
-      },
-    });
+    const { sidebar, publish } = await fixture();
+    publish({ label, icon });
     sidebar.sidebarEntries = ["session:agent:main:mine"];
     await sidebar.updateComplete;
-    const pin = sidebar.querySelector(
-      '.sidebar-rail [data-sidebar-entry="session:agent:main:mine"]',
-    )!;
+    const pin = rail(sidebar, "session:agent:main:mine")!;
     expect(pin.querySelector("a")?.getAttribute("aria-label")).toBe(label);
     expect(pin.getAttribute("title")).toBe(label);
     expect(pin.querySelector(".sidebar-rail__monogram")?.textContent).toBe(monogram);
@@ -229,31 +229,24 @@ describe("personal navigation rail", () => {
   });
 
   it("keeps a session shortcut's identity with only running and unread decorations", async () => {
-    const { sidebar, sessions, result } = await fixture();
+    const { sidebar, sessions, publish } = await fixture();
     const key = "agent:main:mine";
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === key
-            ? Object.assign({}, row, {
-                label: "Release Notes",
-                icon: "📝",
-                hasActiveRun: true,
-                status: "running" as const,
-                unread: true,
-                agentStatus: {
-                  note: "Waiting for input",
-                  attention: "key",
-                  expiresAt: Date.now() + 60_000,
-                },
-                worktree: { id: "wt-notes", branch: "docs/notes", repoRoot: "/repo" },
-              })
-            : row,
-        ),
+    publish(
+      {
+        label: "Release Notes",
+        icon: "📝",
+        hasActiveRun: true,
+        status: "running",
+        unread: true,
+        agentStatus: {
+          note: "Waiting for input",
+          attention: "key",
+          expiresAt: Date.now() + 60_000,
+        },
+        worktree: { id: "wt-notes", branch: "docs/notes", repoRoot: "/repo" },
       },
-    });
+      key,
+    );
     sessions.sessions.setPullRequestSummary(key, { numbers: [1], state: "open" });
     sidebar.storedOutboxes = {
       total: 2,
@@ -295,15 +288,11 @@ describe("personal navigation rail", () => {
       "session:agent:other:unloaded",
       "route:usage",
     ]);
-    const pin = sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"]')!;
+    const pin = rail(sidebar, "route:usage")!;
     expect(pin.querySelector(".sidebar-reorder-trigger")).toBeNull();
     const reorder = createDataTransferStub();
     drag(pin.querySelector("a")!, "dragstart", reorder);
-    drag(
-      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="person:offline"]')!,
-      "drop",
-      reorder,
-    );
+    drag(rail(sidebar, "person:offline")!, "drop", reorder);
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([
       "route:usage",
@@ -379,8 +368,7 @@ describe("personal navigation rail", () => {
     });
     sidebar.onToggleSidebar = toggle;
     const select = async (view: string) => {
-      sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`)!.click();
-      await sidebar.updateComplete;
+      await click(sidebar, `[data-navigation-view="${view}"]`);
     };
     await select("sessions");
     expect(sidebar.navigationCollapsed).toBe(true);
@@ -401,23 +389,13 @@ describe("personal navigation rail", () => {
 
   it("preserves a mobile drawer when a stored desktop preference is collapsed", async () => {
     const { sidebar } = await fixture();
-    vi.spyOn(globalThis, "matchMedia").mockReturnValue({
-      media: "",
-      matches: true,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
-    });
+    mockMobile(() => true);
     sidebar.navigationCollapsed = true;
     const toggle = vi.fn();
     sidebar.onToggleSidebar = toggle;
     await sidebar.updateComplete;
     for (const view of ["sessions", "pages"]) {
-      sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`)!.click();
-      await sidebar.updateComplete;
+      await click(sidebar, `[data-navigation-view="${view}"]`);
     }
     expect(sidebar.navigationView).toBe("pages");
     expect(toggle).not.toHaveBeenCalled();
@@ -426,16 +404,7 @@ describe("personal navigation rail", () => {
   it.each([false, true])(
     "collapses shortcut navigation only on desktop (mobile: %s)",
     async (mobile) => {
-      vi.spyOn(globalThis, "matchMedia").mockImplementation((query) => ({
-        media: query,
-        matches: query.includes("max-width") ? mobile : false,
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
-      }));
+      mockMobile((query) => query.includes("max-width") && mobile);
       const { sidebar, gateway } = await fixture();
       gateway.publish({
         hello: {
