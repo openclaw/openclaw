@@ -261,9 +261,6 @@ describe("runMessageAction plugin dispatch", () => {
     const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
       async () => jsonResult({ ok: true }),
     );
-    const listGroupsLive = vi.fn(async () => [
-      { id: "channel:resolved", name: "resolved", kind: "group" as const },
-    ]);
     const accountPlugin: ChannelPlugin = {
       id: "accountchat",
       meta: {
@@ -278,7 +275,9 @@ describe("runMessageAction plugin dispatch", () => {
         listAccountIds: () => ["default", "ops", "disabled"],
         resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
       },
-      directory: { listGroupsLive },
+      directory: {
+        listGroupsLive: async () => [{ id: "channel:resolved", name: "resolved", kind: "group" }],
+      },
       actions: { describeMessageTool: () => ({ actions: ["send"] }), handleAction },
     };
     const setGatewayAccountPlugin = (overrides: Partial<ChannelPlugin>) =>
@@ -294,7 +293,6 @@ describe("runMessageAction plugin dispatch", () => {
     beforeEach(() => {
       setTestPlugin(accountPlugin, "accountchat");
       handleAction.mockClear();
-      listGroupsLive.mockClear();
     });
 
     afterEach(() => {

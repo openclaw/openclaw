@@ -375,7 +375,6 @@ describe("runMessageAction media behavior", () => {
         const result = await action;
         await settled;
 
-        expect(result.kind).toBe("action");
         expect(handleActionMock).toHaveBeenCalledTimes(1);
         expect(events).toEqual(["load", "release", "handler", "settled"]);
         const payload = requireActionPayload(result);
@@ -394,24 +393,21 @@ describe("runMessageAction media behavior", () => {
     });
 
     it.each([
-      { name: "nested MIME", metadata: {}, contentType: "image/png" },
-      {
-        name: "explicit MIME alias",
-        metadata: { mimeType: "text/plain" },
-        contentType: "text/plain",
-      },
-      {
-        name: "contentType before mimeType",
-        metadata: {
+      ["nested MIME", {}, "image/png", "reply.png"],
+      ["explicit MIME alias", { mimeType: "text/plain" }, "text/plain", "reply.png"],
+      [
+        "contentType before mimeType",
+        {
           contentType: "text/plain",
           mimeType: "application/json",
           filename: "explicit.txt",
         },
-        contentType: "text/plain",
-      },
-    ])(
-      "passes $name from attachments[] to the reply handler",
-      async ({ metadata, contentType }) => {
+        "text/plain",
+        "explicit.txt",
+      ],
+    ] as const)(
+      "passes %s from attachments[] to the reply handler",
+      async (_name, metadata, contentType, filename) => {
         const result = await runReply({
           ...metadata,
           attachments: [
@@ -431,7 +427,7 @@ describe("runMessageAction media behavior", () => {
         expect(handleActionMock).toHaveBeenCalledTimes(1);
         expect(readHandlerParams()).toMatchObject({
           buffer: remoteMedia.buffer.toString("base64"),
-          filename: metadata.filename ?? "reply.png",
+          filename,
           contentType,
         });
       },

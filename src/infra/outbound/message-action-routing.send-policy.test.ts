@@ -7,12 +7,8 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-const ttsMocks = vi.hoisted(() => ({
-  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
-}));
-
 vi.mock("../../tts/tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
+  maybeApplyTtsToPayload: async (params: { payload: unknown }) => params.payload,
 }));
 
 const slackConfig: OpenClawConfig = { channels: { slack: { enabled: true } } };
@@ -39,13 +35,13 @@ function registerPlugin(
   setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
 }
 
-function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
+function registerSlackTextPlugin() {
   const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "m1", chatId: "C123" });
   registerPlugin(
     { id: "slack", outbound: { deliveryMode: "direct", sendText } },
     {
       config: {
-        listAccountIds: () => accountIds,
+        listAccountIds: () => ["default"],
         resolveAccount: () => ({ enabled: true }),
         isConfigured: () => true,
       },
@@ -58,9 +54,6 @@ function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    ttsMocks.maybeApplyTtsToPayload
-      .mockReset()
-      .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
 
   it.each([

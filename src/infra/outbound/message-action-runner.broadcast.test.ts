@@ -132,9 +132,7 @@ describe("broadcast send outcomes through native actions", () => {
     tempHome = await createTempHomeEnv("openclaw-broadcast-outcomes-");
     setRuntimeConfigSnapshot(messageToolConfig);
   });
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(resetPluginRuntimeStateForTest);
   afterAll(async () => {
     await tempHome.restore();
     clearRuntimeConfigSnapshot();
@@ -542,19 +540,6 @@ describe("broadcast send outcomes through native actions", () => {
       ]);
     });
 
-    it("sends an explicit target from a route-less run through the channel", async () => {
-      const result = await explicitRoute(true, {
-        sourceReplyTranscriptOnly: true,
-      });
-
-      expect(result).toMatchObject({
-        kind: "send",
-        channel: "workspace",
-        handledBy: "core",
-        dryRun: false,
-      });
-    });
-
     it.each([
       {
         name: "private source without an address",
@@ -604,10 +589,14 @@ describe("broadcast send outcomes through native actions", () => {
       }
     });
 
-    it.each([false, true])(
-      "checks explicit-route provider policy (allowed=%s)",
-      async (allowAcrossProviders) => {
-        const send = explicitRoute(allowAcrossProviders, { dryRun: true });
+    it.each([
+      [true, { sourceReplyTranscriptOnly: true }, false],
+      [false, { dryRun: true }, true],
+      [true, { dryRun: true }, true],
+    ] as const)(
+      "checks explicit-route delivery (allowed=%s, options=%j)",
+      async (allowAcrossProviders, options, dryRun) => {
+        const send = explicitRoute(allowAcrossProviders, options);
 
         if (!allowAcrossProviders) {
           await expect(send).rejects.toMatchObject({
@@ -621,7 +610,7 @@ describe("broadcast send outcomes through native actions", () => {
           kind: "send",
           channel: "workspace",
           handledBy: "core",
-          dryRun: true,
+          dryRun,
         });
       },
     );

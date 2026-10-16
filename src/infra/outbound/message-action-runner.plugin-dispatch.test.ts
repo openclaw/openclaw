@@ -200,23 +200,36 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleScopedAction).not.toHaveBeenCalled();
     });
 
-    it("rejects unsupported uploads before authorization and media I/O", async () => {
-      mocks.loadWebMedia.mockRejectedValue(new Error("media must not load"));
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("actionhub"),
-          action: "upload-file",
-          params: {
-            channel: "actionhub",
-            target: "other-conversation",
-            media: "https://example.com/pic.png",
-          },
-          conversationReadOrigin: "delegated",
-          dryRun: false,
-        }),
-      ).rejects.toThrow("Message action upload-file not supported for channel actionhub.");
-      expectUncalled(handleAction, mocks.loadWebMedia);
-    });
+    it.each(["upload-file", "read"] as const)(
+      "rejects unsupported %s before effects",
+      async (action) => {
+        const channel = action === "read" ? "sendonly" : "actionhub";
+        if (action === "read") {
+          setTestPlugin(
+            createChannelTestPluginBase({
+              id: channel,
+              config: createAlwaysConfiguredPluginConfig({}),
+            }),
+            channel,
+          );
+        } else {
+          mocks.loadWebMedia.mockRejectedValue(new Error("media must not load"));
+        }
+        await expect(
+          runMessageAction({
+            cfg: action === "read" ? {} : createEnabledMessageActionConfig(channel),
+            action,
+            params:
+              action === "read"
+                ? { channel, target: "channel:peer", messageId: "task-1", limit: 1 }
+                : { channel, target: "other-conversation", media: "https://example.com/pic.png" },
+            conversationReadOrigin: action === "read" ? "direct-operator" : "delegated",
+            dryRun: false,
+          }),
+        ).rejects.toThrow(`Message action ${action} not supported for channel ${channel}.`);
+        expectUncalled(handleAction, mocks.loadWebMedia);
+      },
+    );
 
     it("rejects directory-only external aliases before lookup", async () => {
       const looksLikeId = vi.fn(() => false);
@@ -381,9 +394,7 @@ describe("runMessageAction plugin dispatch", () => {
       resetDirectoryCache();
       setTestPlugin(plugin, channel, "bundled");
     });
-    afterEach(() => {
-      resetDirectoryCache();
-    });
+    afterEach(() => resetDirectoryCache());
 
     it("stops broadcast directory preparation when its signal is canceled", async () => {
       const { entered, release } = createLookupGate();
@@ -472,25 +483,6 @@ describe("runMessageAction plugin dispatch", () => {
         expectUncalled(nextLookup, handleAction);
       },
     );
-  });
-
-  it("reports an unsupported action for a loaded channel without action handlers", async () => {
-    setTestPlugin(
-      createChannelTestPluginBase({
-        id: "sendonly",
-        config: createAlwaysConfiguredPluginConfig({}),
-      }),
-      "sendonly",
-    );
-    await expect(
-      runMessageAction({
-        cfg: {},
-        action: "read",
-        dryRun: false,
-        conversationReadOrigin: "direct-operator",
-        params: { channel: "sendonly", target: "channel:peer", messageId: "task-1", limit: 1 },
-      }),
-    ).rejects.toThrow("Message action read not supported for channel sendonly.");
   });
 
   it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
