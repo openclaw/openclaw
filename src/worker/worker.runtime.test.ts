@@ -136,6 +136,36 @@ const MODEL_REF = { provider: "openai", model: "gpt-5.6-luna" } as const;
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
+const BROWSER = {
+  cdpUrl: "http://127.0.0.1:9222",
+  launcherPath: "/usr/local/bin/openclaw-worker-browser",
+};
+function computerDescriptor(): NonNullable<WorkerLaunchDescriptor["assignment"]["computer"]> {
+  return {
+    nodeId: "worker-desktop",
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["screenshot"],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
+function connectionFor(
+  launch: WorkerLaunchDescriptor,
+  options: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
+) {
+  return createWorkerConnection({
+    endpoint: launch.connectionEndpoint,
+    connectParams: buildWorkerConnectParams(launch),
+    ...options,
+  });
+}
+const RECONNECT_BACKOFF = { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 };
 
 type InferencePlan =
   | "text"
@@ -386,17 +416,13 @@ class FakeWorkerGateway {
       return;
     }
     if (this.options.admissionFailure) {
-      this.send(socket, {
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker fixture rejected",
-          details: { reason: this.options.admissionFailure },
-          retryable: true,
-        },
-      });
+      this.reject(
+        socket,
+        frame.id,
+        "worker fixture rejected",
+        { reason: this.options.admissionFailure },
+        true,
+      );
       return;
     }
     this.send(socket, {
@@ -426,23 +452,15 @@ class FakeWorkerGateway {
       return;
     }
     if (this.options.heartbeatFailure) {
-      this.send(socket, {
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker heartbeat rejected",
-          details: { reason: this.options.heartbeatFailure },
-        },
+      this.reject(socket, frame.id, "worker heartbeat rejected", {
+        reason: this.options.heartbeatFailure,
       });
       return;
     }
-    this.send(socket, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { receivedAtMs: Date.now(), status: "ok", ownerEpoch: OWNER_EPOCH },
+    this.reply(socket, frame.id, {
+      receivedAtMs: Date.now(),
+      status: "ok",
+      ownerEpoch: OWNER_EPOCH,
     });
   }
 
@@ -453,12 +471,7 @@ class FakeWorkerGateway {
       socket.terminate();
       return;
     }
-    this.send(socket, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "cancelled" },
-    });
+    this.reply(socket, frame.id, { status: "cancelled" });
   }
 
   private handleGatewayTool(
@@ -473,21 +486,19 @@ class FakeWorkerGateway {
       socket.terminate();
       return;
     }
-    this.send(socket, {
-      type: "res",
+    this.reply(
+      socket,
       id,
-      ok: true,
-      payload:
-        request.toolId === "presence"
-          ? {
-              content: [{ type: "text", text: "Ada is online" }],
-              details: { status: "ok", people: [{ name: "Ada" }] },
-            }
-          : {
-              content: [{ type: "text", text: "child accepted" }],
-              details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
-            },
-    });
+      request.toolId === "presence"
+        ? {
+            content: [{ type: "text", text: "Ada is online" }],
+            details: { status: "ok", people: [{ name: "Ada" }] },
+          }
+        : {
+            content: [{ type: "text", text: "child accepted" }],
+            details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
+          },
+    );
   }
 
   private handleTranscript(socket: WebSocket, frame: WorkerTranscriptCommitRequestFrame): void {
@@ -498,30 +509,18 @@ class FakeWorkerGateway {
       return;
     }
     if (this.transcriptRequests.length === this.options.transcriptFailureAtRequest) {
-      this.send(socket, {
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker transcript commit rejected",
-          details: { reason: "stale-base-leaf" },
-        },
+      this.reject(socket, frame.id, "worker transcript commit rejected", {
+        reason: "stale-base-leaf",
       });
       return;
     }
     this.acceptedTranscriptRequests.push(structuredClone(frame.params));
     this.applicationOrder.push(`transcript:${frame.params.seq}`);
-    this.send(socket, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: {
-        entryIds: frame.params.messages.map(
-          (_message, index) => `entry-${frame.params.seq}-${index}`,
-        ),
-        newLeafId: `leaf-${frame.params.seq}`,
-      },
+    this.reply(socket, frame.id, {
+      entryIds: frame.params.messages.map(
+        (_message, index) => `entry-${frame.params.seq}-${index}`,
+      ),
+      newLeafId: `leaf-${frame.params.seq}`,
     });
   }
 
@@ -542,41 +541,20 @@ class FakeWorkerGateway {
       this.sentLiveResync < (this.options.liveResyncResponses ?? 1)
     ) {
       this.sentLiveResync += 1;
-      this.send(socket, {
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker live event rejected",
-          details: {
-            reason: "resync-required",
-            ackedSeq: this.options.liveResyncAckedSeq,
-            expectedSeq: this.options.liveResyncAckedSeq + 1,
-          },
-        },
+      this.reject(socket, frame.id, "worker live event rejected", {
+        reason: "resync-required",
+        ackedSeq: this.options.liveResyncAckedSeq,
+        expectedSeq: this.options.liveResyncAckedSeq + 1,
       });
       return;
     }
     if (this.options.liveFailure) {
-      this.send(socket, {
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker live event rejected",
-          details: { reason: this.options.liveFailure },
-        },
+      this.reject(socket, frame.id, "worker live event rejected", {
+        reason: this.options.liveFailure,
       });
       return;
     }
-    this.send(socket, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { ackedSeq: frame.params.seq },
-    });
+    this.reply(socket, frame.id, { ackedSeq: frame.params.seq });
   }
 
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
@@ -590,12 +568,7 @@ class FakeWorkerGateway {
       this.droppedInference = true;
       return;
     }
-    this.send(socket, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "accepted" },
-    });
+    this.reply(socket, frame.id, { status: "accepted" });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
     if (typeof plan === "object") {
@@ -881,6 +854,25 @@ class FakeWorkerGateway {
       socket.send(JSON.stringify(frame));
     }
   }
+
+  private reply(socket: WebSocket, id: string, payload: object): void {
+    this.send(socket, { type: "res", id, ok: true, payload });
+  }
+
+  private reject(
+    socket: WebSocket,
+    id: string,
+    message: string,
+    details: object,
+    retryable?: true,
+  ): void {
+    this.send(socket, {
+      type: "res",
+      id,
+      ok: false,
+      error: { code: "INVALID_REQUEST", message, details, ...(retryable ? { retryable } : {}) },
+    });
+  }
 }
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
@@ -950,6 +942,19 @@ async function setup(options?: FakeGatewayOptions): Promise<{
       sessionId: SESSION_ID,
     });
   return { gateway, workspaceDir, launch };
+}
+
+function nextTurn(launch: WorkerLaunchDescriptor, gateway: FakeWorkerGateway, index: number) {
+  const next = structuredClone(launch);
+  next.assignment.runId = `worker-next-run-${index}`;
+  next.assignment.turnId = `worker-next-turn-${index}`;
+  next.assignment.operationalRunInstance = createOperationalRunInstanceRef(next.assignment.runId);
+  next.assignment.agentRuntimeIdentityToken = `next-test-runtime-token-${index}`;
+  next.admission.credential = `next-test-worker-credential-${index}`;
+  next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+    (request) => request.messages,
+  );
+  return next;
 }
 
 afterEach(async () => {
@@ -1073,22 +1078,8 @@ describe("worker runtime", () => {
         return runtime;
       });
     launch.assignment.toolAuthority.allowedToolNames = ["browser", "computer"];
-    launch.assignment.browser = {
-      cdpUrl: "http://127.0.0.1:9222",
-      launcherPath: "/usr/local/bin/openclaw-worker-browser",
-    };
-    launch.assignment.computer = {
-      nodeId: "worker-desktop",
-      computerUse: {
-        contractVersion: 2,
-        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-        actions: ["screenshot"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      },
-    };
+    launch.assignment.browser = { ...BROWSER };
+    launch.assignment.computer = computerDescriptor();
     try {
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
     } finally {
@@ -1127,10 +1118,7 @@ describe("worker runtime", () => {
         inferencePlans: [outcome === "error" ? "error" : "text"],
       });
       launch.assignment.toolAuthority.allowedToolNames = ["browser"];
-      launch.assignment.browser = {
-        cdpUrl: "http://127.0.0.1:9222",
-        launcherPath: "/usr/local/bin/openclaw-worker-browser",
-      };
+      launch.assignment.browser = { ...BROWSER };
       const createSession =
         outcome === "setup"
           ? vi
@@ -1155,11 +1143,9 @@ describe("worker runtime", () => {
             error: expect.stringContaining("fixture browser cleanup failed"),
             replayInvalid: true,
           });
-          if (outcome === "error") {
-            expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
-              error: expect.stringContaining("fixture provider failed"),
-            });
-          }
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+            error: expect.stringContaining("fixture provider failed"),
+          });
         }
         expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
       } finally {
@@ -1168,32 +1154,18 @@ describe("worker runtime", () => {
     },
   );
 
-  it.each([
-    { computerCleanupFailure: true, terminal: "error" },
-    { computerCleanupFailure: true, terminal: "cancelled" },
-  ] as const)(
-    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: $computerCleanupFailure, terminal: $terminal)",
-    async ({ computerCleanupFailure, terminal }) => {
+  it.each(["error", "cancelled"] as const)(
+    "keeps desktop images through RPC, transcript, and inference before failed cleanup (%s)",
+    async (terminal) => {
       const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
       expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
       const { gateway, launch } = await setup({
         inferencePlans: ["computer", terminal],
         computerSnapshot,
-        computerCleanupFailure,
+        computerCleanupFailure: true,
       });
       launch.assignment.toolAuthority.allowedToolNames = ["computer"];
-      launch.assignment.computer = {
-        nodeId: "worker-desktop",
-        computerUse: {
-          contractVersion: 2,
-          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-          actions: ["screenshot"],
-          targets: ["screen"],
-          deliveryModes: ["foreground"],
-          observations: ["image"],
-          features: { recording: false, agentCursor: false, multiDisplay: false },
-        },
-      };
+      launch.assignment.computer = computerDescriptor();
 
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
         status: "failed",
@@ -1224,29 +1196,23 @@ describe("worker runtime", () => {
       expect(gateway.applicationOrder.indexOf("computer:close")).toBeLessThan(
         gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
       );
-      if (computerCleanupFailure) {
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
-          "replayInvalid",
-          true,
-        );
-      } else {
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("replayInvalid");
-      }
+      const finalEvent = gateway.liveEventRequests.at(-1)?.event;
+      expect(finalEvent?.payload).toHaveProperty("replayInvalid", true);
       if (terminal === "cancelled") {
-        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+        expect(finalEvent).toMatchObject({
           kind: "lifecycle",
           payload: { phase: "finishing", stopReason: "aborted" },
         });
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+        expect(finalEvent?.payload).toHaveProperty(
           "error",
           expect.stringContaining("fixture inference cancelled"),
         );
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+        expect(finalEvent?.payload).toHaveProperty(
           "error",
           expect.stringContaining("fixture desktop cleanup failed"),
         );
-      } else if (computerCleanupFailure) {
-        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      } else {
+        expect(finalEvent).toMatchObject({
           kind: "lifecycle",
           payload: {
             phase: "finishing",
@@ -1256,11 +1222,9 @@ describe("worker runtime", () => {
             ),
           },
         });
-        if (terminal === "error") {
-          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
-            error: expect.stringContaining("fixture provider failed"),
-          });
-        }
+        expect(finalEvent?.payload).toMatchObject({
+          error: expect.stringContaining("fixture provider failed"),
+        });
       }
     },
   );
@@ -1269,10 +1233,7 @@ describe("worker runtime", () => {
     { authority: ["browser"] as const, browser: undefined },
     {
       authority: ["read"] as const,
-      browser: {
-        cdpUrl: "http://127.0.0.1:9222",
-        launcherPath: "/usr/local/bin/openclaw-worker-browser",
-      },
+      browser: BROWSER,
     },
   ])("fails before inference when Browser authority and descriptor disagree", async (testCase) => {
     const { gateway, launch } = await setup();
@@ -1295,11 +1256,7 @@ describe("worker runtime", () => {
     { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
     const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
+    const connection = connectionFor(launch, { reconnectBackoff: RECONNECT_BACKOFF });
     const states: WorkerConnectionState["kind"][] = [];
     connection.onStateChange((state) => states.push(state.kind));
     try {
@@ -1326,11 +1283,7 @@ describe("worker runtime", () => {
 
   it("never replays a portal operation after its response is lost", async () => {
     const { gateway, launch } = await setup({ dropSessionToolResponses: 1 });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
+    const connection = connectionFor(launch, { reconnectBackoff: RECONNECT_BACKOFF });
     try {
       await connection.start();
       const request = {
@@ -1426,10 +1379,7 @@ describe("worker runtime", () => {
       const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-admission-"));
       tempDirs.push(workspaceDir);
       const launch = descriptor(path.join(workspaceDir, "gateway.sock"), workspaceDir);
-      const connection = createWorkerConnection({
-        endpoint: launch.connectionEndpoint,
-        connectParams: buildWorkerConnectParams(launch),
-      });
+      const connection = connectionFor(launch);
       // Production formats the last failure into the deadline message
       // (WorkerConnection.failAdmissionDeadline); model that here.
       const deadline = new WorkerAdmissionDeadlineExceededError(
@@ -1678,17 +1628,7 @@ describe("worker runtime", () => {
         }
 
         const sendNextTurn = (index: number) => {
-          const next = structuredClone(launch);
-          next.assignment.runId = `worker-next-run-${index}`;
-          next.assignment.turnId = `worker-next-turn-${index}`;
-          next.assignment.operationalRunInstance = createOperationalRunInstanceRef(
-            next.assignment.runId,
-          );
-          next.assignment.agentRuntimeIdentityToken = `next-test-runtime-token-${index}`;
-          next.admission.credential = `next-test-worker-credential-${index}`;
-          next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
-            (request) => request.messages,
-          );
+          const next = nextTurn(launch, gateway, index);
           input.write(
             `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
           );
@@ -2002,17 +1942,7 @@ describe("worker runtime", () => {
         const previousProfileDir = await readFile(profilePath, "utf8");
         expect(previousProfileDir).not.toBe("");
         const stateDir = process.env.OPENCLAW_STATE_DIR!;
-        const next = structuredClone(launch);
-        next.assignment.runId = "worker-next-run-2";
-        next.assignment.turnId = "worker-next-turn-2";
-        next.assignment.operationalRunInstance = createOperationalRunInstanceRef(
-          next.assignment.runId,
-        );
-        next.assignment.agentRuntimeIdentityToken = "next-test-runtime-token-2";
-        next.admission.credential = "next-test-worker-credential-2";
-        next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
-          (request) => request.messages,
-        );
+        const next = nextTurn(launch, gateway, 2);
         next.assignment.github = {
           login: "worker-b",
           token: "worker-turn-b-token",
@@ -2096,10 +2026,7 @@ describe("worker runtime", () => {
 describe("worker reconnect clients", () => {
   it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
     const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-    });
+    const connection = connectionFor(launch);
     let healthyReadyCalls = 0;
     connection.onReady(() => {
       throw new Error("induced ready observer failure");
@@ -2119,11 +2046,9 @@ describe("worker reconnect clients", () => {
 
   it("times out a silent admission attempt and admits on reconnect", async () => {
     const { gateway, launch } = await setup({ ignoreFirstAdmission: true });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
+    const connection = connectionFor(launch, {
       admissionTimeoutMs: 25,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      reconnectBackoff: RECONNECT_BACKOFF,
     });
     try {
       await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
@@ -2138,11 +2063,9 @@ describe("worker reconnect clients", () => {
       ignoreHeartbeat: true,
       heartbeatIntervalMs: 1,
     });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
+    const connection = connectionFor(launch, {
       requestTimeoutMs: 25,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      reconnectBackoff: RECONNECT_BACKOFF,
     });
     try {
       await connection.start();
@@ -2158,11 +2081,9 @@ describe("worker reconnect clients", () => {
       silenceFirstLiveEvent: true,
       silenceFirstInference: true,
     });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
+    const connection = connectionFor(launch, {
       requestTimeoutMs: 40,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      reconnectBackoff: RECONNECT_BACKOFF,
     });
     const transcript = new WorkerTranscriptCommitClient(connection, {
       runEpoch: OWNER_EPOCH,

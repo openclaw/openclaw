@@ -156,6 +156,21 @@ async function providerFixture(mode: "tools" | "pending" = "tools") {
     frame(response, {}, "stop");
     response.end("data: [DONE]\n\n");
   };
+  const tool = (response: ServerResponse, name: string, args: object) => {
+    frame(response, {
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: `local-${name}`,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        },
+      ],
+    });
+    frame(response, {}, "tool_calls");
+    response.end("data: [DONE]\n\n");
+  };
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -183,36 +198,9 @@ async function providerFixture(mode: "tools" | "pending" = "tools") {
           JSON.stringify(path.join(owner().root, "tool-proof.mjs")) +
           " " +
           workers.lastPid();
-        frame(response, {
-          role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: "local-exec",
-              type: "function",
-              function: { name: "exec", arguments: JSON.stringify({ command, yieldMs: 10000 }) },
-            },
-          ],
-        });
-        frame(response, {}, "tool_calls");
-        response.end("data: [DONE]\n\n");
+        tool(response, "exec", { command, yieldMs: 10000 });
       } else if (requests.length === 2) {
-        frame(response, {
-          role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: "local-read",
-              type: "function",
-              function: {
-                name: "read",
-                arguments: JSON.stringify({ path: path.join(owner().root, "tool-proof.json") }),
-              },
-            },
-          ],
-        });
-        frame(response, {}, "tool_calls");
-        response.end("data: [DONE]\n\n");
+        tool(response, "read", { path: path.join(owner().root, "tool-proof.json") });
       } else {
         complete(response);
       }
@@ -251,6 +239,19 @@ function expectNoProxyInference() {
   expect(owner().providerCalls).toBe(0);
 }
 
+async function pendingWorker() {
+  const provider = await providerFixture("pending");
+  const descriptor = await localDescriptor();
+  const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
+  await withinTest(provider.entered, activeTestSignal);
+  return { provider, descriptor, worker };
+}
+
+function addSiblingModel(startup: NativeInferenceStartup) {
+  startup.config.models.push({ ...startup.config.models[0]!, id: "other-worker-model" });
+  startup.credentials[`${MODEL.provider}/other-worker-model`] = "synthetic-other-worker-key";
+}
+
 // The shared real-service fixture uses Unix-domain admission, not a fake hello/commit ack.
 describe.skipIf(process.platform === "win32")(
   "native inference through an actual worker process",
@@ -275,11 +276,7 @@ describe.skipIf(process.platform === "win32")(
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
       const registry = startupFor(descriptor, provider.baseUrl);
-      registry.config.models.push({
-        ...registry.config.models[0]!,
-        id: "other-worker-model",
-      });
-      registry.credentials[`${MODEL.provider}/other-worker-model`] = "synthetic-other-worker-key";
+      addSiblingModel(registry);
       const worker = await launch(descriptor, registry);
       const outcome = result(await worker.finish());
       expect(outcome).toMatchObject({
@@ -302,13 +299,10 @@ describe.skipIf(process.platform === "win32")(
       expect(provider.errors).toEqual([]);
       expect(provider.requests).toHaveLength(3);
       for (const request of provider.requests) {
-        expect(request.url).toBe("/v1/chat/completions");
-        expect(request.headers.authorization).toBe("Bearer " + LOCAL_KEY);
-        expect(request.headers["x-local-registry"]).toBe("worker-startup");
-        expect(request.body).toMatchObject({
-          model: MODEL.model,
-          max_completion_tokens: 173,
-          reasoning_effort: "low",
+        expect(request).toMatchObject({
+          url: "/v1/chat/completions",
+          headers: { authorization: "Bearer " + LOCAL_KEY, "x-local-registry": "worker-startup" },
+          body: { model: MODEL.model, max_completion_tokens: 173, reasoning_effort: "low" },
         });
       }
       expect(JSON.stringify(provider.requests[2]!.body.messages)).toContain("startupPresent");
@@ -354,11 +348,7 @@ describe.skipIf(process.platform === "win32")(
         const provider = await providerFixture();
         const descriptor = await localDescriptor();
         const startup = startupFor(descriptor, provider.baseUrl);
-        startup.config.models.push({
-          ...startup.config.models[0]!,
-          id: "other-worker-model",
-        });
-        startup.credentials[`${MODEL.provider}/other-worker-model`] = "synthetic-other-worker-key";
+        addSiblingModel(startup);
         if (scenario === "unknown model") {
           descriptor.assignment.modelRef = {
             ...descriptor.assignment.modelRef,
@@ -407,10 +397,7 @@ describe.skipIf(process.platform === "win32")(
     }, 40_000);
 
     it("cancels pending native HTTP and settles without submitting new transcript messages", async () => {
-      const provider = await providerFixture("pending");
-      const descriptor = await localDescriptor();
-      const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
-      await withinTest(provider.entered, activeTestSignal);
+      const { provider, worker } = await pendingWorker();
       const before = messages();
       const commitsBefore = owner().requestParams("worker.transcript.commit").length;
       expect(before.map((message) => message.role)).toEqual(["user"]);
@@ -437,10 +424,7 @@ describe.skipIf(process.platform === "win32")(
     }, 40_000);
 
     it("closes native provider HTTP during a held Gateway outage before revoked placement can readmit", async () => {
-      const provider = await providerFixture("pending");
-      const descriptor = await localDescriptor();
-      const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
-      await withinTest(provider.entered, activeTestSignal);
+      const { provider, worker } = await pendingWorker();
       const admitted = owner().admissions.length;
       const before = messages();
       const resume = owner().pauseConnections();
@@ -467,10 +451,7 @@ describe.skipIf(process.platform === "win32")(
     }, 40_000);
 
     it("fences a pending local producer after placement replacement without committing stale output", async () => {
-      const provider = await providerFixture("pending");
-      const descriptor = await localDescriptor();
-      const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
-      await withinTest(provider.entered, activeTestSignal);
+      const { provider, descriptor, worker } = await pendingWorker();
       const before = messages();
       const admitted = owner().admissions.length;
       const epoch = await owner().reclaimWithCredential(
