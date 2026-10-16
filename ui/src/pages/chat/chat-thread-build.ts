@@ -168,6 +168,7 @@ export function buildChatItems(
       queuedSends,
       handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
       handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+      props.initialTurnId ?? null,
     );
     return progress;
   };
