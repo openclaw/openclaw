@@ -4,8 +4,11 @@
  * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { collapseWhitespace as normalizeSummaryWhitespace } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
+function normalizeSummaryWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
 
 function truncateSummary(value: string, maxLen = 120, minWordBoundary = 48): string {
   if (value.length <= maxLen) {

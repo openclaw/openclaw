@@ -3,11 +3,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Checks string arrays without filtering, coercing, or copying their entries. */
-export function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
 /** Coerces object-like values to records, falling back to an empty record. */
 export function asRecord(value: unknown): Record<string, unknown> {
   return asOptionalObjectRecord(value) ?? {};

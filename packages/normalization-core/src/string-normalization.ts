@@ -1,10 +1,5 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
-/** Collapses whitespace runs and trims leading and trailing whitespace. */
-export function collapseWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
 export function containsAsciiControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

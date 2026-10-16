@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  collapseWhitespace,
   containsAsciiControlCharacter,
   filterStringEntries,
   normalizeAtHashSlug,
@@ -19,18 +18,6 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
-  it.each([
-    { value: "", expected: "" },
-    { value: " \t\r\n ", expected: "" },
-    { value: " \tFirst  second\n\rthird\t ", expected: "First second third" },
-    { value: "\u00a0First\ufeffsecond\u2028third\u2029", expected: "First second third" },
-    { value: "MiXeD punctuation!?", expected: "MiXeD punctuation!?" },
-    { value: " 🦞\n𝒜\t中文 ", expected: "🦞 𝒜 中文" },
-    { value: "a\u200bb", expected: "a\u200bb" },
-  ])("collapses whitespace without changing other text: $value", ({ value, expected }) => {
-    expect(collapseWhitespace(value)).toBe(expected);
-  });
-
   it.each([
     { label: "empty", value: "", expected: false },
     { label: "printable Unicode", value: "fix/a&b λ", expected: false },

@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import type {
   JsonValue,
@@ -105,7 +104,7 @@ function normalizeCodexCommand(value: JsonValue | undefined): string | undefined
   if (typeof value === "string") {
     return value;
   }
-  if (isStringArray(value)) {
+  if (Array.isArray(value) && value.every((part): part is string => typeof part === "string")) {
     return shellQuoteArgs(value);
   }
   return undefined;

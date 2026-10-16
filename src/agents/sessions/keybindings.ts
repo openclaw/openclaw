@@ -12,7 +12,7 @@ import {
   TUI_KEYBINDINGS,
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { getAgentDir } from "../config.js";
 
@@ -166,7 +166,7 @@ function parseKeybindingsConfig(
   for (const [key, binding] of Object.entries(rawConfig)) {
     if (typeof binding === "string") {
       config.set(key, binding as KeyId);
-    } else if (isStringArray(binding)) {
+    } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
       config.set(key, binding as KeyId[]);
     }
   }

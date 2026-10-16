@@ -2,7 +2,7 @@
  * Looks up model catalog entries and input capability support.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -54,7 +54,10 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
   }
   if (record.supportedReasoningEfforts === null) {
     projected.supportedReasoningEfforts = null;
-  } else if (isStringArray(record.supportedReasoningEfforts)) {
+  } else if (
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
+  ) {
     projected.supportedReasoningEfforts = [...record.supportedReasoningEfforts];
   }
   return Object.keys(projected).length > 0 ? projected : undefined;

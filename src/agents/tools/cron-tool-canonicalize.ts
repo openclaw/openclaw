@@ -1,5 +1,4 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
@@ -94,7 +93,9 @@ function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)
 }
 
 function isStringArrayOrNull(value: unknown): boolean {
-  return value === null || isStringArray(value);
+  return (
+    value === null || (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
 }
 
 function moveDefinedField(

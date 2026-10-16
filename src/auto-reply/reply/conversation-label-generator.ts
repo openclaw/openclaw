@@ -1,4 +1,3 @@
-import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createReasoningTagTextPartitioner } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import {
@@ -52,6 +51,12 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   utilityOnly?: boolean;
 };
 
+function resolvePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
 function resolveAttemptSelection(
   params: ConversationLabelParams & { agentId: string },
   attempt: ConversationLabelAttempt,
@@ -98,8 +103,8 @@ async function runLabelAttempts(
     normalizeLabel?: (label: string) => string | null;
   },
 ): Promise<string | null> {
-  const timeoutMs = floorPositiveFiniteNumber(params.timeoutMs) ?? TIMEOUT_MS;
-  const maxLength = floorPositiveFiniteNumber(params.maxLength) ?? DEFAULT_MAX_LABEL_LENGTH;
+  const timeoutMs = resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS);
+  const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
   const assertCurrent = () => {
     params.assertCurrent?.();
     params.operatorAuthority?.assertCurrent();

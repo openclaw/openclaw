@@ -1,8 +1,4 @@
-import {
-  asNonArrayRecord,
-  isRecord,
-  isStringArray,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
@@ -221,7 +217,8 @@ export function createPluginsTool(options?: {
           runtime?.committed === true &&
           typeof runtime.operationId === "string" &&
           typeof runtime.generation === "number" &&
-          isStringArray(runtime.pluginIds);
+          Array.isArray(runtime.pluginIds) &&
+          runtime.pluginIds.every((id) => typeof id === "string");
         const refresh = committed && runtimeRefresh.request();
         return {
           ...pluginsToolResult(
