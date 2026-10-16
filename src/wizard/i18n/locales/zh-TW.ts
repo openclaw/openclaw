@@ -50,6 +50,8 @@ export const zh_TW = {
       modelAlias: "模型別名（選填）",
       modelAliasPlaceholder: "例如 local、ollama",
       modelId: "模型 ID",
+      modelIdManual: "手動輸入模型 ID",
+      modelDiscoveryUnavailable: "無法從此端點探索模型。請檢查基礎 URL 和憑證，或手動輸入模型 ID。",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
       noAuthConfirm:

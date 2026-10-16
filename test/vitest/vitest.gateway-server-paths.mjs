@@ -253,6 +253,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-lifecycle-run-failure.test.ts",
   "src/gateway/session-lifecycle-source-authority.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
+  "src/gateway/session-lifecycle-state.worker.test.ts",
   "src/gateway/session-list-viewers.perf.test.ts",
   "src/gateway/session-message-drain.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",

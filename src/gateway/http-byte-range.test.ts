@@ -263,63 +263,86 @@ describe("resolveByteResponse", () => {
 });
 
 describe("Gateway byte response descriptor lifecycle", () => {
-  it("destroys the real file stream and closes its descriptor once when its HTTP client disconnects", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-stream-"));
-    const filePath = path.join(directory, "media.bin");
-    const body = Buffer.alloc(8 * 1024 * 1024, 7);
-    await fs.writeFile(filePath, body);
-    const handle = await fs.open(filePath, "r");
-    const closeHandle = vi.spyOn(handle, "close");
-    const createReadStream = vi.spyOn(handle, "createReadStream");
-    const { promise: responseClosed, resolve: resolveResponseClose } = createDeferred();
-    const server = http.createServer((_request, response) => {
-      const owner = createGatewayByteStream(response, handle, () => {
-        response.statusCode = 404;
-        response.end("not found");
-      });
-      const byteResponse = resolveByteResponse({
-        file: { size: body.byteLength },
-        method: "GET",
-      });
-      writeByteHeaders(response, byteResponse);
-      void owner.pipe(byteResponse, "GET");
-      response.once("close", resolveResponseClose);
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected test HTTP server to bind to a TCP port");
-    }
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const request = http.get({ host: "127.0.0.1", port: address.port }, (response) => {
-          response.once("data", () => {
-            response.destroy();
-            resolve();
-          });
+  it.each(["client disconnect", "read revocation"] as const)(
+    "closes the actual stream and descriptor after %s",
+    async (reason) => {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-stream-"));
+      const filePath = path.join(directory, "media.bin");
+      const body = Buffer.alloc(8 * 1024 * 1024, 7);
+      await fs.writeFile(filePath, body);
+      const handle = await fs.open(filePath, "r");
+      const closeHandle = vi.spyOn(handle, "close");
+      const createReadStream = vi.spyOn(handle, "createReadStream");
+      const { promise: responseClosed, resolve: resolveResponseClose } = createDeferred();
+      const server = http.createServer((_request, response) => {
+        const owner = createGatewayByteStream(response, handle, () => {
+          response.statusCode = 404;
+          response.end("not found");
         });
-        request.once("error", reject);
+        const byteResponse = resolveByteResponse({
+          file: { size: body.byteLength },
+          method: "GET",
+        });
+        writeByteHeaders(response, byteResponse);
+        let chunks = 0;
+        void owner.pipe(
+          byteResponse,
+          "GET",
+          undefined,
+          reason === "read revocation"
+            ? {
+                assertCurrent() {
+                  if (++chunks > 1) {
+                    throw new Error("Synthetic reader revoked");
+                  }
+                },
+              }
+            : undefined,
+        );
+        response.once("close", resolveResponseClose);
       });
-      await responseClosed;
-      await vi.waitFor(() => {
-        expect(closeHandle).toHaveBeenCalledOnce();
-        expect(handle.fd).toBe(-1);
-      });
-
-      const streamedFile = createReadStream.mock.results[0]?.value;
-      expect(streamedFile?.destroyed).toBe(true);
-      expect(streamedFile?.readableEnded).toBe(false);
-    } finally {
-      server.closeAllConnections();
       await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+        server.listen(0, "127.0.0.1", resolve);
       });
-      await fs.rm(directory, { recursive: true, force: true });
-    }
-  });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected test HTTP server to bind to a TCP port");
+      }
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const request = http.get({ host: "127.0.0.1", port: address.port }, (response) => {
+            response.once("data", () => {
+              if (reason === "client disconnect") {
+                response.destroy();
+                resolve();
+              }
+            });
+            if (reason === "read revocation") {
+              response.once("aborted", resolve);
+              response.once("end", () => reject(new Error("Revoked transfer completed")));
+            }
+          });
+          request.once("error", reject);
+        });
+        await responseClosed;
+        await vi.waitFor(() => {
+          expect(closeHandle).toHaveBeenCalledOnce();
+          expect(handle.fd).toBe(-1);
+        });
+
+        const streamedFile = createReadStream.mock.results[0]?.value;
+        expect(streamedFile?.destroyed).toBe(true);
+        expect(streamedFile?.readableEnded).toBe(false);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("closes a newly opened descriptor when its response ended before streaming began", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-ended-"));

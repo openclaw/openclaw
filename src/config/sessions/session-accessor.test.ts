@@ -2706,55 +2706,73 @@ describe("session accessor seam", () => {
     expect(predicateContext).not.toHaveProperty("sessionEntry");
   });
 
-  it("rejects a guarded transcript turn when same-session lifecycle ownership changes", async () => {
-    const scope = transcriptScope("session-same-owner", "agent:main:same-owner");
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      abortedLastRun: true,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "interrupted",
-      updatedAt: 10,
-    });
-    const stored = loadSessionEntry(scope);
-    if (!stored) {
-      throw new Error("expected guarded session");
-    }
-    const expectedSessionState = buildRestartRecoveryExpectedState(stored);
-    const predicateStarted = createDeferred();
-    const predicateGate = createDeferred();
-    const pendingTurn = persistSessionTranscriptTurn(scope, {
-      expectedSessionId: scope.sessionId,
-      expectedSessionState,
-      messages: [
-        {
-          message: { role: "assistant", content: "stale recovery notice", timestamp: 100 },
-          shouldAppend: async () => {
-            predicateStarted.resolve();
-            await predicateGate.promise;
-            return true;
+  it.each(["lifecycle ownership", "pending final delivery"])(
+    "rejects a guarded transcript turn when same-session %s changes",
+    async (change) => {
+      const scope = transcriptScope("session-same-owner", "agent:main:same-owner");
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        pendingFinalDelivery,
+        status: "interrupted",
+        updatedAt: 10,
+      });
+      const stored = loadSessionEntry(scope);
+      if (!stored) {
+        throw new Error("expected guarded session");
+      }
+      const expectedSessionState = {
+        ...buildRestartRecoveryExpectedState(stored),
+        pendingFinalDelivery: stored.pendingFinalDelivery ?? null,
+      };
+      const predicateStarted = createDeferred();
+      const predicateGate = createDeferred();
+      const pendingTurn = persistSessionTranscriptTurn(scope, {
+        expectedSessionId: scope.sessionId,
+        expectedSessionState,
+        sessionLifecyclePatch: { pendingFinalDelivery: undefined },
+        messages: [
+          {
+            message: { role: "assistant", content: "stale recovery notice", timestamp: 100 },
+            shouldAppend: async () => {
+              predicateStarted.resolve();
+              await predicateGate.promise;
+              return true;
+            },
           },
-        },
-      ],
-      touchSessionEntry: true,
-      updateMode: "file-only",
-    });
+        ],
+        touchSessionEntry: true,
+        updateMode: "file-only",
+      });
 
-    await predicateStarted.promise;
-    replaceSessionEntrySync(scope, {
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "new-run",
-      restartRecoveryDeliverySourceRunId: "new-run",
-      sessionId: scope.sessionId,
-      status: undefined,
-      updatedAt: 20,
-    });
-    predicateGate.resolve();
-    const result = await pendingTurn;
+      await predicateStarted.promise;
+      const replacement: SessionEntry =
+        change === "pending final delivery"
+          ? {
+              ...stored,
+              pendingFinalDelivery: { ...pendingFinalDelivery, intentId: "replacement-intent" },
+            }
+          : {
+              abortedLastRun: false,
+              restartRecoveryDeliveryRunId: "new-run",
+              restartRecoveryDeliverySourceRunId: "new-run",
+              sessionId: scope.sessionId,
+              status: undefined,
+              updatedAt: 20,
+            };
+      replaceSessionEntrySync(scope, replacement);
+      predicateGate.resolve();
+      const result = await pendingTurn;
 
-    expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
-  });
+      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery).toEqual(
+        replacement.pendingFinalDelivery,
+      );
+    },
+  );
 
   it("keeps the persisted transcript owner when a caller supplies a stale session key", async () => {
     const sessionId = "session-canonical-owner";

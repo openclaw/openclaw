@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable, requireRecord } from "./chat-flow.test-support.ts";
+import { composerStore, composerStorePage } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
@@ -18,14 +19,11 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const withStore = composerStorePage(suite);
+
 suite.define(() => {
   it("captures a restore baseline before native storage yields to a new edit", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const storeHandle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+    await withStore(async ({ page, store: storeHandle }) => {
       const persistenceHandle = await page.evaluateHandle<
         typeof import("../pages/chat/durable-composer-persistence.ts")
       >('import("/src/pages/chat/durable-composer-persistence.ts")');
@@ -36,11 +34,7 @@ suite.define(() => {
             recoveryScope: "restore-order-owner",
             scopeKey: "restore-order-draft",
           };
-          const written = await store.writeDurableComposerDraft(
-            scope,
-            { revision: 10, text: "Older saved draft", attachments: [] },
-            { expectedRevision: 0, writeId: "stored-draft" },
-          );
+          const written = await store.seed(scope, "Older saved draft", 10, "stored-draft");
           if (written.status !== "persisted") {
             throw new Error("failed to seed restore-order draft");
           }
@@ -103,19 +97,14 @@ suite.define(() => {
         route.fulfill({ contentType: "text/html", body: "Composer storage recovery" }),
       );
       await page.goto(`${suite.server.baseUrl}composer-storage-reopen`);
-      const draftStore = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const draftStore = await composerStore(page);
       const scope = {
         gatewayOwner: "reopen-gateway",
         recoveryScope: "reopen-owner",
         scopeKey: "chat:v3:agent:main:reopen\u0000agent:main",
       };
       expect(
-        await draftStore.evaluate(
-          (store, destination) => store.prepareDurableComposerRecovery(destination),
-          scope,
-        ),
+        await draftStore.evaluate((store, destination) => store.prepare(destination), scope),
       ).toEqual({ status: "ready", entries: [] });
       const database = await page.evaluateHandle<
         typeof import("../lib/chat/control-ui-database.runtime.ts")
@@ -139,13 +128,14 @@ suite.define(() => {
         await protocol.detach();
       }
       const result = await draftStore.evaluate(async (store, destination) => {
-        const recovered = await store.prepareDurableComposerRecovery(destination);
-        const written = await store.writeDurableComposerDraft(
+        const recovered = await store.prepare(destination);
+        const written = await store.seed(
           destination,
-          { revision: 1, text: "Draft after browser storage recovery", attachments: [] },
-          { expectedRevision: 0, writeId: "after-reopen" },
+          "Draft after browser storage recovery",
+          1,
+          "after-reopen",
         );
-        return { recovered, written, read: await store.readDurableComposerDraft(destination) };
+        return { recovered, written, read: await store.read(destination) };
       }, scope);
       expect(result).toMatchObject({
         recovered: { status: "ready", entries: [] },
@@ -398,11 +388,7 @@ suite.define(() => {
             sessionStorage.setItem(key, value);
             const component = Object.assign(
               document.createElement("openclaw-chat-outbox-recovery"),
-              {
-                host,
-                identity: "unchanged-route-and-owner",
-                id: "recovery-fence-fixture",
-              },
+              { host, identity: "unchanged-route-and-owner", id: "recovery-fence-fixture" },
             );
             component.style.cssText =
               "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
@@ -421,12 +407,6 @@ suite.define(() => {
             await component.updateComplete;
           });
           expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(0);
-          expect(
-            await notice
-              .locator(".chat-outbox-recovery-row")
-              .getByText("Retained confirmation draft", { exact: true })
-              .count(),
-          ).toBe(0);
           expect(await restore.count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
           expect(await page.evaluate((key) => sessionStorage.getItem(key), legacyKey)).toBe(
@@ -512,32 +492,19 @@ suite.define(() => {
   );
 
   it("migrates an identifiable draft by its captured key after the configured main key changes", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const handle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+    await withStore(async ({ page, store: handle }) => {
       const result = await page.evaluate(async (store) => {
         const owner = { gatewayOwner: "main-key-change", recoveryScope: "credential" };
         const legacy = { ...owner, scopeKey: "agent:main:main\u0000agent:main" };
-        await store.writeDurableComposerDraft(
-          legacy,
-          {
-            revision: 10,
-            text: "original main draft",
-            attachments: [],
-          },
-          { expectedRevision: 0, writeId: "original" },
-        );
+        await store.seed(legacy, "original main draft", 10, "original");
         // Migration has no current-defaults input: captured keys own the transfer.
-        await store.prepareDurableComposerRecovery(owner);
+        await store.prepare(owner);
         return {
-          original: await store.readDurableComposerDraft({
+          original: await store.read({
             ...legacy,
             scopeKey: `chat:v3:${legacy.scopeKey}`,
           }),
-          reinterpreted: await store.readDurableComposerDraft({
+          reinterpreted: await store.read({
             ...owner,
             scopeKey: "chat:v3:agent:main:workspace\u0000agent:main",
           }),
@@ -552,44 +519,21 @@ suite.define(() => {
   });
 
   it("honors newer exact-target draft tombstones without retiring ambiguous legacy data", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}settings`);
-      const handle = await page.evaluateHandle<
-        typeof import("../lib/chat/composer-draft-store.runtime.ts")
-      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+    await withStore(async ({ page, store: handle }) => {
       const result = await page.evaluate(async (store) => {
         const owner = { gatewayOwner: "tombstone-owner", recoveryScope: "credential" };
         const sources = ["agent:main:notes", "agent:main:newer", "global"].map((key) =>
-          Object.assign({}, owner, {
-            scopeKey: `${key}\u0000agent:main`,
-          }),
+          Object.assign({}, owner, { scopeKey: `${key}\u0000agent:main` }),
         );
         for (const [index, source] of sources.entries()) {
-          await store.writeDurableComposerDraft(
-            source,
-            {
-              revision: 10,
-              text: `legacy ${index}`,
-              attachments: [],
-            },
-            { expectedRevision: 0, writeId: `legacy-${index}` },
-          );
+          await store.seed(source, `legacy ${index}`, 10, `legacy-${index}`);
           const destination = { ...source, scopeKey: `chat:v3:${source.scopeKey}` };
-          await store.writeDurableComposerDraft(
-            destination,
-            {
-              revision: index === 1 ? 5 : 20,
-              text: "",
-              attachments: [],
-            },
-            { expectedRevision: 0, writeId: `clear-${index}` },
-          );
+          await store.seed(destination, "", index === 1 ? 5 : 20, `clear-${index}`);
         }
-        const recovery = await store.prepareDurableComposerRecovery(owner);
+        const recovery = await store.prepare(owner);
         return {
           entries: recovery.status === "ready" ? recovery.entries.map((entry) => entry.text) : null,
-          sources: await Promise.all(sources.map((scope) => store.readDurableComposerDraft(scope))),
+          sources: await Promise.all(sources.map((scope) => store.read(scope))),
         };
       }, handle);
       expect(result.entries).toEqual(["legacy 1", "legacy 2"]);

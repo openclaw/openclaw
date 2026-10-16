@@ -417,10 +417,15 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `94f8f5ffec48f47b3b3fb84891ef5ced046f5814` with WebKit
+The pinned build pairs Bun `c45839085e6ceaf9e4d217507c5e0ddbb6132147` with WebKit
 `01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261014-94f8f5ffec-webkit-01f208ae7a`.
-This build measures CPU profiles over the full monotonic capture interval, drains
+`openclaw-v1.4.3-20261015-c45839085e-webkit-01f208ae7a`.
+This build sends TLS SNI only for an explicit, nonempty `servername`, completes
+missing cached function bytecode in place, and uses GreedyDual-Size eviction at
+the same 256 MiB per-VM cache budget. Completed Workers release user listeners
+while retaining Bun's internal `newListener` and `removeListener` hooks;
+`eventNames()` therefore still exposes those two internal events after exit.
+It measures CPU profiles over the full monotonic capture interval, drains
 Worker stdio before exit, preserves unpaired UTF-16 surrogates in `node:path`, and
 waits for the final socket write before setting `ServerResponse.writableFinished`.
 It cancels destroyed child stdin only when a write is pending, exposes native HTTPS

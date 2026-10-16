@@ -94,7 +94,7 @@ extensions/clawrouter/tool-schemas.ts	1
 extensions/clawrouter/usage.ts	1
 extensions/clickclack/src/access.ts	2
 extensions/clickclack/src/channel-config.ts	5
-extensions/clickclack/src/channel.ts	4
+extensions/clickclack/src/channel.ts	3
 extensions/clickclack/src/command-menu.ts	1
 extensions/clickclack/src/discussions/service-open.ts	1
 extensions/clickclack/src/discussions/service.ts	1
@@ -108,7 +108,7 @@ extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
-extensions/clickclack/src/setup-verify.ts	4
+extensions/clickclack/src/setup-verify.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-notifications.ts	1
@@ -767,7 +767,6 @@ extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1
-extensions/slack/src/http/plugin-routes.ts	1
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
@@ -1961,7 +1960,6 @@ src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	1
 src/gateway/session-history-state.ts	2
-src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-recovery-service.ts	1
 src/gateway/session-transcript-derived-readers.ts	1
 src/gateway/sessions-history-http.ts	1
@@ -2171,7 +2169,7 @@ src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
-src/media/media-facts.ts	16
+src/media/media-facts.ts	14
 src/media/playback-transcode.ts	1
 src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
@@ -2287,7 +2285,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	2
-src/plugins/hooks.ts	9
+src/plugins/hooks.ts	8
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4

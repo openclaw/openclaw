@@ -35,6 +35,7 @@ describe("write-unified-entry-dts", () => {
         "src/infra/runtime-process-manifest.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
+        "src/state/postgres-schema.generated/sqlite-state-catalogs.json",
         "src/shared/freebsd-process-identity.ts",
         "src/infra/update-managed-service-handoff-native-loader.ts",
         "src/infra/package-update-activation-native-loader.ts",

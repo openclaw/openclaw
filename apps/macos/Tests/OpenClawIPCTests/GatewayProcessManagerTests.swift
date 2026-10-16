@@ -5,6 +5,7 @@ import Synchronization
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
+@testable import OpenClawNativeState
 
 @Suite(.serialized)
 @MainActor
@@ -2552,6 +2553,80 @@ struct GatewayProcessManagerTests {
             #expect(manager._testControlChannelRefreshForces().last == true)
             #expect(manager.status == .running(details: "pid 4242"))
 
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func `first run waits for persisted identity maintenance within its readiness budget`(
+        maintenanceFinishes: Bool) async throws
+    {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-identity-maintenance-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        let databaseURL = stateDir.appendingPathComponent("state/openclaw.sqlite")
+        let ownerURL = try OpenClawNativeStateAdmission.processOwnerURL(databaseURL: databaseURL, uid: getuid())
+        try FileManager.default.createDirectory(
+            at: ownerURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "pid": getpid(), "createdAt": "2026-10-16T00:00:00.000Z",
+            "configPath": stateDir.appendingPathComponent("openclaw.json").path,
+            "role": "sqlite-maintenance", "stateOwnerKind": "schema",
+        ]).write(to: ownerURL)
+
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let session = GatewayTestWebSocketSession { self.gatewayTask(healthSucceedsAfter: 0) }
+            let probes = Mutex(0)
+            let connection = GatewayConnection(
+                endpointProvider: {
+                    let probe = probes.withLock { $0 += 1
+                        return $0
+                    }
+                    if probe == 2 {
+                        // The first real handshake could not read or create an identity.
+                        #expect(session.latestTask()?.snapshotSendCount() == 0)
+                        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+                        if maintenanceFinishes { try FileManager.default.removeItem(at: ownerURL) }
+                    }
+                    return .init(config: (url: url, token: nil, password: nil), routeAuthority: nil)
+                },
+                supportsSharedEndpointRecovery: false,
+                activationBindingKeyProvider: { nil },
+                sessionBox: WebSocketSessionBox(session: session))
+            let manager = GatewayProcessManager()
+            manager.setTestingConnection(connection)
+            manager.setTestingSkipControlChannelRefresh(true)
+            manager.desiredActive = true
+            manager.setTestingStatus(.starting)
+            manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+            defer { manager.desiredActive = false }
+
+            var dashboardOpened = false
+            var completed = false
+            let fallback = await DeviceIdentityStore.withStateDirectory(stateDir) {
+                await OnboardingFirstRun.run(
+                    selectLocal: {}, prepareRuntime: {},
+                    startGateway: {
+                        guard await manager.waitForGatewayReady(timeout: 1) else {
+                            throw NSError(domain: "identity-maintenance-test", code: 1)
+                        }
+                    },
+                    supportsAutomaticSetup: { true },
+                    openDashboard: { dashboardOpened = true },
+                    markComplete: { completed = true })
+            }
+            #expect(probes.withLock { $0 } >= 2)
+            #expect(dashboardOpened == maintenanceFinishes)
+            #expect(completed == maintenanceFinishes)
+            #expect((fallback == nil) == maintenanceFinishes)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(FileManager.default.fileExists(atPath: databaseURL.path) == maintenanceFinishes)
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }

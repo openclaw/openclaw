@@ -21,6 +21,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as sessionEntries from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -575,10 +576,10 @@ it.each(
     const replacementRunId = `${runId}-replacement`;
     const writeEntered = createDeferred();
     const releaseWrite = createDeferred();
-    const patch = sessionAccessor.patchSessionEntryTarget;
+    const patch = sessionEntries.applySessionEntryTargetOperation;
     const heldWrite = retireWhilePersisting
       ? vi
-          .spyOn(sessionAccessor, "patchSessionEntryTarget")
+          .spyOn(sessionEntries, "applySessionEntryTargetOperation")
           .mockImplementationOnce(async (...args) => {
             writeEntered.resolve();
             await releaseWrite.promise;

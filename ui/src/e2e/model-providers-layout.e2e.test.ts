@@ -114,6 +114,7 @@ suite.define(() => {
           expect(rows.map((row) => row.role)).toEqual([
             "Model",
             "Utility Model",
+            "Utility Fallback Model",
             "Decision Model",
             "Fallback Model",
             "Thinking",

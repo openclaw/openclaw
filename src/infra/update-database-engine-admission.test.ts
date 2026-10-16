@@ -8,6 +8,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertUpdateDatabaseEngineContexts } from "./update-database-engine-admission.js";
 
+vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../snapshot/database-backup.js")>()),
+  readPostgresBackupFamily: vi.fn(async () => "workboard"),
+}));
+
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
 async function store(engine: "sqlite" | "postgres", enabled = true) {
@@ -57,7 +62,7 @@ it.each([
 it("admits a matching PostgreSQL target without changing its anchor", async () => {
   const { file, context } = await store("postgres");
   const before = await fs.readFile(file);
-  await assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"]);
+  await assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]);
   expect(await fs.readFile(file)).toEqual(before);
 });
 
@@ -141,15 +146,23 @@ it("protects selected PostgreSQL families before any anchor has been created", a
     ...context,
     config: {
       ...context.config,
-      database: { engine: "postgres" },
+      database: {
+        engine: "postgres",
+        postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
+      },
     } satisfies OpenClawConfig,
   };
   await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
     /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
   );
+  // A homogeneous selection passes the mixed-engine guard, but still needs capture support.
   await expect(
-    assertUpdateDatabaseEngineContexts([postgres], ["sqlite", "postgres"]),
-  ).resolves.toBeUndefined();
+    assertUpdateDatabaseEngineContexts(
+      [postgres],
+      ["sqlite", "postgres"],
+      ["state", "agent", "workboard", "logbook", "team-reports"],
+    ),
+  ).rejects.toThrow(/PostgreSQL agent capture requires agent-family port and exact-backup support/);
 });
 
 it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {
@@ -180,7 +193,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     try {
       await expect(fs.lstat(marker)).rejects.toMatchObject({ code: "EACCES" });
       await expect(
-        assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"]),
+        assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]),
       ).resolves.toBeUndefined();
       await expect(assertUpdateDatabaseEngineContexts([context], ["sqlite"])).rejects.toThrow(
         `target does not support the PostgreSQL store at ${file}`,

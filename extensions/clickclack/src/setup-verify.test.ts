@@ -8,9 +8,10 @@ const mocks = vi.hoisted(() => ({
   workspaces: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
-  callGatewayFromCli: mocks.callGatewayFromCli,
-}));
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>();
+  return { ...actual, callGatewayFromCli: mocks.callGatewayFromCli };
+});
 
 vi.mock("./http-client.js", () => ({
   createClickClackClient: (options: unknown) => {
@@ -146,6 +147,7 @@ describe("ClickClack post-write setup verification", () => {
             name: "GatewayTransportError",
             kind: "closed",
             code: 1006,
+            connectionDetails: { url: "ws://127.0.0.1:18789", message: "Local Gateway" },
           }),
         ),
       expected: "Start OpenClaw to connect: openclaw gateway",

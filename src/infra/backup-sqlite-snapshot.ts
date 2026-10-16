@@ -2,6 +2,7 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -202,6 +203,10 @@ export async function discoverBackupDatabasePaths(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
+  if (isMainThread && params.config.database?.engine === "postgres") {
+    const { preparePostgresBackupDiscovery } = await import("./backup-database-discovery.js");
+    return (await preparePostgresBackupDiscovery(params)).paths;
+  }
   const discovered = await collectStateDatabasePaths(params);
   const paths = [...discovered.values()].flatMap((database) => database.spellings);
   const plugins = resolvePluginMetadataSnapshot(params);

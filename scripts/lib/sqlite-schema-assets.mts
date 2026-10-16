@@ -2,13 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TsdownPlugin } from "tsdown";
 
+const schemaAssetDirectory = "src/state/postgres-schema.generated";
+
+/** Include lazy catalogs in build fingerprints and reduced source checkouts. */
+export function resolveSqliteSchemaAssetInputs(rootDir = process.cwd()): string[] {
+  const directory = fs.realpathSync(path.resolve(rootDir, schemaAssetDirectory));
+  return fs
+    .readdirSync(directory)
+    .filter((name) => /^sqlite-[a-z-]+-catalogs\.json$/u.test(name))
+    .toSorted()
+    .map((name) => path.join(directory, name));
+}
+
 /** Keep diagnostic catalogs lazy in installed packages and sealed worker archives. */
 export function createSqliteSchemaAssetsPlugin(
   rootDir = process.cwd(),
   recordInput?: (file: string) => void,
   options: { workerChunks?: boolean } = {},
 ): TsdownPlugin {
-  const directory = fs.realpathSync(path.resolve(rootDir, "src/state/postgres-schema.generated"));
+  const directory = fs.realpathSync(path.resolve(rootDir, schemaAssetDirectory));
   return {
     name: "openclaw:sqlite-schema-assets",
     transform(code, id) {

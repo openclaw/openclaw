@@ -21,7 +21,7 @@ export type SessionMessageRewriteSnapshot = {
 };
 export type SessionMessageRewriteCommitted = {
   kind: "session-message-rewrite";
-  result: { generation: string; messageId: string; message: unknown } | null;
+  result: { generation: string; messageId: string; message: unknown; unchanged?: true } | null;
 };
 
 export type SessionTranscriptEventCommitted = {

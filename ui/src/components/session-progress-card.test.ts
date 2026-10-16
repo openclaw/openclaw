@@ -13,7 +13,7 @@ vi.mock("./markdown.ts", async () => {
   return { ...actual, toSanitizedMarkdownHtml: vi.fn(actual.toSanitizedMarkdownHtml) };
 });
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
 const containers: HTMLDivElement[] = [];
 function createContainer() {

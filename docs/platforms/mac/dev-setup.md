@@ -438,6 +438,11 @@ If the app crashes when you try to allow **Speech Recognition** or
 
 ### Gateway "Starting..." indefinitely
 
+During a cold start, the Gateway can briefly hold the state database for schema
+maintenance. The app waits for that custody to finish within its existing
+readiness timeout, then continues automatic setup. It does not replace the
+Gateway or create a new device identity while maintenance is active.
+
 Check whether a zombie process holds the port:
 
 ```bash

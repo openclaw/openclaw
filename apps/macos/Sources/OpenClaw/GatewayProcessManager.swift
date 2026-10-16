@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OpenClawKit
+import OpenClawNativeState
 
 private struct GatewayHealthProbeTimeout: LocalizedError, Sendable {
     let timeoutMs: Double
@@ -1094,6 +1095,10 @@ extension GatewayProcessManager {
     }
 
     private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
+        // Startup schema custody blocks the local identity read before the handshake.
+        if let stateError = error as? OpenClawNativeStateError, stateError.code == .busy {
+            return .retryWithoutRepair
+        }
         if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }
         if self.probeFailureShowsStartupProgress(error) { return .retryWithoutRepair }
         if error is GatewayHealthProbeTimeout { return .retryWithRepair }
