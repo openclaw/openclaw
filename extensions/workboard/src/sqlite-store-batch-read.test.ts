@@ -135,7 +135,7 @@ describe("workboard sqlite batch card persistence", () => {
         title: "Replaced children",
         updatedAt: original.updatedAt + 1,
         labels: children.map((card) => card.labels[0]!),
-        events: children.flatMap((card) => card.events),
+        events: children.flatMap((card) => card.events!),
         metadata: {
           ...original.metadata,
           attempts: children.flatMap((card) => card.metadata!.attempts!),
@@ -144,16 +144,14 @@ describe("workboard sqlite batch card persistence", () => {
           proof: children.flatMap((card) => card.metadata!.proof!),
           artifacts: children.flatMap((card) => card.metadata!.artifacts!),
           attachments: children.flatMap((card) =>
-            card.metadata!.attachments!.map((attachment) => ({
-              ...attachment,
-              cardId: original.id,
-            })),
+            card.metadata!.attachments!.map((attachment) =>
+              Object.assign(attachment, { cardId: original.id }),
+            ),
           ),
           diagnostics: children.flatMap((card) =>
-            card.metadata!.diagnostics!.map((diagnostic) => ({
-              ...diagnostic,
-              detail: card.title,
-            })),
+            card.metadata!.diagnostics!.map((diagnostic) =>
+              Object.assign(diagnostic, { detail: card.title }),
+            ),
           ),
           notifications: children.flatMap((card) => card.metadata!.notifications!),
           workerLogs: children.flatMap((card) => card.metadata!.workerLogs!),
@@ -193,7 +191,7 @@ describe("workboard sqlite batch card persistence", () => {
         ).resolves.toBe(true);
         await expect(stores.cards.lookup(original.id)).resolves.toEqual({
           version: 1,
-          card: cleared,
+          card: { ...cleared, events: undefined },
         });
       } finally {
         await stores.close();
