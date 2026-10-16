@@ -374,6 +374,7 @@ export async function captureGitPostgresBackup(params: {
   const manifest: GitBackupManifest = {
     schemaVersion: 2,
     identity: params.identity,
+    postgresSource: { storeId: exported.source.storeId, namespace: exported.source.namespace },
     userVersion: exported.exportSchemaVersion,
     ...redaction,
     tables: {},

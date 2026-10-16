@@ -403,6 +403,9 @@ the repository private. Git database backups do not replace file/config backups.
 
 `openclaw backup git verify` checks PostgreSQL export hashes and the matched
 anchor locally. It does not connect to PostgreSQL or create a scratch namespace.
+New Git captures also bind the source store to the scope manifest, so verification
+and restore reject a capsule copied from another store. Older captures remain
+readable; keep their complete scope artifacts together when editing Git history.
 SQLite verification retains its private restore and integrity checks.
 
 To recover these scopes:

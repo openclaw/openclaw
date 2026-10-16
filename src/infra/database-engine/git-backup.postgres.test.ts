@@ -9,7 +9,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createGitBackup, verifyGitBackupRef } from "../../snapshot/git-backup.js";
+import {
+  createGitBackup,
+  restoreGitBackupRef,
+  verifyGitBackupRef,
+} from "../../snapshot/git-backup.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { requireGitCommand } from "../git-exec.js";
@@ -340,13 +344,19 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     ).toEqual(extras.toSorted());
   }, 120_000);
 
-  it("verifies matched artifacts without creating server namespaces, including corrupt artifacts", async () => {
+  it("verifies without namespaces, restores legacy exports, and rejects swapped or corrupt capsules", async () => {
     const repositoryPath = path.join(root, "verify-repository");
-    const identity = { role: "generic", id: "workboard" } as const;
+    const identity = { role: "global" } as const;
     await createGitBackup({
       repositoryPath,
       stateDir,
-      databases: [{ path: workboard, identity }],
+      databases: [
+        { path: shared, identity },
+        {
+          path: path.join(stateDir, "matrix/accounts/two/state/openclaw.sqlite"),
+          identity: { role: "generic", id: "retained-state" },
+        },
+      ],
       gitEnv,
     });
     const before = (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows;
@@ -354,17 +364,67 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     const after = (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows;
     expect(after).toEqual(before);
     expect(verified.manifest.identity).toEqual(identity);
-    await fs.appendFile(
-      path.join(repositoryPath, "stores/workboard/postgres/database.sqlite"),
-      "corrupt",
+
+    const manifestPath = path.join(repositoryPath, "global/manifest.json");
+    const originalManifest = await fs.readFile(manifestPath, "utf8");
+    const legacyManifest: Record<string, unknown> = JSON.parse(originalManifest);
+    await fs.writeFile(manifestPath, JSON.stringify({ ...legacyManifest, postgresSource: null }));
+    await requireGitCommand(repositoryPath, ["add", "."]);
+    await requireGitCommand(repositoryPath, ["commit", "-m", "malformed binding fixture"], {
+      env: gitEnv,
+    });
+    await expect
+      .soft(verifyGitBackupRef({ repositoryPath, identity }))
+      .rejects.toThrow("unsupported fields");
+    delete legacyManifest.postgresSource;
+    await fs.writeFile(manifestPath, JSON.stringify(legacyManifest));
+    await requireGitCommand(repositoryPath, ["add", "."]);
+    await requireGitCommand(repositoryPath, ["commit", "-m", "legacy fixture"], {
+      env: gitEnv,
+    });
+    expect((await verifyGitBackupRef({ repositoryPath, identity })).manifest).not.toHaveProperty(
+      "postgresSource",
     );
+    const legacyTarget = path.join(root, "legacy-restored.sqlite");
+    await restoreGitBackupRef({ repositoryPath, identity, targetPath: legacyTarget });
+    {
+      using anchor = openNodeSqliteDatabase(legacyTarget, { readOnly: true });
+      expect(anchor.prepare("SELECT engine FROM openclaw_engine_anchor").get()?.engine).toBe(
+        "postgres",
+      );
+    }
+
+    await fs.writeFile(manifestPath, originalManifest);
+    await fs.cp(
+      path.join(repositoryPath, "stores/retained-state/postgres"),
+      path.join(repositoryPath, "global/postgres"),
+      { recursive: true },
+    );
+    await requireGitCommand(repositoryPath, ["add", "."]);
+    await requireGitCommand(repositoryPath, ["commit", "-m", "swapped capsule fixture"], {
+      env: gitEnv,
+    });
+    const beforeInvalid = (await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname"))
+      .rows;
+    await expect
+      .soft(verifyGitBackupRef({ repositoryPath, identity }))
+      .rejects.toThrow("belongs to a different store");
+    const targetPath = path.join(root, "mismatched-restored.sqlite");
+    await expect
+      .soft(restoreGitBackupRef({ repositoryPath, identity, targetPath }))
+      .rejects.toThrow("belongs to a different store");
+    await expect.soft(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect
+      .soft((await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows)
+      .toEqual(beforeInvalid);
+    await fs.appendFile(path.join(repositoryPath, "global/postgres/database.sqlite"), "corrupt");
     await requireGitCommand(repositoryPath, ["add", "."]);
     await requireGitCommand(repositoryPath, ["commit", "-m", "corrupt fixture"], { env: gitEnv });
     await expect(verifyGitBackupRef({ repositoryPath, identity })).rejects.toThrow(
       "artifact verification failed",
     );
     expect((await client.query("SELECT nspname FROM pg_namespace ORDER BY nspname")).rows).toEqual(
-      before,
+      beforeInvalid,
     );
   }, 120_000);
 });

@@ -532,6 +532,11 @@ Use `--store <id>` for plugin and additional-root scopes recorded under `stores/
 in the repository. Choose exactly one of `--global`, `--agent <id>`, or
 `--store <id>` for verification or restore.
 
+New PostgreSQL Git captures bind the source store to the scope manifest;
+verification and restore reject a capsule copied from another store. Older
+captures remain readable without this binding, so keep their complete scope
+artifacts together when editing Git history.
+
 Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
 
 Git backup creation, restore, and verification stream table data instead of

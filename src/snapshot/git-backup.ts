@@ -564,9 +564,10 @@ export async function verifyGitBackupRef(params: {
     }
     const targetPath = scratch.path("database.sqlite");
     if (manifest.schemaVersion === 2) {
-      await createLocalSnapshotProvider({ repositoryPath: materialized.path }).verify({
-        path: path.join(materialized.path, "postgres"),
-      });
+      await createLocalSnapshotProvider({
+        repositoryPath: materialized.path,
+        expectedPostgresSource: manifest.postgresSource,
+      }).verify({ path: path.join(materialized.path, "postgres") });
       return {
         manifest,
         targetPath,
