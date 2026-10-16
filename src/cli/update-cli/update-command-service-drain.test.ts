@@ -65,7 +65,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ready(): GatewaySuspendPrepareResult {
+function ready(): Extract<GatewaySuspendPrepareResult, { status: "ready" }> {
   return {
     status: "ready",
     suspensionId: "resident-suspension",
@@ -80,7 +80,7 @@ function draining(
   kind: GatewaySuspendBlocker["kind"],
   message: string,
   retryAfterMs = 100,
-): GatewaySuspendPrepareResult {
+): Extract<GatewaySuspendPrepareResult, { status: "draining" }> {
   return {
     status: "draining",
     suspensionId: "resident-suspension",
