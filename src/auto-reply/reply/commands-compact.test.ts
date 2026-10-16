@@ -23,6 +23,23 @@ const compactCommandConfig: OpenClawConfig = {
   channels: { whatsapp: { allowFrom: ["*"] } },
 };
 
+function compactParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {
+  return {
+    ...buildCompactParams("/compact", compactCommandConfig),
+    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+    ...overrides,
+  };
+}
+
+function cliBackend(id = "claude-cli", modelProvider = "anthropic") {
+  return {
+    id,
+    modelProvider,
+    config: { command: id === "claude-cli" ? "claude" : id },
+    bundleMcp: false,
+  };
+}
+
 describe("handleCompactCommand", () => {
   beforeEach(resetCompactCommandMocks);
 
@@ -106,28 +123,30 @@ describe("handleCompactCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
     const call = requireCompactEmbeddedAgentSessionCall();
-    expect(call.sessionId).toBe("session-1");
+    expect(call).toMatchObject({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      allowGatewaySubagentBinding: true,
+      trigger: "manual",
+      customInstructions: "focus on decisions",
+      messageChannel: "whatsapp",
+      groupId: "group-1",
+      groupChannel: "#general",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "owner",
+      senderName: "Alice",
+      senderUsername: "alice_u",
+      senderE164: "+15551234567",
+      agentDir: "/tmp/openclaw-agent-compact",
+      authProfileId: "github-copilot:work",
+      authProfileIdSource: "user",
+    });
     expect(call.abortSignal).toBe(abortController.signal);
-    expect(call.sessionKey).toBe("agent:main:main");
-    expect(call.allowGatewaySubagentBinding).toBe(true);
-    expect(call.trigger).toBe("manual");
-    expect(call.customInstructions).toBe("focus on decisions");
-    expect(call.messageChannel).toBe("whatsapp");
-    expect(call.groupId).toBe("group-1");
-    expect(call.groupChannel).toBe("#general");
-    expect(call.groupSpace).toBe("workspace-1");
-    expect(call.spawnedBy).toBe("agent:main:parent");
-    expect(call.senderId).toBe("owner");
     expect(call.ownerNumbers).toHaveLength(16);
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
     expect(call).not.toHaveProperty("senderIsOwner");
     expect(params.command.ownerList).toEqual(ownerIds);
-    expect(call.senderName).toBe("Alice");
-    expect(call.senderUsername).toBe("alice_u");
-    expect(call.senderE164).toBe("+15551234567");
-    expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
-    expect(call.authProfileId).toBe("github-copilot:work");
-    expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
@@ -139,16 +158,7 @@ describe("handleCompactCommand", () => {
       reason: "already under target",
     });
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(compactParams(), true);
 
     expect(result?.reply?.text).toBe(
       "⚙️ Compaction skipped: context is already under the compaction target • Context 12.1k",
@@ -164,16 +174,7 @@ describe("handleCompactCommand", () => {
       reason: "no real conversation messages",
     });
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(compactParams(), true);
 
     expect(result?.reply?.text).toBe(
       "⚙️ Compaction failed: nothing compactable in this session yet • Context 12.1k",
@@ -188,16 +189,7 @@ describe("handleCompactCommand", () => {
       reason: "already_compacted",
     });
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(compactParams(), true);
 
     expect(result?.reply?.text).toBe(
       "⚙️ Compaction skipped: session is already compacted • Context 12.1k",
@@ -207,15 +199,7 @@ describe("handleCompactCommand", () => {
 
   it("targets the persisted native CLI session for manual compaction", async () => {
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () =>
-        [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "claude" },
-            bundleMcp: false,
-          },
-        ] as never,
+      resolveRuntimeCliBackends: () => [cliBackend()] as never,
     });
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -231,8 +215,7 @@ describe("handleCompactCommand", () => {
 
     try {
       const result = await handleCompactCommand(
-        {
-          ...buildCompactParams("/compact", compactCommandConfig),
+        compactParams({
           provider: "anthropic",
           sessionEntry: {
             sessionId: "cli-session",
@@ -243,7 +226,7 @@ describe("handleCompactCommand", () => {
               "claude-cli": { sessionId: "native-claude-session" },
             },
           },
-        } as HandleCommandsParams,
+        }),
         true,
       );
 
@@ -270,20 +253,7 @@ describe("handleCompactCommand", () => {
     async ({ provider, harness, expectedRuntime, ...testCase }) => {
       cliBackendsTesting.setDepsForTest({
         resolveRuntimeCliBackends: () =>
-          [
-            {
-              id: "claude-cli",
-              modelProvider: "anthropic",
-              config: { command: "claude" },
-              bundleMcp: false,
-            },
-            {
-              id: "copilot",
-              modelProvider: "github-copilot",
-              config: { command: "copilot" },
-              bundleMcp: false,
-            },
-          ] as never,
+          [cliBackend(), cliBackend("copilot", "github-copilot")] as never,
         resolvePluginSetupCliBackend: () => {
           throw new Error("manual compaction attempted synchronous CLI setup discovery");
         },
@@ -330,10 +300,7 @@ describe("handleCompactCommand", () => {
     });
 
     const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", compactCommandConfig),
-        sessionEntry: { sessionId: "server-session", updatedAt: Date.now() },
-      } as HandleCommandsParams,
+      compactParams({ sessionEntry: { sessionId: "server-session", updatedAt: Date.now() } }),
       true,
     );
 

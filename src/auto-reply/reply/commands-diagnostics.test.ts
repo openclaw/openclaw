@@ -1,6 +1,7 @@
 // Tests diagnostics command output and runtime diagnostic toggles.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
@@ -56,33 +57,13 @@ type ExecCall = {
   params: unknown;
 };
 
-type ExecDefaults = {
-  accountId?: string;
-  approvalReviewerDeviceId?: string;
+type ExecDefaults = Omit<ExecToolDefaults, "approvalFollowup"> & {
   approvalFollowup?: () => Promise<string | undefined>;
-  approvalFollowupMode?: string;
-  approvalFollowupText?: string;
-  approvalWarningText?: string;
-  ask?: string;
-  currentChannelId?: string;
-  host?: string;
-  messageProvider?: string;
-  security?: string;
-  trigger?: string;
 };
 
 type ExecParams = {
   ask?: string;
   command?: string;
-};
-
-type DiagnosticsSession = {
-  accountId?: string;
-  agentHarnessId?: string;
-  channel?: string;
-  sessionFile?: string;
-  sessionId?: string;
-  sessionKey?: string;
 };
 
 type PrivateDiagnosticsReply = {
@@ -102,7 +83,7 @@ function requireExecCall(execCalls: ExecCall[], index = 0) {
 }
 
 function requireDiagnosticsSessions(call: PluginCommandContext | undefined) {
-  const sessions = call?.diagnosticsSessions as DiagnosticsSession[] | undefined;
+  const sessions = call?.diagnosticsSessions;
   if (!sessions) {
     throw new Error("expected diagnostics sessions");
   }
@@ -168,13 +149,28 @@ function registerHostTrustedReservedCommandForTest(
   setActivePluginRegistry(pluginRegistry.registry);
 }
 
-function registerCodexDiagnosticsCommandForTest(
-  handler: (ctx: PluginCommandContext) => Promise<unknown>,
+function registerCodexHandler(handler: PluginCommandHandler) {
+  registerHostTrustedReservedCommandForTest({
+    name: "codex",
+    description: "Codex command",
+    acceptsArgs: true,
+    handler,
+    ownership: "reserved",
+  });
+}
+
+function sessionEntry(
+  sessionId = "session-1",
+  sessionFile = "/tmp/session.jsonl",
+  overrides: Partial<NonNullable<HandleCommandsParams["sessionEntry"]>> = {},
 ) {
+  return { sessionId, sessionFile, updatedAt: 1, ...overrides };
+}
+
+function registerCodexDiagnosticsCommandForTest() {
   const calls: PluginCommandContext[] = [];
   const commandHandler = vi.fn<PluginCommandHandler>(async (ctx) => {
     calls.push(ctx);
-    await handler(ctx);
     if (ctx.diagnosticsPreviewOnly) {
       return {
         text: [
@@ -198,49 +194,9 @@ function registerCodexDiagnosticsCommandForTest(
         ].join("\n"),
       };
     }
-    return {
-      text: [
-        "Codex runtime thread detected.",
-        "Thread: codex-thread-1",
-        "To send: /codex diagnostics confirm abc123def456",
-        "To cancel: /codex diagnostics cancel abc123def456",
-      ].join("\n"),
-      interactive: {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [
-              {
-                label: "Send diagnostics",
-                action: {
-                  type: "command",
-                  command: "/codex diagnostics confirm abc123def456",
-                },
-                value: "/codex diagnostics confirm abc123def456",
-                style: "danger" as const,
-              },
-              {
-                label: "Cancel",
-                action: {
-                  type: "command",
-                  command: "/codex diagnostics cancel abc123def456",
-                },
-                value: "/codex diagnostics cancel abc123def456",
-                style: "secondary" as const,
-              },
-            ],
-          },
-        ],
-      },
-    };
+    throw new Error("expected diagnostics preview or approved upload");
   });
-  registerHostTrustedReservedCommandForTest({
-    name: "codex",
-    description: "Codex command",
-    acceptsArgs: true,
-    handler: commandHandler,
-    ownership: "reserved",
-  });
+  registerCodexHandler(commandHandler);
   return { calls, commandHandler };
 }
 
@@ -378,15 +334,10 @@ describe("diagnostics command", () => {
   });
 
   it("wraps Codex feedback upload into the Gateway diagnostics approval", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const params = buildDiagnosticsParams("/diagnostics flaky tool call", {
-      sessionEntry: {
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        updatedAt: 1,
-        agentHarnessId: "codex",
-      },
+      sessionEntry: sessionEntry("session-1", "/tmp/session.jsonl", { agentHarnessId: "codex" }),
     });
     params.ctx.ApprovalReviewerDeviceId = "device-diagnostics-reviewer";
     const result = await handleDiagnosticsCommand(params, true);
@@ -433,22 +384,17 @@ describe("diagnostics command", () => {
   });
 
   it("passes canonical session identities to Codex diagnostics when harness metadata is stale", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         sessionKey: "agent:main:telegram:direct:user-1",
-        sessionEntry: {
-          sessionId: "telegram-session",
-          sessionFile: "/tmp/telegram.jsonl",
-          updatedAt: 1,
-        },
+        sessionEntry: sessionEntry("telegram-session", "/tmp/telegram.jsonl"),
         sessionStore: {
-          "agent:main:telegram:direct:user-1": {
-            sessionId: "telegram-session",
-            sessionFile: "/tmp/telegram.jsonl",
-            updatedAt: 1,
-          },
+          "agent:main:telegram:direct:user-1": sessionEntry(
+            "telegram-session",
+            "/tmp/telegram.jsonl",
+          ),
           "agent:main:discord:channel:123": {
             sessionId: "discord-session",
             sessionFile: "/tmp/discord.jsonl",
@@ -495,7 +441,7 @@ describe("diagnostics command", () => {
           skillsSnapshot: { prompt: "unrelated diagnostics prompt ".repeat(4096), skills: [] },
         },
       );
-      const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+      const { calls } = registerCodexDiagnosticsCommandForTest();
       const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
       const params = buildDiagnosticsParams("/diagnostics", {
         agentId: "main",
@@ -545,11 +491,7 @@ describe("diagnostics command", () => {
 
     await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
-        sessionEntry: {
-          sessionId: "ordinary-session",
-          sessionFile: "/tmp/ordinary.jsonl",
-          updatedAt: 1,
-        },
+        sessionEntry: sessionEntry("ordinary-session", "/tmp/ordinary.jsonl"),
       }),
       true,
     );
@@ -560,7 +502,7 @@ describe("diagnostics command", () => {
   });
 
   it("reports private owner approval as pending before starting collection", async () => {
-    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(
       {
         privateTargets: [
@@ -573,12 +515,7 @@ describe("diagnostics command", () => {
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         isGroup: true,
-        sessionEntry: {
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-          updatedAt: 1,
-          agentHarnessId: "codex",
-        },
+        sessionEntry: sessionEntry("session-1", "/tmp/session.jsonl", { agentHarnessId: "codex" }),
       }),
       true,
     );
@@ -602,19 +539,14 @@ describe("diagnostics command", () => {
   });
 
   it("fails closed in groups when no private diagnostics route is available", async () => {
-    registerCodexDiagnosticsCommandForTest(async () => null);
+    registerCodexDiagnosticsCommandForTest();
     const { execCalls, privateReplies, handleDiagnosticsCommand } =
       createDiagnosticsHandlerForTest();
 
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         isGroup: true,
-        sessionEntry: {
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-          updatedAt: 1,
-          agentHarnessId: "codex",
-        },
+        sessionEntry: sessionEntry("session-1", "/tmp/session.jsonl", { agentHarnessId: "codex" }),
       }),
       true,
     );
@@ -634,13 +566,7 @@ describe("diagnostics command", () => {
           "- channel whatsapp, OpenClaw session session-1, Codex thread codex-thread-1",
         ].join("\n"),
       }));
-      registerHostTrustedReservedCommandForTest({
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      });
+      registerCodexHandler(commandHandler);
       const { privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
         deliveryOutcome: outcome,
         privateTargets: [
@@ -736,13 +662,7 @@ describe("diagnostics command", () => {
         text: `confirmed ${ctx.args}`,
         interactive,
       }));
-      registerHostTrustedReservedCommandForTest({
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      });
+      registerCodexHandler(commandHandler);
 
       const result = await handleDiagnosticsCommand(
         buildDiagnosticsParams("/diagnostics confirm abc123def456"),

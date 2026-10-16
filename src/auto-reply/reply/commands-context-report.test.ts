@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -19,8 +18,6 @@ import { buildCommandContextForTest as buildCommandContext } from "./commands-co
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
-
-/** Tests context report command output and generated report files. */
 
 function makeParams(
   commandBodyNormalized: string,
@@ -79,28 +76,24 @@ function makeParams(
           nonProjectContextChars: 500,
         },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
-        injectedWorkspaceFiles: options?.nativeUnverified
-          ? [
-              {
-                name: "AGENTS.md",
-                path: "/tmp/workspace/AGENTS.md",
-                missing: false,
-                rawChars: 10_000,
-                injectionStatus: "native_unverified",
-                injectedChars: null,
-                truncated: null,
-              },
-            ]
-          : [
-              {
-                name: "AGENTS.md",
-                path: "/tmp/workspace/AGENTS.md",
-                missing: false,
-                rawChars: truncated ? 200_000 : 10_000,
-                injectedChars: truncated ? 12_000 : 10_000,
-                truncated,
-              },
-            ],
+        injectedWorkspaceFiles: [
+          {
+            name: "AGENTS.md",
+            path: "/tmp/workspace/AGENTS.md",
+            missing: false,
+            rawChars: truncated && !options?.nativeUnverified ? 200_000 : 10_000,
+            ...(options?.nativeUnverified
+              ? {
+                  injectionStatus: "native_unverified",
+                  injectedChars: null,
+                  truncated: null,
+                }
+              : {
+                  injectedChars: truncated ? 12_000 : 10_000,
+                  truncated,
+                }),
+          },
+        ],
         skills: {
           promptChars: 10,
           entries: [{ name: "checks", blockChars: 10 }],
@@ -119,6 +112,75 @@ function makeParams(
     commandArgs: [],
     resolvedElevatedLevel: "off",
   } as unknown as HandleCommandsParams;
+}
+
+function detailParams(options: Parameters<typeof makeParams>[2] = {}) {
+  return makeParams("/context detail", false, {
+    contextTokens: 8_192,
+    totalTokens: 900,
+    ...options,
+  });
+}
+
+function toolExchange(timestamp: number) {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", toolName: "read", toolCallId: "call-1", args: {} }],
+      timestamp,
+    },
+    {
+      role: "toolResult",
+      content: [{ type: "text", text: "package.json" }],
+      timestamp: timestamp + 1,
+      toolCallId: "call-1",
+      toolName: "read",
+    },
+  ];
+}
+
+async function withContextMap(
+  options: NonNullable<Parameters<typeof makeParams>[2]>,
+  check: (
+    result: Awaited<ReturnType<typeof buildContextReply>>,
+    mediaUrl: string,
+  ) => Promise<void> | void,
+) {
+  const result = await buildContextReply(
+    makeParams("/context map", false, {
+      contextTokens: 8_192,
+      totalTokens: 900,
+      ...options,
+    }),
+  );
+  if (!result.mediaUrl) {
+    throw new Error("missing context map media path");
+  }
+  try {
+    await check(result, result.mediaUrl);
+  } finally {
+    await unlink(result.mediaUrl);
+  }
+}
+
+function commandContext(body: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
+  return buildCommandContext({
+    ctx: buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "user",
+      To: "bot",
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForCommands: body,
+      ...overrides,
+    }),
+    cfg: {},
+    isGroup: false,
+    triggerBodyNormalized: stripStructuralPrefixes(body),
+    commandAuthorized: true,
+  });
 }
 
 async function withTranscript(
@@ -182,8 +244,6 @@ describe("buildContextReply", () => {
     { persistedHarness: "other-runtime", expected: null },
   ])("projects the selected session window ($resolved, $authored)", async (testCase) => {
     const params = makeParams("/context json", false, { contextTokens: 200_000 });
-    params.provider = "ollama";
-    params.model = "qwen2.5:7b";
     params.sessionEntry = {
       ...params.sessionEntry,
       sessionId: "local-context",
@@ -290,27 +350,10 @@ describe("buildContextReply", () => {
           timestamp: index,
         })),
         { role: "user", content: "Please inspect the repo", timestamp: 1 },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", toolName: "read", toolCallId: "call-1", args: {} }],
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "package.json" }],
-          timestamp: 3,
-          toolCallId: "call-1",
-          toolName: "read",
-        },
+        ...toolExchange(2),
       ],
       async (target) => {
-        const result = await buildContextReply(
-          makeParams("/context detail", false, {
-            contextTokens: 8_192,
-            totalTokens: 900,
-            ...target,
-          }),
-        );
+        const result = await buildContextReply(detailParams(target));
 
         expect(result.text).toContain(
           "Compactable transcript: 2 real conversation message(s) / 130 transcript message(s)",
@@ -325,48 +368,20 @@ describe("buildContextReply", () => {
   });
 
   it("explains when cached prompt usage has no compactable conversation messages", async () => {
-    await withTranscript(
-      [
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", toolName: "read", toolCallId: "call-1", args: {} }],
-          timestamp: 1,
-        },
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "package.json" }],
-          timestamp: 2,
-          toolCallId: "call-1",
-          toolName: "read",
-        },
-      ],
-      async (target) => {
-        const result = await buildContextReply(
-          makeParams("/context detail", false, {
-            contextTokens: 8_192,
-            totalTokens: 900,
-            ...target,
-          }),
-        );
+    await withTranscript([...toolExchange(1)], async (target) => {
+      const result = await buildContextReply(detailParams(target));
 
-        expect(result.text).toContain(
-          "Compactable transcript: 0 real conversation message(s) / 2 transcript message(s)",
-        );
-        expect(result.text).toContain(
-          "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
-        );
-      },
-    );
+      expect(result.text).toContain(
+        "Compactable transcript: 0 real conversation message(s) / 2 transcript message(s)",
+      );
+      expect(result.text).toContain(
+        "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+      );
+    });
   });
 
   it("shows estimate-only detail output when cached context usage is unavailable", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-        totalTokensFresh: false,
-      }),
-    );
+    const result = await buildContextReply(detailParams({ totalTokensFresh: false }));
     expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
     expect(result.text).toContain("Actual context usage (cached): unavailable");
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
@@ -375,19 +390,11 @@ describe("buildContextReply", () => {
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
     await withTranscript([{ role: "user", content: "cached context fixture" }], async (target) => {
-      const params = makeParams("/context detail", false, {
-        contextTokens: 8_192,
-        totalTokens: 111,
-        ...target,
-      });
+      const params = detailParams({ ...target, totalTokens: 111 });
       const sessionEntry = {
         ...params.sessionEntry,
         sessionId: target.sessionId,
         updatedAt: params.sessionEntry?.updatedAt ?? 1,
-        totalTokens: 111,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        inputTokens: 100,
         outputTokens: 11,
       } satisfies SessionEntry;
       params.sessionEntry = sessionEntry;
@@ -395,8 +402,6 @@ describe("buildContextReply", () => {
         [params.sessionKey]: {
           ...sessionEntry,
           totalTokens: 900,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
           inputTokens: 700,
           outputTokens: 200,
         },
@@ -411,21 +416,9 @@ describe("buildContextReply", () => {
   });
 
   it("omits unknown native project-document bytes from context maps", async () => {
-    const result = await buildContextReply(
-      makeParams("/context map", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
-        nativeUnverified: true,
-      }),
-    );
-    if (!result.mediaUrl) {
-      throw new Error("missing context map media path");
-    }
-    try {
+    await withContextMap({ nativeUnverified: true }, (result) => {
       expect(result.text).toContain("Tracked: 1,020 chars");
-    } finally {
-      await unlink(result.mediaUrl);
-    }
+    });
   });
 
   it("includes transcript conversation size in context maps", async () => {
@@ -442,51 +435,32 @@ describe("buildContextReply", () => {
         },
       ],
       async (target) => {
-        const result = await buildContextReply(
-          makeParams("/context map", false, {
-            contextTokens: 8_192,
-            totalTokens: 900,
-            ...target,
-          }),
-        );
-        if (!result.mediaUrl) {
-          throw new Error("missing context map media path");
-        }
-        try {
-          const png = await readFile(result.mediaUrl);
+        await withContextMap(target, async (result, mediaUrl) => {
+          const png = await readFile(mediaUrl);
           expect(result.text).toContain("Conversation: 20 chars (~5 tok)");
           expect(result.trustedLocalMedia).toBe(true);
           expect(result.sensitiveMedia).toBe(true);
           expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-        } finally {
-          await unlink(result.mediaUrl);
-        }
+        });
       },
     );
   });
 
   it("counts model-only turn context but not the persisted current-turn prompt", async () => {
-    const result = await buildContextReply(
-      makeParams("/context map", false, {
-        contextTokens: 8_192,
-        totalTokens: 900,
+    await withContextMap(
+      {
         currentTurn: {
           kind: "room_event",
           promptChars: 11,
           runtimeContextChars: 17,
           modelOnlyPromptChars: 5,
         },
-      }),
+      },
+      (result) => {
+        expect(result.text).toContain("Tracked: 10,542 chars");
+        expect(result.text).toContain("Conversation: 22 chars (~6 tok)");
+      },
     );
-    if (!result.mediaUrl) {
-      throw new Error("missing context map media path");
-    }
-    try {
-      expect(result.text).toContain("Tracked: 10,542 chars");
-      expect(result.text).toContain("Conversation: 22 chars (~6 tok)");
-    } finally {
-      await unlink(result.mediaUrl);
-    }
   });
 
   it("does not render context map from an estimated report", async () => {
@@ -512,58 +486,21 @@ describe("buildContextReply", () => {
   });
 });
 
-/** Tests context command behavior and token reporting. */
-
 describe("buildCommandContext", () => {
   it("preserves multiline soft reset tails after structural normalization", () => {
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      From: "user",
-      To: "bot",
-      Body: "/reset soft\nre-read persona files",
-      RawBody: "/reset soft\nre-read persona files",
-      CommandBody: "/reset soft\nre-read persona files",
-      BodyForCommands: "/reset soft\nre-read persona files",
-    });
-
-    const result = buildCommandContext({
-      ctx,
-      cfg: {} as OpenClawConfig,
-      isGroup: false,
-      triggerBodyNormalized: stripStructuralPrefixes("/reset soft\nre-read persona files"),
-      commandAuthorized: true,
-    });
+    const result = commandContext("/reset soft\nre-read persona files");
 
     expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
   });
 
   it("preserves multiline slash skill payloads after structural normalization", () => {
-    const body = "/skill demo_skill first line\nsecond line";
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      From: "user",
-      To: "bot",
-      Body: body,
-      RawBody: body,
-      CommandBody: body,
-      BodyForCommands: body,
-    });
-
-    const result = buildCommandContext({
-      ctx,
-      cfg: {} as OpenClawConfig,
-      isGroup: false,
-      triggerBodyNormalized: stripStructuralPrefixes(body),
-      commandAuthorized: true,
-    });
+    const result = commandContext("/skill demo_skill first line\nsecond line");
 
     expect(result.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
   });
 
   it("maps explicit gateway origin into command context", () => {
-    const ctx = buildTestCtx({
+    const result = commandContext("/codex bind", {
       Provider: "internal",
       Surface: "internal",
       OriginatingChannel: "slack",
@@ -571,18 +508,6 @@ describe("buildCommandContext", () => {
       SenderId: "gateway-client",
       From: undefined,
       To: undefined,
-      Body: "/codex bind",
-      RawBody: "/codex bind",
-      CommandBody: "/codex bind",
-      BodyForCommands: "/codex bind",
-    });
-
-    const result = buildCommandContext({
-      ctx,
-      cfg: {} as OpenClawConfig,
-      isGroup: false,
-      triggerBodyNormalized: "/codex bind",
-      commandAuthorized: true,
     });
 
     expect(result.channel).toBe("slack");

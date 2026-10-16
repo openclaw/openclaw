@@ -1,4 +1,5 @@
 // Tests trajectory export command approval routing.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
@@ -28,6 +29,8 @@ vi.mock("./commands-private-route.js", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type ExecCall = { defaults: Record<string, unknown>; params: Record<string, unknown> };
 
 function makeParams(
   workspaceDir = tempDirs.make("openclaw-export-command-"),
@@ -81,13 +84,13 @@ function mockCommandBoundaries(
     deliveryOutcome?: Awaited<ReturnType<typeof deliverPrivateCommandReply>>;
   } = {},
 ) {
-  const execCalls: Array<{ defaults: unknown; params: unknown }> = [];
+  const execCalls: ExecCall[] = [];
   const privateReplies: Array<{
     targets: Array<{ channel: string; to: string; accountId?: string | null }>;
     text?: string;
   }> = [];
-  commandMocks.createExecTool.mockImplementation((defaults: unknown) => ({
-    execute: vi.fn(async (_toolCallId: string, params: unknown) => {
+  commandMocks.createExecTool.mockImplementation((defaults: Record<string, unknown>) => ({
+    execute: vi.fn(async (_toolCallId: string, params: Record<string, unknown>) => {
       execCalls.push({ defaults, params });
       return (
         options.result ?? {
@@ -122,27 +125,8 @@ function readEncodedRequestFromCommand(command: string): Record<string, unknown>
   return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value) {
-    throw new Error("expected record");
-  }
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
-}
-
-function execCallRecord(
-  execCalls: Array<{ defaults: unknown; params: unknown }>,
-  index = 0,
-): { defaults: Record<string, unknown>; params: Record<string, unknown> } {
-  const call = execCalls[index];
-  if (!call) {
-    throw new Error(`expected exec call at index ${index}`);
-  }
-  return {
-    defaults: requireRecord(call.defaults),
-    params: requireRecord(call.params),
-  };
+function execCallRecord(execCalls: ExecCall[], index = 0) {
+  return expectDefined(execCalls[index], `exec call ${index}`);
 }
 
 describe("buildExportTrajectoryCommandReply", () => {

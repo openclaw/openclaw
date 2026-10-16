@@ -7,20 +7,20 @@ import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-r
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-// Tests session export command packaging, filesystem writes, and prompt bundle capture.
-
 const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
+  const promptBundle = {
+    systemPrompt: "system prompt",
+    tools: [],
+    skillsPrompt: "",
+    bootstrapFiles: [],
+    injectedFiles: [],
+    sandboxRuntime: { sandboxed: false, mode: "off" },
+  };
   return {
     ...createExportCommandSessionMocks(vi),
-    resolveCommandsSystemPromptBundleMock: vi.fn(async () => ({
-      systemPrompt: "system prompt",
-      tools: [],
-      skillsPrompt: "",
-      bootstrapFiles: [],
-      injectedFiles: [],
-      sandboxRuntime: { sandboxed: false, mode: "off" },
-    })),
+    promptBundle,
+    resolveCommandsSystemPromptBundleMock: vi.fn(async () => promptBundle),
     writeSessionExportFileMock: vi.fn(
       async (_params: {
         workspaceDir: string;
@@ -95,9 +95,6 @@ vi.mock("node:fs", async () => {
           return contents;
         }
       }
-      if (filePath.includes("/export-html/")) {
-        return actual.readFileSync(filePath, "utf8");
-      }
       return actual.readFileSync(filePath, "utf8");
     }),
   };
@@ -162,20 +159,9 @@ function makeParams(): HandleCommandsParams {
   } as unknown as HandleCommandsParams;
 }
 
-function exportWriteParams(callIndex = 0): { contents: string } {
-  const call = hoisted.writeSessionExportFileMock.mock.calls.at(callIndex);
-  if (!call) {
-    throw new Error(`Expected export write call ${callIndex}`);
-  }
-  return call[0];
-}
-
 function writtenHtml(): string {
-  const value = exportWriteParams().contents;
-  if (typeof value !== "string") {
-    throw new Error("Expected exported HTML");
-  }
-  return value;
+  return expectDefined(hoisted.writeSessionExportFileMock.mock.calls[0], "export write")[0]
+    .contents;
 }
 
 function sessionDataFromHtml(html: string): Record<string, unknown> {
@@ -190,16 +176,24 @@ function sessionDataFromHtml(html: string): Record<string, unknown> {
   );
 }
 
-function userTranscript() {
-  return [
-    {
-      type: "message",
-      id: "entry-1",
-      timestamp: "2026-05-16T00:00:00.000Z",
-      message: { role: "user", content: "hello" },
-    },
-  ];
+function messageEntry(id: string, message: { role?: string; content: string }, seconds = 0) {
+  return {
+    type: "message",
+    id,
+    timestamp: new Date(Date.UTC(2026, 4, 16, 0, 0, seconds)).toISOString(),
+    message,
+  };
 }
+
+const userTranscript = () => [messageEntry("entry-1", { role: "user", content: "hello" })];
+const acpMetadata = {
+  backend: "acpx",
+  mode: "persistent",
+  agent: "claude",
+  runtimeSessionName: "backend-session-1",
+  state: "idle",
+  lastActivityAt: 1,
+} as const;
 
 describe("buildExportSessionReply", () => {
   beforeEach(() => {
@@ -211,14 +205,7 @@ describe("buildExportSessionReply", () => {
         updatedAt: 1,
       },
     });
-    hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue({
-      systemPrompt: "system prompt",
-      tools: [],
-      skillsPrompt: "",
-      bootstrapFiles: [],
-      injectedFiles: [],
-      sandboxRuntime: { sandboxed: false, mode: "off" },
-    });
+    hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue(hoisted.promptBundle);
     hoisted.writeSessionExportFileMock.mockResolvedValue({
       absolutePath: "/tmp/workspace/openclaw-session.html",
       displayPath: "openclaw-session.html",
@@ -338,24 +325,9 @@ describe("buildExportSessionReply", () => {
 
   it("skips invalid loaded transcript events before exporting", async () => {
     hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "valid user" },
-      },
-      {
-        type: "message",
-        id: "entry-2",
-        timestamp: "2026-05-16T00:00:01.000Z",
-        message: { content: "missing role" },
-      },
-      {
-        type: "message",
-        id: "entry-3",
-        timestamp: "2026-05-16T00:00:02.000Z",
-        message: { role: "assistant", content: "valid assistant" },
-      },
+      messageEntry("entry-1", { role: "user", content: "valid user" }, 0),
+      messageEntry("entry-2", { content: "missing role" }, 1),
+      messageEntry("entry-3", { role: "assistant", content: "valid assistant" }, 2),
     ];
 
     const reply = await buildExportSessionReply(makeParams());
@@ -374,12 +346,7 @@ describe("buildExportSessionReply", () => {
         timestamp: `2026-05-16T00:00:${String(index).padStart(2, "0")}.000Z`,
         message: { content: "missing role" },
       })),
-      {
-        type: "message",
-        id: "entry-valid",
-        timestamp: "2026-05-16T00:01:00.000Z",
-        message: { role: "assistant", content: "valid assistant" },
-      },
+      messageEntry("entry-valid", { role: "assistant", content: "valid assistant" }, 60),
     ];
 
     const reply = await buildExportSessionReply(makeParams());
@@ -401,18 +368,8 @@ describe("buildExportSessionReply", () => {
       },
     });
     hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-      {
-        type: "message",
-        id: "entry-2",
-        timestamp: "2026-05-16T00:00:01.000Z",
-        message: { role: "user", content: "world" },
-      },
+      messageEntry("entry-1", { role: "user", content: "hello" }, 0),
+      messageEntry("entry-2", { role: "user", content: "world" }, 1),
     ];
 
     const reply = await buildExportSessionReply(makeParams());
@@ -425,14 +382,7 @@ describe("buildExportSessionReply", () => {
   });
 
   it("warns when persisted ACP metadata is stored outside the session entry", async () => {
-    hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue({
-      backend: "acpx",
-      mode: "persistent",
-      agent: "claude",
-      runtimeSessionName: "backend-session-1",
-      state: "idle",
-      lastActivityAt: 1,
-    });
+    hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(acpMetadata);
     hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
@@ -467,29 +417,12 @@ describe("buildExportSessionReply", () => {
       "agent:target:session": {
         sessionId: "session-1",
         updatedAt: 1,
-        acp: {
-          backend: "acpx",
-          mode: "persistent",
-          agent: "claude",
-          runtimeSessionName: "backend-session-1",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+        acp: acpMetadata,
       },
     });
     hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-      {
-        type: "message",
-        id: "entry-2",
-        timestamp: "2026-05-16T00:00:01.000Z",
-        message: { role: "assistant", content: "hi" },
-      },
+      messageEntry("entry-1", { role: "user", content: "hello" }, 0),
+      messageEntry("entry-2", { role: "assistant", content: "hi" }, 1),
     ];
 
     const reply = await buildExportSessionReply(makeParams());
