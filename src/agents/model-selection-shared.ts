@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasUtilityModelSeparationMigrationMarker } from "../config/utility-model-separation-migration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -116,13 +115,6 @@ function resolveManifestPluginsForModelIdNormalization(
 ): ModelManifestPlugins {
   if (params.manifestPlugins !== undefined) {
     return params.manifestPlugins;
-  }
-  // A running Gateway publishes one inventory for its plugin workspace. Config commits
-  // and runtime refreshes run in operation caches, which must not rediscover it.
-  const gatewayManifestPlugins =
-    params.workspaceDir === undefined ? getProcessGatewayPluginMetadataSnapshot() : undefined;
-  if (gatewayManifestPlugins) {
-    return gatewayManifestPlugins;
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (!workspaceDir) {
