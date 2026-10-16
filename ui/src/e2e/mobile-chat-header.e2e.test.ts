@@ -114,11 +114,10 @@ suite.define(() => {
           expect(button.height).toBeGreaterThanOrEqual(44);
         }
 
-        await panels.click();
         const menu = header.locator(".chat-panel-layout-menu");
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).waitFor();
-        await capture(page, header, "mobile-panels-" + viewport.width, [menu.getByRole("menu")]);
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).click();
+        const actions = header.locator(".chat-header-session-menu__trigger");
+        await actions.click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         const details = page.getByRole("dialog", { name: "Details", exact: true });
         await details.waitFor();
         const detailsBox = await details.boundingBox();
@@ -126,7 +125,7 @@ suite.define(() => {
         await capture(page, header, "mobile-details-" + viewport.width, [details]);
         await page.keyboard.press("Escape");
         await details.waitFor({ state: "hidden" });
-        expect(await panels.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await actions.evaluate((element) => element === document.activeElement)).toBe(true);
 
         await panels.click();
         await menu
@@ -139,8 +138,8 @@ suite.define(() => {
           .waitFor();
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
         await capture(page, header, "mobile-files-" + viewport.width, [files]);
-        await panels.click();
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).click();
+        await actions.click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         await details.waitFor();
         expect(await files.isVisible()).toBe(true);
         expect((await details.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 32);

@@ -104,11 +104,9 @@ export class DiscordRealtimeSpeakerSession {
     },
   ) {
     this.outputEnabled = !params.standby;
-    const recordingEpoch = this.providerContinuityEpoch;
     this.recording = new DiscordRealtimeRecording({
       entry: this.params.entry,
-      isCurrent: () =>
-        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === recordingEpoch,
+      isCurrent: () => this.lifecycle.status !== "stopped",
       warn: (message) => logger.warn(message),
     });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({

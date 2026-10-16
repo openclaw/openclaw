@@ -12,9 +12,9 @@ import {
   type DiscordCommand,
   type Modal,
 } from "../internal/discord.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
-import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";

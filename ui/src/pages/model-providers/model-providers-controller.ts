@@ -185,7 +185,7 @@ export class ModelProvidersController extends ModelPageController {
         void this.refresh("replacement");
       }
     },
-    onPageActivation: () => this.refreshPolicy.request("focus"),
+    onPageActivation: () => void this.refreshPolicy.request("focus"),
   });
   readonly installedAgents = new InstalledAgentsController(this, {
     gateway: this.gateway,

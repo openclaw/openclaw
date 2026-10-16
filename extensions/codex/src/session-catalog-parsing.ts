@@ -87,17 +87,14 @@ export function selectCodexCatalogPreviewInput(value: string): string {
 
 /** Detach the small preview from V8's potentially large sliced-string backing store. */
 export function truncateCodexCatalogPreview(
-  value: unknown,
+  value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview =
-    typeof value === "string"
-      ? boundedCatalogString(
-          sanitize(value.replace(/\s+/g, " ")),
-          MAX_SESSION_PREVIEW_LENGTH,
-          "truncate",
-        )
-      : undefined;
+  const preview = boundedCatalogString(
+    sanitize(value.replace(/\s+/g, " ")),
+    MAX_SESSION_PREVIEW_LENGTH,
+    "truncate",
+  );
   return Buffer.from(preview ?? "", "utf8").toString("utf8");
 }
 

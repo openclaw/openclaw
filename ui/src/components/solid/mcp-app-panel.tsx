@@ -30,7 +30,6 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
   const [error, setError] = createSignal<string | null>(null, { ownedWrite: true });
   const [notice, setNotice] = createSignal("", { ownedWrite: true });
   const [settings, setSettings] = createSignal<McpAppSettings | null>(null, { ownedWrite: true });
-  const [values, setValues] = createSignal<McpAppSettings["values"]>({}, { ownedWrite: true });
   let View: (typeof import("../mcp-app-view.tsx"))["McpAppView"] | undefined;
   let generation = 0;
   let mounted = true;
@@ -117,15 +116,11 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
       action,
     };
   }
-  function acceptSettings(result: McpAppSettings) {
-    setSettings(result);
-    setValues({ ...result.values });
-  }
   async function readSettings() {
     await operation(
       (client, launch) =>
         client.request<McpAppSettings>("mcp.app.settings", params(launch, "read")),
-      acceptSettings,
+      setSettings,
     );
   }
   async function open() {
@@ -158,13 +153,7 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
       true,
     );
   }
-  async function saveSettings() {
-    const set = Object.fromEntries(
-      Object.entries(values()).filter(([key, value]) => settings()?.values[key] !== value),
-    );
-    if (!Object.keys(set).length) {
-      return;
-    }
+  async function saveSettings(set: McpAppSettings["values"]) {
     await operation(
       async (client, launch) => {
         const result = await client.request<{ toolResult?: { isError?: boolean } }>(
@@ -180,7 +169,7 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
         return client.request<McpAppSettings>("mcp.app.settings", params(launch, "read"));
       },
       (result) => {
-        acceptSettings(result);
+        setSettings(result);
         setNotice(t("mcpApp.settingsSaved"));
       },
     );
@@ -259,10 +248,8 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
             {(current) => (
               <McpAppSettingsForm
                 settings={current()}
-                values={values()}
                 busy={busy()}
-                onChange={(key, value) => setValues((old) => ({ ...old, [key]: value }))}
-                onSave={() => void saveSettings()}
+                onSave={(changes) => void saveSettings(changes)}
                 onTool={(name) => void runTool(name)}
               />
             )}

@@ -4,12 +4,12 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { ComposerDictationController } from "../chat/composer-dictation.ts";
 import { ComposerMicrophonePicker } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import type { NewSessionComposerTextarea } from "./composer-controller.ts";
 
 registerNewSessionSetupEnglish();
 
 type NewSessionDictationOptions = {
-  textarea: NewSessionComposerTextareaController;
+  textarea: NewSessionComposerTextarea;
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
   canCommit: () => boolean;
