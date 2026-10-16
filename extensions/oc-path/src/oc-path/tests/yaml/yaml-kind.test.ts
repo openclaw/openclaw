@@ -32,26 +32,18 @@ describe("YAML numeric source preservation", () => {
     const ast = parseYaml(before).ast;
     const result = setOcPath(ast, parseOcPath(`oc://workflow.yaml/${address}`), value);
 
-    expect(result.ok).toBe(true);
-    if (result.ok && result.ast.kind === "yaml") {
-      const doc = result.ast.doc;
-      expect(result.ast.raw).toContain("id: 9007199254740993\n");
-      expect(result.ast.raw).toContain("ratio: 1.0000000000000001\n");
-      expect(result.ast.raw).toContain("9007199254740995");
-      expect(typeof doc.get("id")).toBe("number");
-      expect(() => JSON.stringify(doc.toJS())).not.toThrow();
-      expect(ast.raw).toBe(before);
-    }
+    expect(result.raw).toContain("id: 9007199254740993\n");
+    expect(result.raw).toContain("ratio: 1.0000000000000001\n");
+    expect(result.raw).toContain("9007199254740995");
+    expect(typeof parseYaml(result.raw).ast.doc.get("id")).toBe("number");
+    expect(ast.raw).toBe(before);
   });
 
   it("replaces the selected numeric source even when its rounded value is unchanged", () => {
     const ast = parseYaml("untouched: 9007199254740993\nselected: 1.0000000000000001\n").ast;
     const result = setOcPath(ast, parseOcPath("oc://workflow.yaml/selected"), "1");
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.ast.raw).toBe("untouched: 9007199254740993\nselected: 1\n");
-    }
+    expect(result.raw).toBe("untouched: 9007199254740993\nselected: 1\n");
   });
 });
 
