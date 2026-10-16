@@ -87,8 +87,8 @@ function readExact(
   });
 }
 
-it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", async () => {
-  await withDatabase(async (database, env) => {
+it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:scoped-snapshots";
     const entry = {
       sessionId: "snapshot-session",
@@ -144,36 +144,34 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             ? "entry"
             : null,
       );
-      try {
-        for (const fields of [[], ["systemPromptReport"], ["sessionDiffBaseline"]] as const) {
-          payloads.textBytes.entry = 0;
-          const selected = read(fields);
-          expect(selected.entries).toHaveLength(1);
-          expect(selected.entries[0]?.entry).toMatchObject({
-            sidebarRoot: true,
-            parentSessionKey: entry.parentSessionKey,
-            spawnedBy: entry.spawnedBy,
-          });
-          expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
-          expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
-          expect(selected.members).toEqual({ [sessionKey]: [] });
-          expect(selected.participantRecords).toEqual({});
-          for (const field of [
-            "skillsSnapshot",
-            "systemPromptReport",
-            "sessionDiffBaseline",
-          ] as const) {
-            expect(selected.entries[0]?.entry[field]).toEqual(
-              fields.some((selectedField) => selectedField === field) ? entry[field] : undefined,
-            );
-          }
-          expect(payloads.textBytes.entry).toBeLessThan(2048);
-          expect(read(fields, true).entries).toEqual(selected.entries);
+      using _ = { [Symbol.dispose]: () => payloads.restore() };
+
+      for (const fields of [[], ["systemPromptReport"], ["sessionDiffBaseline"]] as const) {
+        payloads.textBytes.entry = 0;
+        const selected = read(fields);
+        expect(selected.entries).toHaveLength(1);
+        expect(selected.entries[0]?.entry).toMatchObject({
+          sidebarRoot: true,
+          parentSessionKey: entry.parentSessionKey,
+          spawnedBy: entry.spawnedBy,
+        });
+        expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
+        expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
+        expect(selected.members).toEqual({ [sessionKey]: [] });
+        expect(selected.participantRecords).toEqual({});
+        for (const field of [
+          "skillsSnapshot",
+          "systemPromptReport",
+          "sessionDiffBaseline",
+        ] as const) {
+          expect(selected.entries[0]?.entry[field]).toEqual(
+            fields.some((selectedField) => selectedField === field) ? entry[field] : undefined,
+          );
         }
-        expect(read().entries[0]?.entry).toMatchObject(entry);
-      } finally {
-        payloads.restore();
+        expect(payloads.textBytes.entry).toBeLessThan(2048);
+        expect(read(fields, true).entries).toEqual(selected.entries);
       }
+      expect(read().entries[0]?.entry).toMatchObject(entry);
     });
     const transported = await readSessionEntriesFromStoreInWorker({
       agentId: target.agentId,
@@ -190,11 +188,10 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
     expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
-  });
-});
+  }));
 
-it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", async () => {
-  await withDatabase(async (database, env) => {
+it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:cron:admission";
     writeSessionEntry(database, sessionKey, { sessionId: "admitted-session", updatedAt: 1 });
     const target = { agentId: database.agentId, path: database.path };
@@ -226,23 +223,20 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
             ? "validation"
             : null,
       );
-      try {
-        expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-        const admission = captureCanonicalSessionReaderContinuation(reader);
-        expect(admission).toBeDefined();
-        admission?.release();
-        queries.counts.validation = 0;
-        expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-        expect(queries.counts.validation).toBe(0);
-      } finally {
-        queries.restore();
-      }
-    });
-  });
-});
+      using _ = { [Symbol.dispose]: () => queries.restore() };
 
-it("keeps pending archive facts in the lifecycle snapshot and observes later commits", async () => {
-  await withDatabase(async (database, env) => {
+      expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
+      const admission = captureCanonicalSessionReaderContinuation(reader);
+      expect(admission).toBeDefined();
+      admission?.release();
+      queries.counts.validation = 0;
+      expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
+      expect(queries.counts.validation).toBe(0);
+    });
+  }));
+
+it("keeps pending archive facts in the lifecycle snapshot and observes later commits", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:archive-admission";
     writeSessionEntry(database, sessionKey, { sessionId: "live-session", updatedAt: 1 });
     const target = { agentId: database.agentId, path: database.path };
@@ -275,11 +269,10 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
       concurrentCommit.mockRestore();
       peer.close();
     }
-  });
-});
+  }));
 
-it.each([false, true])("reads row metadata (continuation: %s)", async (useContinuation) => {
-  await withDatabase(async (database, env) => {
+it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation) =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:cron:row-facts-\ufffd";
     const rawKey = "agent:main:cron:row-facts-\ud800";
     const sessionId = "row-facts-session";
@@ -455,11 +448,11 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
       concurrentCommit.mockRestore();
       peer.close();
     }
-  });
-});
+  }),
+);
 
-it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
-  await withDatabase(async (database, env) => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", () =>
+  withDatabase(async (database, env) => {
     const sessionKeys = Array.from(
       { length: 64 },
       (_, index) => `agent:main:cron:absent-boards-${index}`,
@@ -470,61 +463,57 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = openNodeSqliteDatabase(target.path);
-    try {
-      withRetainedReader(target, () => {
-        const reader = openReader(target, env);
-        const read = () =>
-          readSessionRowDatabaseFacts({
-            kind: "session-row-facts",
-            database: target,
-            env,
-            sessionKeys,
-          });
-        const queries = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(reader.db),
-          ["boards", "catalog"],
-          (sql) =>
-            /sqlite_master/iu.test(sql)
-              ? "catalog"
-              : /\bfrom "board_tabs"/iu.test(sql)
-                ? "boards"
-                : null,
-        );
-        try {
-          for (let refresh = 0; refresh < 2; refresh++) {
-            const result = read();
-            expect(result.rows).toHaveLength(64);
-            expect(result.rows.every((row) => !row.hasBoard)).toBe(true);
-          }
-          expect(queries.counts).toEqual({ boards: 0, catalog: 0 });
-        } finally {
-          queries.restore();
+    using peer = openNodeSqliteDatabase(target.path);
+
+    withRetainedReader(target, () => {
+      const reader = openReader(target, env);
+      const read = () =>
+        readSessionRowDatabaseFacts({
+          kind: "session-row-facts",
+          database: target,
+          env,
+          sessionKeys,
+        });
+      const queries = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(reader.db),
+        ["boards", "catalog"],
+        (sql) =>
+          /sqlite_master/iu.test(sql)
+            ? "catalog"
+            : /\bfrom "board_tabs"/iu.test(sql)
+              ? "boards"
+              : null,
+      );
+      try {
+        for (let refresh = 0; refresh < 2; refresh++) {
+          const result = read();
+          expect(result.rows).toHaveLength(64);
+          expect(result.rows.every((row) => !row.hasBoard)).toBe(true);
         }
-        boardStore.ensureBoardSchema({ db: peer, path: target.path });
-        peer
-          .prepare(
-            "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'tab', 'Board', 0, 'user', 0)",
-          )
-          .run(sessionKeys[0]!);
-        expect(
-          read()
-            .rows.filter((row) => row.hasBoard)
-            .map((row) => row.sessionKey),
-        ).toEqual([sessionKeys[0]]);
-        peer.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
-        expect(read().rows.every((row) => !row.hasBoard)).toBe(true);
-      });
-    } finally {
-      peer.close();
-    }
-  });
-});
+        expect(queries.counts).toEqual({ boards: 0, catalog: 0 });
+      } finally {
+        queries.restore();
+      }
+      boardStore.ensureBoardSchema({ db: peer, path: target.path });
+      peer
+        .prepare(
+          "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'tab', 'Board', 0, 'user', 0)",
+        )
+        .run(sessionKeys[0]!);
+      expect(
+        read()
+          .rows.filter((row) => row.hasBoard)
+          .map((row) => row.sessionKey),
+      ).toEqual([sessionKeys[0]]);
+      peer.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
+      expect(read().rows.every((row) => !row.hasBoard)).toBe(true);
+    });
+  }));
 
 it.each(["worker", "exact", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
-  async (reader) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+  (reader) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
       const sessionKeys = ["agent:main:subagent:retained"];
       const read = () =>
@@ -546,12 +535,11 @@ it.each(["worker", "exact", "row-facts"] as const)(
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, "");
       expect(read).toThrow("Session metadata unavailable (schema-missing)");
-    });
-  },
+    }),
 );
 
-it("returns detached metadata and rejects asynchronous batch consumers", async () => {
-  await withDatabase(async (database, env) => {
+it("returns detached metadata and rejects asynchronous batch consumers", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
@@ -562,8 +550,7 @@ it("returns detached metadata and rejects asynchronous batch consumers", async (
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
-  });
-});
+  }));
 
 function seedRetainedSessionHeader(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
@@ -581,8 +568,8 @@ function seedRetainedSessionHeader(
 
 it.each(["sharing", "list"] as const)(
   "returns %s metadata through the worker boundary",
-  async (projection) => {
-    await withDatabase(async (database, env) => {
+  (projection) =>
+    withDatabase(async (database, env) => {
       const sessionKey = "agent:main:retained-header";
       seedRetainedSessionHeader(database, sessionKey, "retained-session");
       replaceSessionEntrySync(
@@ -612,12 +599,11 @@ it.each(["sharing", "list"] as const)(
       } else {
         expect(result.sharing).toBeUndefined();
       }
-    });
-  },
+    }),
 );
 
-it("preserves listing validation of dirty siblings in selected worker reads", async () => {
-  await withDatabase(async (database, env) => {
+it("preserves listing validation of dirty siblings in selected worker reads", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:selected";
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
     for (const key of [sessionKey, sibling]) {
@@ -647,11 +633,10 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sibling);
     await expect(read()).rejects.toThrow("non-canonical persisted row");
-  });
-});
+  }));
 
-it("reads retained headers and entries from one committed sharing snapshot", async () => {
-  await withDatabase(async (database, env) => {
+it("reads retained headers and entries from one committed sharing snapshot", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:retained-snapshot";
     seedRetainedSessionHeader(database, sessionKey, "retained-session");
     const target = { agentId: database.agentId, path: database.path };
@@ -695,13 +680,12 @@ it("reads retained headers and entries from one committed sharing snapshot", asy
       concurrentCommit.mockRestore();
       peer.close();
     }
-  });
-});
+  }));
 
 it.each(["unsettled marker", "missing window"] as const)(
   "refuses an uncertified retained header with %s instead of reporting absence",
-  async (defect) => {
-    await withDatabase(async (database, env) => {
+  (defect) =>
+    withDatabase(async (database, env) => {
       const sessionKey = "agent:main:uncertified-header";
       seedRetainedSessionHeader(database, sessionKey, "uncertified-session");
       if (defect === "unsettled marker") {
@@ -720,12 +704,11 @@ it.each(["unsettled marker", "missing window"] as const)(
           projection: "sharing",
         }),
       ).rejects.toThrow();
-    });
-  },
+    }),
 );
 
-it("keeps durable delivery generations live only through same-generation writes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+it("keeps durable delivery generations live only through same-generation writes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const sessionKey = "agent:main:delivery";
     const scope = { agentId: "main", sessionKey, env };
     const entry = { sessionId: "original", updatedAt: 1 };
@@ -839,11 +822,10 @@ it("keeps durable delivery generations live only through same-generation writes"
     } finally {
       authority.release();
     }
-  });
-});
+  }));
 
-it("orders native reads with writers and ignores unrelated metadata notifications", async () => {
-  await withDatabase(async (database, env) => {
+it("orders native reads with writers and ignores unrelated metadata notifications", () =>
+  withDatabase(async (database, env) => {
     const sessionKey = "agent:main:ordered-consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "ordered-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
@@ -876,13 +858,12 @@ it("orders native reads with writers and ignores unrelated metadata notification
         withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
       ),
     ).resolves.toBeUndefined();
-  });
-});
+  }));
 
 it.each(["entry", "store", "topology", "native"] as const)(
   "revokes an ordered reader after authoritative %s changes",
-  async (change) => {
-    await withDatabase(async (database, env) => {
+  (change) =>
+    withDatabase(async (database, env) => {
       const sessionKey = "agent:main:changed-consumer";
       writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
       let consumed = 0;
@@ -917,6 +898,5 @@ it.each(["entry", "store", "topology", "native"] as const)(
         await reading;
       }
       expect(consumed).toBe(1);
-    });
-  },
+    }),
 );

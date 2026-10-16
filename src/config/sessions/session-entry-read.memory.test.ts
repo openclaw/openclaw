@@ -7,23 +7,23 @@ import {
 } from "./session-accessor.entry-mutation.js";
 import {
   readResolvedSessionEntryInWorker,
-  resolveSessionEntryCandidateTargetForRuntime,
+  resolveSessionEntryCandidateTargetForRuntime as resolveCandidate,
 } from "./session-accessor.entry.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import type { SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
+  captureSessionActorStorageOwner as captureStorageOwner,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
-import { captureNativeSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
+import { captureNativeSessionEntryCurrentRead as captureCurrentRead } from "./session-entry-current-runtime.js";
 import { prepareSessionEntryPresenceRead } from "./session-entry-presence-read.js";
 import {
   createSessionEntryListReader,
-  readSessionEntriesFromStoreInWorker,
-  readSessionEntryByIdReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker as readEntries,
+  readSessionEntryByIdReadOnlyInWorker as readById,
   readSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionEntryInWorker } from "./session-entry-read-writable.js";
@@ -31,6 +31,14 @@ import type { InternalSessionEntry } from "./types.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
+const committed = (result: Promise<{ kind: string }>) =>
+  expect(result).resolves.toMatchObject({ kind: "committed" });
+const makeEntry = (sessionId: string, fields: Partial<InternalSessionEntry> = {}) => ({
+  sessionId,
+  updatedAt: 1,
+  incognito: true,
+  ...fields,
+});
 const createEntry = (storage: SessionActorStorage, entry: InternalSessionEntry) =>
   storage.mutate({ type: "session.entry.create", input: { entry } }, authority);
 const patchEntry = (storage: SessionActorStorage, patch: Partial<InternalSessionEntry>) =>
@@ -56,18 +64,18 @@ it("unbound child readers observe memory lineage writes without opening SQLite",
   const childKey = "agent:main:dashboard:incognito-child";
   const actor = await owner.acquire({ database: owner.identity, sessionKey: childKey }, lifetime);
   try {
-    await createEntry(actor.storage!, {
-      sessionId: "child",
-      updatedAt: 1,
-      incognito: true,
-      skillsSnapshot: { prompt: "private instructions", skills: [] },
-    });
+    await createEntry(
+      actor.storage!,
+      makeEntry("child", {
+        skillsSnapshot: { prompt: "private instructions", skills: [] },
+      }),
+    );
     expect(await listSessionChildEntriesReadOnly(scope)).toEqual([]);
     await patchEntry(actor.storage!, { parentSessionKey: scope.sessionKey });
     const children = await listSessionChildEntriesReadOnly({ ...scope, projection: "list" });
     expect(children).toMatchObject([{ sessionKey: childKey, entry: { sessionId: "child" } }]);
     expect(children[0]?.entry).not.toHaveProperty("skillsSnapshot");
-    const selected = await readSessionEntriesFromStoreInWorker({
+    const selected = await readEntries({
       ...scope,
       selection: { kind: "children", parentSessionKeys: [scope.sessionKey] },
       projection: "list",
@@ -87,14 +95,9 @@ it("keeps absent incognito metadata absent across ordinary read entry points", a
   expect(await readSessionEntryReadOnlyInWorker(scope)).toBeUndefined();
   expect(await readSessionEntryInWorker(scope)).toBeUndefined();
   expect(await prepareSessionEntryPresenceRead(scope).read()).toBe(false);
-  expect(
-    await readSessionEntryByIdReadOnlyInWorker({ ...scope, sessionId: "missing" }),
-  ).toBeUndefined();
+  expect(await readById({ ...scope, sessionId: "missing" })).toBeUndefined();
   expect((await createSessionEntryListReader(scope)()).entries).toEqual([]);
-  expect(
-    (await readSessionEntriesFromStoreInWorker({ ...scope, sessionKeys: [scope.sessionKey] }))
-      .entries,
-  ).toEqual([]);
+  expect((await readEntries({ ...scope, sessionKeys: [scope.sessionKey] })).entries).toEqual([]);
   expect(memorySessionActorOwners.read(database)).toBeUndefined();
 });
 
@@ -105,48 +108,39 @@ it("unbound readers observe committed entry and sharing changes without replacin
   try {
     runWithSessionActorStorage(binding!, () => {
       expect(
-        captureSessionActorStorageOwner({
+        captureStorageOwner({
           agentId: scope.agentId,
           storePath: `${scope.env.OPENCLAW_STATE_DIR}/durable.sqlite`,
         }),
       ).toBeUndefined();
     });
-    await expect(
-      createEntry(binding!.actor.storage, {
-        sessionId: "memory-read",
-        updatedAt: 1,
-        incognito: true,
-        modelSelectionLocked: false,
-      }),
-    ).resolves.toMatchObject({ kind: "committed" });
-    const current = captureNativeSessionEntryCurrentRead(scope);
+    const storage = binding!.actor.storage;
+    await committed(
+      createEntry(storage, makeEntry("memory-read", { modelSelectionLocked: false })),
+    );
+    const current = captureCurrentRead(scope);
     const list = createSessionEntryListReader(scope);
     expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(1);
     using now = vi.spyOn(Date, "now");
     now.mockReturnValue(2);
-    await expect(
-      patchEntry(binding!.actor.storage, { updatedAt: 2, modelSelectionLocked: true }),
-    ).resolves.toMatchObject({ kind: "committed" });
-    const shared = await binding!.actor.storage.mutate(
-      {
-        type: "session.collaboration.add",
-        input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },
-      },
-      authority,
+    await committed(patchEntry(storage, { updatedAt: 2, modelSelectionLocked: true }));
+    await committed(
+      storage.mutate(
+        {
+          type: "session.collaboration.add",
+          input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },
+        },
+        authority,
+      ),
     );
-    expect(shared.kind).toBe("committed");
     expect(current.readCurrent()?.modelSelectionLocked).toBe(true);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(2);
     expect((await readSessionEntryInWorker(scope))?.updatedAt).toBe(2);
     for (const sessionId of ["memory-read", " memory-read "]) {
-      await expect(
-        readSessionEntryByIdReadOnlyInWorker({ ...scope, sessionId }),
-      ).resolves.toMatchObject({
-        entry: { updatedAt: 2 },
-      });
+      expect((await readById({ ...scope, sessionId }))?.entry.updatedAt).toBe(2);
     }
-    const batch = await readSessionEntriesFromStoreInWorker({
+    const batch = await readEntries({
       ...scope,
       sessionKeys: [scope.sessionKey],
       projection: "sharing",
@@ -183,7 +177,7 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
     expect((await preparation.preparations[0])?.execution).toBeUndefined();
     const created = await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
-      entry: { sessionId: "created-memory", updatedAt: 1, incognito: true },
+      entry: makeEntry("created-memory"),
     }));
     expect(created.ok).toBe(true);
     actor = await claim.acquireSessionActor(lifetime);
@@ -191,7 +185,7 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
       kind: "memory",
       incarnation: claim.incarnation,
     });
-    await expect(
+    await committed(
       actor.patch(
         {
           commandId: "admitted-entry-update",
@@ -200,10 +194,10 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
         },
         authority,
       ),
-    ).resolves.toMatchObject({ kind: "committed" });
+    );
     expect((await readResolvedSessionEntryInWorker({ ...scope, cfg: {} }))?.updatedAt).toBe(2);
     await expect(
-      resolveSessionEntryCandidateTargetForRuntime({
+      resolveCandidate({
         agentId: scope.agentId,
         env: scope.env,
         cfg: {},
