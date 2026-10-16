@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
@@ -18,14 +19,9 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resolveWidgetPresenters } from "../../plugins/widget-presenters.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  resetGeneratedMediaTaskActivityForTests,
-  admitMediaHandle,
-} from "../media-generation-activity.test-support.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
-import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import {
   retainPreparedPluginGeneration,
@@ -35,9 +31,13 @@ import {
   closeEphemeralPreparedModelRuntimeResources,
   PreparedModelRuntimeBuildResources,
 } from "../prepared-model-runtime.resources.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import { imageGenerationTaskLifecycle as lifecycle } from "./media-generate-background.js";
+import {
+  mediaResourceSnapshot,
+  mockAdmittedMediaTask,
+  waitForMediaPhase,
+} from "./media-resource-fixtures.test-support.js";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==",
@@ -231,62 +231,17 @@ module.exports = { id: '${id}', register(api) {
             await rollbackDisposal.promise;
           }
           releasePublication = retainPreparedPluginGeneration(prepared.pluginGeneration);
-          const facts = prepared.agentFacts[0]!;
-          const catalog = prepareConfiguredRuntimeFacts({
-            agentFacts: facts,
-            workspaceFacts: prepared.pluginGeneration,
-            templateModelRegistry: ModelRegistry.inMemory(facts.templateAuthStorage),
-            configuredRuntimeModels: facts.configuredRuntimeModels,
-          });
-          const snapshot = createPreparedModelRuntimeSnapshot(
-            undefined,
-            facts,
-            prepared.pluginGeneration,
-            catalog,
-            {
-              initialAuth: {
-                authStore: facts.authStore,
-                authModes: {},
-                providerAuthLabels: new Map(),
-              },
-              isCurrent: () => true,
-              withRefreshStatus: (value) => value,
-              readFullModelCatalog: () => catalog.modelCatalog,
-              refreshExpiredModelCatalog: () => {},
-              recheckNativeLogin: () => {},
-              readPublishedModels: () => undefined,
-              loadFullModelCatalog: async () => catalog.modelCatalog,
-              loadNativeModelCatalog: async () => catalog.modelCatalog,
-              loadAuth: async () => {
-                throw new Error("No model auth in this fixture");
-              },
-            },
-          );
+          const snapshot = mediaResourceSnapshot(prepared);
           const scheduled: Array<() => Promise<void>> = [];
           const sessionKey = "agent:main:discord:direct:donor-proof";
-          vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
-            admitMediaHandle({
-              taskId: "donor-task",
-              detach: true,
-              runId: "donor-run",
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              taskLabel: "Donor proof",
-            }),
-          );
-          vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
-          const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
-          const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});
-          vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({ status: "delivered" });
+          const { completed, failed } = mockAdmittedMediaTask(lifecycle, sessionKey);
           const tool = createImageGenerateTool({
             config,
             agentDir: state.agentDir(),
             workspaceDir: state.workspaceDir,
             preparedModelRuntime: snapshot,
             agentSessionKey: sessionKey,
-            scheduleBackgroundWork: (work) => {
-              scheduled.push(work);
-            },
+            scheduleBackgroundWork: (work) => scheduled.push(work),
           });
           if (!tool) {
             throw new Error("Missing image tool");
@@ -295,23 +250,14 @@ module.exports = { id: '${id}', register(api) {
             (await tool.execute("donor-call", { prompt: "A synthetic resource proof" })).details,
           ).toMatchObject({ status: "started" });
           completion = scheduled[0]!();
-          await Promise.race([
-            admitted.promise,
-            completion.then(() => {
-              throw new Error("Media task settled before invoking the copied donor", {
-                cause: failed.mock.calls[0]?.[0]?.error,
-              });
-            }),
-          ]);
+          await waitForMediaPhase(admitted.promise, completion);
           releasingOwners = Promise.allSettled([
             construction[Symbol.asyncDispose](),
             releasePublication?.(),
           ]);
           closeDonor = donorSource?.release();
           void closeDonor?.catch(() => {});
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await setImmediate();
           expect.soft(donorDb.isOpen).toBe(true);
           expect.soft(donorDispose).not.toHaveBeenCalled();
           if (donorSource) {
@@ -321,18 +267,11 @@ module.exports = { id: '${id}', register(api) {
             /provider setup changed/,
           );
           finishCallback.resolve();
-          await Promise.race([
-            primaryDisposal.promise,
-            completion.then(() => {
-              throw new Error("Media work ended without primary disposal");
-            }),
-          ]);
+          await waitForMediaPhase(primaryDisposal.promise, completion);
           expect.soft(donorDb.isOpen).toBe(true);
           finishPrimary.resolve();
           if (mode === "rollback") {
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await setImmediate();
             expect(donorDb.isOpen).toBe(true);
             expect(donorDispose).not.toHaveBeenCalled();
             expect(completed).not.toHaveBeenCalled();
