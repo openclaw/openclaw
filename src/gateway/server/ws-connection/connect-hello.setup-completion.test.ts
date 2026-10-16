@@ -7,6 +7,7 @@ import {
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import { persistDevicePairingStoreState } from "../../../infra/device-pairing-store.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import type { PairedDevice } from "../../../infra/device-pairing.types.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../../shared/device-bootstrap-profile.js";
 import {
@@ -145,6 +146,8 @@ describe("sendGatewayHello setup completion ordering", () => {
 
           const handoffStarted = createDeferred();
           const releaseHandoff = createDeferred();
+          const releaseMetadata = createDeferred();
+          let metadataTail: Promise<void> | undefined;
           const onHelloDelivered = vi.fn();
           const broadcast = vi.fn((event: string) => {
             if (presenceFails && event === "presence") {
@@ -200,6 +203,14 @@ describe("sendGatewayHello setup completion ordering", () => {
               await releaseHandoff.promise;
             }),
             onHelloDelivered,
+            pendingDeviceMetadata: {
+              deviceId: paired.deviceId,
+              identity: paired,
+              patch: { displayName: "After hello" },
+            },
+            runDetachedConnectWork: vi.fn((run: () => Promise<void>) => {
+              metadataTail = releaseMetadata.promise.then(run);
+            }),
             pendingNodePairingCleanup: {},
             releasePendingNodePairingCleanup: vi.fn(async () => undefined),
           };
@@ -211,7 +222,15 @@ describe("sendGatewayHello setup completion ordering", () => {
             setupId: issued.setupId,
           });
           releaseHandoff.resolve();
-          await hello;
+          try {
+            await hello;
+            expect(context.runDetachedConnectWork).toHaveBeenCalledOnce();
+            expect((await getPairedDevice(paired.deviceId))?.displayName).toBe(paired.displayName);
+          } finally {
+            releaseMetadata.resolve();
+            await metadataTail;
+          }
+          expect((await getPairedDevice(paired.deviceId))?.displayName).toBe("After hello");
           expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
           await clock.advanceBy(200);
           const completionAfterHandoff = await readDevicePairSetupCompletion({

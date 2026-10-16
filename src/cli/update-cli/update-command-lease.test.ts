@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -110,6 +111,9 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   mocks.publication.mockReset().mockImplementation(async (params, publish) => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());

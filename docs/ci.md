@@ -70,6 +70,11 @@ Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
+Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
+path. Successful 16-class jobs reached 19:04, leaving too little margin under the
+former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
+runner size, worker count, shard split, and individual test deadlines are unchanged.
+
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at

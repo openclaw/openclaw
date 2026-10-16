@@ -77,9 +77,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         typeof defaultsModel === "string"
           ? normalizeOptionalString(defaultsModel)
           : normalizeOptionalString(defaultsModel?.primary);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-      const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+      const primaryProvider = primary?.split("/")[0];
+      const primaryModel = primary?.split("/").slice(1).join("/");
 
       const requestProvider = normalizeOptionalString(params.provider);
       const configuredProvider = normalizeOptionalString(pluginCfg.defaultProvider);

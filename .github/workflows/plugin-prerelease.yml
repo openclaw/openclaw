@@ -81,7 +81,9 @@ jobs:
   resolve_target:
     name: Resolve target ref
     if: github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       checkout_revision: ${{ steps.resolve.outputs.sha }}
@@ -113,7 +115,7 @@ jobs:
   preflight:
     name: Build plugin prerelease plan
     needs: [resolve_target]
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
@@ -755,7 +757,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -989,7 +991,7 @@ jobs:
       - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     steps:
       - name: Verify plugin prerelease suite

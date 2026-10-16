@@ -182,6 +182,16 @@ If the pin is invalid, enabling fails with the CLI error; reinstall explicitly w
 `--runtime` or `--runtime-path` to replace the saved pin.
 Disabling it uninstalls the LaunchAgent, which removes the pin.
 
+Runtime intent lives in the daemon-owned local SQLite store
+`<state>/control/services.sqlite`, independently of the selected shared-state
+engine. The app reads typed intent through its bundled CLI; it does not open the
+shared database. Unknown, malformed, or stale intent preserves the service and
+requires an explicit runtime selection before replacement. A pending migration is
+reported as `migrationPending`; update and resume preserve the current runtime
+until Doctor or a CLI start/repair completes it. An app-hosted resume that runs
+neither Doctor nor the CLI start fence may keep the receipt pending; the next
+CLI start/repair or `openclaw doctor` completes it.
+
 A newly installed app-managed Bun service is pinned to
 `<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and
 `OPENCLAW_SQLITE_LIBRARY` environment. After an app update, the app reinstalls
@@ -368,7 +378,8 @@ Node resume path; it does not skip the version update or enable the hosting
 toggle early.
 
 Before an app-owned install through the bundled CLI, the app reads runtime intent
-with that same CLI, runtime, and environment using `gateway status --deep --json`.
+with that same CLI, runtime, and environment using `gateway status --runtime-intent-only --json`.
+This local inspection remains available when the Gateway or PostgreSQL is stopped.
 It passes the observed revision and service definition to the installer after its
 final local custody checks. Failed or unknown inspection stops the install. If an
 operator changes the service or runtime pin before installation begins, the CLI

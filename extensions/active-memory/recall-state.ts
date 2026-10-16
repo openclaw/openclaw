@@ -182,10 +182,10 @@ export function buildCacheKey(params: {
         authorityFingerprint: params.authorityFingerprint,
         memoryAudience: buildMemoryAudienceCacheIdentity(params.memoryAudience),
         memorySlot: params.memorySlot,
-        activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
+        activeProjectKeys: params.activeProjectKeys?.toSorted() ?? [],
         modelProviderId: params.modelProviderId,
         modelId: params.modelId,
-        recallToolNames: [...params.recallToolNames].toSorted(),
+        recallToolNames: params.recallToolNames.toSorted(),
         resourceScope: params.resourceScope,
       }),
     )

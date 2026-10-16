@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -14,10 +14,11 @@ import {
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { DreamDiaryActionMethod, DreamingState, WikiOverview } from "./dreaming.ts";
 import { AgentMemoryState } from "./memory-panel-state.ts";
 import { AgentMemoryView } from "./memory-panel-view.tsx";
@@ -123,9 +124,12 @@ function createPage(context: ApplicationContext): TestMemoryPanel {
 }
 
 async function replaceContext(page: TestMemoryPanel, context: ApplicationContext) {
-  page.context = context;
-  page.requestUpdate();
-  await page.updateComplete;
+  page.disconnect();
+  const replacement = createPage(context);
+  replacement.agentId = page.agentId;
+  replacement.connect();
+  await replacement.updateComplete;
+  return replacement;
 }
 
 afterEach(() => {
@@ -140,49 +144,50 @@ afterEach(() => {
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
-  it.each(["lit", "solid"] as const)(
-    "registers the memory host and releases shell layout for %s callers",
-    async (renderer) => {
-      const context = contextWithGateway({} as GatewayBrowserClient, false);
-      const content = document.createElement("main");
-      content.className = "content";
-      document.body.append(content);
-      const owner = new ShellLayoutOwner();
-      owner.contentRef(content);
-      if (renderer === "lit") {
-        const provider = createApplicationContextProvider(context);
-        const host = document.createElement("openclaw-agent-memory-panel");
-        host.agentId = "support";
-        provider.append(host);
-        content.append(provider);
-      } else {
-        const provider = createSolidApplicationContextProvider(context);
-        mountSolid(
-          () =>
-            createComponent(ShellLayoutProvider, {
-              value: { owner, host: content },
-              get children() {
-                return createComponent(AgentMemoryPanel, { agentId: "support" });
+  it("scopes native memory requests to the current agent and releases shell layout", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+    );
+    const context = contextWithGateway(createTestGatewayClient(request), true);
+    const unsubscribe = vi.fn();
+    context.gateway.subscribe = () => unsubscribe;
+    const content = document.createElement("main");
+    content.className = "content";
+    document.body.append(content);
+    const owner = new ShellLayoutOwner();
+    owner.contentRef(content);
+    const provider = createSolidApplicationContextProvider(context);
+    const [agentId, setAgentId] = createSignal("support");
+    const view = mountSolid(
+      () =>
+        createComponent(ShellLayoutProvider, {
+          value: { owner, host: content },
+          get children() {
+            return createComponent(AgentMemoryPanel, {
+              get agentId() {
+                return agentId();
               },
-            }),
-          { container: content, wrapper: provider.wrapper },
-        );
-      }
-      const host = content.querySelector("openclaw-agent-memory-panel")!;
-      await host.updateComplete;
-      flush();
-      expect(host.agentId).toBe("support");
-      expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
-      expect(owner.current.toolbarHeader).toBe(true);
-      if (renderer === "solid") {
-        cleanupSolid();
-      } else {
-        host.remove();
-      }
-      await Promise.resolve();
-      expect(owner.current.toolbarHeader).toBeUndefined();
-    },
-  );
+            });
+          },
+        }),
+      { container: content, wrapper: provider.wrapper },
+    );
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "support" }),
+    );
+    const host = content.querySelector("openclaw-agent-memory-panel")!;
+    expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
+    expect(owner.current.toolbarHeader).toBe(true);
+
+    setAgentId("main");
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" }),
+    );
+    expect(content.querySelector("openclaw-agent-memory-panel")).toBe(host);
+    view.unmount();
+    expect(owner.current.toolbarHeader).toBeUndefined();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
 
   it("waits for a committed agent before loading agent-scoped memory", async () => {
     const request = vi.fn(async (method: string) => {
@@ -274,7 +279,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
   it("resets provider and modal state when the gateway source changes", async () => {
     const client = {} as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, false));
+    let page = createPage(contextWithGateway(client, false));
     page.connect();
     await page.updateComplete;
     const previousState = page.dreaming;
@@ -288,7 +293,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.toggleConfirmLoading = true;
     page.pendingEnabled = true;
 
-    await replaceContext(page, contextWithGateway(client, false));
+    page = await replaceContext(page, contextWithGateway(client, false));
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.dreamDiaryContent).toBeNull();
@@ -307,8 +312,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
   });
 
   it.each([false, true])(
-    "discards a wiki response from a replaced gateway source (subscription rebound: %s)",
-    async (rebound) => {
+    "discards a wiki response from a replaced gateway source (remounted: %s)",
+    async (remounted) => {
       const pending = deferred<unknown>();
       const client = {
         request: vi.fn(() => pending.promise),
@@ -319,7 +324,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
       const preview = page.openWikiPage("old.md");
       const nextContext = contextWithGateway(client, false);
-      if (rebound) {
+      if (remounted) {
         await replaceContext(page, nextContext);
       } else {
         page.context = nextContext;

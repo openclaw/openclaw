@@ -41,7 +41,7 @@ export type {
 } from "./main-session-recovery-types.js";
 
 const MAIN_RESTART_RECOVERY_REMEDIATION_HINT =
-  "inspect the failed main session and use /new or reset to start a replacement session";
+  "inspect the failed main session and use Resume in WebChat; in other channels, use /new or /reset to start a replacement session";
 
 function updateRecoveryState(
   entry: SessionEntry,

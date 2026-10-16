@@ -319,7 +319,7 @@ function canRecordAgentsApiNativeToolInvocation(item: AgentsApiItem): boolean {
     return ["command_execution", "mcp_call", "web_search_call"].includes(item.type);
   }
   if (item.type === "command_execution") {
-    return typeof item.command === "string" && (item.cwd === null || typeof item.cwd === "string");
+    return item.command !== undefined && item.cwd !== undefined;
   }
   // A retrieved MCP arguments field does not prove that generation is complete.
   // Wait for this item's terminal status before freezing its invocation.
@@ -338,9 +338,7 @@ function canRecordAgentsApiTranscriptItem(
     return canRecordAgentsApiNativeToolInvocation(item);
   }
   if (item.type === "function_call") {
-    return (
-      typeof item.call_id === "string" && recordedGatewayCallIds.has(`${turnId}:${item.call_id}`)
-    );
+    return item.call_id !== undefined && recordedGatewayCallIds.has(`${turnId}:${item.call_id}`);
   }
   if (
     item.type === "reasoning" ||

@@ -444,10 +444,9 @@ export function resolveBuildStepCacheState(
   const lock = acquireBuildArtifactLock(stampPath);
   try {
     const stamp = readArtifactRecord(stampPath);
-    let signature: string;
+    let signature: string | undefined;
     let consumedInputs: string[] | undefined;
     if (params.inputSignature) {
-      signature = params.inputSignature([]);
       try {
         if (stamp?.inputs) {
           signature = params.inputSignature(stamp.inputs);
@@ -457,6 +456,7 @@ export function resolveBuildStepCacheState(
         // Missing previous inputs invalidate normally; the successful compiler
         // supplies the next membership before this owner can seal a generation.
       }
+      signature ??= params.inputSignature([]);
     } else {
       signature = hashInputFiles(
         rootDir,

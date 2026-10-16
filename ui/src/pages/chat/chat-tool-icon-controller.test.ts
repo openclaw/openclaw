@@ -4,6 +4,7 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 
@@ -81,7 +82,7 @@ function setup() {
       },
     },
   };
-  const host = {
+  const host: SolidControllerHost = {
     addController: vi.fn(),
     removeController: vi.fn(),
     requestUpdate: vi.fn(),

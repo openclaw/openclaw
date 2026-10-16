@@ -25,6 +25,7 @@ import {
 } from "../subagents/announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../subagents/announce/subagent-announce.requester-settle-wake.js";
 import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryChangesToSqlite } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
@@ -192,7 +193,9 @@ describe("swarm tools integration", () => {
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
     vi.mocked(getRuntimeConfig).mockReturnValue(config);
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockResolvedValue(false);
-    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
+    await configureMockSubagentRegistryPersistence({
+      persistRegistryRows: saveSubagentRegistryChangesToSqlite,
+    });
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(1_000);
     vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");

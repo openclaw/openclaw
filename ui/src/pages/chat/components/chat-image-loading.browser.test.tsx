@@ -12,7 +12,6 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
-import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "../../activity/session-activity-media.css";
 
 const browserMode = "__vitest_browser__" in globalThis;

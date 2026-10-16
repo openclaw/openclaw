@@ -26,6 +26,18 @@ const testSuites = new Set([
 ]);
 const reviewed = new Map([
   [
+    "src/daemon/runtime-pin-store.ts",
+    { tier: "T3", evidence: "CLI service owner / Doctor migration; no Gateway runtime." },
+  ],
+  [
+    "src/daemon/runtime-pin-state.ts",
+    { tier: "T3", evidence: "CLI service locks; CLI status and Doctor audits; no Gateway caller." },
+  ],
+  [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
+    { tier: "T3", evidence: "Doctor config-machine-state / pin fence; exclusive migration lock." },
+  ],
+  [
     "src/config/sessions/goals-operations.ts",
     {
       priority: 99,
@@ -1567,12 +1579,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "readActiveCronRunReceiptOwnersInDatabase",
-          "readActiveCronRunReceiptsInDatabase",
-        ],
+        operations: ["readActiveCronRunReceiptsInDatabase"],
         evidence:
-          "read-command.ts currentReceipt/activeReceiptOwners and run-recovery.read.ts route through openclaw-state-read.worker.ts; remaining direct callers are run-admission.worker.ts and runtime-maintenance.worker.ts",
+          "read-command.ts currentReceipt and run-recovery.read.ts route through openclaw-state-read.worker.ts; remaining direct callers are run-admission.worker.ts and runtime-maintenance.worker.ts",
       },
     ],
   ],
@@ -3115,6 +3124,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
+  "extensions/memory-core/src/memory/manager-search.ts", // Only manager-search.worker.ts executes keyword SQL; host imports are the pure prepareExactPathMatcher helper or types.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
   "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.

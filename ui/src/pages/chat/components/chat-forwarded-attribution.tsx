@@ -6,13 +6,12 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import { emptyLegacyContent, LitContent } from "../../../lit/solid-content.tsx";
-import { renderForwardedAvatar } from "../chat-avatar.ts";
+import { ForwardedAvatar, type ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import { readAutomationRun } from "../chat-turn-boundary.ts";
 
 registerChatMessageMetadataEnglish();
 
-export type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] & {
+export type ForwardedAttributionOptions = ForwardedAvatarOptions & {
   mainKey?: string;
   basePath?: string;
   linkSource?: boolean;
@@ -124,10 +123,14 @@ export function ForwardedAttribution(props: {
     source().sourceIsOtherAgent && props.options.updateCount === undefined
       ? source().sourceParsed?.agentId
       : undefined;
-  const avatar = createMemo(() => {
+  const hasAvatar = () => {
     const agentId = avatarAgentId();
-    return agentId ? renderForwardedAvatar(agentId, props.options) : emptyLegacyContent;
-  });
+    return Boolean(
+      agentId &&
+      (agentId === props.options.agentId ||
+        props.options.agents?.some((agent) => agent.id === agentId)),
+    );
+  };
   const from = () =>
     props.options.updateCount === undefined
       ? t("chat.messages.forwardedFrom")
@@ -194,9 +197,9 @@ export function ForwardedAttribution(props: {
           fallback={<ForwardedLink source={source()} basePath={props.options.basePath} />}
         >
           <span class="chat-reply-attribution__agent">
-            <Show when={avatar() !== emptyLegacyContent}>
+            <Show when={hasAvatar()}>
               <span class="chat-reply-attribution__agent-avatar" aria-hidden="true">
-                <LitContent value={avatar()} />
+                <ForwardedAvatar agentId={avatarAgentId()} options={props.options} />
               </span>
             </Show>
             <Show

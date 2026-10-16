@@ -378,6 +378,11 @@ export class SessionLineageController {
   load(sessionKey: string): Promise<void> {
     this.synchronize();
     const key = sessionKey.trim();
+    const creation = this.owner.context?.chatSubmissions?.readCreate()?.creation;
+    // A displayed provisional key has no authoritative descriptor to discover yet.
+    if (creation?.sessionKey === key && !creation.admitted) {
+      return Promise.resolve();
+    }
     if (key !== this.routeKey) {
       this.evictPreviousLineage();
       this.retire();

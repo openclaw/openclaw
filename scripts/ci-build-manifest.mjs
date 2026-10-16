@@ -685,7 +685,8 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
@@ -1671,8 +1672,8 @@ const manifest = {
   run_macos_node: runMacosNode,
   macos_node_matrix: createMatrix(
     runMacosNode
-      ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-        ? [1, 2, 3].map((part) => ({
+      ? [1, 2].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+        ? (hasPackageScript("test:macos:ci:3") ? [1, 2, 3] : [1, 2]).map((part) => ({
             check_name: `macos-node-${part}`,
             runtime: "node",
             task: `test-${part}`,
@@ -1785,7 +1786,10 @@ if (hybridHostedEligible) {
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification || hostedHybridControls),
     "ci-gate": count(hostedHybridControls),
-    "check-plan": count(hostedPlanner && runCheckPlan),
+    "check-plan": count(
+      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
+        runCheckPlan,
+    ),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
         (hostedHybridControls ||

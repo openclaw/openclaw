@@ -13,6 +13,7 @@ import {
 import type { GatewayServiceCommandConfig, GatewayServiceInstallArgs } from "./service-types.js";
 import { resolveGatewayService } from "./service.js";
 import { mockSystemAccountHome } from "./service.test-helpers.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 const leaves = vi.hoisted(() => ({ install: vi.fn(), read: vi.fn(), config: vi.fn() }));
 vi.mock("./launchd.js", async (original) => ({
   ...(await original<typeof import("./launchd.js")>()),
@@ -33,6 +34,7 @@ it.each(
 )("guards the admitted $kind native rebind: $scenario", async ({ kind, scenario }) => {
   const state = await createOpenClawTestState({ layout: kind === "node" ? "split" : "home" });
   try {
+    await seedCompletedRuntimePinMigration(state.env);
     mockProcessPlatform("darwin");
     state.applyEnv();
     mockSystemAccountHome();

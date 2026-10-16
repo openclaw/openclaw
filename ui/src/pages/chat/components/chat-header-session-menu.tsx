@@ -24,7 +24,6 @@ import {
   type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -108,7 +107,6 @@ function ChatHeaderSessionMenuContent(
   const readState = () => state;
   const controllerHost = useSessionMenuControllers(
     host,
-    useOptionalApplication(),
     () => setRevision((value) => value + 1),
     () => {
       revision();

@@ -2,7 +2,6 @@ import { For, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import type {
   SessionMenuActions,
@@ -12,14 +11,6 @@ import type {
 import { Icon } from "./solid/icon.tsx";
 import type { MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
-
-function OwnerAvatar(props: { owner: SessionOwnerOption }) {
-  return (
-    <span class="session-menu__avatar" aria-hidden="true">
-      <SessionOwnerAvatar owner={props.owner} />
-    </span>
-  );
-}
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
@@ -91,27 +82,26 @@ export function useSessionMenuDetails(
       ),
     );
   };
-  const ownerSearch = (
-    <div
-      class="people-menu__search"
-      ref={nativeListener("click", (event) => event.stopPropagation())}
-    >
-      <input
-        type="search"
-        data-search
-        data-form-control
-        autocomplete="off"
-        aria-label={t("sessionsView.searchPeople")}
-        placeholder={t("sessionsView.searchPeople")}
-        value={query()}
-        onInput={(event) => setQuery(event.currentTarget.value)}
-      />
-    </div>
-  );
   const ownerSearchEntry: MenuEntry = {
     kind: "content",
     id: "owners-search",
-    content: ownerSearch,
+    content: (
+      <div
+        class="people-menu__search"
+        ref={nativeListener("click", (event) => event.stopPropagation())}
+      >
+        <input
+          type="search"
+          data-search
+          data-form-control
+          autocomplete="off"
+          aria-label={t("sessionsView.searchPeople")}
+          placeholder={t("sessionsView.searchPeople")}
+          value={query()}
+          onInput={(event) => setQuery(event.currentTarget.value)}
+        />
+      </div>
+    ),
   };
   const ownerOptions = (): MenuEntry[] => {
     const current = readState().currentOwner;
@@ -131,7 +121,11 @@ export function useSessionMenuDetails(
           checked,
           disabled: actions.actionDisabled("assign-owner") || checked,
           attributes: { title: readState().actionDisabledReasons["assign-owner"] },
-          icon: <OwnerAvatar owner={owner} />,
+          icon: (
+            <span class="session-menu__avatar" aria-hidden="true">
+              <SessionOwnerAvatar owner={owner} />
+            </span>
+          ),
           content: <span class="session-menu__text">{label}</span>,
           details: checked ? (
             <span class="session-menu__check" aria-hidden="true">

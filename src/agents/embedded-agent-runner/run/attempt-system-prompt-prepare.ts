@@ -190,6 +190,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       model: `${attempt.provider}/${attempt.modelId}`,
       channel: attempt.messageChannel ?? attempt.messageProvider,
       accountId: attempt.agentAccountId,
+      requester: {
+        agentTo: attempt.messageTo,
+        agentThreadId: attempt.messageThreadId,
+        currentMessagingTarget: attempt.currentMessagingTarget ?? attempt.currentChannelId,
+        currentChannelId: attempt.chatId ?? attempt.currentChannelId,
+        currentThreadTs: attempt.currentThreadTs,
+      },
       chatType: attempt.chatType,
       requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
     },

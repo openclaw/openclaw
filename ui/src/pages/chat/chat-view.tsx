@@ -31,7 +31,7 @@ import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
-import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
@@ -110,24 +110,22 @@ function ChatFooterContent(input: ChatViewInput) {
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
-        <LitContent
-          value={renderChatPullRequests({
-            pullRequests: input.props.pullRequests ?? [],
-            gateway: input.props.pullRequestsGateway,
-            sessionId: input.props.pullRequestsSessionId,
-            sessionKey: scopedSessionArtifactKey(
-              input.props.sessionKey,
-              input.props.currentAgentId ?? undefined,
-            ),
-            presented: input.props.presented ?? true,
-            branch: input.props.pullRequestsBranch,
-            branchDismissed: input.props.pullRequestsBranchDismissed,
-            status: input.props.pullRequestsStatus ?? "ready",
-            onDismiss: (pullRequest) => input.props.onDismissPullRequest?.(pullRequest),
-            onDismissBranch: input.props.onDismissPullRequestsBranch,
-            onOpenSessionDiff: input.props.onOpenSessionDiff,
-            publication: input.props.githubPublication,
-          })}
+        <ChatPullRequests
+          pullRequests={input.props.pullRequests ?? []}
+          gateway={input.props.pullRequestsGateway}
+          sessionId={input.props.pullRequestsSessionId}
+          sessionKey={scopedSessionArtifactKey(
+            input.props.sessionKey,
+            input.props.currentAgentId ?? undefined,
+          )}
+          presented={input.props.presented ?? true}
+          branch={input.props.pullRequestsBranch}
+          branchDismissed={input.props.pullRequestsBranchDismissed}
+          status={input.props.pullRequestsStatus ?? "ready"}
+          onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
+          onDismissBranch={input.props.onDismissPullRequestsBranch}
+          onOpenSessionDiff={input.props.onOpenSessionDiff}
+          publication={input.props.githubPublication}
         />
       </Show>
       <LitContent

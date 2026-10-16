@@ -461,7 +461,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         machineClass: profile.class,
         os: profile.target,
         phase: "pending",
-        runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
+        runtimeIdentity: context.nodeRuntimeIdentity,
         preparationKey,
         cacheKey,
         purpose,

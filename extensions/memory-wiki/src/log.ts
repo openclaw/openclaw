@@ -157,17 +157,25 @@ export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string):
         listMemoryWikiPagePaths(vaultRoot, relativeDir),
       ),
     )
-  )
-    .flat()
-    .toSorted((left, right) => left.localeCompare(right));
-  const hash = createHash("sha256");
+  ).flat();
+  const entries: Array<[string, Buffer]> = [];
   for (const file of files) {
-    const relativePath = Buffer.from(file);
-    const pathLength = Buffer.allocUnsafe(4);
-    pathLength.writeUInt32BE(relativePath.byteLength);
     const contentDigest = createHash("sha256")
       .update(await fs.readFile(path.join(vaultRoot, file)))
       .digest();
+    entries.push([file, contentDigest]);
+  }
+  return hashMemoryWikiVaultSources(entries);
+}
+
+export function hashMemoryWikiVaultSources(entries: Array<[string, Buffer]>): string {
+  const hash = createHash("sha256");
+  for (const [file, contentDigest] of entries.toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const relativePath = Buffer.from(file);
+    const pathLength = Buffer.allocUnsafe(4);
+    pathLength.writeUInt32BE(relativePath.byteLength);
     hash.update(pathLength).update(relativePath).update(contentDigest);
   }
   return hash.digest("hex");

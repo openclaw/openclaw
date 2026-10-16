@@ -240,6 +240,9 @@ output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
 
+If recording a search for later memory promotion fails, search still returns
+its matches with a warning naming the recording error.
+
 The Control UI's Memories tab shows the same warning and recovery guidance
 alongside stale search results, and clears them after a fresh search.
 

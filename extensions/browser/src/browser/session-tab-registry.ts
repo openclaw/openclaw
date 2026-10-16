@@ -5,7 +5,6 @@
 import {
   captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
-  readCurrentBrowserState,
   type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
@@ -66,20 +65,26 @@ async function performVolatileCleanup(
 ): Promise<number> {
   const inFlight = volatileTabCleanupByTarget();
   const targetKey = volatileSessionTabTargetKey(candidate);
+  let cancelledByActivity = false;
   const resolveCurrent = () => {
     const current = resolveVolatile(candidate)?.tab;
-    return current?.registration === candidate.registration &&
-      (cleanupKind !== "sweep" || sameVolatileSessionTab(current, candidate))
-      ? current
-      : undefined;
+    if (current?.registration !== candidate.registration) {
+      return undefined;
+    }
+    if (cleanupKind === "sweep" && !sameVolatileSessionTab(current, candidate)) {
+      cancelledByActivity = true;
+      return undefined;
+    }
+    return current;
   };
-  const existing = inFlight.get(targetKey);
-  if (existing) {
-    await existing;
-    // A replaced registration is picked up by the next sweep, not handed off mid-close.
-    return 0;
+  for (let existing = inFlight.get(targetKey); existing; existing = inFlight.get(targetKey)) {
+    const result = await existing;
+    // Activity cancels a sweep, but not lifecycle cleanup of the same registration.
+    if (cleanupKind !== "lifecycle" || !result.cancelledByActivity || !resolveCurrent()) {
+      return 0;
+    }
   }
-  const cleanup = Promise.resolve().then(async () => {
+  const attempt = Promise.resolve().then(async () => {
     if (params.prepareCurrent && !(await params.prepareCurrent())) {
       return 0;
     }
@@ -146,12 +151,13 @@ async function performVolatileCleanup(
     deleteVolatileRegistrations(registrations);
     return 1;
   });
+  const cleanup = attempt
+    .then((closed) => ({ closed, cancelledByActivity }))
+    .finally(() => {
+      inFlight.delete(targetKey);
+    });
   inFlight.set(targetKey, cleanup);
-  try {
-    return await cleanup;
-  } finally {
-    inFlight.delete(targetKey);
-  }
+  return (await cleanup).closed;
 }
 
 async function closeTrackedTabs(
@@ -188,32 +194,17 @@ async function prepareTrackedTabCleanup(
   params: CloseParams & { sessionKeys?: Array<string | undefined> },
 ) {
   let dashboardClosed = 0;
-  const readDurable = () =>
-    readCurrentBrowserState(
-      params.authority?.runtime,
-      () => readDurableTabs(params.onWarn, params.authority),
-      params.isCurrent,
-    );
-  let durable = await readDurable();
-  if (!durable) {
-    return { dashboardClosed, durable };
-  }
+  let durable = await readDurableTabs(params.onWarn, params.authority);
   const hasDashboard =
     durable.some((tab) => tab.dashboard) ||
-    (
-      await readCurrentBrowserState(
-        params.authority?.runtime,
-        () => readBrowserDashboardStopIntents(params.authority),
-        params.isCurrent,
-      )
-    )?.length;
+    (await readBrowserDashboardStopIntents(params.authority)).length;
   if (hasDashboard) {
     const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
     if (!isCleanupCurrent(params)) {
       return { dashboardClosed, durable: undefined };
     }
     dashboardClosed = await reconcileBrowserDashboards(params);
-    durable = await readDurable();
+    durable = await readDurableTabs(params.onWarn, params.authority);
   }
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }

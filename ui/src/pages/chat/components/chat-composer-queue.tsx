@@ -14,6 +14,7 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -24,8 +25,7 @@ import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -303,8 +303,7 @@ function ChatQueueItem(rowProps: {
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
   const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const authorAvatar = createMemo(() => renderChatAuthorAvatar(item().sender));
-  const hasAuthorAvatar = createMemo(() => hasComposerContent(authorAvatar()));
+  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -532,7 +531,7 @@ function ChatQueueItem(rowProps: {
           <QueueWaitingIcon />
         </span>
       )}
-      <LitContent value={authorAvatar()} />
+      <ChatAuthorAvatar sender={item().sender} />
       {previewUrl() && images() ? (
         <img
           class="chat-queue__images"

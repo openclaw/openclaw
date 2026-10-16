@@ -2,8 +2,13 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
+const pinMigrationMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => {
+    await pinMigrationMock();
+    return run();
+  },
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +161,7 @@ describe("runNodeDaemonInstall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    pinMigrationMock.mockReset().mockResolvedValue(undefined);
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     mocks.runExec.mockReset().mockImplementation(async (executable: string) => ({
@@ -190,6 +196,21 @@ describe("runNodeDaemonInstall", () => {
       user: "pi",
       linger: "no",
     });
+  });
+
+  it("reports pending runtime-pin migration before reading intent or installing", async () => {
+    pinMigrationMock.mockRejectedValueOnce(
+      new Error("Runtime pin migration pending; run openclaw doctor."),
+    );
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Runtime pin inspection failed: Runtime pin migration pending; run openclaw doctor.",
+    );
+    expect(pinSnapshotMock).not.toHaveBeenCalled();
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.service.install).not.toHaveBeenCalled();
   });
 
   it.each([

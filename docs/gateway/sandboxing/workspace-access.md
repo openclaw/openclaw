@@ -115,6 +115,8 @@ a copy, staging stops with the same warning while the original remains available
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
 Local container mounts and sandbox file tools enforce these read-only roots.
+Generated skill copies carry their own Git ignore rule, so ordinary Git discovery
+omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy
