@@ -101,7 +101,8 @@ describe("google generative ai helpers", () => {
         },
       ],
     };
-    expect(normalizeGoogleProviderConfig("google-vertex", config)).toEqual(config);
+    const expected = structuredClone(config);
+    expect(normalizeGoogleProviderConfig("google-vertex", config)).toEqual(expected);
   });
 
   it("derives the Gemini API origin without duplicating /v1beta", () => {
