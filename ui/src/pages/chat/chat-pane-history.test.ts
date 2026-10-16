@@ -662,9 +662,9 @@ it("replaces a byte-limited cached tail before loading the next older page", asy
   state.chatMessages = historyPage([2, 3, 4, 5]).messages;
   state.chatHistoryPagination = pagination(5, 0);
 
-  await pane.loadOlderMessages(false);
+  await pane.loadOlderMessages();
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([4, 5]);
-  await pane.loadOlderMessages(false);
+  await pane.loadOlderMessages();
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5]);
   expect(state.chatHistoryPagination).toEqual(pagination(5));
 });
