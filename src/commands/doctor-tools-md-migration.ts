@@ -128,10 +128,8 @@ async function readMigrationFileSnapshot(
   ) {
     throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
   }
-  // This reader feeds content that is merged into AGENTS.md, re-encoded into the archive, and
-  // then unlinked from the workspace. Replacement decoding would persist U+FFFD over bytes the
-  // migration never intended to change, so refuse before any write. Same rule as the workspace
-  // memory migration and the file-editing tools (src/agents/utf8-file.ts).
+  // Both the merged file and archive must preserve the source bytes; decoding
+  // with replacement would corrupt content before the source is unlinked.
   if (!isUtf8(file.buffer)) {
     throw new Error(
       `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
