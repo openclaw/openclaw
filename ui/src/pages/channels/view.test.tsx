@@ -102,7 +102,7 @@ describe("channels plugin presentation metadata", () => {
     Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
     props.selectedChannel = "slack";
     Object.assign(props.wizardHost, {
-      state: { phase: "error", channel: "slack", message: "Setup failed" },
+      state: () => ({ phase: "error", channel: "slack", message: "Setup failed" }),
     });
     const container = document.createElement("div");
 

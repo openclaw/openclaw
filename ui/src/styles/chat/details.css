@@ -140,6 +140,14 @@ openclaw-chat-details-progress {
 .chat-details__toolbar button {
   color: var(--muted);
 }
+@media (hover: hover) {
+  .chat-details__row .chat-copy-btn {
+    opacity: 0;
+  }
+  .chat-details__row:is(:hover, :focus-within) .chat-copy-btn {
+    opacity: 1;
+  }
+}
 .chat-details__toolbar svg,
 .chat-details__row .chat-copy-btn svg {
   width: 14px;

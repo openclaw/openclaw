@@ -23,7 +23,6 @@ import type {
 } from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import {
   createModelCatalog,
   createSessionsListResult,
@@ -48,7 +47,10 @@ import {
   selectAttachmentMenuOption,
   selectFile,
 } from "./chat-attachment-picker.test-support.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerControlsFixture,
+} from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -1902,15 +1904,7 @@ describe("chat loading skeleton", () => {
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
-      composerControls: solidContent(
-        () =>
-          Object.assign(document.createElement("button"), {
-            className: "chat-composer-model-control",
-            type: "button",
-            textContent: "Model",
-          }),
-        {},
-      ),
+      composerControls: createComposerControlsFixture(),
       queue: [createPendingSend()],
       selectedSession: createContextUsageSessions().sessions[0],
     });
@@ -2043,15 +2037,7 @@ describe("chat loading skeleton", () => {
     try {
       const container = renderChatView({
         messages: [{ role: "assistant", content: "Partial response" }],
-        composerControls: solidContent(
-          () =>
-            Object.assign(document.createElement("button"), {
-              className: "chat-composer-model-control",
-              type: "button",
-              textContent: "Model",
-            }),
-          {},
-        ),
+        composerControls: createComposerControlsFixture(),
         runStatus: {
           phase: "interrupted",
           runId: "run-1",

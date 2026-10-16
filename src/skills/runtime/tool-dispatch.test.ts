@@ -65,6 +65,31 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveSkillDispatchTools", () => {
   it.each([
+    { message: { surface: "webchat" }, deny: false, available: true },
+    { message: { surface: "whatsapp" }, deny: false, available: false },
+    { message: { surface: "webchat" }, deny: true, available: false },
+    {
+      message: { surface: "unknown-channel", provider: "webchat" },
+      deny: false,
+      available: false,
+    },
+  ])(
+    "gates ask_user on the inbound $message.surface surface (deny: $deny)",
+    async ({ message, deny, available }) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        tools: { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const tools = await resolveSkillDispatchTools(
+        { ...dispatchDefaults, message, cfg },
+        { createOpenClawToolsAsync },
+      );
+      expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
+    },
+  );
+
+  it.each([
     { tools: { profile: "coding" }, actions: ["update.run"] },
     {
       tools: { profile: "full" },

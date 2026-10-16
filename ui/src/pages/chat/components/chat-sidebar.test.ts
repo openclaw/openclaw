@@ -423,6 +423,86 @@ describe("markdown sidebar", () => {
     },
   );
 
+  it("shows a failed attachment download and lets the user retry", async () => {
+    let failDownload!: (reason: Error) => void;
+    const download = vi.fn(
+      () =>
+        new Promise<Blob>((_resolve, reject) => {
+          failDownload = reject;
+        }),
+    );
+    const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
+      content: {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: "report.zip",
+        download,
+      } satisfies SidebarContent,
+    });
+    container.append(panel);
+    await panel.updateComplete;
+    const button = expectDefined(
+      panel.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__download"),
+      "Attachment download button",
+    );
+
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(true));
+    failDownload(new Error("Download interrupted"));
+    await vi.waitFor(() => {
+      expect(button.disabled).toBe(false);
+      expect(panel.querySelector('[role="alert"]')?.textContent).toBe("Download interrupted");
+    });
+    button.click();
+    await vi.waitFor(() => {
+      expect(button.disabled).toBe(true);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(download).toHaveBeenCalledTimes(2);
+    panel.remove();
+  });
+
+  it.each(["selection", "disconnection"])(
+    "retires an attachment download on %s before late bytes arrive",
+    async (change) => {
+      let finishDownload!: (blob: Blob) => void;
+      let signal!: AbortSignal;
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: "report.zip",
+        download: (requestSignal: AbortSignal) => {
+          signal = requestSignal;
+          return new Promise<Blob>((resolve) => {
+            finishDownload = resolve;
+          });
+        },
+      };
+      const createObjectURL = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = createObjectURL;
+        },
+      );
+      container.append(panel);
+      await panel.updateComplete;
+      panel.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__download")!.click();
+      if (change === "selection") {
+        panel.content = { kind: "markdown", content: "Next" };
+        await panel.updateComplete;
+      } else {
+        panel.remove();
+        await Promise.resolve();
+      }
+      expect(signal.aborted).toBe(true);
+      finishDownload(new Blob(["late content"]));
+      await Promise.resolve();
+      expect(createObjectURL).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["error"] as const)(
     "keeps the image placeholder through metadata until the image emits %s",
     async (outcome) => {

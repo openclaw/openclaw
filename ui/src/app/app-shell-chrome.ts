@@ -657,7 +657,7 @@ export class ShellChromeOwner {
     if (
       !event ||
       this.host.lazyCustomElements.visibleState ||
-      this.commandPaletteLoading.waitingForComposition
+      this.commandPaletteLoading.waitingForComposition()
     ) {
       return;
     }

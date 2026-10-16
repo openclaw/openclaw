@@ -120,7 +120,7 @@ export function replaceSessionWithBranchedTranscriptInTransaction(
   assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
   const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, resolved.sessionKey, {
+  const written = writeSessionEntry(database, resolved.sessionKey, {
     ...projectCanonicalSessionEntryShape({ ...fresh }),
     sessionId: branch.sessionId,
     updatedAt: Date.now(),
@@ -128,8 +128,10 @@ export function replaceSessionWithBranchedTranscriptInTransaction(
   assertLockedTranscriptWriteAllowed(database, nextResolved, nextScope);
   replaceSqliteTranscriptEventsInTransaction(database, nextResolved, branch.events, projection);
   assertActive?.();
+  const current = new Map(previous);
+  current.set(resolved.sessionKey, written);
   return {
-    identity: { previous, current: readSessionIdentitySnapshot(database, identityKeys) },
+    identity: { previous, current },
     version: readTranscriptContextVersionInTransaction(database, nextResolved.sessionId),
   };
 }

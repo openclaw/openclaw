@@ -1,4 +1,3 @@
-import { ContextProvider } from "@lit/context";
 import { insert, render, spread } from "@solidjs/web";
 import {
   createComponent,
@@ -16,23 +15,6 @@ import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
 import { mountLitContent } from "./solid-content.tsx";
-
-/** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
-export function connectLegacyApplicationContext(
-  host: HTMLElement,
-  context: ApplicationContext,
-): () => void {
-  const provider = new ContextProvider(host, {
-    context: applicationContext,
-    initialValue: context,
-  });
-  provider.hostConnected();
-  return () => {
-    provider.clearCallbacks();
-    host.removeEventListener("context-request", provider.onContextRequest);
-    host.removeEventListener("context-provider", provider.onProviderRequest);
-  };
-}
 
 /** Temporary renderer island; remove with the last Lit route and template caller. */
 export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {

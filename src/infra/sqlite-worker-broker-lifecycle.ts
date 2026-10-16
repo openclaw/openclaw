@@ -297,7 +297,11 @@ export function createSqliteWorkerLifecycle({
             actor.markNativeStopped();
           }
         } catch (error) {
-          errors.push(error);
+          // A close refused by an already failed slot never ran. Native exit owns
+          // its retirement; the original request still reports the slot failure.
+          if (error !== actor.slot.failed) {
+            errors.push(error);
+          }
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }

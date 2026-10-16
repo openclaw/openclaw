@@ -62,7 +62,7 @@ describe("X guest turns", () => {
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
-      replyText: "See https://docs.openclaw.ai/",
+      replyText: "[[x_success]] See https://docs.openclaw.ai/",
       posts: [mention],
       queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
     });

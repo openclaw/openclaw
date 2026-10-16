@@ -26,6 +26,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
@@ -803,4 +804,29 @@ describe("Tool Search network error boundaries", () => {
     expect(runtime.hasNetworkContent("secret-parent")).toBe(false);
     expect(formatToolSearchControlError(failure, runtime, "secret-parent")).toBe(failure);
   });
+});
+
+it("admits complete values without lending that route to direct or nested dispatch", async () => {
+  const small = "complete";
+  const large = "é🙂".repeat(20_000);
+  const reportId = "openclaw:core:report";
+  const proxyId = "openclaw:core:proxy";
+  const target = fakeTool("report");
+  target.execute = async (_id, input) => {
+    await Promise.resolve();
+    const text = typeof input === "object" && input !== null && "small" in input ? small : large;
+    assertCompleteToolResult(text, resolveToolResultBudget(4096));
+    return jsonResult({ text });
+  };
+  const proxy = fakeTool("proxy");
+  proxy.execute = async () => (await runtime.callExactId(reportId)).result;
+  const { runtime } = createRuntime([target, proxy]);
+  await expect(runtime.callExactId(reportId, { small: true })).resolves.toMatchObject({
+    result: { details: { text: small } },
+  });
+  await Promise.all([
+    expect(runtime.callExactValue(reportId)).resolves.toEqual({ text: large }),
+    expect(runtime.callExactId(reportId)).rejects.toThrow("Code Mode"),
+    expect(runtime.callExactValue(proxyId)).rejects.toThrow("Code Mode"),
+  ]);
 });

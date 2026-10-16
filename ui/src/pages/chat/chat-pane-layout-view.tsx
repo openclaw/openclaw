@@ -7,27 +7,11 @@ import { LitContent } from "../../lit/solid-content.tsx";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
 import { PaneDetails, type PaneDetailsProps } from "./chat-pane-header-view.tsx";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 
 export function PaneBootLayout() {
   return <main class="app-shell app-shell--booting" aria-busy="true" />;
-}
-
-export function PaneOutboxRecovery(props: {
-  state: ChatPageHost;
-  identity: string;
-  onRestored: () => void;
-}) {
-  return (
-    <openclaw-chat-outbox-recovery
-      prop:host={props.state}
-      prop:messages={props.state.chatMessages}
-      prop:identity={props.identity}
-      onOutbox-restored={() => props.onRestored()}
-    />
-  );
 }
 
 export function PaneSubagentStop(props: { onAbort: () => void }) {

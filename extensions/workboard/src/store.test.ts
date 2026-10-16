@@ -1446,6 +1446,12 @@ describe("WorkboardStore", () => {
     expect(child.status).toBe("todo");
     expect(child.execution).toBeUndefined();
     expect(child.metadata?.attempts).toBeUndefined();
+    expect(child.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+      ]),
+    );
+    await expect(store.get(child.id)).resolves.toEqual(child);
     await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(/dependencies/);
     await expect(store.move(child.id, "ready", child.position)).rejects.toThrow(/dependencies/);
     await expect(store.move(child.id, "running", child.position)).rejects.toThrow(/dependencies/);
@@ -2487,6 +2493,7 @@ describe("WorkboardStore", () => {
     const reclaimed = await store.reclaim(claimed.card.id, { reason: "stale session" }, null);
     expect(reclaimed).toMatchObject({ status: "ready" });
     expect(reclaimed.metadata?.claim).toBeUndefined();
+    await expect(store.get(reclaimed.id)).resolves.toEqual(reclaimed);
 
     const running = await store.create({
       title: "Running recovery",
@@ -2497,6 +2504,7 @@ describe("WorkboardStore", () => {
     expect(stopped.execution).toBeUndefined();
     expect(stopped.metadata?.attempts).toEqual([expect.objectContaining({ status: "stopped" })]);
     expect(stopped.metadata?.failureCount).toBeUndefined();
+    await expect(store.get(stopped.id)).resolves.toEqual(stopped);
   });
 
   it("excludes archived cards from notification replay without discarding their history", async () => {
