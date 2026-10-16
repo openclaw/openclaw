@@ -14,7 +14,10 @@ import {
 } from "./github-identity.test-support.ts";
 
 const confirmation = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: confirmation.show }));
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: confirmation.show,
+}));
 
 beforeEach(() => {
   confirmation.show.mockReset().mockResolvedValue(true);
