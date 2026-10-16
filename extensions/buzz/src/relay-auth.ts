@@ -173,7 +173,7 @@ async function authenticateBuzzRelay(params: {
         await racePromiseWithAbortSignal(
           params.relay.auth(params.signAuth),
           signal,
-          (signal) => signal.reason,
+          (abortedSignal) => abortedSignal.reason,
         );
         return;
       } catch (error) {
@@ -188,7 +188,7 @@ async function authenticateBuzzRelay(params: {
             setTimeout(resolve, AUTH_CHALLENGE_POLL_MS);
           }),
           signal,
-          (signal) => signal.reason,
+          (abortedSignal) => abortedSignal.reason,
         );
       }
     }

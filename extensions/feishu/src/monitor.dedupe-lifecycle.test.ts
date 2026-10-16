@@ -41,7 +41,8 @@ vi.mock("./monitor.transport.js", () => ({
   monitorWebSocket: mocks.transport,
   monitorWebhook: mocks.transport,
 }));
-vi.mock("./dedup.js", () => ({
+vi.mock("./dedup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dedup.js")>()),
   warmupDedupFromPluginState: mocks.warmup,
   claimUnprocessedFeishuMessage: mocks.claim,
   hasProcessedFeishuMessage: vi.fn(async () => false),

@@ -154,6 +154,7 @@ function processHoldsOpenClawArtifacts(
   } catch (error) {
     throw new Error(
       `Could not classify PID ${pid}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }

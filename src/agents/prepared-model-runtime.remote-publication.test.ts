@@ -163,7 +163,10 @@ it("shares catalog adoption without sharing observer cancellation and accepts th
   const observer = new AbortController();
   const cancelled = applyRemoteModelCatalogUpdate(() => config, observer.signal);
   const reason = new Error("catalog observer closed");
-  const cancelledResult = expect(cancelled).rejects.toBe(reason);
+  const cancelledResult = expect(cancelled).rejects.toMatchObject({
+    name: "AbortError",
+    cause: reason,
+  });
   let adoption: ReturnType<typeof applyRemoteModelCatalogUpdate> | undefined;
   try {
     await withinTest(preparing.promise, signal);

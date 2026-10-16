@@ -37,7 +37,6 @@ export async function waitForBuzzRoomAccess(params: {
     return await new Promise<BuzzDiscoveredRoom[]>((resolve, reject) => {
       let settled = false;
       let checking = false;
-      let pollTimer: ReturnType<typeof setInterval> | undefined;
       const seenEvents = new Set<string>();
 
       const finish = (error?: unknown, rooms?: BuzzDiscoveredRoom[]) => {
@@ -46,9 +45,7 @@ export async function waitForBuzzRoomAccess(params: {
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        if (pollTimer) {
-          clearInterval(pollTimer);
-        }
+        clearInterval(pollTimer);
         if (error !== undefined) {
           reject(
             error instanceof Error
@@ -128,7 +125,7 @@ export async function waitForBuzzRoomAccess(params: {
           },
         },
       );
-      pollTimer = setInterval(() => {
+      const pollTimer = setInterval(() => {
         void checkRooms();
       }, DISCOVERY_POLL_INTERVAL_MS);
       pollTimer.unref?.();
