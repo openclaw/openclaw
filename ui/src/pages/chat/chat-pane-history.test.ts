@@ -633,11 +633,13 @@ it("replaces cached source groups during a zero-offset refill without losing liv
   const unchanged = nativeHistoryMessage(4);
   const live = nativeHistoryMessage(5);
   const request = vi.fn(async () => ({
-    ...historyPage(),
+    ...historyPage(undefined, { sessionId: "session-current" }),
     messages: [nativeHistoryMessage(2), changed, sibling, { ...unchanged }],
   }));
   const { pane, state } = historyPane(request);
-  state.chatMessages = [cached, unchanged, live];
+  state.currentSessionId = "session-current";
+  state.chatMessages = [cached, unchanged];
+  reduceChatSessionProjection(state, { type: "messagePersisted", message: live });
   state.chatHistoryPagination = pagination(4, 0);
 
   await pane.loadOlderMessages();
@@ -649,6 +651,22 @@ it("replaces cached source groups during a zero-offset refill without losing liv
     "chat.history",
     olderRequest(state.sessionKey, 0),
   );
+});
+
+it("replaces a byte-limited cached tail before loading the next older page", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ ...historyPage([4, 5]), ...pagination(5, 2) })
+    .mockResolvedValueOnce(historyPage([1, 2, 3], { totalMessages: 5 }));
+  const { pane, state } = historyPane(request);
+  state.chatMessages = historyPage([2, 3, 4, 5]).messages;
+  state.chatHistoryPagination = pagination(5, 0);
+
+  await pane.loadOlderMessages(false);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([4, 5]);
+  await pane.loadOlderMessages(false);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5]);
+  expect(state.chatHistoryPagination).toEqual(pagination(5));
 });
 
 it("refreshes the tail instead of mixing an older page from a replacement session", async () => {

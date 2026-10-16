@@ -33,6 +33,7 @@ import {
 import {
   commitCurrentChatHistorySnapshot,
   historySessionId,
+  reconcileHistoryTail,
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
@@ -59,6 +60,7 @@ import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
+  reduceChatSessionProjection,
   retireChatSubmissionDisplay,
 } from "./history-merge.ts";
 import {
@@ -502,13 +504,29 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
           );
         }
-        const nextMessages = prependUniqueNativeMessages(
-          messages,
-          state.chatMessages,
-          requestedOffset === 0,
-        );
-        const grew = nextMessages.length > state.chatMessages.length;
-        publishChatSessionProjectionMessages(state, nextMessages);
+        const previousCount = state.chatMessages.length;
+        if (requestedOffset === 0) {
+          // A byte-limited refill can be smaller than the cache. Replace its
+          // window; the projection owner alone retains live and pending rows.
+          const tail = reconcileHistoryTail({
+            nextMessages: messages,
+            nextPagination,
+            nextSessionId: historySessionId(result),
+            previousMessages: state.chatMessages,
+            previousPagination: pagination,
+            previousSessionId: state.currentSessionId ?? null,
+          });
+          reduceChatSessionProjection(state, {
+            type: "snapshotLoaded",
+            messages: tail?.messages ?? messages,
+          });
+        } else {
+          publishChatSessionProjectionMessages(
+            state,
+            prependUniqueNativeMessages(messages, state.chatMessages),
+          );
+        }
+        const grew = state.chatMessages.length > previousCount;
         state.chatHistoryPagination = exhausted
           ? {
               hasMore: false,

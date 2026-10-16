@@ -79,11 +79,7 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
 }
 
 /** Preserve projected siblings while removing only overlapping page occurrences. */
-export function prependUniqueNativeMessages(
-  messages: unknown[],
-  current: unknown[],
-  replaceOverlapping = false,
-): unknown[] {
+export function prependUniqueNativeMessages(messages: unknown[], current: unknown[]): unknown[] {
   const incomingSources = new Set<string>();
   for (const message of messages) {
     const source = nativeHistoryMessageSourceIdentity(message);
@@ -92,7 +88,7 @@ export function prependUniqueNativeMessages(
     }
   }
   const overlappingSources = new Set<string>();
-  const duplicates = new Map<string, unknown[]>();
+  const duplicateCounts = new Map<string, number>();
   for (const message of current) {
     const source = nativeHistoryMessageSourceIdentity(message);
     if (!source || !incomingSources.has(source)) {
@@ -103,30 +99,21 @@ export function prependUniqueNativeMessages(
     const identity = nativeHistoryMessageIdentity(message);
     if (identity) {
       overlappingSources.add(source);
-      const matches = duplicates.get(identity) ?? [];
-      matches.push(message);
-      duplicates.set(identity, matches);
+      duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
     }
   }
-  const uniqueMessages: unknown[] = [];
-  for (const message of messages) {
+  const uniqueMessages = messages.filter((message) => {
     const source = nativeHistoryMessageSourceIdentity(message);
-    const identity =
-      source && overlappingSources.has(source) ? nativeHistoryMessageIdentity(message) : null;
-    const matches = identity ? duplicates.get(identity) : undefined;
-    if (replaceOverlapping) {
-      uniqueMessages.push(matches?.shift() ?? message);
-    } else if (matches?.length) {
-      matches.pop();
-    } else {
-      uniqueMessages.push(message);
+    if (!source || !overlappingSources.has(source)) {
+      return true;
     }
-  }
-  // A zero-offset refill owns whole source groups, including changed display metadata.
-  const retained = replaceOverlapping
-    ? current.filter(
-        (message) => !incomingSources.has(nativeHistoryMessageSourceIdentity(message) ?? ""),
-      )
-    : current;
-  return [...uniqueMessages, ...retained];
+    const identity = nativeHistoryMessageIdentity(message);
+    const remaining = identity ? (duplicateCounts.get(identity) ?? 0) : 0;
+    if (!identity || remaining === 0) {
+      return true;
+    }
+    duplicateCounts.set(identity, remaining - 1);
+    return false;
+  });
+  return [...uniqueMessages, ...current];
 }

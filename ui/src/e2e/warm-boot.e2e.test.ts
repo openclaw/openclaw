@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -507,7 +508,8 @@ suite.define(() => {
               },
             },
           ];
-          const firstPage = messages.slice(-1_000);
+          const pageSize = imported ? 50 : 1_000;
+          const firstPage = messages.slice(-pageSize);
           const hasMore = messages.length > firstPage.length;
           await gateway.setMethodResponse("chat.history", {
             cases: [
@@ -518,13 +520,13 @@ suite.define(() => {
                   sessionId: currentRow.sessionId,
                   totalMessages: messages.length,
                   hasMore,
-                  ...(hasMore ? { nextOffset: 1_000 } : {}),
+                  ...(hasMore ? { nextOffset: pageSize } : {}),
                 },
               },
               {
-                match: { offset: 1_000 },
+                match: { offset: pageSize },
                 response: {
-                  messages: messages.slice(0, -1_000),
+                  messages: messages.slice(0, -pageSize),
                   sessionId: currentRow.sessionId,
                   totalMessages: messages.length,
                   hasMore: false,
@@ -543,19 +545,25 @@ suite.define(() => {
           expect(history.params).toMatchObject({ offset: 0 });
           await expect.poll(messageCount).toBe(firstPage.length);
           await page
-            .getByText(`Older history ${olderMessages.length - 79}`, { exact: true })
+            .getByText(
+              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
+              { exact: true },
+            )
             .waitFor({ state: "attached" });
+          await waitForChatScrollIdle(page);
           await page.mouse.wheel(0, -1_000_000);
           if (hasMore) {
             const older = await gateway.waitForRequest("chat.history", {
-              match: { offset: 1_000 },
+              match: { offset: pageSize },
             });
-            expect(older.params).toMatchObject({ offset: 1_000 });
+            expect(older.params).toMatchObject({ offset: pageSize });
             await expect.poll(messageCount).toBe(messages.length);
             await page
-              .getByText("Older history 100", { exact: true })
+              .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
               .waitFor({ state: "attached" });
-            await page.getByText("Older history 101", { exact: true }).waitFor();
+            await page
+              .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
+              .waitFor();
           } else {
             await page.getByText("Older history 1", { exact: true }).waitFor();
           }
