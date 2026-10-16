@@ -5,7 +5,6 @@ import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-glob
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
-import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
@@ -14,6 +13,7 @@ import {
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
@@ -401,12 +401,7 @@ export function installEmbeddedAttemptStreamGuards(
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
-    priority:
-      attempt.spawnedBy ||
-      (attempt.lane && isBackgroundWorkLane(attempt.lane)) ||
-      (attempt.trigger && attempt.trigger !== "user" && attempt.trigger !== "manual")
-        ? "background"
-        : "interactive",
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,

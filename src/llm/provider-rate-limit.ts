@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { FailoverError } from "../agents/failover/error.js";
 import {
   hasOrganizationTpmRateLimitEvidence,
@@ -101,7 +101,7 @@ function schedule(gate: Gate) {
       }
       const interactive = gate.queue.findIndex((waiter) => waiter.priority === "interactive");
       const released = gate.queue.splice(Math.max(0, interactive), 1);
-      gate.nextAt = Date.now() + 100 + Math.floor(Math.random() * 151);
+      gate.nextAt = Date.now() + randomInt(100, 251);
       schedule(gate);
       released.forEach((waiter) => finish(waiter));
     },
