@@ -47,52 +47,15 @@ import {
 import {
   clearNativeHookRelaysForTests,
   createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+  invokeRelay,
+  registerAgentRelay,
+  registerOwnedRelay,
+  registerRelay,
 } from "./native-hook-relay.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
-
-function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
-  return registerNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
-
-function registerOwnedRelay(
-  overrides: Partial<Parameters<typeof registerOwnedNativeHookRelay>[0]> = {},
-) {
-  return registerOwnedNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
-function invokeRelay(
-  relayId: string,
-  event: Parameters<typeof invokeNativeHookRelay>[0]["event"],
-  rawPayload: unknown,
-  options: Omit<
-    Parameters<typeof invokeNativeHookRelay>[0],
-    "provider" | "relayId" | "event" | "rawPayload"
-  > = {},
-) {
-  return invokeNativeHookRelay({ provider: "codex", relayId, event, rawPayload, ...options });
-}
-
-function registerAgentRelay(
-  overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
-) {
-  return registerRelay({
-    agentId: "agent-1",
-    sessionKey: "agent:main:session-1",
-    ...overrides,
-  });
-}
 
 function readTestNativeAgentId(rawPayload: unknown): string | undefined {
   if (!isRecord(rawPayload) || typeof rawPayload.agent_id !== "string") {
