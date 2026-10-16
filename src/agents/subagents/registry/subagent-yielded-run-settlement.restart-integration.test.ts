@@ -88,6 +88,17 @@ describe("yielded run settlement", () => {
         now: T0 - 5 * MINUTE_MS + 1,
         message: { role: "assistant", content: visibility.earlierReply },
       });
+      await appendTranscriptMessage(target, {
+        now: T0 - 5 * MINUTE_MS + 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "progress-1", name: "read", arguments: {} }],
+        },
+      });
+      await appendTranscriptMessage(target, {
+        now: T0 - 5 * MINUTE_MS + 3,
+        message: { role: "toolResult", toolCallId: "progress-1", content: "intermediate data" },
+      });
     }
     await appendTranscriptMessage(target, {
       now: T0 - 4 * MINUTE_MS - 1,
@@ -157,7 +168,7 @@ describe("yielded run settlement", () => {
       waited: { status: "done", result: YIELDED_REPLY },
     },
   ];
-  const legacyYieldedCollector = (outcome?: { status: "ok" }) =>
+  const legacyYieldedCollector = (outcome?: { status: "ok" | "timeout" }) =>
     makeRunRecord({
       runId: "legacy-yielded-collector",
       childSessionKey: COLLECTOR_KEY,
@@ -355,26 +366,32 @@ describe("yielded run settlement", () => {
     expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "explicitly hidden", text: "Hidden collector text", display: false as const },
-    { name: "empty", text: "" },
-    { name: "whitespace-only", text: "  \n  " },
-  ])(
-    "does not resurrect earlier output when the completed collector yield is $name",
-    async ({ text, display }) => {
+  it.each(
+    [
+      { name: "explicitly hidden", text: "Hidden collector text", display: false as const },
+      { name: "empty", text: "" },
+      { name: "whitespace-only", text: "  \n  " },
+    ].flatMap((shape) => [
+      { ...shape, status: "ok" as const },
+      { ...shape, status: "timeout" as const },
+    ]),
+  )(
+    "does not resurrect earlier output when the $status collector yield is $name",
+    async ({ text, display, status }) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(T0);
       await writeYieldedTranscript(text, 1, {
         display,
         earlierReply: "Earlier progress is not the final result",
       });
-      await addSubagentRunForTests(legacyYieldedCollector({ status: "ok" }));
+      await addSubagentRunForTests(legacyYieldedCollector({ status }));
       await restartRegistry();
       await testing.sweepOnceForTests();
       await fixture.settle();
+      expect(persisted("legacy-yielded-collector")?.execution.outcome?.status).toBe(status);
       expect(persisted("legacy-yielded-collector")?.completion?.resultText).toBeNull();
       expect((await waitSurface("legacy-yielded-collector")).completed).toMatchObject([
-        { status: "done", result: "" },
+        { status: status === "ok" ? "done" : "timeout", result: "" },
       ]);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();

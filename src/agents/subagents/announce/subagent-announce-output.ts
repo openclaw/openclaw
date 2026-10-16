@@ -91,6 +91,10 @@ function summarizeSubagentOutputHistory(
     if (role === "assistant") {
       previousAssistantCalledYield = assistantCallsSessionsYield(message);
       snapshot.waitingForContinuation = previousAssistantCalledYield;
+      if (completedCollectorTurn && previousAssistantCalledYield) {
+        // The yielded result replaces earlier progress, even for a timed-out collector.
+        snapshot.latestToolCallCount = undefined;
+      }
       if (isSilentAssistantTranscriptMessage(message)) {
         snapshot.latestText = undefined;
         continue;
