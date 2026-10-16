@@ -147,10 +147,10 @@ ${
       assert.equal(code, 0, output);
       if (doctor) {
         assert.match(output, /Doctor complete/u);
+        // The note renderer can wrap the label and library path onto separate lines.
+        const sqliteDiagnostic = `SQLite (doctor process): ${path.join(runtime, "runtime", manifest.runtime.sqlite.path)}`;
         assert(
-          output.includes(
-            `SQLite (doctor process): ${path.join(runtime, "runtime", manifest.runtime.sqlite.path)}`,
-          ),
+          output.replaceAll(/[│\s]/gu, "").includes(sqliteDiagnostic.replaceAll(/\s/gu, "")),
           `Doctor did not report the bundled SQLite library: ${output}`,
         );
         assert.doesNotMatch(
