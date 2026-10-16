@@ -7,6 +7,7 @@ import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
@@ -22,15 +23,8 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
-import {
-  contextReport,
-  invokeUsage,
-  usageClient,
-  usageReply,
-  usageRoleConfig,
-  writeUsage,
-} from "./usage.test-support.js";
 
 it.for([
   "session reset",
@@ -40,20 +34,20 @@ it.for([
 ] as const)(
   "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
-    const reset = change === "session reset";
-    const revocation = change === "revocation after context read";
-    const pageBackfill = change === "page backfill after revocation";
-    const holdContext = revocation || pageBackfill;
     const state = await createOpenClawTestState({
       label: "usage-context-lifecycle",
       prepareProfileCatalog: true,
     });
     const release = createDeferred();
     const targetReadStarted = createDeferred();
-    const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
-    const summaryLoaded = createDeferred<Awaited<ReturnType<typeof actualLoad>>>();
+    const summaryLoaded =
+      createDeferred<
+        Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
+      >();
     let request: Promise<unknown> | undefined;
     let projection: SessionRowProjection | undefined;
+    let restoreSummaryLoader: (() => void) | undefined;
+    let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
     let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
@@ -66,28 +60,58 @@ it.for([
           releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
-          vi.restoreAllMocks();
+          restoreSummaryLoader?.();
+          restoreTargetReader?.();
           signal.removeEventListener("abort", releaseSummary);
         }
       })());
     onTestFinished(cleanup);
     signal.addEventListener("abort", releaseSummary, { once: true });
+    if (signal.aborted) {
+      releaseSummary();
+    }
 
     try {
       signal.throwIfAborted();
-      await state.writeConfig(
-        usageRoleConfig(
-          {
-            agents: { ownership: "explicit", entries: { main: {} } },
-            plugins: { enabled: false },
+      await state.writeConfig({
+        agents: { ownership: "explicit", entries: { main: {} } },
+        plugins: { enabled: false },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
           },
-          revocation ? "view" : "none",
-        ),
-      );
+        },
+      });
       const config = await captureRuntimeConfigAsyncReader()();
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
       releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
-      const client = usageClient(viewer.id);
+      const client: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "test",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+        },
+        authenticatedUserProfile: {
+          profileId: viewer.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      };
       const sessionId = "usage-before-change";
       const scope = {
         agentId: "main",
@@ -95,26 +119,58 @@ it.for([
         storePath: path.join(state.sessionsDir(), "sessions.json"),
       };
       const timestamp = Date.now();
-      const originalReport = contextReport(timestamp);
+      const originalReport = {
+        source: "run" as const,
+        generatedAt: timestamp,
+        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      };
       const changedReport = { ...originalReport, generatedAt: timestamp + 1 };
       const siblingReport = { ...originalReport, generatedAt: timestamp + 2 };
+      replaceSessionEntrySync(scope, {
+        sessionId,
+        updatedAt: timestamp,
+        createdActor: { type: "human", source: "profile", id: viewer.id },
+        visibility: "shared",
+        systemPromptReport: originalReport,
+      });
       const sibling = {
         ...scope,
         sessionKey: "agent:main:usage-unaffected",
         sessionId: "usage-unaffected",
       };
-      for (const [target, tokens, updatedAt, report] of [
-        [{ ...scope, sessionId }, 17, timestamp, originalReport],
-        [sibling, 23, timestamp - 1, pageBackfill ? siblingReport : undefined],
+      replaceSessionEntrySync(sibling, {
+        sessionId: sibling.sessionId,
+        updatedAt: timestamp - 1,
+        createdActor: { type: "human", source: "profile", id: viewer.id },
+        visibility: "shared",
+        ...(change === "page backfill after revocation"
+          ? { systemPromptReport: siblingReport }
+          : {}),
+      });
+      for (const [target, tokens] of [
+        [{ ...scope, sessionId }, 17],
+        [sibling, 23],
       ] as const) {
-        replaceSessionEntrySync(target, {
-          sessionId: target.sessionId,
-          updatedAt,
-          createdActor: { type: "human", source: "profile", id: viewer.id },
-          visibility: "shared",
-          ...(report ? { systemPromptReport: report } : {}),
+        await persistSessionTranscriptTurn(target, {
+          cwd: state.workspaceDir,
+          updateMode: "none",
+          messages: [
+            {
+              message: {
+                role: "assistant",
+                content: "Synthetic usage",
+                timestamp,
+                provider: "synthetic",
+                model: "synthetic",
+                usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: 0 } },
+              },
+              now: timestamp,
+            },
+          ],
         });
-        await writeUsage(target, state.workspaceDir, tokens, timestamp, 0);
       }
       await sessionCostUsage.loadCostUsageSummary({
         config,
@@ -124,45 +180,61 @@ it.for([
       });
 
       projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
-      vi.spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache").mockImplementation(
-        async (params) => {
+      const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
+      const summaryLoader = vi
+        .spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache")
+        .mockImplementation(async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
-          if (!holdContext) {
+          if (
+            change !== "revocation after context read" &&
+            change !== "page backfill after revocation"
+          ) {
             await release.promise;
           }
           return result;
-        },
-      );
-      if (holdContext) {
+        });
+      restoreSummaryLoader = () => summaryLoader.mockRestore();
+      if (
+        change === "revocation after context read" ||
+        change === "page backfill after revocation"
+      ) {
         const actualRead = usageSessionSelection.loadUsageSessionContext;
-        vi.spyOn(usageSessionSelection, "loadUsageSessionContext").mockImplementation(
-          async (...args) => {
+        const reader = vi
+          .spyOn(usageSessionSelection, "loadUsageSessionContext")
+          .mockImplementation(async (...args) => {
             await actualRead(...args);
             targetReadStarted.resolve();
             await release.promise;
-          },
-        );
+          });
+        restoreTargetReader = () => reader.mockRestore();
       }
       const respond = vi.fn();
-      request = invokeUsage(
-        "sessions.usage",
-        {
-          agentId: "main",
-          range: "all",
-          limit: pageBackfill ? 1 : 2,
-          includeContextWeight: true,
-        },
-        config,
-        {
+      request = Promise.resolve(
+        expectDefined(
+          coreGatewayHandlers["sessions.usage"],
+          "registered usage handler",
+        )({
+          req: { type: "req", id: "context-lifecycle", method: "sessions.usage" },
+          params: {
+            agentId: "main",
+            range: "all",
+            limit: change === "page backfill after revocation" ? 1 : 2,
+            includeContextWeight: true,
+          },
           respond,
           client,
-          handlers: coreGatewayHandlers,
-          context: bindSessionRowProjection({ getRuntimeConfig: () => config }, () => projection),
-        },
+          isWebchatConnect: () => false,
+          context: bindSessionRowProjection(
+            { getRuntimeConfig: () => config } as GatewayRequestContext,
+            () => projection,
+          ),
+        }),
       );
       const loaded = await Promise.race([
-        holdContext ? targetReadStarted.promise : summaryLoaded.promise,
+        change === "revocation after context read" || change === "page backfill after revocation"
+          ? targetReadStarted.promise
+          : summaryLoaded.promise,
         request.then(() => {
           throw new Error("Usage request returned before the read hold");
         }),
@@ -174,7 +246,7 @@ it.for([
       expect(respond).not.toHaveBeenCalled();
       signal.throwIfAborted();
 
-      if (reset) {
+      if (change === "session reset") {
         await resetSessionEntryLifecycle({
           agentId: scope.agentId,
           storePath: scope.storePath,
@@ -193,15 +265,15 @@ it.for([
         }));
       }
       expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-        sessionId: reset ? "usage-after-reset" : sessionId,
+        sessionId: change === "session reset" ? "usage-after-reset" : sessionId,
         systemPromptReport: changedReport,
-        ...(reset ? {} : { incognito: true }),
+        ...(change === "session reset" ? {} : { incognito: true }),
       });
 
-      if (revocation) {
+      if (change === "revocation after context read") {
         invalidateOperatorRolePolicy(viewer.id);
       }
-      const sql = revocation ? observeHostDataSql() : undefined;
+      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
       try {
         releaseSummary();
         await request;
@@ -211,23 +283,30 @@ it.for([
       } finally {
         sql?.restore();
       }
-      const [ok, payload] = usageReply(respond);
+      expect(respond).toHaveBeenCalledOnce();
+      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
-      const unaffected = {
-        key: sibling.sessionKey,
-        usage: { totalTokens: 23 },
-        ...(pageBackfill ? { hasContextWeight: true, contextWeight: siblingReport } : {}),
-      };
-      expect(result).toMatchObject({
-        totals: { totalTokens: reset ? 40 : 23 },
-        sessions: reset
-          ? [
-              { key: scope.sessionKey, sessionId, hasContextWeight: false, contextWeight: null },
-              unaffected,
-            ]
-          : [unaffected],
-      });
+      expect(result.sessions.map((row) => row.key)).toEqual(
+        change === "session reset" ? [scope.sessionKey, sibling.sessionKey] : [sibling.sessionKey],
+      );
+      expect(result.totals.totalTokens).toBe(change === "session reset" ? 40 : 23);
+      expect(
+        result.sessions.find((row) => row.key === sibling.sessionKey)?.usage?.totalTokens,
+      ).toBe(23);
+      if (change === "session reset") {
+        expect(result.sessions[0]).toMatchObject({
+          key: scope.sessionKey,
+          sessionId,
+          hasContextWeight: false,
+          contextWeight: null,
+        });
+      }
+      if (change === "page backfill after revocation") {
+        expect(result.sessions).toMatchObject([
+          { key: sibling.sessionKey, hasContextWeight: true, contextWeight: siblingReport },
+        ]);
+      }
     } finally {
       await cleanup();
     }
