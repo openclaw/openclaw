@@ -3,18 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   registerSealedRuntimeProcessEntrypoint,
   resolveRuntimeProcessEntrypointUrl,
 } from "./runtime-process-url.js";
-import { planLegacyStateMigrationsReadOnly } from "./state-migrations.doctor.js";
 import {
   captureLegacyStateSnapshotIdentity,
   readLegacyStateMigrationPlanConfig,
 } from "./state-migrations.plan.js";
+import { createMigrationFixture } from "./state-migrations.shard-fixture.test-support.js";
 import { captureLegacyStateSnapshotIdentityInProcess } from "./state-migrations.snapshot.worker.js";
+import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 
 const tempDirs = createTrackedTempDirs();
 const digest = expect.stringMatching(/^sha256:[0-9a-f]{64}$/u);
@@ -24,42 +25,15 @@ function expectWarning(warnings: string[], message: string) {
   expect(warnings).toEqual([expect.stringContaining(message)]);
 }
 
-function expectBoundPlan(plan: Awaited<ReturnType<typeof planFixture>>) {
+function expectBoundPlan(plan: LegacyStateMigrationPlan) {
   expect(plan.refusal?.code).toBe("candidate-artifact-digest-required");
   expect(plan.snapshot.stateDigest).toEqual(digest);
 }
 
-async function makeFixture() {
-  const root = await tempDirs.make("openclaw-migration-snapshot-identity-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  return { root, homeDir, stateDir, configPath, env };
-}
-
-async function planFixture({
-  root,
-  homeDir,
-  stateDir,
-  configPath,
-  env,
-}: Awaited<ReturnType<typeof makeFixture>>) {
-  return planLegacyStateMigrationsReadOnly({
-    mode: "doctor",
-    candidate: { root, version: "test" },
-    snapshot: { homeDir, configPath, stateDir },
-    env,
-  });
-}
+let fixture: ReturnType<typeof createMigrationFixture>;
+beforeEach(async () => {
+  fixture = createMigrationFixture(await tempDirs.make("openclaw-migration-snapshot-identity-"));
+});
 
 afterEach(async () => {
   await tempDirs.cleanup();
@@ -68,7 +42,6 @@ afterEach(async () => {
 
 describe("legacy state migration snapshot identity", () => {
   it("captures accepted config include identities larger than OS argument limits", async () => {
-    const fixture = await makeFixture();
     const includeDir = path.join(fixture.root, "a".repeat(180), "b".repeat(180), "c".repeat(180));
     fs.mkdirSync(includeDir, { recursive: true });
     const paths = Array.from({ length: 2300 }, (_, index) => {
@@ -104,14 +77,13 @@ describe("legacy state migration snapshot identity", () => {
   });
 
   it("refuses unavailable snapshot workers without falling back to caller-process hashing", async () => {
-    const fixture = await makeFixture();
     const original = resolveRuntimeProcessEntrypointUrl("stateMigrationSnapshot");
     registerSealedRuntimeProcessEntrypoint(
       "stateMigrationSnapshot",
       pathToFileURL(path.join(fixture.root, "missing-worker.js")),
     );
     try {
-      const refused = await planFixture(fixture);
+      const refused = await fixture.plan();
       expect(refused.refusal?.code).toBe("snapshot-identity-unavailable");
       expect(refused.snapshot.stateDigest).toBeUndefined();
       expect(refused.steps).toEqual([]);
@@ -119,91 +91,88 @@ describe("legacy state migration snapshot identity", () => {
     } finally {
       registerSealedRuntimeProcessEntrypoint("stateMigrationSnapshot", original);
     }
-    expectBoundPlan(await planFixture(fixture));
+    expectBoundPlan(await fixture.plan());
   });
 
   it.each([
-    "file-content",
-    "file-replacement",
-    "nested-entry",
-    "unchanged",
-    "config-content",
-    "config-replacement",
-    "included-config",
-    "included-unchanged",
-  ] as const)(
-    "revalidates earlier entries at the snapshot worker's final traversal: %s",
-    async (mutation) => {
-      const fixture = await makeFixture();
-      const earlyDirectory = path.join(fixture.stateDir, "a-directory");
-      const earlyFile = path.join(earlyDirectory, "probe.json");
-      const lateFile = path.join(fixture.stateDir, "z-probe.json");
-      fs.mkdirSync(earlyDirectory);
-      fs.writeFileSync(earlyFile, '{"value":"original"}\n');
-      fs.writeFileSync(lateFile, "{}\n");
-      const includedPath = path.join(fixture.root, "planner-input.json");
-      if (mutation === "included-config" || mutation === "included-unchanged") {
-        fs.writeFileSync(fixture.configPath, '{"$include":"./planner-input.json"}\n');
-        fs.writeFileSync(includedPath, "{}\n");
-      }
-      const config = await readLegacyStateMigrationPlanConfig(fixture);
-      expect(config.configInputHashes).toBeDefined();
-      const mutations = {
-        "file-content": () => fs.writeFileSync(earlyFile, '{"value":"changed"}\n'),
-        "file-replacement": () => {
-          fs.unlinkSync(earlyFile);
-          fs.writeFileSync(earlyFile, '{"value":"replacement"}\n');
-        },
-        "nested-entry": () => fs.writeFileSync(path.join(earlyDirectory, "added.json"), "{}\n"),
-        "config-content": () => fs.writeFileSync(fixture.configPath, changedConfig),
-        "config-replacement": () => {
-          fs.unlinkSync(fixture.configPath);
-          fs.writeFileSync(fixture.configPath, changedConfig);
-        },
-        "included-config": () => fs.writeFileSync(includedPath, changedConfig),
-        unchanged: () => {},
-        "included-unchanged": () => {},
-      };
-      const realOpen = fs.promises.open.bind(fs.promises);
-      let finalCaptureReached = false;
-      vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-        const handle = await realOpen(...args);
-        if (path.resolve(String(args[0])) === lateFile) {
-          finalCaptureReached = true;
-          mutations[mutation]();
+    ["file", "changed"],
+    ["file", "replacement"],
+    ["entry", "changed"],
+    ["file", undefined],
+    ["config", "changed"],
+    ["config", "replacement"],
+    ["include", "changed"],
+    ["include", undefined],
+  ] as const)("revalidates earlier %s at final traversal: %s", async (target, mutation) => {
+    const earlyDirectory = path.join(fixture.stateDir, "a-directory");
+    const earlyFile = path.join(earlyDirectory, "probe.json");
+    const lateFile = path.join(fixture.stateDir, "z-probe.json");
+    fs.mkdirSync(earlyDirectory);
+    fs.writeFileSync(earlyFile, '{"value":"original"}\n');
+    fs.writeFileSync(lateFile, "{}\n");
+    const includedPath = path.join(fixture.root, "planner-input.json");
+    if (target === "include") {
+      fs.writeFileSync(fixture.configPath, '{"$include":"./planner-input.json"}\n');
+      fs.writeFileSync(includedPath, "{}\n");
+    }
+    const config = await readLegacyStateMigrationPlanConfig(fixture);
+    expect(config.configInputHashes).toBeDefined();
+    const targetPath = {
+      file: earlyFile,
+      entry: path.join(earlyDirectory, "added.json"),
+      config: fixture.configPath,
+      include: includedPath,
+    }[target];
+    const realOpen = fs.promises.open.bind(fs.promises);
+    let finalCaptureReached = false;
+    vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (path.resolve(String(args[0])) === lateFile) {
+        finalCaptureReached = true;
+        if (mutation) {
+          if (mutation === "replacement") {
+            fs.unlinkSync(targetPath);
+          }
+          fs.writeFileSync(
+            targetPath,
+            target === "file"
+              ? `{"value":"${mutation}"}\n`
+              : target === "entry"
+                ? "{}\n"
+                : changedConfig,
+          );
         }
-        return handle;
-      });
+      }
+      return handle;
+    });
 
-      const identity = await captureLegacyStateSnapshotIdentityInProcess({
-        ...fixture,
-        configInputHashes: config.configInputHashes,
-      });
+    const identity = await captureLegacyStateSnapshotIdentityInProcess({
+      ...fixture,
+      configInputHashes: config.configInputHashes,
+    });
 
-      expect(finalCaptureReached).toBe(true);
-      if (mutation === "unchanged" || mutation === "included-unchanged") {
-        expect(identity.warnings).toEqual([]);
-        expect(identity.stateDigest).toEqual(digest);
-        expect(fs.readFileSync(earlyFile, "utf8")).toBe('{"value":"original"}\n');
+    expect(finalCaptureReached).toBe(true);
+    if (!mutation) {
+      expect(identity.warnings).toEqual([]);
+      expect(identity.stateDigest).toEqual(digest);
+      expect(fs.readFileSync(earlyFile, "utf8")).toBe('{"value":"original"}\n');
+    } else {
+      expect(identity.configDigest).toBeUndefined();
+      expect(identity.stateDigest).toBeUndefined();
+      if (target === "entry") {
+        // The child-list check catches additions even when directory metadata is unchanged.
+        expect(identity.warnings).toHaveLength(1);
+        expect([
+          `Could not bind copied snapshot: Snapshot entry changed while hashing: ${earlyDirectory}`,
+          `Could not bind copied snapshot: Snapshot directory changed while hashing: ${earlyDirectory}`,
+        ]).toContain(identity.warnings[0]);
       } else {
-        expect(identity.configDigest).toBeUndefined();
-        expect(identity.stateDigest).toBeUndefined();
-        if (mutation === "nested-entry") {
-          // The child-list check catches additions even when directory metadata is unchanged.
-          expect(identity.warnings).toHaveLength(1);
-          expect([
-            `Could not bind copied snapshot: Snapshot entry changed while hashing: ${earlyDirectory}`,
-            `Could not bind copied snapshot: Snapshot directory changed while hashing: ${earlyDirectory}`,
-          ]).toContain(identity.warnings[0]);
-        } else {
-          expectWarning(identity.warnings, "Snapshot entry changed while hashing:");
-        }
+        expectWarning(identity.warnings, "Snapshot entry changed while hashing:");
       }
-    },
-  );
+    }
+  });
 
   it("refuses an ordinary file replaced between tree inspection and open", async () => {
-    const fixture = await makeFixture();
     const probePath = path.join(fixture.stateDir, "identity-probe.json");
     const originalPath = `${probePath}.original`;
     fs.writeFileSync(probePath, '{"value":"original"}\n');
@@ -232,7 +201,6 @@ describe("legacy state migration snapshot identity", () => {
   ])(
     "preserves a caller-held %s read transaction on %s through the complete planner",
     async (journalMode, relativePath) => {
-      const fixture = await makeFixture();
       const databasePath = path.join(fixture.stateDir, relativePath);
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       const database = new DatabaseSync(databasePath);
@@ -281,7 +249,7 @@ describe("legacy state migration snapshot identity", () => {
         }
         expect(compete()).toEqual({ blocked: true });
 
-        const plan = await planFixture(fixture);
+        const plan = await fixture.plan();
 
         expectBoundPlan(plan);
         expect(compete()).toEqual({ blocked: true });
@@ -294,16 +262,15 @@ describe("legacy state migration snapshot identity", () => {
   );
 
   it("binds in-snapshot hard-link topology", async () => {
-    const fixture = await makeFixture();
     const firstPath = path.join(fixture.stateDir, "first.json");
     const secondPath = path.join(fixture.stateDir, "second.json");
     fs.writeFileSync(firstPath, '{"value":"same"}\n');
     fs.writeFileSync(secondPath, '{"value":"same"}\n');
-    const independent = await planFixture(fixture);
+    const independent = await fixture.plan();
 
     fs.unlinkSync(secondPath);
     fs.linkSync(firstPath, secondPath);
-    const linked = await planFixture(fixture);
+    const linked = await fixture.plan();
 
     expect(independent.snapshot.stateDigest).toEqual(digest);
     expect(linked.snapshot.stateDigest).toEqual(digest);
@@ -311,13 +278,12 @@ describe("legacy state migration snapshot identity", () => {
   });
 
   it("refuses a snapshot file with an unbound external hard link", async () => {
-    const fixture = await makeFixture();
     const externalPath = path.join(fixture.root, "external.json");
     const linkedPath = path.join(fixture.stateDir, "linked.json");
     fs.writeFileSync(externalPath, '{"value":"shared"}\n');
     fs.linkSync(externalPath, linkedPath);
 
-    const plan = await planFixture(fixture);
+    const plan = await fixture.plan();
 
     expect(plan.snapshot.stateDigest).toBeUndefined();
     expectWarning(plan.warnings, `Snapshot file has links outside copied state: ${linkedPath}`);

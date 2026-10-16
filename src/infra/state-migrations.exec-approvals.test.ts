@@ -56,6 +56,7 @@ function useStateDir(directory: string) {
   stateDir = directory;
   env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   sourcePath = resolveExecApprovalsPath(env);
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 }
 beforeEach(() => useStateDir(tempDirs.make("openclaw-exec-approvals-migration-")));
 const writeLegacy = (value: unknown, targetPath = sourcePath) =>
@@ -111,7 +112,6 @@ it("imports nullable and absent usage metadata and releases the runtime gate", a
   };
   await writeLegacy(expected);
   expect(detectLegacyExecApprovals({ stateDir }).hasLegacy).toBe(false);
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   execApprovalsStoreTesting.reset();
   expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
   const result = await migrate();
@@ -159,7 +159,6 @@ it.each([
   const legacyPath = claimed ? `${sourcePath}.doctor-importing` : sourcePath;
   await writeLegacy(stub, legacyPath);
   const original = await fsp.readFile(legacyPath);
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
   const result = await migrate();
   expect(result.warnings).toEqual([]);
@@ -227,7 +226,6 @@ it.runIf(process.platform !== "win32")(
         ...emptyStub,
         socket: { path: socketPath, token: originalToken },
       });
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       expect((await migrate({ env, stateDir })).warnings).toEqual([]);
       const resolved = await resolveExecApprovalsLocked(undefined, { requireSocket: true });
       await expect(
@@ -304,7 +302,6 @@ it.each<[string | Buffer, string]>([
 ])("preserves malformed bytes and a non-removal receipt (case %#)", async (raw, problem) => {
   const original = Buffer.from(raw);
   await fsp.writeFile(sourcePath, original);
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
   const result = await migrate();
   expect(result.changes).toEqual([]);

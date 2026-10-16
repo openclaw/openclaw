@@ -35,10 +35,7 @@ function writePlugin(params: {
   markerPath: string;
   action?: typeof sessionAction;
   declarations?: Array<{ id: string; phase?: string; doctorOnly: boolean }>;
-  label?: string;
   change?: string;
-  prepareStateDir?: string;
-  rejectRuntimeLoad?: boolean;
 }) {
   const { pluginRoot, pluginId, markerPath, action = sessionAction } = params;
   fs.mkdirSync(pluginRoot, { recursive: true });
@@ -59,18 +56,16 @@ function writePlugin(params: {
   }
   fs.writeFileSync(
     path.join(pluginRoot, "index.cjs"),
-    params.rejectRuntimeLoad
-      ? "throw new Error('metadata discovery loaded plugin runtime');\n"
-      : "module.exports = {};\n",
+    "throw new Error('metadata discovery loaded plugin runtime');\n",
   );
   fs.writeFileSync(
     path.join(pluginRoot, "doctor-contract-api.cjs"),
     `const fs = require("node:fs");
 module.exports = { stateMigrations: [{
-  ...${JSON.stringify(action)}, label: ${JSON.stringify(params.label ?? pluginId)},
+  ...${JSON.stringify(action)}, label: ${JSON.stringify(pluginId)},
   detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
   migrateLegacyState: () => {
-${params.prepareStateDir ? `    fs.mkdirSync(${JSON.stringify(params.prepareStateDir)}, { recursive: true });\n` : ""}    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
+    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
     return { changes: [${JSON.stringify(params.change ?? `migrated ${pluginId}`)}], warnings: [] };
   },
 }] };\n`,
@@ -124,15 +119,13 @@ afterEach(async () => {
 
 it("repairs a planned bundled owner omitted by a partial index after acquiring fresh maintenance ownership", async () => {
   const root = await tempDirs.make("openclaw-doctor-partial-inventory-");
-  const stateDir = path.join(root, "state");
   const bundledRoot = path.join(root, "bundled");
   const pluginIds = ["kept-owner", "omitted-owner"];
   for (const pluginId of pluginIds) {
     writePlugin({
       pluginRoot: path.join(bundledRoot, pluginId),
       pluginId,
-      markerPath: path.join(stateDir, `${pluginId}-migrated`),
-      rejectRuntimeLoad: true,
+      markerPath: path.join(root, "state", `${pluginId}-migrated`),
     });
   }
   const config: OpenClawConfig = {
@@ -172,7 +165,7 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
           repairResult(pluginIds, ["migrated kept-owner", "migrated omitted-owner"]),
         );
         for (const pluginId of pluginIds) {
-          const marker = path.join(stateDir, `${pluginId}-migrated`);
+          const marker = path.join(root, "state", `${pluginId}-migrated`);
           expect(fs.readFileSync(marker, "utf8")).toBe("migrated");
         }
         await expect(repair(config, env, actions)).resolves.toEqual(repairResult(pluginIds));
@@ -188,27 +181,23 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
 
 it("keeps supported discovery and execution order stable when a configured alias is removed", async () => {
   const root = await tempDirs.make("openclaw-doctor-order-discovery-");
-  const stateDir = path.join(root, "state");
   const bundledRoot = path.join(root, "bundled");
-  const markerPath = (pluginId: string) => path.join(stateDir, `${pluginId}-migrated`);
+  const markerPath = (pluginId: string) => path.join(root, "state", `${pluginId}-migrated`);
   for (const pluginId of ["acpx", "codex"] as const) {
     writePlugin({
       pluginRoot: path.join(bundledRoot, pluginId),
       pluginId,
       markerPath: markerPath(pluginId),
       action: { ...sessionAction, id: `${pluginId}-session-action` },
-      label: `${pluginId} session action`,
-      prepareStateDir: stateDir,
     });
   }
-  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(root, "state"), { recursive: true });
   const baseConfig: OpenClawConfig = {
     plugins: { entries: { acpx: { enabled: true }, codex: { enabled: true } } },
   };
   const aliasConfig: OpenClawConfig = {
     plugins: {
       ...baseConfig.plugins,
-      // Model the supported configured-alias path directly to the bundled artifact.
       load: { paths: [path.join(bundledRoot, "codex")] },
     },
   };
@@ -219,8 +208,7 @@ it("keeps supported discovery and execution order stable when a configured alias
     { pluginId: "codex", id: "codex-session-action" },
   ]);
   expect(discoverActions(baseConfig, env)).toEqual(frozenActions);
-  const refused = await repair(baseConfig, env, frozenActions.toReversed());
-  expect(refused).toEqual({
+  await expect(repair(baseConfig, env, frozenActions.toReversed())).resolves.toEqual({
     ...repairResult(["acpx", "codex"]),
     warnings: [expect.stringContaining("immutable action order")],
     warningDisposition: undefined,
@@ -262,7 +250,6 @@ it.each([
       pluginRoot,
       pluginId,
       markerPath: mutationPath,
-      label: "Session action",
       change: "migrated session action",
       declarations: inventory === "undeclared-post-action" ? [] : [declaration],
     });

@@ -27,17 +27,15 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { deriveMeetingTranscriptSessionColumns } from "../transcripts/store-columns.js";
 import { meetingTranscriptDb } from "../transcripts/store-sqlite.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
-import {
-  createCallerModeSnapshot,
-  snapshotFiles,
-} from "./state-migrations.caller-mode.test-helpers.js";
-import {
-  autoMigrateLegacyState,
-  detectLegacyStateMigrations,
-  planLegacyStateMigrationsReadOnly,
-} from "./state-migrations.doctor.js";
+import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
+import { autoMigrateLegacyState, detectLegacyStateMigrations } from "./state-migrations.doctor.js";
 import { resolveLegacyStateMigrationOwner } from "./state-migrations.legacy-owner.js";
 import { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
+import {
+  byId,
+  createMigrationFixture,
+  writeFixtureFile as writeFile,
+} from "./state-migrations.shard-fixture.test-support.js";
 import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
@@ -47,18 +45,15 @@ function migrationOptions(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, home: str
   return { cfg, env, homedir: () => home, legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES };
 }
 
-function writeFile(file: string, content: string) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content);
+function withState(
+  run: Parameters<typeof withOpenClawTestState>[1],
+  layout: "split" | "home" = "split",
+) {
+  return withOpenClawTestState({ layout, agentEnv: "clear" }, run);
 }
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-mode-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
   // Storage receipts need a real candidate inventory, not unrelated bundled Doctor runtimes.
   const bundledRoot = path.join(root, "extensions");
   const pluginRoot = path.join(bundledRoot, "candidate-plugin");
@@ -74,27 +69,9 @@ async function makeFixture() {
       doctorContract: { stateMigrations: [] },
     },
   });
-  const cfg: OpenClawConfig = {
-    plugins: { entries: { "candidate-plugin": { enabled: true } } },
-  };
-  fs.writeFileSync(configPath, `${JSON.stringify(cfg)}\n`);
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
-}
-
-function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
-  return planLegacyStateMigrationsReadOnly({
-    mode: "doctor",
-    candidate: { root: fixture.root, version: "test" },
-    snapshot: createCallerModeSnapshot(fixture),
-    env: fixture.env,
+  return createMigrationFixture(root, {
+    config: { plugins: { entries: { "candidate-plugin": { enabled: true } } } },
+    bundledPluginsDir: bundledRoot,
   });
 }
 
@@ -116,65 +93,59 @@ afterEach(async () => {
 });
 
 it("reports legacy-main session repairs without migrating when other detectors are empty", async () => {
-  await withOpenClawTestState(
-    { label: "preflight-legacy-main", layout: "split", agentEnv: "clear" },
-    async (state) => {
-      const cfg = { agents: { entries: { worker: {} } } };
-      const source = { agentId: "main", env: state.env, sessionKey: "agent:main:chat" };
-      const destination = { agentId: "worker", env: state.env, sessionKey: "agent:worker:chat" };
-      const entry = { sessionId: "legacy-main-session", updatedAt: 100 };
-      runOpenClawAgentWriteTransaction(
-        (database) =>
-          writeSessionEntry(database, source.sessionKey, entry, {
-            allowStoredAliases: true,
-            previousEntry: null,
-          }),
-        source,
-      );
+  await withState(async (state) => {
+    const cfg = { agents: { entries: { worker: {} } } };
+    const source = { agentId: "main", env: state.env, sessionKey: "agent:main:chat" };
+    const destination = { agentId: "worker", env: state.env, sessionKey: "agent:worker:chat" };
+    const entry = { sessionId: "legacy-main-session", updatedAt: 100 };
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        writeSessionEntry(database, source.sessionKey, entry, {
+          allowStoredAliases: true,
+          previousEntry: null,
+        }),
+      source,
+    );
 
-      const result = await autoMigrateLegacyState(migrationOptions(cfg, state.env, state.home));
+    const result = await autoMigrateLegacyState(migrationOptions(cfg, state.env, state.home));
 
-      expect(result.changes).not.toContain("Migrated legacy main session claim agent:worker:chat.");
-      expect(result.notices).toContainEqual(expect.stringContaining("openclaw doctor --fix"));
-      expect(loadExactSessionEntryReadOnly(source)?.entry).toMatchObject(entry);
-      expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
-    },
-  );
+    expect(result.changes).not.toContain("Migrated legacy main session claim agent:worker:chat.");
+    expect(result.notices).toContainEqual(expect.stringContaining("openclaw doctor --fix"));
+    expect(loadExactSessionEntryReadOnly(source)?.entry).toMatchObject(entry);
+    expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
+  });
 });
 
 it.each([undefined, "missing"])(
   "keeps raw migration ownership separate from runtime selection with system owner %s",
   async (systemAgentId) => {
-    await withOpenClawTestState(
-      { label: "retained-install-owner", layout: "split", agentEnv: "clear" },
-      async (state) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            defaults: systemAgentId ? { systemAgent: { agentId: systemAgentId } } : {},
-            entries: { main: {}, worker: {} },
-          },
-        };
-        const runtime = { env: state.env, homedir: () => state.home };
-        const resolution = resolveInstallAgentDir(cfg, runtime);
-        const locatorConfig: OpenClawConfigWithLegacyRoster = {
-          agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
-        };
-        const migration = resolveLegacyStateMigrationOwner({
-          cfg,
-          locatorConfig,
-          ...runtime,
-        });
+    await withState(async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: systemAgentId ? { systemAgent: { agentId: systemAgentId } } : {},
+          entries: { main: {}, worker: {} },
+        },
+      };
+      const runtime = { env: state.env, homedir: () => state.home };
+      const resolution = resolveInstallAgentDir(cfg, runtime);
+      const locatorConfig: OpenClawConfigWithLegacyRoster = {
+        agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+      };
+      const migration = resolveLegacyStateMigrationOwner({
+        cfg,
+        locatorConfig,
+        ...runtime,
+      });
 
-        expect(migration.migrationTarget).toEqual({
-          dir: state.agentDir("worker"),
-          owner: "worker",
-        });
-        expect(migration.sessionMigrationAgentId).toBe("worker");
-        expect(resolution.migrationTarget).toBeUndefined();
-        expect(resolution.optionalDirectory).toBeUndefined();
-      },
-    );
+      expect(migration.migrationTarget).toEqual({
+        dir: state.agentDir("worker"),
+        owner: "worker",
+      });
+      expect(migration.sessionMigrationAgentId).toBe("worker");
+      expect(resolution.migrationTarget).toBeUndefined();
+      expect(resolution.optionalDirectory).toBeUndefined();
+    });
   },
 );
 
@@ -191,12 +162,7 @@ it.each([
   "shares the install directory between SDK and Doctor: $name (malformed: $malformed)",
   async (testCase) => {
     const { malformed } = testCase;
-    await withOpenClawTestState(
-      {
-        label: "install-agent-dir",
-        layout: testCase.override === "tilde" ? "split" : "home",
-        agentEnv: "clear",
-      },
+    await withState(
       async (state) => {
         const legacyDir = path.join(state.home, ".openclaw", "agent");
         const configuredDir = testCase.custom
@@ -303,6 +269,7 @@ it.each([
           },
         );
       },
+      testCase.override === "tilde" ? "split" : "home",
     );
   },
 );
@@ -420,13 +387,13 @@ it("binds WAL-backed shared-auth and meeting-transcript inputs as SQLite", async
     expect(fs.existsSync(`${agentDatabasePath}-wal`)).toBe(true);
     expect(fs.existsSync(`${stateDatabasePath}-wal`)).toBe(true);
 
-    plan = await planFixture(fixture);
+    plan = await fixture.plan();
   } finally {
     agentDatabase.close();
     stateDatabase.close();
   }
-  const sharedAuthPlan = plan.steps.find((step) => step.id === "shared-auth-store");
-  const meetingPlan = plan.steps.find((step) => step.id === "meeting-transcripts");
+  const sharedAuthPlan = byId(plan.steps, "shared-auth-store");
+  const meetingPlan = byId(plan.steps, "meeting-transcripts");
   expect(sharedAuthPlan).toMatchObject({
     requiredness: "conditional",
     source: [{ kind: "sqlite", path: agentDatabasePath }],
@@ -434,21 +401,16 @@ it("binds WAL-backed shared-auth and meeting-transcript inputs as SQLite", async
   expect(meetingPlan).toMatchObject({ requiredness: "required" });
   expect(meetingPlan?.source).toContainEqual({ kind: "sqlite", path: stateDatabasePath });
 
-  const result = await autoMigrateLegacyState({
-    ...migrationOptions(cfg, fixture.env, fixture.homeDir),
-    doctorOnlyStateMigrations: true,
-  });
-  expect(result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")).toMatchObject({
+  const result = await fixture.migrate(cfg);
+  expect(byId(result.stepReceipts, "shared-auth-store")).toMatchObject({
     outcome: "completed",
     source: sharedAuthPlan?.source,
     requiredness: "conditional",
   });
-  expect(result.stepReceipts.find((receipt) => receipt.id === "meeting-transcripts")).toMatchObject(
-    {
-      outcome: "completed",
-      source: meetingPlan?.source,
-    },
-  );
+  expect(byId(result.stepReceipts, "meeting-transcripts")).toMatchObject({
+    outcome: "completed",
+    source: meetingPlan?.source,
+  });
 });
 
 it("plans managed-worktree owners that remain after state-schema repair", async () => {
@@ -481,10 +443,10 @@ it("plans managed-worktree owners that remain after state-schema repair", async 
     legacy.close();
   }
 
-  const plan = await planFixture(fixture);
+  const plan = await fixture.plan();
 
   expect(plan.steps[0]).toMatchObject({ id: "state-schema", requiredness: "required" });
-  expect(plan.steps.find((step) => step.id === "managed-worktrees")).toMatchObject({
+  expect(byId(plan.steps, "managed-worktrees")).toMatchObject({
     source: [
       { kind: "sqlite", path: stateDatabasePath },
       { kind: "owner", id: "core:managed-worktree:legacy-after-schema" },
