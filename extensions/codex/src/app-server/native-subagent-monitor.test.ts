@@ -30,7 +30,14 @@ function createFixture(options?: ConstructorParameters<typeof CodexNativeSubagen
   const client = createClient();
   const runtime = createRuntime();
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, options);
-  return { client, runtime, monitor };
+  return {
+    client,
+    runtime,
+    monitor,
+    child: (method: string, params: JsonObject) => client.notify(childNotification(method, params)),
+    history: (params: Parameters<typeof threadRead>[0]) =>
+      client.setThreadRead("child-thread", threadRead(params)),
+  };
 }
 
 function observeEvents() {
@@ -175,37 +182,28 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("publishes parent-owned child activity without projecting it into the parent session", async () => {
     const events = observeEvents();
-    const { client, monitor } = createFixture();
+    const { client, monitor, child } = createFixture();
     const parent = await registerParent(monitor);
     await notifyChildStarted(client);
     await parent.unregister();
-    await client.notify(
-      childNotification("item/agentMessage/delta", {
-        turnId: "child-turn",
-        itemId: "assistant-1",
-        delta: "Inspecting the registry",
-      }),
-    );
-    await client.notify(
-      childNotification("item/reasoning/summaryTextDelta", {
-        turnId: "child-turn",
-        itemId: "reasoning-1",
-        summaryIndex: 0,
-        delta: "Planning the fix",
-      }),
-    );
-    await client.notify(
-      childNotification("item/started", {
-        turnId: "child-turn",
-        item: {
-          type: "commandExecution",
-          id: "command-1",
-          command: "pnpm test",
-          cwd: "/workspace",
-          status: "inProgress",
-        },
-      }),
-    );
+    await child("item/agentMessage/delta", {
+      turnId: "child-turn",
+      delta: "Inspecting the registry",
+    });
+    await child("item/reasoning/summaryTextDelta", {
+      turnId: "child-turn",
+      delta: "Planning the fix",
+    });
+    await child("item/started", {
+      turnId: "child-turn",
+      item: {
+        type: "commandExecution",
+        id: "command-1",
+        command: "pnpm test",
+        cwd: "/workspace",
+        status: "inProgress",
+      },
+    });
 
     expect(events).toEqual(
       expect.arrayContaining([
@@ -221,7 +219,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("publishes native attention and idle observations without finalizing the task", async () => {
     const events = observeEvents();
-    const { client, runtime, monitor } = createFixture();
+    const { client, runtime, monitor, child } = createFixture();
     await registerDetachedChild(client, monitor);
     const nativeStatuses: JsonObject[] = [
       { type: "active", activeFlags: [] },
@@ -231,7 +229,7 @@ describe("CodexNativeSubagentMonitor", () => {
       { type: "notLoaded" },
     ];
     for (const nativeStatus of nativeStatuses) {
-      await client.notify(childNotification("thread/status/changed", { status: nativeStatus }));
+      await child("thread/status/changed", { status: nativeStatus });
     }
     const sourceId = expectExecution(events, [
       { state: "running" },
@@ -249,7 +247,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("observes native mailbox waits and replacement turns without inventing child targets", async () => {
     const events = observeEvents();
-    const { client, monitor } = createFixture();
+    const { client, monitor, child } = createFixture();
     await registerDetachedChild(client, monitor);
     const startTurn = (turnId: string) => client.notify(turnStartedNotification(turnId));
     const waitItem = async (
@@ -257,19 +255,17 @@ describe("CodexNativeSubagentMonitor", () => {
       turnId: string,
       receiverThreadIds: string[] = [],
     ) => {
-      await client.notify(
-        childNotification(`item/${phase}`, {
-          turnId,
-          item: {
-            type: "collabAgentToolCall",
-            id: `wait-${turnId}`,
-            tool: "wait",
-            senderThreadId: "child-thread",
-            receiverThreadIds,
-            status: phase === "started" ? "inProgress" : "completed",
-          },
-        }),
-      );
+      await child(`item/${phase}`, {
+        turnId,
+        item: {
+          type: "collabAgentToolCall",
+          id: `wait-${turnId}`,
+          tool: "wait",
+          senderThreadId: "child-thread",
+          receiverThreadIds,
+          status: phase === "started" ? "inProgress" : "completed",
+        },
+      });
     };
     await startTurn("first-turn");
     await waitItem("started", "first-turn");
@@ -281,12 +277,10 @@ describe("CodexNativeSubagentMonitor", () => {
     await waitItem("started", "next-turn");
     const beforeLateEvents = events.length;
     await waitItem("completed", "first-turn");
-    await client.notify(
-      childNotification("item/agentMessage/delta", {
-        turnId: "first-turn",
-        delta: "stale progress",
-      }),
-    );
+    await child("item/agentMessage/delta", {
+      turnId: "first-turn",
+      delta: "stale progress",
+    });
     expect(events).toHaveLength(beforeLateEvents);
     await client.notify(
       childTurnCompletedNotification({ status: "interrupted", turnId: "next-turn" }),
@@ -324,76 +318,59 @@ describe("CodexNativeSubagentMonitor", () => {
     });
   });
 
-  it("falls back to a typed no-final completion when history stays unavailable", async () => {
-    vi.useFakeTimers();
-    const { client, runtime, monitor } = createFixture({
-      recoveryPollDelaysMs: [10],
-    });
-    await registerDetachedChild(client, monitor);
+  it.each([false, true])(
+    "keeps a typed no-final fallback with available history: %s",
+    async (available) => {
+      vi.useFakeTimers();
+      const { client, runtime, monitor, history } = createFixture({ recoveryPollDelaysMs: [10] });
+      if (available) {
+        history({ status: "completed" });
+      }
+      await registerDetachedChild(client, monitor);
 
-    await client.notify(nativeCompletionNotification({ result: null }));
-    await vi.advanceTimersByTimeAsync(20);
+      await client.notify(nativeCompletionNotification({ result: null }));
+      await vi.advanceTimersByTimeAsync(20);
 
-    expectCompletion(runtime, {
-      statusLabel: "completed_without_final_message",
-      result: "Subagent completed without a final assistant message.",
-    });
-  });
-
-  it("keeps a typed no-final fallback across completed history reads", async () => {
-    vi.useFakeTimers();
-    const { client, runtime, monitor } = createFixture({ recoveryPollDelaysMs: [10] });
-    client.setThreadRead("child-thread", threadRead({ status: "completed" }));
-    await registerDetachedChild(client, monitor);
-
-    await client.notify(nativeCompletionNotification({ result: null }));
-    await vi.advanceTimersByTimeAsync(20);
-
-    expectCompletion(runtime, { statusLabel: "completed_without_final_message" });
-  });
+      expectCompletion(runtime, {
+        statusLabel: "completed_without_final_message",
+        result: "Subagent completed without a final assistant message.",
+      });
+    },
+  );
 
   it("discards a provisional no-final result when the child starts another turn", async () => {
     vi.useFakeTimers();
-    const { client, runtime, monitor } = createFixture({
+    const { client, runtime, monitor, history } = createFixture({
       recoveryPollDelaysMs: [10],
     });
     await registerDetachedChild(client, monitor);
 
     await client.notify(nativeCompletionNotification({ result: null }));
-    client.setThreadRead(
-      "child-thread",
-      threadRead({ turnId: "new-turn", threadStatus: "active", status: "inProgress" }),
-    );
+    history({ turnId: "new-turn", threadStatus: "active", status: "inProgress" });
     await client.notify(turnStartedNotification("new-turn", { error: null }));
     await vi.advanceTimersByTimeAsync(30);
 
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
-    client.setThreadRead(
-      "child-thread",
-      threadRead({
-        turnId: "new-turn",
-        status: "completed",
-        result: "new turn result",
-        resultPhase: "final_answer",
-        trailingCommentary: "post-final progress noise",
-      }),
-    );
+    history({
+      turnId: "new-turn",
+      status: "completed",
+      result: "new turn result",
+      resultPhase: "final_answer",
+      trailingCommentary: "post-final progress noise",
+    });
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(true);
     expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
     expectCompletion(runtime, { result: "new turn result" });
   });
 
   it("does not recover persisted completion while the child thread is active", async () => {
-    const { client, runtime, monitor } = createFixture();
-    client.setThreadRead(
-      "child-thread",
-      threadRead({
-        threadStatus: "active",
-        status: "completed",
-        result: "stale persisted result",
-      }),
-    );
+    const { client, runtime, monitor, history } = createFixture();
+    history({
+      threadStatus: "active",
+      status: "completed",
+      result: "stale persisted result",
+    });
     await registerDetachedChild(client, monitor);
 
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
@@ -408,18 +385,15 @@ describe("CodexNativeSubagentMonitor", () => {
     "uses the authoritative $current turn after a system error",
     async ({ current, persisted, result }) => {
       vi.useFakeTimers();
-      const { client, runtime, monitor } = createFixture(
+      const { client, runtime, monitor, history } = createFixture(
         current === "inProgress" ? { recoveryPollDelaysMs: [10] } : undefined,
       );
-      client.setThreadRead(
-        "child-thread",
-        threadRead({
-          threadStatus: "systemError",
-          status: persisted,
-          result: "stale persisted result",
-          error: persisted === "failed" ? "stale persisted failure" : undefined,
-        }),
-      );
+      history({
+        threadStatus: "systemError",
+        status: persisted,
+        result: "stale persisted result",
+        error: persisted === "failed" ? "stale persisted failure" : undefined,
+      });
       client.setThreadTurns("child-thread", {
         data: [
           {
@@ -446,23 +420,18 @@ describe("CodexNativeSubagentMonitor", () => {
   it("delivers a bounded system-error fallback when live turn history stays unavailable", async () => {
     vi.useFakeTimers();
     const releaseClient = vi.fn();
-    const { client, runtime, monitor } = createFixture({
+    const { client, runtime, monitor, history, child } = createFixture({
       recoveryPollDelaysMs: [10],
       retainClient: () => releaseClient,
     });
-    client.setThreadRead(
-      "child-thread",
-      threadRead({
-        threadStatus: "systemError",
-        status: "failed",
-        error: "possibly stale failure",
-      }),
-    );
+    history({
+      threadStatus: "systemError",
+      status: "failed",
+      error: "possibly stale failure",
+    });
     await registerDetachedChild(client, monitor);
 
-    await client.notify(
-      childNotification("thread/status/changed", { status: { type: "systemError" } }),
-    );
+    await child("thread/status/changed", { status: { type: "systemError" } });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(client.request).toHaveBeenCalledWith(

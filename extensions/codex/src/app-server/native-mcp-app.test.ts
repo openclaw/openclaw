@@ -34,7 +34,7 @@ function createAttempt(enabled = true): EmbeddedRunAttemptParams {
   } as EmbeddedRunAttemptParams;
 }
 
-function appItem(overrides: Record<string, unknown> = {}) {
+function appItem(overrides: Record<string, unknown>) {
   return {
     id: "call-options",
     type: "mcpToolCall",
@@ -94,7 +94,11 @@ function createFixture(
     threadId,
     attempt: createAttempt(),
   });
-  return { client, request, prepare };
+  return {
+    client,
+    request,
+    prepare: (item: Record<string, unknown>) => prepare?.(appItem(item) as never),
+  };
 }
 
 describe("Codex native MCP Apps", () => {
@@ -103,22 +107,19 @@ describe("Codex native MCP Apps", () => {
       show_options: { description: "Show nearby options", inputSchema: {} },
       show_menu: { description: "Show a restaurant menu", inputSchema: {} },
       internal_reasoning: {
-        description: "Model-only internal context",
         inputSchema: {},
         _meta: { ui: { visibility: ["model"] } },
       },
     });
 
-    const details = await prepare?.(
-      appItem({
-        arguments: { limit: 4 },
-        result: {
-          content: [{ type: "text", text: "Found four restaurants." }],
-          structuredContent: { stores: [{ id: "store-1" }] },
-          _meta: null,
-        },
-      }) as never,
-    );
+    const details = await prepare({
+      arguments: { limit: 4 },
+      result: {
+        content: [{ type: "text", text: "Found four restaurants." }],
+        structuredContent: { stores: [{ id: "store-1" }] },
+        _meta: null,
+      },
+    });
     expect(vi.mocked(retainSharedCodexAppServerClientIfCurrent).mock.lastCall?.[0]).toBe(client);
     expect(details).toMatchObject({
       mcpAppPreview: {
@@ -146,18 +147,13 @@ describe("Codex native MCP Apps", () => {
     ).toEqual(new Set(["show_options", "show_menu"]));
   });
 
-  it.each([
-    { label: "a different", responseOriginCallId: "call-other" },
-    { label: "no", responseOriginCallId: undefined },
-    { label: "a null", responseOriginCallId: null },
-  ])(
-    "omits the app preview when Codex returns $label MCP origin call",
-    async ({ responseOriginCallId }) => {
+  it.each(["call-other", undefined, null])(
+    "omits the app preview for mismatched MCP origin call %s",
+    async (responseOriginCallId) => {
       const { request, prepare } = createFixture(
         "codex_apps",
         {
           show_options: {
-            description: "Show options",
             inputSchema: {},
             _meta: { connector_id: "sample" },
           },
@@ -165,7 +161,7 @@ describe("Codex native MCP Apps", () => {
         () => (responseOriginCallId !== undefined ? { originCallId: responseOriginCallId } : {}),
       );
 
-      await expect(prepare?.(appItem({ server: "codex_apps" }) as never)).resolves.toBeUndefined();
+      await expect(prepare({ server: "codex_apps" })).resolves.toBeUndefined();
       expect(request).toHaveBeenCalledWith(
         "mcpServer/resource/read",
         { ...resourceParams, server: "codex_apps", originCallId: "call-options" },
@@ -204,14 +200,13 @@ describe("Codex native MCP Apps", () => {
       "thread-hosted",
     );
 
-    const hostedItem = appItem({
+    const hostedItem = {
       id: "call-calendar",
       server: "codex_apps",
       tool: "calendar_read",
       appContext: { connectorId: "calendar", resourceUri: "ui://calendar/widget.html" },
-      result: { content: [{ type: "text", text: "Calendar ready." }] },
-    });
-    await expect(prepare?.(hostedItem as never)).resolves.toBeDefined();
+    };
+    await expect(prepare(hostedItem)).resolves.toBeDefined();
 
     const previewParams = vi.mocked(prepareHarnessNativeMcpAppPreview).mock.lastCall?.[0];
     expect(previewParams?.allowedAppToolNames).toEqual(
@@ -232,17 +227,15 @@ describe("Codex native MCP Apps", () => {
       ]),
     });
 
-    const previousResourceReadCount = request.mock.calls.filter(
-      ([method]) => method === "mcpServer/resource/read",
-    ).length;
+    const resourceReads = () =>
+      request.mock.calls.filter(([method]) => method === "mcpServer/resource/read");
+    const previousResourceReadCount = resourceReads().length;
     for (const tool of ["calendar_model_only", "drive_delete", "unattributed"]) {
       await expect(
-        prepare?.({ ...hostedItem, id: `call-denied-${tool}`, tool } as never),
+        prepare({ ...hostedItem, id: `call-denied-${tool}`, tool }),
       ).resolves.toBeUndefined();
     }
-    expect(
-      request.mock.calls.filter(([method]) => method === "mcpServer/resource/read"),
-    ).toHaveLength(previousResourceReadCount);
+    expect(resourceReads()).toHaveLength(previousResourceReadCount);
   });
 
   it("does not grant a hosted widget authority without an originating connector", async () => {
@@ -253,17 +246,12 @@ describe("Codex native MCP Apps", () => {
       attempt: createAttempt(),
     });
 
-    await expect(
-      prepare?.(
-        appItem({
-          id: "call-unowned",
-          server: "codex_apps",
-          tool: "calendar_read",
-          appContext: { resourceUri: "ui://calendar/widget.html" },
-          result: { content: [{ type: "text", text: "Calendar ready." }] },
-        }) as never,
-      ),
-    ).resolves.toBeUndefined();
+    const item = appItem({
+      server: "codex_apps",
+      tool: "calendar_read",
+      appContext: { resourceUri: "ui://calendar/widget.html" },
+    });
+    await expect(prepare?.(item as never)).resolves.toBeUndefined();
     expect(request).not.toHaveBeenCalled();
   });
 });

@@ -266,15 +266,12 @@ it("disables native user-scope skills only for non-default state directories", a
       ]),
     );
     const { client } = createFakeCodexAppServerClient(request);
-
-    await withEnvAsync(
-      { HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
-      async () => {
-        await expect(
-          resolveCodexNativeSkillIsolation({ client, codexHome: customCodexHome, cwd: workspace }),
-        ).resolves.toBe(undefined);
-      },
-    );
+    const params = { client, codexHome: customCodexHome, cwd: workspace };
+    await expect(
+      withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") }, () =>
+        resolveCodexNativeSkillIsolation(params),
+      ),
+    ).resolves.toBe(undefined);
     expect(request).toHaveBeenCalledTimes(1);
 
     const isolation = await withEnvAsync(
@@ -282,13 +279,7 @@ it("disables native user-scope skills only for non-default state directories", a
         HOME: path.join(home, "gateway-home"),
         OPENCLAW_STATE_DIR: path.join(home, "scratch-state"),
       },
-      () =>
-        resolveCodexNativeSkillIsolation({
-          client,
-          codexHome: customCodexHome,
-          cwd: workspace,
-          home,
-        }),
+      () => resolveCodexNativeSkillIsolation({ ...params, home }),
     );
     expect(request).toHaveBeenLastCalledWith(
       "skills/list",

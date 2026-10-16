@@ -33,14 +33,12 @@ function resolvePolicy(
   });
 }
 
-async function preparePolicy(overrides: Parameters<typeof prepareCodexNativeExecutionPolicy>[0]) {
-  return (
-    await prepareCodexNativeExecutionPolicy({
-      config: { tools: { exec: { host: "gateway" } } },
-      readRuntimeSessionEntry: true,
-      ...overrides,
-    })
-  ).policy;
+function preparePolicy(overrides: Parameters<typeof prepareCodexNativeExecutionPolicy>[0]) {
+  return prepareCodexNativeExecutionPolicy({
+    config: { tools: { exec: { host: "gateway" } } },
+    readRuntimeSessionEntry: true,
+    ...overrides,
+  }).then(({ policy }) => policy);
 }
 
 const gatewayPolicy = {
@@ -110,30 +108,20 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     );
   });
 
-  it("does not read an unscoped session entry for an explicit multi-agent roster", async () => {
-    mockSelectedEntry("worker-6");
-
-    expect(
-      await preparePolicy({
-        config: multiAgentConfig,
-        sessionKey: "node-session",
-        agentId: "alpha",
-      }),
-    ).toMatchObject(gatewayPolicy);
-    expect(capture).not.toHaveBeenCalled();
-  });
-
-  it("uses global policy when an explicit multi-agent roster has no selected agent", async () => {
-    mockSelectedEntry("worker-6");
-
-    expect(
-      await preparePolicy({
-        config: multiAgentConfig,
-        sessionKey: "node-session",
-      }),
-    ).toMatchObject(gatewayPolicy);
-    expect(capture).not.toHaveBeenCalled();
-  });
+  it.each(["alpha", undefined])(
+    "uses global policy without an unscoped roster read (agent=%s)",
+    async (agentId) => {
+      mockSelectedEntry("worker-6");
+      expect(
+        await preparePolicy({
+          config: multiAgentConfig,
+          sessionKey: "node-session",
+          agentId,
+        }),
+      ).toMatchObject(gatewayPolicy);
+      expect(capture).not.toHaveBeenCalled();
+    },
+  );
 
   it("honors agent exec config before global exec config", () => {
     expect(
