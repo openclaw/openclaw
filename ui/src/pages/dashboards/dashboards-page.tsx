@@ -16,26 +16,25 @@ export function DashboardsPage(props: DashboardsPageProps) {
     sort: "updated",
   });
   // Loader data is an initial seed; session publications own subsequent updates.
-  const [data, setData] = createSignal(
-    untrack(() => props.routeData),
-    { ownedWrite: true },
-  );
+  const initialData = untrack(() => props.routeData);
   const gateway = projectGateway(context.gateway);
 
   const selection = projectAgentSelection(context.agentSelection);
   const scopeId = createMemo(() => selection.read().state.scopeId?.trim() || null);
   const query = createMemo(() => dashboardSessionListQuery(scopeId()));
   const list = createMemo(() => projectSessionList({ sessions: context.sessions, scope: query() }));
+  const data = createMemo<DashboardsRouteData>((previous) => {
+    const snapshot = list().read();
+    const retained = previous ?? initialData;
+    return !snapshot.result && !snapshot.error && retained?.result
+      ? retained
+      : dashboardsRouteData(context, snapshot);
+  });
   createEffect(
     () => ({ projection: list(), scope: query() }),
     ({ projection, scope }) => {
       const apply = () => {
         const snapshot = untrack(projection.read);
-        setData((previous) =>
-          !snapshot.result && !snapshot.error && previous?.result
-            ? previous
-            : dashboardsRouteData(context, snapshot),
-        );
         if (snapshot.pagination?.hasMore && !snapshot.loading && !snapshot.error) {
           void context.sessions.refreshList({
             ...scope,
