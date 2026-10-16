@@ -70,12 +70,13 @@ describe("worker node provisioning shutdown replay", () => {
       },
       destroy,
     });
+    const protocolFeatures = [
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+    ];
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      ],
+      protocolFeatures,
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -105,53 +106,60 @@ describe("worker node provisioning shutdown replay", () => {
       to: "provisioning",
       patch: { nodeDeviceId: deviceId },
     });
-    const unavailable = vi.fn(async () => ({ available: false as const }));
-    const firstTransfer = createWorkerBootstrapArtifactTransferService();
-    const firstEnrollment = createWorkerNodeEnrollmentManager({
-      store: support.testState.store,
-      getConfig: () => support.testState.config,
-      resolveAvailability: unavailable,
-      prepareArtifact,
-      transfer: firstTransfer,
-    });
-    const receipt = {
-      ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      ],
-    };
-    const first = support.createService(provider, {
-      prepareNodeBootstrap: firstEnrollment.prepare,
-      prepareNodeEnrollment: firstEnrollment.begin,
-      closeNodeEnrollment: firstEnrollment.close,
-      stopNodeEnrollmentWaits: firstEnrollment.stop,
-      ensureNodeWorkerBundle: async () => receipt,
-    });
-
-    const createDispatch = async (environments: typeof first) =>
-      createProviderReplayDispatch({
+    const receipt = { ...support.BOOTSTRAP_RECEIPT, protocolFeatures };
+    async function startService(
+      resolveAvailability: Parameters<
+        typeof createWorkerNodeEnrollmentManager
+      >[0]["resolveAvailability"],
+      options: Parameters<typeof support.createService>[1] = {},
+      beforeDispatch?: (service: ReturnType<typeof support.createService>) => void,
+    ) {
+      const transfer = createWorkerBootstrapArtifactTransferService();
+      const enrollment = createWorkerNodeEnrollmentManager({
+        store: support.testState.store,
+        getConfig: () => support.testState.config,
+        resolveAvailability,
+        prepareArtifact,
+        transfer,
+      });
+      const service = support.createService(provider, {
+        prepareNodeBootstrap: enrollment.prepare,
+        prepareNodeEnrollment: enrollment.begin,
+        closeNodeEnrollment: enrollment.close,
+        stopNodeEnrollmentWaits: enrollment.stop,
+        ensureNodeWorkerBundle: async () => receipt,
+        ...options,
+      });
+      beforeDispatch?.(service);
+      const dispatch = createProviderReplayDispatch({
         initialPlacements: await placements.listAsync(),
         placements,
-        environments,
+        environments: service,
         resolveDevicePlacementRequirement: async () => ({
           requiredNodeCommands: [],
           consumesWorkerSlot: true,
         }),
         isCurrentNodePlacement: () => true,
       });
-    const firstDispatch = await createDispatch(first);
-    const uninstallFirstGuard = first.installReconcileEnvironmentGuard(
-      async (environmentId, reconcileCore) => {
-        const owner = (await placements.listAsync()).find(
-          (candidate) => candidate.environmentId === environmentId,
+      const uninstall = service.installReconcileEnvironmentGuard(async (environmentId, core) => {
+        const owner = expectDefined(
+          (await placements.listAsync()).find((row) => row.environmentId === environmentId),
+          "provisioning owner",
         );
-        if (owner?.state !== "provisioning") {
+        if (owner.state !== "provisioning") {
           throw new Error("guarded recovery lost its provisioning owner");
         }
-        await firstDispatch.resumeProvisioning(owner, reconcileCore);
-      },
-    );
+        await dispatch.resumeProvisioning(owner, core);
+      });
+      return { service, dispatch, transfer, uninstall };
+    }
+    const unavailable = vi.fn(async () => ({ available: false as const }));
+    const {
+      service: first,
+      dispatch: firstDispatch,
+      transfer: firstTransfer,
+      uninstall: uninstallFirstGuard,
+    } = await startService(unavailable);
     const recovery = firstDispatch.reconcile();
     await support.waitForFast(() => expect(unavailable).toHaveBeenCalled());
 
@@ -195,38 +203,11 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const restartedTransfer = createWorkerBootstrapArtifactTransferService();
-    const restartedEnrollment = createWorkerNodeEnrollmentManager({
-      store: support.testState.store,
-      getConfig: () => support.testState.config,
-      resolveAvailability: async () => ({ available: true }),
-      prepareArtifact,
-      transfer: restartedTransfer,
-    });
     const { nodeTunnelManager, syncWorkspace } = createProviderReplayNodeTunnel();
-    const restarted = support.createService(provider, {
-      prepareNodeBootstrap: restartedEnrollment.prepare,
-      prepareNodeEnrollment: restartedEnrollment.begin,
-      closeNodeEnrollment: restartedEnrollment.close,
-      stopNodeEnrollmentWaits: restartedEnrollment.stop,
-      ensureNodeWorkerBundle: async () => receipt,
-      nodeTunnelManager,
-    });
-    bindProviderReplayNodeAvailability(restarted);
-    const restartedDispatch = await createDispatch(restarted);
-    const uninstallRestartedGuard = restarted.installReconcileEnvironmentGuard(
-      async (environmentId, reconcileCore) => {
-        const owner = expectDefined(
-          (await placements.listAsync()).find(
-            (candidate) => candidate.environmentId === environmentId,
-          ),
-          "restarted provisioning owner",
-        );
-        if (owner.state !== "provisioning") {
-          throw new Error("restarted recovery lost its provisioning placement");
-        }
-        await restartedDispatch.resumeProvisioning(owner, reconcileCore);
-      },
+    const { dispatch: restartedDispatch, uninstall: uninstallRestartedGuard } = await startService(
+      async () => ({ available: true }),
+      { nodeTunnelManager },
+      bindProviderReplayNodeAvailability,
     );
 
     await restartedDispatch.reconcile();

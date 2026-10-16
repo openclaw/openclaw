@@ -12,6 +12,7 @@ import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { testState } from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 
 describe("worker environment runtime upgrades", () => {
@@ -34,53 +35,53 @@ describe("worker environment runtime upgrades", () => {
     targetReceipt: WorkerAdmissionHandshake = currentReceipt,
   ) {
     const environmentId = "worker-runtime-upgrade";
-    await support.testState.store.createIntent({
+    type Transition = Parameters<typeof testState.store.transition>[0];
+    const transition = (
+      from: Transition["from"],
+      to: Transition["to"],
+      patch?: Transition["patch"],
+    ) => testState.store.transition({ environmentId, from, to, patch });
+    await testState.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test", desktop: true } },
       provisionOperationId: `provision:${environmentId}`,
     });
-    await support.testState.store.transition({
-      environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
+    await transition("requested", "provisioning");
     if (transport === "ssh") {
-      await support.testState.store.transition({
-        environmentId,
-        from: "provisioning",
-        to: "bootstrapping",
-        patch: { leaseId: `lease:${environmentId}`, sshEndpoint: support.SSH_ENDPOINT },
+      await transition("provisioning", "bootstrapping", {
+        leaseId: `lease:${environmentId}`,
+        sshEndpoint: support.SSH_ENDPOINT,
       });
     }
-    const ready = await support.testState.store.transition({
-      environmentId,
-      from: transport === "node" ? "provisioning" : "bootstrapping",
-      to: "ready",
-      patch: {
+    const ready = await transition(
+      transport === "node" ? "provisioning" : "bootstrapping",
+      "ready",
+      {
         ...support.readyPatch(environmentId, { ...bootstrapReceipt, installKind: "bundle" }),
         desktop: support.DESKTOP,
         ...(transport === "node"
           ? { leaseId: `lease:${environmentId}`, nodeDeviceId: `node:${environmentId}` }
           : {}),
       },
-    });
+    );
     const environment =
       state === "ready"
         ? ready
-        : await support.testState.store.transition({
-            environmentId,
-            from: "ready",
-            to: state,
-            ...(state === "attached"
-              ? { patch: support.attachedPatch(environmentId, REQUEST.sessionId) }
-              : {}),
-          });
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
+        : await transition(
+            "ready",
+            state,
+            state === "attached"
+              ? support.attachedPatch(environmentId, REQUEST.sessionId)
+              : undefined,
+          );
+    const placementStore = () =>
+      createWorkerSessionPlacementStore({
+        database: testState.stateDb,
+        now: () => testState.nowMs,
+      });
+    const placements = placementStore();
     const placement =
       state === "attached"
         ? await seedActivePlacement(placements, {
@@ -89,24 +90,24 @@ describe("worker environment runtime upgrades", () => {
             executionMode: transport === "node" ? "worker-turn" : "remote-exec",
           })
         : undefined;
-    const oldCredential = support.testState.store.getCredential(environmentId)!;
+    const oldCredential = testState.store.getCredential(environmentId)!;
     const events: string[] = [];
     const tunnelManager = createWorkerTunnelManager();
     const stop = vi.spyOn(tunnelManager, "stop").mockImplementation(async () => {
-      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      expect(testState.store.getCredential(environmentId)).toBeUndefined();
       events.push("stopped");
     });
     const install = vi.fn(async () => {
       expect(events.at(-1)).toBe("stopped");
-      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      expect(testState.store.getCredential(environmentId)).toBeUndefined();
       events.push("installed");
       return targetReceipt;
     });
-    support.testState.prepareInstallation = vi.fn(async () => ({
+    testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
       ...targetReceipt,
     }));
-    support.testState.bootstrapWorker = vi.fn(async ({ installation, sshEndpoint }) => {
+    testState.bootstrapWorker = vi.fn(async ({ installation, sshEndpoint }) => {
       expect(installation.bundleHash).toBe(targetReceipt.bundleHash);
       expect(sshEndpoint).toEqual(environment.sshEndpoint);
       return install();
@@ -172,12 +173,11 @@ describe("worker environment runtime upgrades", () => {
       service,
       tunnelManager,
       nodeTunnelManager,
+      readEnvironment: () => testState.store.get(environmentId),
+      readCredential: () => testState.store.getCredential(environmentId),
       restart: async () => {
         await support.reopenWorkerEnvironmentStore();
-        const restarted = createWorkerSessionPlacementStore({
-          database: support.testState.stateDb,
-          now: () => support.testState.nowMs,
-        });
+        const restarted = placementStore();
         await restarted.recoverWorkerSessionToolOperationsAfterRestart();
         await restarted.clearLocalTurnClaimsAfterRestartAsync();
         return { placements: restarted, ...(await bindService(restarted, true)) };
@@ -185,36 +185,31 @@ describe("worker environment runtime upgrades", () => {
     };
   }
 
-  it.each([["node", "idle"]] as const)(
-    "upgrades the %s %s runtime while retaining its machine and workspace",
-    async (transport, state) => {
-      const h = await setupUpgrade(transport, state);
-      await h.service.reconcileOnce();
-      expect(h.events).toEqual(["stopped", "installed"]);
-      expect(h.stop).toHaveBeenCalledWith(h.environment.environmentId, h.environment.ownerEpoch);
-      expect(h.provision).not.toHaveBeenCalled();
-      expect(h.destroy).not.toHaveBeenCalled();
-      expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
-        state,
-        leaseId: h.environment.leaseId,
-        ownerEpoch: h.environment.ownerEpoch,
-        nodeDeviceId: h.environment.nodeDeviceId,
-        desktop: h.environment.desktop,
-        attachedSessionIds: h.environment.attachedSessionIds,
-        bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
-        destroyRequestedAtMs: null,
-      });
-      expect(support.testState.store.getCredential(h.environment.environmentId)).toMatchObject({
-        bundleHash: currentReceipt.bundleHash,
-        ownerEpoch: h.environment.ownerEpoch,
-        sessionId: null,
-      });
-      expect(
-        support.testState.store.getCredential(h.environment.environmentId)?.credentialHash,
-      ).not.toBe(h.oldCredential.credentialHash);
-      expect(h.ensureNodeWorkerBundle).toHaveBeenCalledOnce();
-    },
-  );
+  it("upgrades the node idle runtime while retaining its machine and workspace", async () => {
+    const h = await setupUpgrade("node", "idle");
+    await h.service.reconcileOnce();
+    expect(h.events).toEqual(["stopped", "installed"]);
+    expect(h.stop).toHaveBeenCalledWith(h.environment.environmentId, h.environment.ownerEpoch);
+    expect(h.provision).not.toHaveBeenCalled();
+    expect(h.destroy).not.toHaveBeenCalled();
+    expect(h.readEnvironment()).toMatchObject({
+      state: "idle",
+      leaseId: h.environment.leaseId,
+      ownerEpoch: h.environment.ownerEpoch,
+      nodeDeviceId: h.environment.nodeDeviceId,
+      desktop: h.environment.desktop,
+      attachedSessionIds: h.environment.attachedSessionIds,
+      bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
+      destroyRequestedAtMs: null,
+    });
+    expect(h.readCredential()).toMatchObject({
+      bundleHash: currentReceipt.bundleHash,
+      ownerEpoch: h.environment.ownerEpoch,
+      sessionId: null,
+    });
+    expect(h.readCredential()?.credentialHash).not.toBe(h.oldCredential.credentialHash);
+    expect(h.ensureNodeWorkerBundle).toHaveBeenCalledOnce();
+  });
 
   it("exposes an in-flight node refresh and isolates progress listeners until it settles", async () => {
     const h = await setupUpgrade("node");
@@ -250,7 +245,7 @@ describe("worker environment runtime upgrades", () => {
     }
     await expect(refresh!.settled).resolves.toBeUndefined();
     expect(h.service.readRuntimeRefresh(h.environment.environmentId)).toBeUndefined();
-    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+    expect(h.readEnvironment()).toMatchObject({
       bootstrapReceipt: { ...currentReceipt, installKind: "bundle" },
       lastError: null,
     });
@@ -273,7 +268,7 @@ describe("worker environment runtime upgrades", () => {
     expect(h.install).toHaveBeenCalledOnce();
     expect(h.destroy).not.toHaveBeenCalled();
     expect(h.placements.get(REQUEST.sessionId)).toEqual(h.placement);
-    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+    expect(h.readEnvironment()).toMatchObject({
       state: "attached",
       leaseId: h.environment.leaseId,
       ownerEpoch: h.environment.ownerEpoch,
@@ -291,7 +286,7 @@ describe("worker environment runtime upgrades", () => {
       ...h.placement,
       workerBundleHash: currentReceipt.bundleHash,
     });
-    expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
+    expect(h.readEnvironment()).toMatchObject({
       state: "attached",
       leaseId: h.environment.leaseId,
       ownerEpoch: h.environment.ownerEpoch,
@@ -356,8 +351,8 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
-      const fixture = await createHarness(support.testState.stateDb, restarted.placements, {
-        workspacePath: support.testState.root,
+      const fixture = await createHarness(testState.stateDb, restarted.placements, {
+        workspacePath: testState.root,
       });
       const openWorkspace = async () => {
         expect(h.events).toEqual(unchanged ? [] : ["stopped", "installed"]);
@@ -391,11 +386,11 @@ describe("worker environment runtime upgrades", () => {
             const claim = projectWorkerSessionTurnClaim(placement)!;
             expect(restarted.placements.validateWorkspaceResultClaim(claim)).toBe(true);
             expect(restarted.gate.validateWorkerTurn(claim)).toBe(false);
-            const before = support.testState.store.getCredential(environmentId);
+            const before = testState.store.getCredential(environmentId);
             await expect(restarted.service.acquireTurnCredential(claim)).rejects.toThrow(
               "not authoritative",
             );
-            expect(support.testState.store.getCredential(environmentId)).toEqual(before);
+            expect(testState.store.getCredential(environmentId)).toEqual(before);
             if (!before) {
               throw new Error("Released-state fixture lost its retained credential");
             }
@@ -424,8 +419,8 @@ describe("worker environment runtime upgrades", () => {
           await reconcileEnvironment(environmentId);
         },
       );
-      const recovery = await createHarness(support.testState.stateDb, restarted.placements, {
-        workspacePath: support.testState.root,
+      const recovery = await createHarness(testState.stateDb, restarted.placements, {
+        workspacePath: testState.root,
         environmentService: restarted.service,
       });
       try {
@@ -468,7 +463,7 @@ describe("worker environment runtime upgrades", () => {
       if (race === "shutdown") {
         stopping = h.service.stop();
       } else if (race === "destroy") {
-        await support.testState.store.requestDestroy({
+        await testState.store.requestDestroy({
           environmentId: h.environment.environmentId,
           state: "attached",
         });
@@ -497,13 +492,11 @@ describe("worker environment runtime upgrades", () => {
       installed.resolve(currentReceipt);
       await recovery;
       await stopping;
-      expect(support.testState.store.get(h.environment.environmentId)?.bootstrapReceipt).toEqual(
-        h.environment.bootstrapReceipt,
-      );
+      expect(h.readEnvironment()?.bootstrapReceipt).toEqual(h.environment.bootstrapReceipt);
       expect(h.placements.get(REQUEST.sessionId)?.workerBundleHash).toBe(
         h.placement!.workerBundleHash,
       );
-      expect(support.testState.store.getCredential(h.environment.environmentId)).toBeUndefined();
+      expect(h.readCredential()).toBeUndefined();
       expect(h.provision).not.toHaveBeenCalled();
       expect(h.destroy).not.toHaveBeenCalled();
     },
