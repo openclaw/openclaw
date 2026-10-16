@@ -230,7 +230,7 @@ describe("followup queue authority", () => {
     }
   });
 
-  it("keeps original grant revocation effective after collect retires an older client cancel", async () => {
+  it("keeps original grant revocation effective while collected client cancellation stays connected", async () => {
     const key = "test-collect-operator-revocation";
     const source = createOperatorAuthority();
     const firstCancel = new AbortController();
@@ -282,7 +282,7 @@ describe("followup queue authority", () => {
         }
       });
       await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(observations).toEqual([false, true]);
+      expect(observations).toEqual([true, true]);
       expect(effects).toEqual(["before revocation"]);
       expect(source.references()).toBe(0);
     } finally {

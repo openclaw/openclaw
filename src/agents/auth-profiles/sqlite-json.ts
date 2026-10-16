@@ -166,12 +166,14 @@ export function readAuthProfileRowsReadOnly(
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
   retainReader = true,
+  snapshotRoot?: string,
 ): AuthProfileRowRead {
   const acquired = acquireAuthProfileReadDatabase(
     databasePath,
     openReadOnlyDatabase,
     schema,
     expectedIdentity,
+    snapshotRoot,
   );
   if (acquired.status !== "readable") {
     const inspection: PersistedAuthProfileStoreInspection =

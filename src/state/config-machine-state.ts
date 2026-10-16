@@ -62,12 +62,20 @@ export function readConfigMachineStateCommandInDatabase(
 export function readConfigMachineState<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
+  behavior: {
+    artifactPreservingReadOnly?: boolean;
+    mapReadError?: (error: unknown) => Error;
+  } = {},
 ): T | undefined {
   const read = ({ db: database }: { db: EngineConnection }) => {
-    const row = readConfigMachineStateRowInDatabase(database, key);
-    // SAFETY: Each key's owner defines its persisted JSON shape.
-    return row ? (JSON.parse(row.value_json) as T) : undefined;
+    try {
+      const row = readConfigMachineStateRowInDatabase(database, key);
+      // SAFETY: Each key's owner defines its persisted JSON shape.
+      return row ? (JSON.parse(row.value_json) as T) : undefined;
+    } catch (error) {
+      // Only map row failures; admission, native close, and snapshot cleanup keep their owner.
+      throw behavior.mapReadError ? behavior.mapReadError(error) : error;
+    }
   };
   return behavior.artifactPreservingReadOnly
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, options)

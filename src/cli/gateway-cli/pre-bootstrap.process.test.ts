@@ -126,9 +126,54 @@ describe("Gateway config selection before migration admission", () => {
       managed: true,
       included: false,
     },
+    {
+      name: "managed auth-profile-only reference",
+      apiKey: undefined,
+      managed: true,
+      included: false,
+      authProfile: true,
+    },
+    {
+      name: "managed unreadable secondary",
+      apiKey: undefined,
+      managed: true,
+      included: false,
+      authProfile: true,
+      unreadableAuth: true,
+    },
+    {
+      name: "managed reset with unreadable secondary",
+      apiKey: undefined,
+      managed: true,
+      included: false,
+      authProfile: true,
+      unreadableAuth: true,
+      reset: true,
+    },
+    ...(["ownership", "credentials"] as const).map((cleanupStage) => ({
+      name: `managed shared ${cleanupStage} cleanup failure`,
+      apiKey: undefined,
+      managed: true,
+      included: false,
+      authProfile: true,
+      cleanupStage,
+    })),
+    {
+      name: "managed config env replacement",
+      apiKey: undefined,
+      managed: true,
+      included: false,
+      configEnv: true,
+    },
   ])(
     "preserves $name through startup without writing config",
-    async ({ apiKey, managed, included }) => {
+    async (scenario) => {
+      const { apiKey, managed, included } = scenario;
+      const authProfile = "authProfile" in scenario && scenario.authProfile;
+      const configEnv = "configEnv" in scenario && scenario.configEnv;
+      const unreadableAuth = "unreadableAuth" in scenario && scenario.unreadableAuth;
+      const reset = "reset" in scenario && scenario.reset;
+      const cleanupStage = "cleanupStage" in scenario ? scenario.cleanupStage : undefined;
       const root = fs.realpathSync(tempDirs.make("openclaw-managed-env-selection-"));
       const runtimeRoot = createSourceRuntime(runtimeParent);
       const stateDir = path.join(root, "state");
@@ -152,9 +197,21 @@ describe("Gateway config selection before migration admission", () => {
           plugins: { enabled: false },
           messages: { responsePrefix: "$${STALE_KEY}" },
           models: { providers: included ? { $include: "providers.json" } : providers },
+          ...(configEnv ? { env: { vars: { REPRO_PROVIDER_KEY: "repro-not-a-real-key" } } } : {}),
+          ...(reset ? { env: { vars: { RESET_ONLY_KEY: "synthetic-authored-reset-value" } } } : {}),
+          ...(authProfile
+            ? {
+                agents: {
+                  ownership: "explicit",
+                  entries: { main: {}, helper: {}, ...(unreadableAuth ? { broken: {} } : {}) },
+                },
+                auth: { profiles: { "minimax:fixture": { provider: "minimax", mode: "api_key" } } },
+              }
+            : {}),
         }),
       );
       const before = stateManifest(stateDir);
+      const configBefore = fs.readFileSync(configPath, "utf8");
       const result = await runIsolatedModuleScript(
         {
           PATH: process.env.PATH,
@@ -164,33 +221,217 @@ describe("Gateway config selection before migration admission", () => {
           HOME: root,
           USERPROFILE: root,
           OPENCLAW_HOME: root,
+          XDG_CACHE_HOME: path.join(root, "cache"),
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
           INVOCATION_ID: "repro",
-          REPRO_PROVIDER_KEY: "repro-not-a-real-key",
+          REPRO_PROVIDER_KEY: configEnv ? "stale-inherited-key" : "repro-not-a-real-key",
           STALE_KEY: "removed-service-value",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managed ? "REPRO_PROVIDER_KEY,STALE_KEY" : "STALE_KEY",
         },
         `
+        import fs from "node:fs";
+        import path from "node:path";
+        import { createHash } from "node:crypto";
         Object.defineProperty(process, "platform", { value: "linux" });
-        const { selectGatewayRunEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
+        const authProfile = ${JSON.stringify(authProfile)};
+        const unreadableAuth = ${JSON.stringify(unreadableAuth)};
+        const reset = ${JSON.stringify(reset)};
+        const cleanupStage = ${JSON.stringify(cleanupStage)};
+        let stateBefore;
+        let profileRef;
+        let agentDir;
+        if (authProfile) {
+          if (cleanupStage) {
+            const { writeConfigMachineState } = await import("./src/state/config-machine-state-write.ts");
+            writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: process.env });
+          }
+          const { saveAuthProfileStore } = await import("./src/agents/auth-profiles/store-runtime.ts");
+          const { loadPersistedAuthProfileStore } = await import("./src/agents/auth-profiles/persisted.ts");
+          const { resolveSecretRefString } = await import("./src/secrets/resolve.ts");
+          const { closeOpenClawAgentDatabasesAsync } = await import("./src/state/openclaw-agent-db.ts");
+          const { closeOpenClawStateDatabaseAsync } = await import("./src/state/openclaw-state-db.ts");
+          const { closeAuthProfileReadPool } = await import("./src/agents/auth-profiles/sqlite.ts");
+          agentDir = path.join(process.env.OPENCLAW_STATE_DIR, "agents", "helper", "agent");
+          fs.mkdirSync(agentDir, { recursive: true });
+          saveAuthProfileStore({ version: 1, profiles: { "minimax:fixture": {
+            type: "api_key", provider: "minimax",
+            keyRef: { source: "env", provider: "default", id: "REPRO_PROVIDER_KEY" },
+          } } }, agentDir);
+          profileRef = loadPersistedAuthProfileStore(agentDir)?.profiles["minimax:fixture"]?.keyRef;
+          if (!profileRef || !fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))) {
+            throw new Error("SQLite auth-profile fixture was not persisted");
+          }
+          if (await resolveSecretRefString(profileRef, { config: {}, env: process.env }) !== "repro-not-a-real-key") {
+            throw new Error("Auth-profile fixture did not resolve before startup");
+          }
+          if (cleanupStage) {
+            const { writePersistedAuthProfileStoreRaw } = await import("./src/agents/auth-profiles/sqlite.ts");
+            const { openOpenClawStateDatabase } = await import("./src/state/openclaw-state-db.ts");
+            writePersistedAuthProfileStoreRaw({ version: 1, profiles: {
+              shared: { type: "api_key", provider: "fixture", keyRef: profileRef },
+              inline: { type: "api_key", provider: "fixture", key: "synthetic-private-copy-credential" },
+            } }, undefined, openOpenClawStateDatabase({ env: process.env }));
+          }
+          let brokenPath;
+          if (unreadableAuth) {
+            const brokenDir = path.join(process.env.OPENCLAW_STATE_DIR, "agents", "broken", "agent");
+            saveAuthProfileStore({ version: 1, profiles: {} }, brokenDir);
+            brokenPath = path.join(brokenDir, "openclaw-agent.sqlite");
+          }
+          closeAuthProfileReadPool({ kind: "root", rootPath: process.env.OPENCLAW_STATE_DIR });
+          await closeOpenClawAgentDatabasesAsync(process.env.OPENCLAW_STATE_DIR);
+          await closeOpenClawStateDatabaseAsync();
+          if (brokenPath) fs.writeFileSync(brokenPath, "synthetic invalid secondary SQLite");
+          stateBefore = Object.fromEntries(fs.readdirSync(process.env.OPENCLAW_STATE_DIR, {
+            recursive: true, withFileTypes: true,
+          }).filter(entry => entry.isFile()).map(entry => {
+            const filename = path.join(entry.parentPath, entry.name);
+            return [path.relative(process.env.OPENCLAW_STATE_DIR, filename),
+              createHash("sha256").update(fs.readFileSync(filename)).digest("hex")];
+          }));
+        }
+        const { selectGatewayRunEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunBootstrap, recheckGatewayRunReset } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
         const { ExitError } = await import("./src/runtime.ts");
-        const runtime = { log() {}, error: console.error, exit(code) { throw new ExitError(code); } };
+        if (authProfile) {
+          const { readConfigFileSnapshot } = await import("./src/config/config.ts");
+          const snapshot = await readConfigFileSnapshot({ isolateEnv: true, observe: false, pluginValidation: "core-only" });
+          if (!snapshot.valid) throw new Error("Auth-profile fixture config was invalid: " + JSON.stringify(snapshot.issues));
+        }
+        const warnings = [];
+        const runtime = { log() {}, error(message) { warnings.push(message); }, exit(code) { throw new ExitError(code); } };
+        const opts = reset ? { reset: true, dev: true } : {};
         let admitted = false;
+        let cleanupFailure;
+        let failedCopy;
+        let failedRemoval = false;
+        let snapshotRetained = false;
+        let credentialRetained = false;
+        let cleanupJoined = false;
+        const nativeRm = fs.rmSync;
+        const { DatabaseSync } = await import("node:sqlite");
+        const nativePrepare = DatabaseSync.prototype.prepare;
+        if (cleanupStage) {
+          const stateKey = cleanupStage === "ownership" ? "auth.sharedStore" : "authProfiles.store";
+          // Observe the real selected row; only its private copy's filesystem removal fails.
+          DatabaseSync.prototype.prepare = function(...args) {
+            const statement = nativePrepare.apply(this, args);
+            const location = this.location();
+            for (const method of ["get", "all"]) {
+              const query = statement[method];
+              statement[method] = function(...bindings) {
+                const result = query.apply(this, bindings);
+                if (!failedCopy && bindings.includes(stateKey) && location &&
+                    !location.startsWith(process.env.OPENCLAW_STATE_DIR + path.sep)) {
+                  failedCopy = location;
+                }
+                return result;
+              };
+            }
+            return statement;
+          };
+          fs.rmSync = function(target, options) {
+            if (failedCopy && (String(target) === failedCopy || String(target) === path.dirname(failedCopy))) {
+              failedRemoval = true;
+              throw Object.assign(new Error("synthetic private snapshot removal refused"), { code: "EACCES" });
+            }
+            return nativeRm(target, options);
+          };
+        }
         try {
-          if (await selectGatewayRunEnvironment({ opts: {}, runtime }) &&
-              await prepareGatewayRunBootstrap({ opts: {}, runtime })) {
-            admitted = await recheckGatewayRunBootstrap({ opts: {}, runtime });
+          const selected = await selectGatewayRunEnvironment({ opts, runtime });
+          if (cleanupStage) {
+            admitted = selected;
+          } else {
+            const bootstrap = selected && await prepareGatewayRunBootstrap({ opts, runtime });
+            admitted = reset
+              ? selected && !bootstrap && await recheckGatewayRunReset({ opts, runtime })
+              : bootstrap && await recheckGatewayRunBootstrap({ opts, runtime });
           }
         } catch (error) {
-          if (!(error instanceof ExitError)) throw error;
+          if (cleanupStage) cleanupFailure = error;
+          else if (!(error instanceof ExitError)) throw error;
+        } finally {
+          try {
+            if (cleanupStage) {
+              snapshotRetained = Boolean(failedCopy && fs.existsSync(failedCopy));
+              credentialRetained = snapshotRetained && fs.readFileSync(failedCopy).includes(Buffer.from("synthetic-private-copy-credential"));
+            }
+          } finally {
+            DatabaseSync.prototype.prepare = nativePrepare;
+            fs.rmSync = nativeRm;
+          }
+          if (cleanupStage) {
+            const { closeOpenClawAgentDatabasesAsync } = await import("./src/state/openclaw-agent-db.ts");
+            const { closeOpenClawStateDatabaseAsync } = await import("./src/state/openclaw-state-db.ts");
+            const { cleanupSnapshotOperations } = await import("./src/infra/sqlite-readonly-location-cleanup.ts");
+            const cleanupErrors = [];
+            for (const close of [
+              () => closeOpenClawAgentDatabasesAsync(process.env.OPENCLAW_STATE_DIR),
+              () => closeOpenClawStateDatabaseAsync(),
+              () => cleanupSnapshotOperations(),
+            ]) {
+              try { await close(); } catch (error) { cleanupErrors.push(error); }
+            }
+            if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Bootstrap fixture cleanup failed");
+            cleanupJoined = Boolean(failedCopy && !fs.existsSync(path.dirname(failedCopy)));
+          }
+        }
+        let cleanupRefused = false;
+        if (cleanupStage) {
+          const pending = [cleanupFailure];
+          const visited = new Set();
+          while (pending.length) {
+            const error = pending.pop();
+            if (!(error instanceof Error) || visited.has(error)) continue;
+            visited.add(error);
+            if (error.message === "Shared-state snapshot cleanup is incomplete.") cleanupRefused = true;
+            if (error.cause) pending.push(error.cause);
+            if (error instanceof AggregateError) pending.push(...error.errors);
+          }
+        }
+        let resolved = false;
+        let resolutionError;
+        if (authProfile) {
+          const { loadPersistedAuthProfileStoreAtDatabasePath } = await import("./src/agents/auth-profiles/persisted.ts");
+          const { prepareSqliteReadOnlyLocationSync } = await import("./src/infra/sqlite-snapshot-source.ts");
+          const { resolveSecretRefString } = await import("./src/secrets/resolve.ts");
+          const source = prepareSqliteReadOnlyLocationSync(path.join(agentDir, "openclaw-agent.sqlite"));
+          let persistedRef;
+          try {
+            persistedRef = loadPersistedAuthProfileStoreAtDatabasePath(source.location, "agent")?.profiles["minimax:fixture"]?.keyRef;
+          } finally {
+            const { closeAuthProfileReadPool } = await import("./src/agents/auth-profiles/sqlite.ts");
+            closeAuthProfileReadPool({ kind: "database", databasePath: source.location });
+            if (!source.cleanup()) throw new Error("Auth-profile verification snapshot cleanup failed");
+          }
+          if (JSON.stringify(persistedRef) !== JSON.stringify(profileRef)) {
+            throw new Error("Startup changed the auth-profile reference");
+          }
+          try {
+            resolved = await resolveSecretRefString(persistedRef, { config: {}, env: process.env }) === "repro-not-a-real-key";
+          } catch (error) {
+            if (error?.code !== "SECRET_REF_NOT_FOUND") throw error;
+            resolutionError = error.code;
+          }
+          const { closeAuthProfileReadPool } = await import("./src/agents/auth-profiles/sqlite.ts");
+          closeAuthProfileReadPool({ kind: "root", rootPath: process.env.OPENCLAW_STATE_DIR });
         }
         console.log("__RESULT__" + JSON.stringify({ admitted,
           keyPresent: process.env.REPRO_PROVIDER_KEY === "repro-not-a-real-key",
           stalePresent: process.env.STALE_KEY !== undefined,
+          ...(authProfile ? { stateBefore, resolved, resolutionError } : {}),
+          ...(cleanupStage ? {
+            refused: cleanupRefused, failedRemoval, snapshotRetained, credentialRetained, cleanupJoined,
+          } : {}),
+          ...(unreadableAuth ? {
+            warned: warnings.some(message => message.includes("auth-profile") && message.includes("doctor")),
+            credentialSafe: warnings.every(message => ["repro-not-a-real-key", "removed-service-value", "REPRO_PROVIDER_KEY", "STALE_KEY", process.env.OPENCLAW_STATE_DIR, agentDir].every(value => !message.includes(value))),
+            resetOnlyPresent: process.env.RESET_ONLY_KEY !== undefined,
+          } : {}),
         }));
         `,
         { runtimeRoot, timeoutMs: 60_000 },
@@ -198,12 +439,27 @@ describe("Gateway config selection before migration admission", () => {
       const output = `${result.stdout}\n${result.stderr}`;
       const line = result.stdout.split("\n").find((entry) => entry.startsWith("__RESULT__"));
       expect(line, output).toBeDefined();
-      expect(JSON.parse(line!.slice("__RESULT__".length)), output).toEqual({
-        admitted: true,
+      const { stateBefore, ...observed } = JSON.parse(line!.slice("__RESULT__".length));
+      expect(observed, output).toEqual({
+        admitted: !cleanupStage,
         keyPresent: true,
-        stalePresent: false,
+        stalePresent: Boolean(unreadableAuth || cleanupStage),
+        ...(authProfile ? { resolved: true } : {}),
+        ...(cleanupStage
+          ? {
+              refused: true,
+              failedRemoval: true,
+              snapshotRetained: true,
+              credentialRetained: true,
+              cleanupJoined: true,
+            }
+          : {}),
+        ...(unreadableAuth
+          ? { warned: !reset, credentialSafe: true, resetOnlyPresent: false }
+          : {}),
       });
-      expect(stateManifest(stateDir)).toEqual(before);
+      expect(stateManifest(stateDir)).toEqual(authProfile ? stateBefore : before);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(configBefore);
     },
     75_000,
   );
