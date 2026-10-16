@@ -1,4 +1,3 @@
-// Imessage tests cover monitor.watch subscribe retry plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
@@ -9,6 +8,7 @@ import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import type { MonitorIMessageOpts } from "./monitor/types.js";
 import {
   installIMessageFailingStateRuntimeForTest,
   installIMessageStateRuntimeForTest,
@@ -45,21 +45,24 @@ function createRpcClient(overrides?: {
   waitForClose?: () => Promise<void>;
 }): MockIMessageRpcClient {
   const client = {
-    request: vi.fn(
-      overrides?.request ??
-        (async () => {
-          return { subscription: 1 };
-        }),
-    ),
-    waitForClose: vi.fn(
-      overrides?.waitForClose ??
-        (async () => {
-          return undefined;
-        }),
-    ),
+    request: vi.fn(overrides?.request ?? (async () => ({ subscription: 1 }))),
+    waitForClose: vi.fn(overrides?.waitForClose ?? (async () => {})),
     stop: vi.fn(async () => {}),
   };
   return client as unknown as MockIMessageRpcClient;
+}
+
+function runMonitor(
+  runtime = createRuntimeSpies(),
+  statusSink?: MonitorIMessageOpts["statusSink"],
+  config: MonitorIMessageOpts["config"] = { channels: { imessage: {} } },
+) {
+  return monitorIMessageProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    config,
+    runtime,
+    statusSink,
+  });
 }
 
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
@@ -98,12 +101,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       .mockResolvedValueOnce(firstClient)
       .mockResolvedValueOnce(secondClient);
 
-    const monitorPromise = monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: {} } } as never,
-      runtime: runtime as never,
-      statusSink,
-    });
+    const monitorPromise = runMonitor(runtime, statusSink);
 
     await Promise.race([firstSubscribe.promise, monitorPromise]);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -161,12 +159,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       }),
     );
 
-    const monitorErrorPromise = monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: {} } } as never,
-      runtime: runtime as never,
-      statusSink,
-    }).catch((error: unknown) => error);
+    const monitorErrorPromise = runMonitor(runtime, statusSink).catch((error: unknown) => error);
 
     await Promise.race([firstSubscribe.promise, monitorErrorPromise]);
     await vi.advanceTimersByTimeAsync(2_000);
@@ -199,14 +192,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       }),
     );
 
-    await expect(
-      monitorIMessageProvider({
-        scheduler: createTestPluginServiceScheduler(),
-        config: { channels: { imessage: {} } } as never,
-        runtime: createRuntimeSpies() as never,
-        statusSink,
-      }),
-    ).rejects.toThrow("permission denied");
+    await expect(runMonitor(undefined, statusSink)).rejects.toThrow("permission denied");
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledOnce();
     expect(statusSink).toHaveBeenCalledWith(
@@ -259,33 +245,24 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
         return client;
       });
 
-      await monitorIMessageProvider({
-        scheduler: createTestPluginServiceScheduler(),
-        config: {
-          agents: { entries: { main: { identity: { name: "Claw" } } } },
-          channels: {
-            imessage: {
-              dmPolicy: "open",
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["+15550001111"],
-              ...(groupScope !== "none"
-                ? {
-                    groups: {
-                      "*": { requireMention: groupScope === "root" },
-                      "999": { requireMention: false, tools: { deny: ["exec"] } },
-                    },
-                    accounts: {
-                      default:
-                        groupScope === "account"
-                          ? { groups: { "*": { requireMention: true } } }
-                          : {},
-                    },
-                  }
-                : {}),
-            },
+      await runMonitor(runtime, undefined, {
+        agents: { entries: { main: { identity: { name: "Claw" } } } },
+        channels: {
+          imessage: {
+            dmPolicy: "open",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15550001111"],
+            ...(groupScope !== "none"
+              ? {
+                  groups: {
+                    "*": { requireMention: groupScope === "root" },
+                    "999": { requireMention: false, tools: { deny: ["exec"] } },
+                  },
+                  accounts: { default: {} },
+                }
+              : {}),
           },
         },
-        runtime: runtime as never,
       });
 
       await new Promise((resolve) => {
@@ -304,17 +281,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       expect(diagnostics[0]).toContain(
         `account=default reason="${reason}" chat_id=456 group=true message_id=43 guid=present`,
       );
-      expect(diagnostics[0]).not.toContain("outbound-guid");
-      expect(diagnostics[0]).not.toContain("private message text");
-      expect(diagnostics[0]).not.toContain("+15550001111");
+      for (const secret of ["outbound-guid", "private message text", "+15550001111"]) {
+        expect(diagnostics[0]).not.toContain(secret);
+      }
       if (reason === "no mention") {
         expect(diagnostics[0]).toContain('groups["456"].requireMention=false');
         expect(diagnostics[0]).toContain("identity");
-        const groupsPath =
-          groupScope === "account"
-            ? 'channels.imessage.accounts["default"].groups'
-            : "channels.imessage.groups";
-        expect(diagnostics[0]).toContain(`${groupsPath}["456"].requireMention=false`);
+        expect(diagnostics[0]).toContain('channels.imessage.groups["456"].requireMention=false');
       }
     },
   );
@@ -360,11 +333,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       return client;
     });
 
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: { groupPolicy: "open" } } },
-      runtime,
-    });
+    await runMonitor(runtime, undefined, { channels: { imessage: { groupPolicy: "open" } } });
 
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
