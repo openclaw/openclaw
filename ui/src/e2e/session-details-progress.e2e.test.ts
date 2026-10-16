@@ -34,6 +34,7 @@ suite.define(() => {
               "sessions.list": chatSessionListResponse([
                 {
                   key: sessionKey,
+                  kind: "direct",
                   label: "Environment copy controls",
                   createdActor: { type: "human", id: "ada", label: "Ada" },
                   spawnedCwd: "/workspace/openclaw",
