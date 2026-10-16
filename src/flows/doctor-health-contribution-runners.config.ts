@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateModelRetirement } from "../infra/update-deferred-model-retirement.js";
 import {
   getUpdateDoctorConfigWriteAuthority,
+  recordDoctorRepairOutcome,
   recordUpdateDoctorConfigMigration,
   recordUpdateDoctorConfigWriteRefusal,
   runUpdateDoctorIncludeWrite,
@@ -38,6 +39,7 @@ export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext)
     }
   }
   delete ctx.configResult.retiredAuthProfileCleanupPlans;
+  recordDoctorRepairOutcome(true);
 }
 
 /** Returns false when persistence was refused or skipped, without authorizing dependent work. */

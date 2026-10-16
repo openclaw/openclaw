@@ -17,7 +17,8 @@ import {
   type ExtraGatewayService,
   type GatewayServiceInventory,
 } from "../daemon/inspect.js";
-import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
+import { execLaunchctl } from "../daemon/launchd-exec.js";
+import { confirmLaunchdServiceUnloaded } from "../daemon/launchd-unload.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import {
@@ -47,8 +48,8 @@ import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-superv
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   preserveGatewayAuthTokenForService,
@@ -99,28 +100,6 @@ type GatewayServiceConfigRepairOptions = {
 };
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
-const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
-async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
-  const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const remainingMs = Math.max(1, deadline - Date.now());
-    const probe = await execLaunchctl(
-      ["print", serviceTarget],
-      Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
-    );
-    if (probe.code !== 0) {
-      // A successful print (including a stopped job) means launchd still owns
-      // the label. Unknown errors and probe timeouts stay fail-closed.
-      return isLaunchctlNotLoaded(probe);
-    }
-    const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
-    if (delayMs <= 0) {
-      break;
-    }
-    await sleep(delayMs);
-  }
-  return false;
-}
 
 async function filterInactiveExtraGatewayServices(
   services: ExtraGatewayService[],
@@ -167,7 +146,9 @@ async function cleanupLegacyLaunchdService(params: {
 
   // bootout/unload can return before launchd finishes stopping the job. A plist
   // must stay in place unless a bounded print probe observes the label gone.
-  if (!(await confirmLegacyLaunchdServiceUnloaded(`${domain}/${params.label}`))) {
+  if (
+    !(await confirmLaunchdServiceUnloaded(`${domain}/${params.label}`, DOCTOR_LAUNCHCTL_TIMEOUT_MS))
+  ) {
     return { status: "failed", reason: "launchctl could not confirm unload" };
   }
 
@@ -427,6 +408,7 @@ export async function maybeRepairGatewayServiceConfig(
           maintenance: options.serviceMaintenance,
         });
       } catch (error) {
+        recordDoctorRepairOutcome(undefined);
         note(String(error), "Gateway service installation");
         return cfg;
       }
@@ -489,6 +471,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRepairDeferred) {
+    recordDoctorRepairOutcome(undefined);
     note(formatServiceRepairDeferredNote(), "Gateway service config");
     return cfg;
   }
@@ -502,6 +485,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRewriteBlock) {
+    recordDoctorRepairOutcome(undefined);
     return cfg;
   }
 
@@ -518,6 +502,7 @@ export async function maybeRepairGatewayServiceConfig(
     const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
     const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
     const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+    recordDoctorRepairOutcome(undefined);
     note(
       `Gateway service command, working directory, or environment comes from an operator-owned systemd drop-in; rewriting the managed unit cannot repair it. Inspect with \`${inspectCommand}\`, then update or remove the drop-in and rerun doctor.`,
       "Gateway service config",
@@ -585,6 +570,7 @@ export async function maybeRepairGatewayServiceConfig(
       }
     }
   } catch (err) {
+    recordDoctorRepairOutcome(undefined);
     runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
@@ -616,6 +602,7 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway",
       );
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       if (err instanceof ConfigWritePostCommitError) {
         throw err;
       }
@@ -660,6 +647,7 @@ export async function maybeRepairGatewayServiceConfig(
     },
   });
   if (unresolvedRepairFindings.length > 0) {
+    recordDoctorRepairOutcome(undefined);
     note(unresolvedRepairFindings.join("\n"), "Gateway service findings still unresolved");
   }
   return cfgForServiceInstall;

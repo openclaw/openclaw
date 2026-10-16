@@ -7,6 +7,7 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import {
   createUpdateDoctorDatabaseWriteCapture,
   DoctorMaintenanceRefusalError,
+  recordDoctorRepairOutcome,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
@@ -270,6 +271,7 @@ export async function createDoctorMaintenanceState(options: {
         const { loadDotEnv } = await import("../infra/dotenv.js");
         loadDotEnv({ quiet: true });
         const result = migration.result;
+        recordDoctorRepairOutcome(result.migrated);
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));
         }

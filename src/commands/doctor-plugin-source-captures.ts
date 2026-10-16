@@ -2,6 +2,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import {
   inspectLegacyPluginSourceCaptureRoots,
   pruneLegacyPluginSourceCaptures,
@@ -47,6 +48,9 @@ export async function noteLegacyPluginSourceCaptures(
     );
     if (shouldRepair) {
       const result = await pruneLegacyPluginSourceCaptures(report, assertLegacyUnowned);
+      recordDoctorRepairOutcome(
+        result.blockedReason || result.warnings.length ? undefined : result.removed.length > 0,
+      );
       if (result.removed.length > 0) {
         lines.push(
           `Removed ${result.removed.length} legacy plugin capture root(s), ${formatBytes(result.removed.reduce((bytes, root) => bytes + root.bytes, 0))}.`,
@@ -71,11 +75,13 @@ export async function noteLegacyPluginSourceCaptures(
       env,
     );
     if (native.removed.length > 0) {
+      recordDoctorRepairOutcome(true);
       lines.push(`Removed ${native.removed.length} unreferenced native plugin capture root(s).`);
     }
     warnings.push(...native.warnings);
   }
   if (warnings.length > 0) {
+    recordDoctorRepairOutcome(undefined);
     lines.push(
       "Legacy capture inspection or cleanup was incomplete; sizes may be partial.",
       ...warnings,

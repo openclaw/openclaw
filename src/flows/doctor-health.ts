@@ -22,6 +22,7 @@ import {
   captureUpdateDoctorConfigWrites,
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
+  recordDoctorRepairOutcome,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   UpdateDoctorError,
@@ -89,7 +90,7 @@ export async function runDoctorHealthFlow(
       }
       const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
       return withPluginLoadDiagnostics((diagnostics) => {
-        const runDoctor = (capture?: DoctorConfigCapture) =>
+        const runDoctor = (capture: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
               requestedExit = () => exitDoctorHealthFlow(selectedRuntime, code);
@@ -103,9 +104,7 @@ export async function runDoctorHealthFlow(
             resumeCapture,
             preCaptureRehearsalRoot,
           );
-        return resultPath
-          ? captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority)
-          : runDoctor();
+        return captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority);
       });
     });
   const { withPluginGenerationSourceCustody } =
@@ -149,6 +148,7 @@ async function runDoctorHealthFlowWithResult(
   let healthContext: DoctorHealthFlowContext | undefined;
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
+  let retireOriginalCapture: (() => Promise<void>) | undefined;
   const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
     if (!ctx.configWriteRefusal) {
       return false;
@@ -225,6 +225,9 @@ async function runDoctorHealthFlowWithResult(
           writeAuthority,
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
+          onCaptured: (retire) => {
+            retireOriginalCapture = retire;
+          },
         }),
       }),
     );
@@ -300,6 +303,7 @@ async function runDoctorHealthFlowWithResult(
         ]) {
           const result = repair({ env: process.env });
           repairedState ||= result.changes.length > 0;
+          recordDoctorRepairOutcome(result.changes.length > 0);
           if (result.warnings.length > 0) {
             throw new Error(result.warnings.join("\n"));
           }
@@ -357,6 +361,9 @@ async function runDoctorHealthFlowWithResult(
         shouldRepair: prompter.shouldRepair,
         env: process.env,
       });
+      recordDoctorRepairOutcome(
+        deletionJournal.warnings.length ? undefined : deletionJournal.changes.length > 0,
+      );
       for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
         effectiveRuntime.log(message);
       }
@@ -430,6 +437,9 @@ async function runDoctorHealthFlowWithResult(
           ),
       );
       recordAgentDatabaseAdmissions(agentDatabaseRefusals);
+      if (agentDatabaseRefusals.length) {
+        recordDoctorRepairOutcome(undefined);
+      }
       const { CONFIG_PATH } = await import("../config/config.js");
       const ctx: DoctorHealthFlowContext = {
         runtime: doctorRuntime,
@@ -590,6 +600,7 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
     if (pluginWarnings.length > 0) {
+      recordDoctorRepairOutcome(undefined);
       showDoctorOutro("Doctor finished with plugin load errors.");
       if (options.nonInteractive && !isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;
@@ -696,6 +707,14 @@ async function runDoctorHealthFlowWithResult(
     throw error;
   } finally {
     await measureGatewayBootstrapStep("doctor.maintenance.release", () => resources.disposeAsync());
+    if (
+      doctorResult.status === "ok" &&
+      !exitCode &&
+      !doctorResult.maintenanceRefusal &&
+      !doctorResult.failureFacts?.length
+    ) {
+      await retireOriginalCapture?.();
+    }
     if (updateResult) {
       await publishDoctorUpdateResult({ updateResult, doctorResult, healthContext, maintenance });
     }

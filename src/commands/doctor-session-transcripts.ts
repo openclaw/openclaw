@@ -23,6 +23,7 @@ import type {
   MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 import {
   repairCanonicalSessionDeliveryStates,
@@ -192,6 +193,7 @@ export async function noteSessionTranscriptHealth(options?: {
     await import("./doctor-session-sqlite.js");
   let postSessionPluginReceipt: LegacyStateMigrationStepReceipt | undefined;
   const recordPostSessionRefusal = (refusal: { code: string; message: string }) => {
+    recordDoctorRepairOutcome(undefined);
     if (!params.postSessionPluginMigration || postSessionPluginReceipt) {
       return postSessionPluginReceipt;
     }
@@ -337,6 +339,11 @@ export async function noteSessionTranscriptHealth(options?: {
       postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(receiptStep, pluginRepair);
       params.onStepReceipt?.(postSessionPluginReceipt);
     }
+    if (params.shouldRepair) {
+      recordDoctorRepairOutcome(
+        pluginRepair.warnings.length ? undefined : pluginRepair.changes.length > 0,
+      );
+    }
     const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
     if (pluginMessages.length > 0) {
       note(pluginMessages.join("\n"), "Plugin session repair");
@@ -353,6 +360,7 @@ export async function noteSessionTranscriptHealth(options?: {
         })
       : await runSessionSqlite();
   } catch (error) {
+    recordDoctorRepairOutcome(undefined);
     if (!(error instanceof DoctorSqliteMaintenanceLockUnavailableError)) {
       recordPostSessionRefusal({
         code: "blocked-by-session-repair-failure",
@@ -389,6 +397,33 @@ export async function noteSessionTranscriptHealth(options?: {
     resolvedSkillsReport,
     legacyMainSessionResult,
   } = result;
+  if (params.shouldRepair) {
+    const rowRepairs = [worktreeWorkspaceReport, acpKeyReport, titleReport, reservedKeyReport];
+    const partial =
+      report.supportIssue ||
+      report.targets.some(
+        (target) => !isInformationalMissingSessionIndex(target) && target.issues.length > 0,
+      ) ||
+      rowRepairs.some((repair) => repair.repaired < repair.found) ||
+      canonicalKeyReport.repairedGroups < canonicalKeyReport.foundGroups ||
+      acpKeyReport.warnings.length > 0 ||
+      titleReport.warnings.length > 0 ||
+      legacyMainSessionResult.warnings.length > 0 ||
+      (legacyMainSessionResult.armed && !legacyMainSessionResult.complete);
+    recordDoctorRepairOutcome(
+      partial
+        ? undefined
+        : rowRepairs.some((repair) => repair.repaired > 0) ||
+            canonicalKeyReport.repairedGroups > 0 ||
+            legacyMainSessionResult.changes.length > 0 ||
+            report.totals.importedEntries +
+              report.totals.importedTranscriptEvents +
+              (report.totals.archivedLegacyStoreFiles ?? 0) +
+              report.totals.archivedTranscriptFiles +
+              report.totals.archivedUnreferencedJsonlFiles >
+              0,
+    );
+  }
   if (worktreeWorkspaceReport.found > 0) {
     note(
       params.shouldRepair

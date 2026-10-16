@@ -1,16 +1,87 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/io.js";
+import { noteDoctorRepairResult } from "../flows/doctor-health-contribution-utils.js";
 import * as ancestry from "../infra/restart-stale-pids.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
-import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
-import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  DoctorMaintenanceRefusalError,
+} from "../infra/update-doctor-result.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  "no-op",
+  "advisory",
+  "partial",
+  "refused",
+  "config-repair",
+  "ledger-unavailable",
+] as const)("retains original recovery only when needed after %s", async (scenario) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess() {},
+    });
+    const run = async () => {
+      const finish = await preserveDoctorOriginalState({
+        root: process.cwd(),
+        env: state.env,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      });
+      const captures = resolveUpdateCaptureRoot(state.stateDir);
+      const name = (await fs.readdir(captures)).find((entry) => entry.startsWith("doctor-"));
+      expect(name).toMatch(/^doctor-/);
+      const manifest = path.join(captures, name!, "manifest.json");
+      const before = await fs.readFile(manifest, "utf8");
+      if (scenario === "config-repair") {
+        await createConfigIO({ env: state.env }).writeConfigFile({
+          gateway: { mode: "local", port: 19001 },
+        });
+      }
+      if (scenario === "advisory" || scenario === "partial") {
+        noteDoctorRepairResult(
+          { changes: [], warnings: ["Synthetic notice"], completed: scenario === "advisory" },
+          vi.fn(),
+        );
+      }
+      if (scenario === "refused") {
+        await createDoctorPrompter({
+          options: { repair: true, nonInteractive: true },
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        }).confirmAggressiveAutoFix({ message: "Synthetic repair", initialValue: true });
+      }
+      await finish?.();
+      if (scenario === "no-op" || scenario === "advisory") {
+        expect((await fs.readdir(captures)).filter((entry) => entry.startsWith("doctor-"))).toEqual(
+          [],
+        );
+      } else {
+        expect(await fs.readFile(manifest, "utf8")).toBe(before);
+      }
+    };
+    try {
+      await scope.run(() =>
+        scenario === "ledger-unavailable"
+          ? run()
+          : captureUpdateDoctorConfigWrites(state.configPath, run),
+      );
+    } finally {
+      await scope.close();
+    }
+  });
+});
 
 it.each(["ancestry-unverified", "missing-capture"] as const)(
   "preserves the original capture refusal classification for %s",
@@ -60,69 +131,3 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
     });
   },
 );
-
-it("keeps one sealed container capture, skips repeats, and still retires old captures", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const marker = state.path("activation-capture-marker");
-    const env = { ...state.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: marker };
-    const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
-    const log = vi.fn();
-    const preserve = (root: string | null) =>
-      preserveDoctorOriginalState({
-        root,
-        env,
-        runtime: { log, error: vi.fn(), exit: vi.fn() },
-        signal: new AbortController().signal,
-        assertCurrent() {},
-      });
-
-    // A nonfatal capture failure leaves the next start free to capture.
-    await preserve(null);
-    expect(fs.existsSync(marker)).toBe(false);
-    expect(log).toHaveBeenLastCalledWith(
-      expect.stringContaining("Original state capture was unavailable"),
-    );
-
-    const capture = vi
-      .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")
-      .mockImplementation(async ({ runId }) => {
-        const directory = path.join(captureRoot, runId);
-        fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, "manifest.json"), "{}");
-        return {
-          ref: {
-            directory,
-            manifestPath: path.join(directory, "manifest.json"),
-            manifestSha256: "0".repeat(64),
-          },
-          warnings: [],
-          diagnostics: { databaseWarnings: [] },
-        };
-      });
-    const retire = vi
-      .spyOn(baselineCapture, "retireExpiredStandaloneDoctorCaptures")
-      .mockResolvedValue({ retired: [], warnings: [] });
-    await preserve(process.cwd());
-    expect(capture).toHaveBeenCalledOnce();
-    const runId = fs.readFileSync(marker, "utf8");
-    expect(runId).toBe(capture.mock.calls[0]![0].runId);
-
-    log.mockClear();
-    await preserve(process.cwd());
-    expect(capture).toHaveBeenCalledOnce();
-    expect(log.mock.calls).toEqual([
-      [
-        `This container already retained a pre-repair capture (${runId}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
-      ],
-    ]);
-    // Repeat starts keep the container's capture while older ones still age out.
-    expect(retire).toHaveBeenCalledTimes(2);
-    expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
-
-    // A marker whose capture is gone no longer suppresses capture.
-    fs.rmSync(path.join(captureRoot, runId), { recursive: true });
-    await preserve(process.cwd());
-    expect(capture).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(marker, "utf8")).toBe(capture.mock.calls[1]![0].runId);
-  });
-});

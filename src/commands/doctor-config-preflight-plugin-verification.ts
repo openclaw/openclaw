@@ -3,6 +3,7 @@ import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import type { PluginPayloadSmokeFailure } from "../plugins/payload-verification.js";
@@ -114,6 +115,9 @@ export async function runDoctorPluginConvergence(params: {
         compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
       }),
     params.measure,
+  );
+  recordDoctorRepairOutcome(
+    convergence.warnings.length ? undefined : convergence.changes.length > 0,
   );
   if (convergence.changes.length > 0) {
     note(convergence.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");

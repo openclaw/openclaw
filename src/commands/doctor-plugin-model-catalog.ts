@@ -9,6 +9,7 @@ import {
   repairPersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -131,6 +132,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     }
   }
 
+  recordDoctorRepairOutcome(warnings.length ? undefined : migrated + repairs.length > 0);
   if (migrated > 0) {
     emitNote(
       `Migrated and verified ${migrated} generated provider catalog${migrated === 1 ? "" : "s"} in agent SQLite.`,

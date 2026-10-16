@@ -22,6 +22,7 @@ import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../state/openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -141,10 +142,11 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
       throw error;
     }
   });
+  const found = pending.reduce((count, item) => count + item.sessionKeys.length, 0);
   return {
     targets,
     pending,
-    found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
+    found,
     scannedStores: targets.length,
     apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
       let repaired = 0;
@@ -170,6 +172,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           }
         }
       }
+      recordDoctorRepairOutcome(repaired < found ? undefined : repaired > 0);
       return repaired;
     },
   };

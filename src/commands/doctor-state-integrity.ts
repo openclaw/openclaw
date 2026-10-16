@@ -55,6 +55,7 @@ import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -617,6 +618,7 @@ export async function noteStateIntegrity(
         fs.chmodSync(dir, (fs.statSync(dir).mode & 0o777) | 0o700);
         changes.push(`- Repaired permissions on ${label ? `${label}: ` : ""}${displayDir}`);
       } catch (err) {
+        recordDoctorRepairOutcome(undefined);
         warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
       }
     }
@@ -644,6 +646,7 @@ export async function noteStateIntegrity(
         changes.push(`- Tightened permissions on ${displayPath} to ${octalMode}`);
       }
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       warnings.push(`- Failed to read ${failureLabel}: ${String(err)}`);
     }
   };
@@ -695,6 +698,7 @@ export async function noteStateIntegrity(
         changes.push(`- Created ${displayStateDir}`);
         stateDirExists = true;
       } else {
+        recordDoctorRepairOutcome(undefined);
         warnings.push(`- Failed to create ${displayStateDir}: ${created.error}`);
       }
     }
@@ -747,6 +751,7 @@ export async function noteStateIntegrity(
           if (created.ok) {
             changes.push(`- Created ${label}: ${displayDir}`);
           } else {
+            recordDoctorRepairOutcome(undefined);
             warnings.push(`- Failed to create ${displayDir}: ${created.error}`);
           }
         }
@@ -1019,6 +1024,7 @@ export async function noteStateIntegrity(
   if (warnings.length > 0) {
     noteFn(warnings.join("\n"), "State integrity");
   }
+  recordDoctorRepairOutcome(changes.length > 0);
   if (changes.length > 0) {
     noteFn(changes.join("\n"), "Doctor changes");
   }

@@ -2,6 +2,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
@@ -175,10 +176,12 @@ async function runMemoryRecallHealth(
             ...repair.warnings.map((warning) => `- warning: ${warning}`),
           ];
         }
+        recordDoctorRepairOutcome(true);
         lines.push(`Verify: ${formatCliCommand("openclaw memory status --deep")}`);
         note(agentMessage(lines.filter(Boolean).join("\n")), "Doctor changes");
       }
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       report(
         `${prompter ? "Memory artifact repair" : "Memory recall audit"} could not be completed: ${formatErrorMessage(err)}`,
       );

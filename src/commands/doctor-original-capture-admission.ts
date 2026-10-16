@@ -12,6 +12,7 @@ export function createDoctorOriginalCaptureHook(
   > & {
     rehearsalRoot?: string;
     json?: boolean;
+    onCaptured?: (retire: () => Promise<void>) => void;
   },
 ): NonNullable<DoctorMaintenanceParams["beforeStateMutation"]> {
   return async ({ env, signal }) => {
@@ -56,15 +57,20 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
-    await measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
-      preserveDoctorOriginalState({
-        root: params.root,
-        env,
-        runtime: params.runtime,
-        signal,
-        assertCurrent: () => scope.assertOwnerCurrent(),
-        writeAuthority: params.writeAuthority,
-      }),
+    const retire = await measureGatewayBootstrapStep(
+      "doctor.maintenance.preserve-original-state",
+      () =>
+        preserveDoctorOriginalState({
+          root: params.root,
+          env,
+          runtime: params.runtime,
+          signal,
+          assertCurrent: () => scope.assertOwnerCurrent(),
+          writeAuthority: params.writeAuthority,
+        }),
     );
+    if (retire) {
+      params.onCaptured?.(retire);
+    }
   };
 }

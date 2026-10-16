@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -197,6 +198,7 @@ export async function noteDoctorAgentMemorySchemaHealth(
     report = { repaired: [], warnings: [error.message] };
   }
 
+  recordDoctorRepairOutcome(report.warnings.length ? undefined : report.repaired.length > 0);
   if (report.repaired.length > 0) {
     writeNote(
       report.repaired

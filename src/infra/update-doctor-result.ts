@@ -156,6 +156,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
 }
 
 export type DoctorConfigCapture = {
+  repairsApplied?: boolean;
   path: string;
   hash: string;
   inputHash?: string;
@@ -274,6 +275,7 @@ export function captureUpdateDoctorConfigWrites<T>(
   authority?: UpdateDoctorWriteAuthority,
 ): Promise<T> {
   const capture: DoctorConfigCapture = {
+    repairsApplied: false,
     path: path.resolve(configPath),
     hash: "unchanged",
     configChanges: [],
@@ -287,6 +289,18 @@ export function captureUpdateDoctorConfigWrites<T>(
     },
     () => run(capture),
   );
+}
+
+/** Sticky repair outcome: undefined means a repair could not certify completion. */
+export function recordDoctorRepairOutcome(applied: boolean | undefined): void {
+  const capture = doctorConfigWrites.getStore()?.capture;
+  if (capture?.repairsApplied === false) {
+    capture.repairsApplied = applied;
+  }
+}
+
+export function getDoctorRepairOutcome(): boolean | undefined {
+  return doctorConfigWrites.getStore()?.capture.repairsApplied;
 }
 
 /** The same authority covers include writers; only the root has a captured input hash. */
@@ -338,6 +352,7 @@ export function recordUpdateDoctorConfigFileWrite(
   inputHash: string | null,
   hash: string,
 ): void {
+  recordDoctorRepairOutcome(true);
   const capture = doctorConfigWrites.getStore()?.capture;
   if (!capture) {
     return;

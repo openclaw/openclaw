@@ -6,6 +6,7 @@ import {
   type ConfigAuditScrubResult,
 } from "../config/io.audit.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 
 const NOTE_TITLE = "Config audit";
 const CONFIG_AUDIT_SCRUB_CHECK_ID = "core/doctor/config-audit-scrub";
@@ -77,6 +78,7 @@ export async function maybeScrubConfigAuditLog(params: {
       ...(!params.shouldRepair ? { dryRun: true } : {}),
     });
     if (params.shouldRepair && result.aborted) {
+      recordDoctorRepairOutcome(undefined);
       note(
         "Config audit scrub was aborted because new entries were appended to config-audit.jsonl during the rewrite. No records were modified. Stop the gateway (or wait until it is idle) and rerun `openclaw doctor --fix`.",
         NOTE_TITLE,
@@ -84,6 +86,7 @@ export async function maybeScrubConfigAuditLog(params: {
       return;
     }
     if (result.rewritten > 0) {
+      recordDoctorRepairOutcome(params.shouldRepair);
       const count = formatEntryCount(result.rewritten);
       const fixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
       note(
@@ -94,6 +97,7 @@ export async function maybeScrubConfigAuditLog(params: {
       );
     }
   } catch (err) {
+    recordDoctorRepairOutcome(undefined);
     note(
       `Config audit scrub failed: ${err instanceof Error ? err.message : String(err)}`,
       NOTE_TITLE,

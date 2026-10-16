@@ -16,6 +16,7 @@ import { GatewayServiceAuthorityError } from "../daemon/service-update-authority
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive, type SystemdUnitScope } from "../daemon/systemd.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -47,6 +48,7 @@ export async function canRepairRunningGatewayDefinition(params: {
     `Gateway native-policy repair requires a running managed service. The existing definition and stop state were preserved; inspect it with \`${formatCliCommand("openclaw gateway status --deep", params.env)}\` before using \`${formatCliCommand("openclaw gateway install --force", params.env)}\`.`,
     "Gateway service definition",
   );
+  recordDoctorRepairOutcome(undefined);
   return false;
 }
 
@@ -77,6 +79,7 @@ export async function installDoctorGatewayService(
           }
         }
         await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
+        recordDoctorRepairOutcome(true);
       };
       if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =
@@ -126,6 +129,7 @@ export async function installDoctorGatewayService(
       await install();
     }
   } catch (err) {
+    recordDoctorRepairOutcome(undefined);
     if (err instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(err)) {
       throw err;
     }

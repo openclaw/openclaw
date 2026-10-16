@@ -10,6 +10,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -313,6 +314,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   for (const plugin of stale) {
     removeManagedNpmDependency(plugin);
   }
+  recordDoctorRepairOutcome(true);
   note(
     [
       "Removed stale managed npm plugin package(s) shadowing bundled plugins:",
@@ -359,6 +361,7 @@ async function loadRepairedPluginInstallRecords(
   for (const pluginId of pluginIds) {
     records = removePluginInstallRecordFromRecords(records, pluginId);
   }
+  recordDoctorRepairOutcome(pluginIds.length > 0);
   return migrateOfficialPluginInstallProvenance(records);
 }
 

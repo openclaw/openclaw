@@ -35,6 +35,7 @@ import {
   assertNoRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../../infra/state-migrations.retired-files.js";
+import { recordDoctorRepairOutcome } from "../../../infra/update-doctor-result.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateReadContext } from "../../../state/openclaw-state-worker-context.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -97,6 +98,7 @@ export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined
 }
 
 export function rethrowLegacyCronStoreError(error: unknown): void {
+  recordDoctorRepairOutcome(undefined);
   if (error instanceof RetiredStateFormatError) {
     throw error;
   }
@@ -408,6 +410,7 @@ export async function applyLegacyCronStoreRepair(params: {
         await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       rethrowSqliteSchemaVersionError(err);
       const snapshotChanged = collectErrorGraphCandidates(err, (current) => [current.cause]).some(
         (cause) => cause instanceof CronJobsStoreChangedError,
@@ -458,6 +461,7 @@ export async function applyLegacyCronStoreRepair(params: {
     );
   }
 
+  recordDoctorRepairOutcome(warnings.length ? undefined : changes.length > 0);
   return {
     changes,
     warnings,

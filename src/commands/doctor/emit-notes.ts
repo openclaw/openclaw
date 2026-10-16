@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { recordDoctorRepairOutcome } from "../../infra/update-doctor-result.js";
 
 /** Strip terminal control sequences from a potentially multi-line doctor note. */
 export function sanitizeDoctorNote(note: string): string {
@@ -11,6 +12,7 @@ export function emitDoctorNotes(params: {
   infoNotes?: string[];
   warningNotes?: string[];
 }): void {
+  recordDoctorRepairOutcome(Boolean(params.changeNotes?.length));
   for (const [title, notes] of [
     ["Doctor changes", params.changeNotes],
     ["Doctor info", params.infoNotes],

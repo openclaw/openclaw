@@ -19,6 +19,7 @@ import { MIN_READABLE_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -193,6 +194,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       }
       const headerTimestamp = timestampMsToIsoString(snapshot.rows[0]?.createdAt ?? Number.NaN);
       if (!headerTimestamp) {
+        recordDoctorRepairOutcome(undefined);
         note(
           `- Failed to repair transcript ${sessionId} (${target.agentId}): invalid first-row timestamp`,
           NOTE_TITLE,
@@ -259,6 +261,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
           { operationLabel: "doctor.session-transcript-headers" },
         );
         repaired += 1;
+        recordDoctorRepairOutcome(true);
       } catch (error) {
         reportError(`- Failed to repair transcript ${sessionId} (${target.agentId})`, error);
       }

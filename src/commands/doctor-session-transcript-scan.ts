@@ -9,6 +9,7 @@ import {
   resolveTargetSqliteOptions,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 /** Each snapshot closes its cursors before a repair; each pass owns only its read connection. */
@@ -22,8 +23,10 @@ export function scanDoctorSessionTranscripts(
     reportError: (message: string, error: unknown) => void;
   }) => void,
 ): void {
-  const reportError = (message: string, error: unknown) =>
+  const reportError = (message: string, error: unknown) => {
+    recordDoctorRepairOutcome(undefined);
     note(`${message}: ${formatErrorMessage(error).replace(/\s+/g, " ").trim()}`, params.title);
+  };
   for (const target of projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
     params.env,

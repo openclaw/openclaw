@@ -18,7 +18,11 @@ import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenanc
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
-import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  recordDoctorRepairOutcome,
+  UpdateDoctorError,
+} from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -651,6 +655,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     async repairSqliteNoCow(paths: readonly string[]) {
       assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
+      recordDoctorRepairOutcome(result.warnings.length ? undefined : result.changes.length > 0);
       for (const message of result.changes) {
         params.runtime.log(message);
       }

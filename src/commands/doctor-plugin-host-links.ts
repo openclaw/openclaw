@@ -2,6 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage as formatPackageReadFailure } from "@openclaw/normalization-core/error-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -172,5 +173,8 @@ export async function maybeRepairPluginOpenClawHostLinks(
     );
   }
 
+  recordDoctorRepairOutcome(
+    warnings.length ? undefined : repaired > 0 || registeredRepair.repaired > 0,
+  );
   return repaired > 0 || registeredRepair.repaired > 0;
 }

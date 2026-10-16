@@ -1,5 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { shortenHomePath } from "../utils.js";
 
 type DoctorAgentDatabaseOperationResult<T> = { ok: true; value: T } | { ok: false };
@@ -35,6 +36,7 @@ function noteDoctorAgentDatabaseFailure(
   params: { agentId: string; path: string },
   error: unknown,
 ): void {
+  recordDoctorRepairOutcome(undefined);
   note(
     `- Agent ${params.agentId} database ${shortenHomePath(params.path)}: ${formatErrorMessage(error)}`,
     "Doctor warnings",

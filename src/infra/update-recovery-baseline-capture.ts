@@ -630,6 +630,7 @@ export async function retireExpiredStandaloneDoctorCaptures(params: {
   keepRunId: string;
   now?: number;
   assertCurrent: () => void;
+  completedWithoutRepairs?: boolean;
 }): Promise<{ retired: string[]; warnings: string[] }> {
   const retired: string[] = [];
   const warnings: string[] = [];
@@ -647,8 +648,9 @@ export async function retireExpiredStandaloneDoctorCaptures(params: {
     return { retired, warnings };
   }
   for (const name of names.toSorted()) {
+    const currentNoop = name === params.keepRunId && params.completedWithoutRepairs;
     if (
-      name === params.keepRunId ||
+      (name === params.keepRunId && !currentNoop) ||
       !/^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(name)
     ) {
       continue;
@@ -675,11 +677,13 @@ export async function retireExpiredStandaloneDoctorCaptures(params: {
         manifest.schemaVersion !== 2 ||
         manifest.generation?.kind !== "baseline" ||
         !Number.isFinite(createdAt) ||
-        now - createdAt <= STANDALONE_DOCTOR_CAPTURE_RETENTION_MS ||
+        (!currentNoop && now - createdAt <= STANDALONE_DOCTOR_CAPTURE_RETENTION_MS) ||
         (await statOrMissing(path.join(directory, "outcome.json"))) ||
-        (await getUpdateRunAsync(manifest.runId, {
-          path: path.join(params.stateDir, "state", "openclaw.sqlite"),
-        })) !== undefined
+        // The fresh standalone doctor-UUID cannot be an updater's UUID run ID.
+        (!currentNoop &&
+          (await getUpdateRunAsync(manifest.runId, {
+            path: path.join(params.stateDir, "state", "openclaw.sqlite"),
+          })) !== undefined)
       ) {
         continue;
       }

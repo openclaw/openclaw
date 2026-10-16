@@ -19,8 +19,9 @@ export async function loadUsageCacheOperations() {
   return {
     "usageCache.retireLegacy": (_input: undefined, { writeTransaction, admit }) =>
       writeTransaction("session-cost-usage.legacy.retire", "Usage cache", ({ db }) => {
-        retireLegacySessionCostUsageCacheInDatabase(db);
+        const retired = retireLegacySessionCostUsageCacheInDatabase(db);
         admit("commit");
+        return retired;
       }),
     "usageCache.writeRollup": (
       input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1][],

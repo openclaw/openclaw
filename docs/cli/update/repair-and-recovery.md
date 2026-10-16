@@ -156,14 +156,18 @@ copy does not replace an earlier update's originals. Standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
-Official image activation keeps one such copy per container: after a capture
-succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other expired Doctor captures.
 Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
 retires older sealed Doctor captures and reports each removal; incomplete captures
 and update captures are never retired automatically, so take a verified backup
 when you need a long-term copy. Review and retire superseded update captures with
 [`openclaw update cleanup`](#update-cleanup).
+
+After a successful standalone repair pass, Doctor immediately retires its new capture
+if its repair ledger records no repairs, migrations, or moves. Routine observation and
+plugin-index bookkeeping do not count as repairs. This also applies before Docker Gateway
+startup. Repairing, incomplete, or unverifiable runs keep the normal retention period. Checkpointed SQLite
+stores use the same clone-aware copy as updater retention, with a guarded byte-copy
+fallback when cloning is unavailable or denied by the filesystem.
 
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
 hard-link publication followed by source removal in native `auto` mode. Existing

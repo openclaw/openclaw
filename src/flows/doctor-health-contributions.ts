@@ -11,7 +11,10 @@ import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
-import { recordUpdateDoctorDeferredInspectionChecks } from "../infra/update-doctor-result.js";
+import {
+  recordDoctorRepairOutcome,
+  recordUpdateDoctorDeferredInspectionChecks,
+} from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -194,6 +197,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
           throw new Error("the replacement token could not be verified");
         }
         rollback = undefined;
+        recordDoctorRepairOutcome(true);
         note(
           `Regenerated Gateway token in secret store entry "${entry.name}"; gateway.auth.token remains a SecretRef. Backup: ${backup.path}\nRestart the Gateway, then reconnect or re-pair devices with the new token.`,
           "Gateway auth",
@@ -212,6 +216,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
         const warning = `Could not repair Gateway token in secret store entry "${entry.name}": ${scrubDoctorErrorMessage(error)}.${recovery} Rerun \`openclaw doctor --fix\` after resolving the reported problem.`;
         note(warning, "Gateway auth");
         recordDoctorHealthWarnings(ctx, [], [warning]);
+        recordDoctorRepairOutcome(undefined);
       }
       return;
     }
@@ -296,6 +301,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         ),
       );
       if (migrated.changes.length > 0) {
+        recordDoctorRepairOutcome(true);
         note(migrated.changes.join("\n"), "Doctor changes");
       }
       const notices = migrated.notices ?? [];
@@ -325,6 +331,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     throw error;
   }
   if (removedExecApprovals > 0) {
+    recordDoctorRepairOutcome(true);
     note(
       `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
       "Doctor changes",
@@ -663,6 +670,7 @@ async function runDoctorHealthContributionList(
       } catch (error) {
         // Cancellation ends the command, including when an optional check reports a warning.
         signal?.throwIfAborted();
+        recordDoctorRepairOutcome(undefined);
         if (
           contribution.required ||
           error instanceof DoctorStateMigrationRefusalError ||

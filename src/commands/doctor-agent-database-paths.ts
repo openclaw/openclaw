@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { repairOpenClawAgentDatabasePaths } from "../state/openclaw-agent-db-path-repair.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -26,10 +27,12 @@ export function noteDoctorAgentDatabasePathHealth(params: {
     { operationLabel: "doctor.agent-database-paths" },
   );
   if (report.repaired > 0) {
+    recordDoctorRepairOutcome(true);
     invalidateRegisteredAgentDatabasesMemo({ env: params.env });
     note(`Repaired ${report.repaired} agent database path registration(s).`, "Doctor changes");
   }
   if (report.warnings.length > 0) {
+    recordDoctorRepairOutcome(undefined);
     note(report.warnings.join("\n"), "Doctor warnings");
   }
   return report.warnings;

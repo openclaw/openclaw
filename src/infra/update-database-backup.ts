@@ -339,12 +339,13 @@ export async function createUpdateDatabaseBackupInProcess(
       await ensureDurableDirectory({ directoryPath: parent, create: createPrivateSqliteDirectory });
     }
     const snapshotPath = path.join(directory, archivePath);
-    const stopped =
-      input.stopped &&
+    // Artifact-preserving captures also prove source/journal stability after the raw clone.
+    const checkpointed =
+      (input.stopped || input.preserveSourceArtifacts) &&
       !identities.has(`${sourcePath}-journal`) &&
       (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
     const before = input.stopped ? undefined : await readGeneration(sourcePath);
-    const snapshot = stopped
+    const snapshot = checkpointed
       ? await createStoppedSqliteSnapshot({
           sourcePath,
           targetPath: snapshotPath,
@@ -403,7 +404,11 @@ export async function createUpdateDatabaseBackupInProcess(
   if (JSON.stringify(current) !== JSON.stringify(inventory)) {
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
-  await inspectRestorableDatabaseFiles(inventory.present, identities, input.stopped);
+  await inspectRestorableDatabaseFiles(
+    inventory.present,
+    identities,
+    input.stopped || input.preserveSourceArtifacts,
+  );
   return {
     directory,
     databases,

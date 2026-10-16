@@ -11,6 +11,7 @@ import {
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -188,6 +189,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     return false;
   }
   if (candidate === "record-too-large") {
+    recordDoctorRepairOutcome(undefined);
     params.warnings.push(
       `- Skipped heartbeat main-session recovery for ${mainKey}: the transcript contains a JSONL record larger than ${TRANSCRIPT_RECORD_MAX_CHARS} characters, so doctor left it unchanged.`,
     );
@@ -198,6 +200,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     isSessionKeyOccupied: params.isSessionKeyOccupied,
   });
   if (!recoveredKey) {
+    recordDoctorRepairOutcome(undefined);
     params.warnings.push(
       `- Main session ${mainKey} appears heartbeat-owned, but doctor could not choose a safe recovery key.`,
     );
@@ -252,6 +255,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     });
   }
   if (!movedEntry) {
+    recordDoctorRepairOutcome(undefined);
     params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
     return false;
   }

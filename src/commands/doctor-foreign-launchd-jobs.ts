@@ -10,6 +10,7 @@ import {
 } from "../daemon/launchd-foreign-jobs.js";
 import { readGatewayForcedRestartSummary } from "../daemon/restart-storm.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import {
@@ -31,6 +32,7 @@ export async function noteMacForeignLaunchdJobs(
   try {
     jobs = await findForeignLaunchdJobs(env);
   } catch (error) {
+    recordDoctorRepairOutcome(undefined);
     note(
       `Could not inspect foreign launchd jobs: ${sanitizeTerminalText(formatErrorMessage(error))}. No jobs were removed.`,
       "Foreign launchd jobs (macOS)",
@@ -62,6 +64,7 @@ export async function noteMacForeignLaunchdJobs(
     isServiceRepairDeferred(resolveServiceRepairPolicy(env)) ||
     !(await shouldManageGatewayService(env))
   ) {
+    recordDoctorRepairOutcome(undefined);
     runtime.log(
       "Foreign launchd job repair skipped: this Doctor invocation does not own service repair or an update is in progress. No jobs were removed.",
     );
@@ -70,12 +73,14 @@ export async function noteMacForeignLaunchdJobs(
   for (const job of candidates) {
     try {
       const result = await repairForeignLaunchdJob(job, env);
+      recordDoctorRepairOutcome(result.removed ? true : undefined);
       runtime.log(
         result.removed
           ? result.detail
           : `Removal not confirmed for launchd job ${job.label}: ${result.detail}`,
       );
     } catch (error) {
+      recordDoctorRepairOutcome(undefined);
       runtime.log(
         `Removal not confirmed for launchd job ${job.label}: ${sanitizeTerminalText(formatErrorMessage(error))}`,
       );

@@ -15,6 +15,10 @@ import {
 } from "../daemon/service.test-helpers.js";
 import { buildSystemdUnit } from "../daemon/systemd-unit.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  getDoctorRepairOutcome,
+} from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -623,4 +627,14 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       ]);
     },
   );
+
+  it("records a service repair that preserves config bytes", async () => {
+    await captureUpdateDoctorConfigWrites("synthetic-doctor-config.json", async () => {
+      const { observations, errors } = await runRepair("repairable", { tokenPresent: true });
+      expect(errors).toEqual([]);
+      expect(observations.configBytesPreserved).toBe(true);
+      expect(observations.unitBytesPreserved).toBe(false);
+      expect(getDoctorRepairOutcome()).toBe(true);
+    });
+  });
 });

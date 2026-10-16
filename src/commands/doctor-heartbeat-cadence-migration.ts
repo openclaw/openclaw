@@ -21,6 +21,7 @@ import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { shortenHomePath } from "../utils.js";
 
 const HEARTBEAT_CADENCE_MIGRATION_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
@@ -180,6 +181,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
     }
   });
 
+  recordDoctorRepairOutcome(warnings.length ? undefined : changes.length > 0);
   if (changes.length > 0) {
     note(changes.join("\n"), "Doctor changes");
   }

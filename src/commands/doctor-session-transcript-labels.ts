@@ -6,6 +6,7 @@ import { readTranscriptEventRows } from "../config/sessions/session-accessor.sql
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   scanDoctorSessionTranscripts,
@@ -177,6 +178,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
         try {
           event = JSON.parse(row.eventJson) as TranscriptEvent;
         } catch {
+          recordDoctorRepairOutcome(undefined);
           // A malformed sibling cannot produce a valid deferred projection after repair.
           hasMalformedRow = true;
           continue;
@@ -217,6 +219,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
           );
           repairedSessions += 1;
           repairedEvents += updates.length;
+          recordDoctorRepairOutcome(true);
         } catch (repairError) {
           reportError(
             `- Failed to rewrite labels for session ${sessionId} (${agentId})`,

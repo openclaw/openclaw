@@ -10,6 +10,7 @@ import {
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { parseLaunchctlJob, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
+import { confirmLaunchdServiceUnloaded } from "./launchd-unload.js";
 
 type GatewayAction = "restart" | "start" | "stop";
 export type ForeignLaunchdJob = {
@@ -396,8 +397,7 @@ export async function repairForeignLaunchdJob(
       detail: `Could not remove ${current.label}: ${formatLaunchctlResultDetail(removed)}`,
     };
   }
-  const probe = await execLaunchctl(["print", target], INSPECTION_TIMEOUT_MS);
-  return isLaunchctlNotLoaded(probe)
+  return (await confirmLaunchdServiceUnloaded(target, INSPECTION_TIMEOUT_MS))
     ? {
         removed: true,
         detail: `Removed stray launchd job ${current.label} (${current.program}; Gateway ${current.gatewayActions.join("/")}).${current.plistPath ? " Disabled at login; plist retained." : ""}`,

@@ -6,6 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { retireLegacySessionCostUsageCache } from "../infra/session-cost-usage-cache.sqlite.js";
 import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
@@ -80,6 +81,7 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const files = await detectLegacyUsageCostCacheFiles(params.env).catch((error: unknown) => {
+    recordDoctorRepairOutcome(undefined);
     const command = params.shouldRepair ? "openclaw doctor --fix" : "openclaw doctor";
     const action = params.shouldRepair ? "scan and cleanup" : "scan";
     note(
@@ -109,12 +111,14 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
     });
   }
   if (failures.length > 0) {
+    recordDoctorRepairOutcome(undefined);
     note(
       `Failed removing legacy usage-cost cache files:\n${failures.join("\n")}`,
       "Usage cost cache",
     );
     return;
   }
+  recordDoctorRepairOutcome(true);
   note(
     `Removed ${files.length} rebuildable legacy usage-cost cache ${files.length === 1 ? "file" : "files"}; SQLite rebuilds the cache on demand.`,
     "Usage cost cache",
@@ -139,8 +143,10 @@ async function maybeRemoveLegacySkillUploadTree(params: {
   }
   try {
     await fs.rm(uploadRoot, { recursive: true, force: true });
+    recordDoctorRepairOutcome(true);
   } catch (error) {
     note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
+    recordDoctorRepairOutcome(undefined);
     return;
   }
   note(
@@ -169,6 +175,7 @@ async function maybeRemoveObsoleteControlUiAssetCache(params: {
       return [];
     }
     await fs.rm(cacheRoot, { recursive: true, force: true });
+    recordDoctorRepairOutcome(true);
     note(
       `Removed obsolete Control UI asset cache at ${shortenHomePath(cacheRoot)}.`,
       "Control UI assets",
@@ -209,7 +216,7 @@ export async function maybeRepairLegacyRuntimeFiles(
   if (shouldRepair) {
     for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
       if ((await fs.stat(entry.path).catch(() => null))?.isFile()) {
-        await runDoctorAgentDatabaseOperationAsync({
+        const result = await runDoctorAgentDatabaseOperationAsync({
           agentId: entry.agentId,
           path: entry.path,
           run: () =>
@@ -219,6 +226,7 @@ export async function maybeRepairLegacyRuntimeFiles(
               databasePath: entry.path,
             }),
         });
+        recordDoctorRepairOutcome(result.ok ? result.value > 0 : undefined);
       }
     }
   }

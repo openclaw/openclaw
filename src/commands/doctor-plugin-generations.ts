@@ -3,6 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { listRecoveredManagedNpmInstallCandidates } from "../plugins/installed-plugin-index-record-reader.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -118,6 +119,7 @@ export async function maybeRepairStaleManagedNpmInstallGenerations(
     return false;
   }
   clearLoadInstalledPluginIndexInstallRecordsCache();
+  recordDoctorRepairOutcome(true);
   note(
     [
       "Retired stale managed npm plugin generation(s); they will be pruned after the gateway restarts:",

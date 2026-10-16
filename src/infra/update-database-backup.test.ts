@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -134,9 +135,13 @@ it.each(["legacy", "current"] as const)(
   },
 );
 
-it.each(["auto", "off"] as const)(
-  "captures stopped databases without a payload audit (native copy %s)",
-  async (mode) => {
+it.each([
+  { mode: "auto", stopped: true },
+  { mode: "off", stopped: true },
+  { mode: "auto", stopped: false },
+] as const)(
+  "clones checkpointed databases without a payload audit (native=$mode, stopped=$stopped)",
+  async ({ mode, stopped }) => {
     const f = await fixture(true);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
@@ -145,11 +150,18 @@ it.each(["auto", "off"] as const)(
       const backup = await createUpdateDatabaseBackupInProcess({
         ...f.input,
         inspectionPlan: f.inspectionPlan,
-        stopped: true,
+        stopped,
+        preserveSourceArtifacts: true,
       });
       expect(audit).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
+        if (mode === "auto") {
+          const metadata = await readCloneFileMetadata([entry.path, entry.snapshotPath]);
+          if (metadata[0]?.cloneId) {
+            expect(metadata[1]?.cloneId).toBe(metadata[0].cloneId);
+          }
+        }
         const bytes = await fs.readFile(entry.snapshotPath);
         expect(entry).toMatchObject({
           userVersion: 17,

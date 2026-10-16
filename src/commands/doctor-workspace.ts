@@ -9,6 +9,7 @@ import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -312,6 +313,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFile(params.scope.workspaceDir);
+    recordDoctorRepairOutcome(migration.skipReason ? undefined : migration.changed);
     const reason = migration.skipReason;
     if (reason) {
       note(
@@ -342,6 +344,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {
     const prefix = params.scope.labelAgent ? `Agent "${params.scope.agentId}": ` : "";
+    recordDoctorRepairOutcome(undefined);
     note(
       `${prefix}Workspace memory repair could not be completed: ${formatErrorMessage(err)}`,
       "Doctor",

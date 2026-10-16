@@ -26,6 +26,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
@@ -395,6 +396,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     }
   }
 
+  recordDoctorRepairOutcome(warnings.length ? undefined : migrated + removed > 0);
   if (migrated > 0) {
     note(
       `Copied and verified ${migrated} model credential${migrated === 1 ? "" : "s"} in agent SQLite. Existing catalog values remain active until the runtime migration lands.`,

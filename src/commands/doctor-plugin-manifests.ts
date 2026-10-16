@@ -6,6 +6,7 @@ import { z } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -189,12 +190,14 @@ export async function maybeRepairLegacyPluginManifestContracts(
       );
       applied.push(...migration.changeLines);
     } catch (error) {
+      recordDoctorRepairOutcome(undefined);
       params.runtime.error(
         `Failed to rewrite legacy plugin manifest at ${migration.manifestPath}: ${String(error)}`,
       );
     }
   }
 
+  recordDoctorRepairOutcome(applied.length > 0);
   if (applied.length > 0) {
     emitNote(applied.join("\n"), "Doctor changes");
   }

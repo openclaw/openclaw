@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
+import {
+  captureUpdateDoctorConfigWrites,
+  getDoctorRepairOutcome,
+} from "../infra/update-doctor-result.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
 
 const mocks = vi.hoisted(() => ({
@@ -61,6 +65,25 @@ describe("Doctor foreign launchd jobs", () => {
   });
 
   afterEach(() => Object.defineProperty(process, "platform", platform));
+
+  it.each(["observed", "removed", "unconfirmed", "failed", "refused"] as const)(
+    "records the repair outcome after a foreign job is %s",
+    async (outcome) => {
+      if (outcome === "unconfirmed") {
+        mocks.repair.mockResolvedValue({ removed: false, detail: "Removal is unconfirmed." });
+      } else if (outcome === "failed") {
+        mocks.repair.mockRejectedValue(new Error("Removal failed"));
+      } else if (outcome === "refused") {
+        mocks.manageService.mockResolvedValue(false);
+      }
+      await captureUpdateDoctorConfigWrites("synthetic-doctor-config.json", async () => {
+        await noteMacForeignLaunchdJobs({ repair: outcome !== "observed" }, runtime, {});
+        expect(getDoctorRepairOutcome()).toBe(
+          outcome === "observed" ? false : outcome === "removed" ? true : undefined,
+        );
+      });
+    },
+  );
 
   it("reports lifecycle details without removal when --fix is absent", async () => {
     await noteMacForeignLaunchdJobs({}, runtime, {});

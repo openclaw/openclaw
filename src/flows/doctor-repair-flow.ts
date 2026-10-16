@@ -1,5 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { copyHealthChecks, normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
@@ -62,6 +63,7 @@ export async function runDoctorHealthRepairs(
     try {
       checkFindings = await check.detect(checkContext);
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
       continue;
     }
@@ -83,6 +85,13 @@ export async function runDoctorHealthRepairs(
       outcome.effects.push(...(result.effects ?? []));
       outcome.changes.push(...result.changes);
       const status = result.status ?? "repaired";
+      if (opts.dryRun !== true) {
+        recordDoctorRepairOutcome(
+          status !== "repaired" || result.warnings?.length
+            ? undefined
+            : result.changes.length > 0 || Boolean(result.effects?.length),
+        );
+      }
       if (status !== "repaired") {
         outcome.warnings.push(
           `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
@@ -109,12 +118,15 @@ export async function runDoctorHealthRepairs(
         remainingFindings = validationFindings;
         outcome.checksValidated++;
         if (validationFindings.length > 0) {
+          recordDoctorRepairOutcome(undefined);
           outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
         }
       } catch (err) {
+        recordDoctorRepairOutcome(undefined);
         outcome.warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
       }
     } catch (err) {
+      recordDoctorRepairOutcome(undefined);
       outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
     } finally {
       // Only completed validation replaces the original findings for this check.

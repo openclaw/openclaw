@@ -4,7 +4,10 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
@@ -12,7 +15,11 @@ import type {
 } from "../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  retireLegacySessionCostUsageCacheInDatabase,
+  type SessionCostUsageRollupSnapshot,
+} from "./session-cost-usage-cache.kernel.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { readDatabasePathIdentitySync, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -138,16 +145,21 @@ export async function retireLegacySessionCostUsageCache(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
-}): Promise<void> {
-  const writer = createCacheWriter(
-    captureCacheDatabaseOptions({
-      agentId: normalizeAgentId(params.agentId),
-      env: params.env,
-      ...(params.databasePath ? { path: params.databasePath } : {}),
-    }),
-  );
+}): Promise<number> {
+  const options = captureCacheDatabaseOptions({
+    agentId: normalizeAgentId(params.agentId),
+    env: params.env,
+    ...(params.databasePath ? { path: params.databasePath } : {}),
+  });
+  if (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+    return runOpenClawAgentWriteTransaction(
+      ({ db }) => retireLegacySessionCostUsageCacheInDatabase(db),
+      options,
+    );
+  }
+  const writer = createCacheWriter(options);
   try {
-    await writer.write("usageCache.retireLegacy", undefined);
+    return await writer.write("usageCache.retireLegacy", undefined);
   } finally {
     await writer.close();
   }

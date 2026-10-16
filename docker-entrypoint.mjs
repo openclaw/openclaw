@@ -1,6 +1,5 @@
 // Image activation owns unattended retained-volume repair; ordinary CLI startup only admits state.
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -70,20 +69,6 @@ function gatewayInvocation(program) {
   return options && !options.commandOptions.includes("--reset") ? options : undefined;
 }
 
-// Doctor owns this marker: it skips its full pre-repair capture while the marker
-// exists and creates it only after a capture is sealed. A container keeps its
-// image, environment, and mounts across stop/start, and its writable layer survives
-// them, so a new image or recreated container starts without the marker.
-const ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
-
-function activationMarker(rootOptions) {
-  const key = createHash("sha256")
-    .update(JSON.stringify([root, rootOptions]))
-    .digest("hex")
-    .slice(0, 32);
-  return path.join(os.tmpdir(), `openclaw-image-activation-${process.getuid?.() ?? "user"}-${key}`);
-}
-
 async function activate() {
   const program = command[0] && executable(command[0]);
   if (!program) {
@@ -105,10 +90,6 @@ async function activate() {
       process.on(signal, listener);
       listeners.set(signal, listener);
     }
-    const env = {
-      ...process.env,
-      [ACTIVATION_MARKER_ENV]: activationMarker(invocation.rootOptions),
-    };
     try {
       child = spawn(
         process.execPath,
@@ -119,7 +100,7 @@ async function activate() {
           "--fix",
           "--non-interactive",
         ],
-        { stdio: "inherit", env },
+        { stdio: "inherit", env: process.env },
       );
       /** @type {Error | undefined} */
       let failure;

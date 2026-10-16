@@ -299,10 +299,10 @@ export function pruneSessionCostUsageRollupsInDatabase(
 }
 
 /** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
-export function retireLegacySessionCostUsageCacheInDatabase(db: DatabaseSync): void {
+export function retireLegacySessionCostUsageCacheInDatabase(db: DatabaseSync): number {
   return withSqliteDatabaseWriteScope(db, [], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    executeSqliteQuerySync(
+    const legacy = executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("cache_entries")
@@ -311,9 +311,10 @@ export function retireLegacySessionCostUsageCacheInDatabase(db: DatabaseSync): v
     );
     // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
     // Delete by scope so those values are never materialized during cleanup.
-    executeSqliteQuerySync(
+    const rollups = executeSqliteQuerySync(
       db,
       kysely.deleteFrom("cache_entries").where("scope", "in", RETIRED_ROLLUP_SCOPES),
     );
+    return Number((legacy.numAffectedRows ?? 0n) + (rollups.numAffectedRows ?? 0n));
   });
 }

@@ -1,46 +1,17 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
   DoctorMaintenanceRefusalError,
+  getDoctorRepairOutcome,
   type UpdateDoctorWriteAuthority,
 } from "../infra/update-doctor-result.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
-
-// docker-entrypoint.mjs passes a container-local path. The marker names the capture
-// this container already sealed, so later starts skip the full copy but keep it.
-const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
-const STANDALONE_CAPTURE_RUN_ID =
-  /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-
-/** A marker counts only while the sealed capture it names is still retained. */
-async function readImageActivationCapture(
-  marker: string,
-  captureRoot: string,
-): Promise<string | undefined> {
-  try {
-    const stat = await fs.lstat(marker);
-    if (!stat.isFile() || (process.getuid !== undefined && stat.uid !== process.getuid())) {
-      return undefined;
-    }
-    const runId = (await fs.readFile(marker, "utf8")).trim();
-    if (!STANDALONE_CAPTURE_RUN_ID.test(runId)) {
-      return undefined;
-    }
-    const manifest = await fs.lstat(path.join(captureRoot, runId, "manifest.json"));
-    return manifest.isFile() ? runId : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** Preserve evidence before repair; neither a capture nor its lineage authorizes restoration. */
 export async function preserveDoctorOriginalState(params: {
@@ -50,7 +21,7 @@ export async function preserveDoctorOriginalState(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   writeAuthority?: UpdateDoctorWriteAuthority;
-}): Promise<void> {
+}): Promise<(() => Promise<void>) | undefined> {
   const original = params.writeAuthority?.originalRecoveryCapture;
   const runId = original?.runId ?? params.env[UPDATE_RUN_ID_ENV]?.trim();
   const updateInProgress = original !== undefined || params.env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
@@ -64,7 +35,7 @@ export async function preserveDoctorOriginalState(params: {
     params.runtime.log(
       "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
     );
-    return;
+    return undefined;
   }
   let admission: ReturnType<typeof resolveDoctorUpdateAdmission> | undefined;
   const assertCurrent = () => {
@@ -93,43 +64,7 @@ export async function preserveDoctorOriginalState(params: {
           ? `Original update capture retained at ${retained.ref.manifestPath}.`
           : "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
       );
-      return;
-    }
-    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
-      await import("../infra/update-recovery-baseline-capture.js");
-    const stateDir = resolvePathViaExistingAncestorSync(resolveStateDir(params.env));
-    const retireExpiredCaptures = async (keepRunId: string) => {
-      try {
-        const retirement = await retireExpiredStandaloneDoctorCaptures({
-          stateDir,
-          keepRunId,
-          assertCurrent,
-        });
-        for (const directory of retirement.retired) {
-          params.runtime.log(
-            `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
-          );
-        }
-        for (const warning of retirement.warnings) {
-          params.runtime.log(warning);
-        }
-      } catch (error) {
-        params.runtime.log(
-          `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
-        );
-      }
-    };
-    const activationMarker = params.env[IMAGE_ACTIVATION_MARKER_ENV]?.trim() || undefined;
-    const activationCapture = activationMarker
-      ? await readImageActivationCapture(activationMarker, resolveUpdateCaptureRoot(stateDir))
-      : undefined;
-    if (activationCapture) {
-      assertCurrent();
-      params.runtime.log(
-        `This container already retained a pre-repair capture (${activationCapture}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
-      );
-      await retireExpiredCaptures(activationCapture);
-      return;
+      return undefined;
     }
     const installRoot = params.root;
     if (!installRoot) {
@@ -139,6 +74,8 @@ export async function preserveDoctorOriginalState(params: {
     if (!driver) {
       throw new Error("The Doctor process could not be identified for the pre-repair capture.");
     }
+    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
+      await import("../infra/update-recovery-baseline-capture.js");
     assertCurrent();
     const standaloneRunId = `doctor-${randomUUID()}`;
     const captured = await captureUpdateRecoveryBaseline({
@@ -154,23 +91,44 @@ export async function preserveDoctorOriginalState(params: {
     params.runtime.log(
       `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
     );
-    if (activationMarker) {
+    const retire = async (completedWithoutRepairs = false) => {
       try {
-        await fs.rm(activationMarker, { force: true });
-        await fs.writeFile(activationMarker, standaloneRunId, { flag: "wx", mode: 0o600 });
+        const retirement = await retireExpiredStandaloneDoctorCaptures({
+          stateDir: resolvePathViaExistingAncestorSync(resolveStateDir(params.env)),
+          keepRunId: standaloneRunId,
+          assertCurrent: completedWithoutRepairs
+            ? () => params.writeAuthority?.assertCurrent()
+            : assertCurrent,
+          completedWithoutRepairs,
+        });
+        for (const directory of retirement.retired) {
+          params.runtime.log(
+            directory === captured.ref.directory
+              ? "Retired pre-repair capture: Doctor completed without applying repairs."
+              : `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+          );
+        }
+        for (const warning of retirement.warnings) {
+          params.runtime.log(warning);
+        }
       } catch (error) {
         params.runtime.log(
-          `Container activation marker unavailable: ${formatErrorMessage(error)}. The next container start takes another full capture.`,
+          `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
         );
       }
-    }
-    await retireExpiredCaptures(standaloneRunId);
+    };
+    await retire();
     for (const warning of captured.warnings) {
       params.runtime.log(warning.message);
     }
     for (const warning of captured.diagnostics.databaseWarnings) {
       params.runtime.log(warning);
     }
+    return async () => {
+      if (getDoctorRepairOutcome() === false) {
+        await retire(true);
+      }
+    };
   } catch (error) {
     assertCurrent();
     if (
@@ -192,4 +150,5 @@ export async function preserveDoctorOriginalState(params: {
       `Original state capture was unavailable: ${formatErrorMessage(error)}. Doctor will continue; inspect retained evidence manually before restoring state.`,
     );
   }
+  return undefined;
 }

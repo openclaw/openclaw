@@ -1,6 +1,7 @@
 import { confirm, select } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorRepairMode, shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
 import type { DoctorOptions } from "./doctor.types.js";
@@ -21,12 +22,16 @@ export function createDoctorPrompter(params: {
   signal?: AbortSignal;
 }) {
   const repairMode = resolveDoctorRepairMode(params.options);
+  const declineRepair = () => {
+    recordDoctorRepairOutcome(undefined);
+    return false;
+  };
   const confirmPrompt = async (p: DoctorConfirmParams) => {
     if (params.signal?.aborted || repairMode.nonInteractive) {
-      return false;
+      return declineRepair();
     }
     if (!repairMode.canPrompt) {
-      return p.initialValue ?? false;
+      return p.initialValue === true ? true : declineRepair();
     }
     // Exit 130 (SIGINT convention) so the installer can distinguish
     // user cancellation from normal doctor failures.
@@ -40,7 +45,8 @@ export function createDoctorPrompter(params: {
       message: stylePromptMessage(p.message),
     });
     // Maintenance interruption declines new consent without abandoning restoration.
-    return params.signal?.aborted ? false : guardCancel(answer, params.runtime, 130);
+    const approved = params.signal?.aborted ? false : guardCancel(answer, params.runtime, 130);
+    return approved || declineRepair();
   };
   const confirmDefault = async (p: DoctorConfirmParams) => {
     if (shouldAutoApproveDoctorFix(repairMode)) {
@@ -57,7 +63,7 @@ export function createDoctorPrompter(params: {
         return true;
       }
       if (repairMode.shouldRepair && !repairMode.shouldForce) {
-        return false;
+        return declineRepair();
       }
       return confirmPrompt(p);
     },
@@ -70,7 +76,7 @@ export function createDoctorPrompter(params: {
         return true;
       }
       if (requiresInteractiveConfirmation === true && !repairMode.canPrompt) {
-        return false;
+        return declineRepair();
       }
       return confirmPrompt(confirmParams);
     },

@@ -36,6 +36,7 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
@@ -444,6 +445,7 @@ async function noteAuthProfileHealthForTarget(params: {
     }));
 
   if (shouldRefresh) {
+    recordDoctorRepairOutcome(undefined);
     const errors: string[] = [];
     for (const profile of refreshTargets) {
       try {

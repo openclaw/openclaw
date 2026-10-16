@@ -369,6 +369,26 @@ describe("foreign launchd repair", () => {
     expect(jobs.has(label)).toBe(true);
   });
 
+  it("confirms asynchronous launchd teardown without repeating removal", async () => {
+    addJob(label, ["/opt/bin/openclaw", "gateway", "restart"]);
+    const job = expectDefined((await findForeignLaunchdJobs({}))[0], "detected foreign job");
+    const execute = exec.getMockImplementation()!;
+    let removing = false;
+    exec.mockImplementation(async (args, timeout) => {
+      if (args[0] === "bootout") {
+        removing = true;
+        return ok();
+      }
+      const result = await execute(args, timeout);
+      if (removing && args[0] === "print") {
+        jobs.delete(label);
+      }
+      return result;
+    });
+    expect((await repairForeignLaunchdJob(job, {})).removed).toBe(true);
+    expect(exec.mock.calls.filter(([args]) => args[0] === "bootout")).toHaveLength(1);
+  });
+
   it("revalidates a plist job after disabling it before bootout", async () => {
     const plistPath = path.join(dir, "foreign.plist");
     await fs.writeFile(plistPath, "<plist><dict></dict></plist>");

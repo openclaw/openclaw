@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
@@ -29,6 +30,7 @@ export async function prepareDoctorDatabaseMigrations(
       throw new Error(migrated.warnings.join("\n"));
     }
     result.changes.push(...migrated.changes);
+    recordDoctorRepairOutcome(migrated.changes.length > 0);
   }
   const agentMigrations = migrations.filter((entry) => entry.kind === "agent");
   if (agentMigrations.length > 0) {
@@ -58,6 +60,7 @@ export async function prepareDoctorDatabaseMigrations(
           result.changes.push(
             `Upgraded agent database schema in ${target.path}: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
           );
+          recordDoctorRepairOutcome(true);
         }
       },
     );

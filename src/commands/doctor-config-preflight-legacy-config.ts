@@ -13,6 +13,7 @@ import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
 import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import { recordDoctorRepairOutcome } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { listReferencedLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
@@ -64,6 +65,7 @@ export async function migrateLegacyDoctorConfig(params: {
     return;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
+  recordDoctorRepairOutcome(changes.length > 0);
   if (changes.length > 0) {
     note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
