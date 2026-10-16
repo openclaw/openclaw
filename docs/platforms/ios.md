@@ -80,6 +80,10 @@ Wake, camera access, Health summaries, or Always location first asks for native
 confirmation.
 
 The Gateway's Talk configuration owns provider, voice, and speech language.
+Native Talk reads completed assistant progress messages aloud in order, followed
+by the final reply, using the configured voice. Growing previews, reasoning, and
+tool output remain silent. Stopping Talk or losing its connection cancels queued
+speech.
 Saved iOS overrides no longer apply; the retired app speech-language preference
 is cleared at startup. The default share instruction is also retired and cleared
 at startup. Share messages include only an instruction explicitly supplied for
