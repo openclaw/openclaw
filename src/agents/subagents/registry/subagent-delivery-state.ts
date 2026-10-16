@@ -91,9 +91,7 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
-            ...(entry.delivery.disposition === "intentional_non_delivery"
-              ? { disposition: entry.delivery.disposition }
-              : {}),
+            ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
               : {}),

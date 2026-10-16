@@ -20,7 +20,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 const REASONING_RETRY =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RETRY =
-  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
 const REJECTION = "Provider completed tool call with malformed JSON arguments";
 type Assistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 type Attempt = Partial<EmbeddedRunAttemptResult>;
@@ -37,6 +37,7 @@ function retryState(attempt: Attempt = {}) {
   return {
     provider: "openai",
     modelId: "gpt-5.4",
+    replyDeliveryState: "missing" as const,
     payloadCount: 0,
     aborted: false,
     timedOut: false,
@@ -187,9 +188,11 @@ describe("incomplete-turn payload resolution", () => {
       lastAssistant: undefined,
       toolMetas: [{ toolName: "bash", meta: "workspace" }],
     };
-    expect(warning(attempt)).toContain("couldn't generate a response");
+    const expected =
+      "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.";
+    expect(warning(attempt)).toBe(expected);
     expect(warning(attempt, { aborted: true, externalAbort: true })).toBeNull();
-    expect(warning(attempt, { aborted: true })).toContain("couldn't generate a response");
+    expect(warning(attempt, { aborted: true })).toBe(expected);
   });
 
   it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
@@ -220,7 +223,7 @@ describe("incomplete-turn payload resolution", () => {
         lastAssistant: assistant({ content: thinking() }),
       },
       1,
-      "couldn't generate a response",
+      "No answer was returned. Ask again if you still need one.",
     ],
     [
       "empty token-limited answer",

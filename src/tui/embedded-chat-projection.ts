@@ -32,8 +32,7 @@ export function projectLocalRunText(
     normalizeLiveAssistantBufferedText(run.buffer, {
       final,
       managedMediaUrls: [...run.managedMediaUrls],
-    }).trim(),
-    { suppressLeadFragments: !final },
+    }),
   );
 }
 

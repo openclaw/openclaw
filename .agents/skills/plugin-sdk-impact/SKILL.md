@@ -1,6 +1,6 @@
 ---
 name: plugin-sdk-impact
-description: Assess plugin consumers before SDK deprecation, removal, or incompatible behavior/security changes using public ClawHub usage evidence.
+description: Query how many public plugins use a Plugin SDK method, optionally by recent release date, and assess SDK deprecation or behavior changes using live ClawHub evidence.
 ---
 
 # Plugin SDK impact
@@ -16,11 +16,19 @@ particular behavior. Keep the approval and deprecation rules in
    exports and runtime paths. Verify spelling against the definition and known
    callers; an incorrect key can return a convincing zero. Search bundled callers
    locally as well: the registry only covers published public plugins.
-2. Query each canonical key from the repository root:
+2. Query each canonical key using the bundled helper:
 
    ```sh
-   node .agents/skills/plugin-sdk-impact/scripts/query.mjs 'api-member:api.registerTool'
+   node {baseDir}/scripts/query.mjs 'api-member:api.registerTool'
    ```
+
+   For “updated within the last three months”, add `--months 3`. This means the
+   latest eligible public release was uploaded within three calendar months of
+   now, measured in UTC (month ends are clamped). Listing edits and rescans do not
+   count as updates. The stored release date is its creation/upload time; public
+   approval can happen later. `--since 2026-07-16T12:00:00Z` accepts an explicit cutoff.
+   Report the exact inclusive cutoff from `releaseWindow`, not a guessed date.
+   Both consumers and coverage use the same window on every page.
 
    The helper follows all usage and coverage pages, including empty intermediate
    pages. It prints distinct plugin counts, runtime/type counts, bounded evidence,
@@ -31,10 +39,12 @@ particular behavior. Keep the approval and deprecation rules in
    the behavior being changed. Type-only consumers still matter for type/export
    removal. Query related members separately; a module import does not prove use
    of every export. Repeated references in a plugin count as one consumer.
-4. Report the keys, query time, consumers and evidence, coverage gaps, local caller
-   findings, and your compatibility recommendation. Finish with the maintainer's
-   decision to make: preserve behavior, deprecate with migration, or proceed under
-   the existing policy. Never infer permission from the count.
+4. For a usage-count question, report the key, query time, exact release window
+   (if requested), distinct plugins, and coverage gaps. For a proposed SDK change,
+   also report matched evidence, local callers, and your compatibility
+   recommendation. Finish change investigations with the maintainer's decision:
+   preserve behavior, deprecate with migration, or proceed under existing policy.
+   Never infer permission from the count.
 
 ## Canonical keys
 

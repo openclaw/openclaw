@@ -36,6 +36,7 @@ import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
+import { resolveCommandReplyExpectation } from "../../reply-completion.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   SOURCE_OWNER_CHANGED,
@@ -405,6 +406,16 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
+    const replyExpectation = resolveCommandReplyExpectation({
+      cfg,
+      sessionKey: canonicalRequesterSessionKey,
+      sessionEntry: requesterEntry,
+      messageChannel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+      opts: {
+        ...(parentOnly ? { privateCompletion: true as const } : {}),
+        inputProvenance: { kind: "inter_session" },
+      },
+    });
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
@@ -447,6 +458,7 @@ async function sendSubagentAnnounceDirectlyBound(
       params,
       parentOnly,
       requesterSessionBound,
+      replyExpectation,
       deliveryTarget,
       shouldDeliverAgentFinal,
       requiresMessageToolDelivery,

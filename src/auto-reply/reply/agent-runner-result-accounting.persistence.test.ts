@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
@@ -598,8 +599,9 @@ it.each([
 );
 
 it.each([
-  { kind: "NO_REPLY", expectation: "required", missing: true },
+  { kind: "NO_REPLY", expectation: "required", missing: false },
   { kind: "NO_REPLY", expectation: "optional", missing: false },
+  { kind: "empty", expectation: "required", missing: true },
   { kind: "hook_block", expectation: "required", missing: false },
 ] as const)(
   "accounts for queued $expectation $kind completion despite trace",
@@ -609,16 +611,20 @@ it.each([
     fixture.context.followupRun.run.traceLevelOverride = "raw";
     fixture.context.followupRun.run.terminalReplyExpectation = expectation;
     fixture.context.execution.result.payloads = [];
+    fixture.context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
+      rawText: kind === "NO_REPLY" ? "NO_REPLY" : "",
+    }).terminalReply;
     if (kind === "NO_REPLY") {
       fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
-    } else {
+    } else if (kind === "hook_block") {
       fixture.context.execution.result.meta.error = { kind: "hook_block", message: "blocked" };
     }
     const delivered = await fixture.deliverQueued();
     if (missing) {
-      expect(
-        delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
-      ).toBe(true);
+      expect(delivered.filter((payload) => payload.isError && payload.isStatusNotice)).toHaveLength(
+        1,
+      );
+      expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
     } else {
       expect(delivered).toEqual([]);
     }
@@ -685,7 +691,8 @@ describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting"
 });
 
 it.each([
-  { completion: "NO_REPLY", expectation: "required", missing: true },
+  { completion: "NO_REPLY", expectation: "required", missing: false },
+  { completion: "empty", expectation: "required", missing: true },
   { completion: "hook_block", expectation: "required", missing: false },
 ] as const)(
   "finalizes a $expectation $completion fallback without hiding missing output",
@@ -700,6 +707,9 @@ it.each([
       { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
     ];
     context.execution.result.payloads = [];
+    context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
+      rawText: completion === "NO_REPLY" ? "NO_REPLY" : "",
+    }).terminalReply;
     if (completion === "NO_REPLY") {
       context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
     } else if (completion === "hook_block") {

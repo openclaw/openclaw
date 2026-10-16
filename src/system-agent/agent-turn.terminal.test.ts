@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { runEmbeddedAgent as RunEmbeddedAgent } from "../agents/embedded-agent.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -112,8 +113,18 @@ describe("system-agent terminal failure cleanup", () => {
       }),
     },
     {
-      name: "silent reply",
-      runEmbeddedAgent: async () => ({ payloads: [{ text: "NO_REPLY" }] }),
+      name: "silent reply despite a retained payload",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { terminalReply: { disposition: "silent" } },
+      }),
+    },
+    {
+      name: "silent terminal fact with an earlier visible draft",
+      runEmbeddedAgent: async () => ({
+        payloads: [{ text: "Retained draft, not a final result." }],
+        meta: { terminalReply: { disposition: "silent" } },
+      }),
     },
     {
       name: "raw-only hidden metadata",
@@ -178,7 +189,10 @@ describe("system-agent terminal failure cleanup", () => {
       },
       {
         ...deps,
-        runEmbeddedAgent: runEmbeddedAgent as never,
+        runEmbeddedAgent: vi.fn(async (params: Parameters<typeof RunEmbeddedAgent>[0]) => {
+          expect(params.terminalReplyExpectation).toBe("result-required");
+          return runEmbeddedAgent();
+        }) as never,
         readConfigFileSnapshot: vi.fn(async () => ({
           exists: true,
           valid: true,

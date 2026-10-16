@@ -39,7 +39,7 @@ import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export function formatReturnedAgentErrors(messages: string[]): string | undefined {
+function formatReturnedAgentErrors(messages: string[]): string | undefined {
   const [primary, ...additional] = [...new Set(messages)];
   if (!primary || additional.length === 0) {
     return primary;

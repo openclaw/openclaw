@@ -85,6 +85,13 @@ The supported PostgreSQL families are:
 A supported store never silently falls back to SQLite when its PostgreSQL
 connection or admission fails.
 
+Doctor can acquire offline maintenance custody and run data-only state migrations
+on PostgreSQL. A live or unverifiable Gateway owner still prevents maintenance;
+state writes use the existing PostgreSQL writer advisory lock. State schema
+migrations remain blocked until PostgreSQL state-family backup support is
+available. Keep the current database and retry with a version that supports those
+backups.
+
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no

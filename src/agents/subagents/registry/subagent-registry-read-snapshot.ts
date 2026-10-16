@@ -4,9 +4,9 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   getSubagentSessionReadLookup,
+  immutableSubagentRunSessionList,
   isSubagentRunPayloadEvicted,
 } from "./subagent-registry-memory.js";
 import {
@@ -96,7 +96,7 @@ export function mergeSubagentRunReadScope(
     const snapshot = new Map<string, SubagentRunReadRecord>();
     for (const key of new Set([...persistedKeys, ...liveKeys])) {
       const liveEntry = inMemoryRuns.get(key);
-      const entry = liveEntry ? projectSubagentRunForSessionList(liveEntry) : compact.get(key);
+      const entry = liveEntry ? immutableSubagentRunSessionList(liveEntry) : compact.get(key);
       if (entry) {
         snapshot.set(key, entry);
       }
@@ -105,7 +105,7 @@ export function mergeSubagentRunReadScope(
   }
   const snapshot = new Map(compact);
   for (const [runId, entry] of inMemoryRuns) {
-    snapshot.set(runId, projectSubagentRunForSessionList(entry));
+    snapshot.set(runId, immutableSubagentRunSessionList(entry));
   }
   return snapshot;
 }
@@ -215,7 +215,7 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       });
       for (const entry of full.values()) {
         if (inMemoryRuns.get(entry.runId) !== entry) {
-          snapshot.set(entry.runId, projectSubagentRunForSessionList(entry));
+          snapshot.set(entry.runId, immutableSubagentRunSessionList(entry));
         }
       }
       const current = select(snapshot);

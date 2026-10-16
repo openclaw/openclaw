@@ -14,6 +14,8 @@ import {
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
@@ -38,10 +40,7 @@ import {
   appendChatCanvasBlocksToMessage,
   extractChatToolResultCanvasPreview,
 } from "./chat-display-projection.canvas.js";
-import {
-  projectLiveAssistantBufferedText,
-  shouldSuppressAssistantEventForLiveChat,
-} from "./live-chat-projector.js";
+import { shouldSuppressAssistantEventForLiveChat } from "./live-chat-projector.js";
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -519,6 +518,7 @@ export function createAgentEventHandler({
                 evt.data?.assistantTranscriptIdempotencyKey,
               ),
               terminalPersistence,
+              terminalReply: normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply),
               isCurrent: () =>
                 shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
             },
@@ -808,6 +808,7 @@ export function createAgentEventHandler({
       errorObservation?: unknown;
       assistantTranscriptIdempotencyKey?: string;
       terminalPersistence?: Promise<void>;
+      terminalReply?: AgentRunTerminalReplySnapshot;
       isCurrent?: () => boolean;
     },
   ) => {
@@ -816,15 +817,12 @@ export function createAgentEventHandler({
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
-      text: terminalBuffer.text.trim(),
+      text: terminalBuffer.text,
       isHeartbeat: delivery.isHeartbeat,
     });
-    const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
-      suppressLeadFragments: false,
-    });
-    const text = projected.text.trim();
+    const text = normalizedHeartbeatText.text;
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || (projected.suppress && !terminalBuffer.displayText);
+      normalizedHeartbeatText.suppress || opts?.terminalReply?.disposition === "silent";
     const hasDisplayContent = Boolean(text || terminalBuffer.displayText);
     // Flush any paced delta so streaming clients receive the complete text
     // before the final event.
@@ -868,8 +866,7 @@ export function createAgentEventHandler({
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
       const canvasBlocks = run?.canvasBlocks ?? [];
-      // Empty tool-only turns can render widgets; explicit silent/control replies
-      // still suppress their message, even when an earlier tool hosted a widget.
+      // Prepared silent output has no model text; tool-owned widgets remain visible.
       const canvasOnly =
         jobState === "done" &&
         canvasBlocks.length > 0 &&
