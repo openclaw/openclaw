@@ -9,8 +9,6 @@ import {
 } from "node:http";
 import { createServer } from "node:https";
 import { Socket } from "node:net";
-import { buffer as readBody } from "node:stream/consumers";
-import { promisify } from "node:util";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
@@ -65,43 +63,6 @@ const child = {
   },
 };
 
-const metadataFor = (thread_id: string, generation: string) => ({
-  thread_id,
-  request_kind: "turn",
-  [CODEX_INFERENCE_GENERATION_KEY]: generation,
-});
-const clientMetadata = (metadata: object) => ({
-  "x-codex-turn-metadata": JSON.stringify(metadata),
-});
-const authority = () => ({ signal: new AbortController().signal, assertCurrent() {} });
-const register = (threadId: string, text = "private parent prefix") =>
-  proxy.context.register({ threadId, text, ...authority() });
-const forkFrom = (sourceThreadId: string, threadId: string) =>
-  proxy.context.fork({ sourceThreadId, threadId, ...authority() });
-const json = (body: object) => Buffer.from(JSON.stringify(body));
-
-function receiveBody(
-  reply = "synthetic completion",
-  inspect?: (req: IncomingMessage, bytes: Buffer, res: ServerResponse) => Buffer | void,
-) {
-  const received = createDeferred<Buffer>();
-  handle = (req, res) => {
-    void readBody(req).then((bytes) => {
-      received.resolve(inspect?.(req, bytes, res) ?? bytes);
-      res.end(reply);
-    }, received.reject);
-  };
-  return received.promise;
-}
-
-async function consume(upload: ReturnType<typeof post>, status = 200) {
-  const response = await upload.response;
-  expect(response.statusCode).toBe(status);
-  const body = (await readBody(response)).toString();
-  await upload.closed;
-  return body;
-}
-
 beforeEach(async () => {
   sockets = new Set();
   changed = new EventEmitter();
@@ -126,6 +87,9 @@ beforeEach(async () => {
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
   });
+  if (process.env.OPENCLAW_VITEST_RUNTIME === "bun") {
+    expect(process.versions.bun).toBeTruthy();
+  }
 });
 
 afterEach(async () => {
@@ -133,11 +97,13 @@ afterEach(async () => {
   for (const socket of sockets) {
     socket.destroy();
   }
-  await promisify(server.close.bind(server))();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   vi.restoreAllMocks();
 });
 
-function post(body: object = child, headers: Record<string, string> = {}) {
+function post(body = Buffer.from(JSON.stringify(child)), headers: Record<string, string> = {}) {
   const response = createDeferred<IncomingMessage>();
   const closed = createDeferred<void>();
   const req = request(
@@ -153,8 +119,16 @@ function post(body: object = child, headers: Record<string, string> = {}) {
   req.once("socket", (socket) => {
     socket.once("close", () => closed.resolve());
   });
-  req.end(Buffer.isBuffer(body) ? body : json(body));
+  req.end(body);
   return { req, response: response.promise, closed: closed.promise };
+}
+
+async function readBody(stream: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 async function waitForUpstreamClose() {
@@ -166,17 +140,39 @@ async function waitForUpstreamClose() {
 describe("inference HTTP transport ownership", () => {
   it("replays completed-parent prompt bytes through the HTTP serializer", async () => {
     const received: Buffer[] = [];
-    receiveBody("answer", (_req, bytes) => {
-      received.push(bytes);
-    });
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        received.push(bytes);
+        res.end("answer");
+      });
+    };
+    const register = (threadId: string) =>
+      proxy.context.register({
+        threadId,
+        text: "private parent prefix",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
     const send = async (threadId: string, generation: string, prompt: object) => {
-      await consume(
-        post({
-          model: "allowed",
-          ...prompt,
-          client_metadata: clientMetadata(metadataFor(threadId, generation)),
-        }),
+      const upload = post(
+        Buffer.from(
+          JSON.stringify({
+            model: "allowed",
+            ...prompt,
+            client_metadata: {
+              "x-codex-turn-metadata": JSON.stringify({
+                thread_id: threadId,
+                request_kind: "turn",
+                [CODEX_INFERENCE_GENERATION_KEY]: generation,
+              }),
+            },
+          }),
+        ),
       );
+      const response = await upload.response;
+      expect(response.statusCode).toBe(200);
+      await readBody(response);
+      await upload.closed;
     };
     const parent = register("parent");
     const input = [
@@ -191,7 +187,12 @@ describe("inference HTTP transport ownership", () => {
       input,
     });
     parent.release();
-    const fork = forkFrom("parent", "fork");
+    const fork = proxy.context.fork({
+      sourceThreadId: "parent",
+      threadId: "fork",
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
     const question = { role: "user", content: "side question" };
     const finalAnswer = { role: "assistant", content: "Parent final answer 4837" };
     await send("fork", fork.generation, {
@@ -201,7 +202,9 @@ describe("inference HTTP transport ownership", () => {
       input: [...input, finalAnswer, question],
     });
     const [parentBytes, forkBytes] = received;
-    assert(parentBytes && forkBytes, "Expected both parent and fork wire requests");
+    if (!parentBytes || !forkBytes) {
+      throw new Error("Expected both parent and fork wire requests");
+    }
     const parentWire = JSON.parse(parentBytes.toString());
     const forkWire = JSON.parse(forkBytes.toString());
     expect(forkWire.instructions).toBe(parentWire.instructions);
@@ -231,11 +234,21 @@ describe("inference HTTP transport ownership", () => {
           resolveModelThreadId: codexNativeSubagentMonitorRuntime.resolveModelThreadId,
         }),
       });
-      const parent = register("parent-thread");
+      const parent = proxy.context.register({
+        threadId: "parent-thread",
+        text: "private parent prefix",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
       if (earlyCleanup) {
         parent.release();
       }
-      const fork = forkFrom("parent-thread", "fork-thread");
+      const fork = proxy.context.fork({
+        sourceThreadId: "parent-thread",
+        threadId: "fork-thread",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
       const source = createNativeModelSourceFixture(["allowed"]);
       const owner = await codexNativeSubagentMonitorRuntime.register({
         client: client.client,
@@ -247,8 +260,10 @@ describe("inference HTTP transport ownership", () => {
       owner.bindTurn("fork-turn");
       const metadata = {
         session_id: "fork-session",
-        ...metadataFor("fork-thread", fork.generation),
+        thread_id: "fork-thread",
         turn_id: "fork-turn",
+        request_kind: "turn",
+        [CODEX_INFERENCE_GENERATION_KEY]: fork.generation,
       };
       const body = {
         model: "allowed",
@@ -265,18 +280,35 @@ describe("inference HTTP transport ownership", () => {
         "thread-id": metadata.thread_id,
         "x-codex-turn-metadata": JSON.stringify(metadata),
       };
-      const received = receiveBody("fork response");
+      const received = createDeferred<Buffer>();
+      handle = (req, res) => {
+        void readBody(req).then((bytes) => {
+          received.resolve(bytes);
+          res.end("fork response");
+        }, received.reject);
+      };
       try {
         // Parent completion must not revoke the independently admitted fork.
         parent.release();
-        expect(await consume(post(body, headers))).toBe("fork response");
-        expect(JSON.parse((await received).toString())).toEqual({
+        const upload = post(Buffer.from(JSON.stringify(body)), headers);
+        const response = await upload.response;
+        const responseBody = (await readBody(response)).toString();
+        expect({ status: response.statusCode, body: responseBody }).toEqual({
+          status: 200,
+          body: "fork response",
+        });
+        expect(JSON.parse((await received.promise).toString())).toEqual({
           ...body,
           instructions: "native instructions\n\nprivate parent prefix",
           tool_choice: "none",
         });
+        await upload.closed;
         await owner.unregister();
-        expect(await consume(post(body, headers), 403)).toContain("cannot verify the owner");
+        const revoked = post(Buffer.from(JSON.stringify(body)), headers);
+        const denied = await revoked.response;
+        expect(denied.statusCode).toBe(403);
+        expect((await readBody(denied)).toString()).toContain("cannot verify the owner");
+        await revoked.closed;
       } finally {
         fork.release();
         await owner.unregister();
@@ -285,26 +317,41 @@ describe("inference HTTP transport ownership", () => {
   );
 
   it("preserves guarded TLS, length, auth and SSE when rewriting zstd requests", async () => {
-    const registration = register("root", "synthetic root context");
+    const registration = proxy.context.register({
+      threadId: "root",
+      text: "synthetic root context",
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
     const body = {
       instructions: "native instructions",
       input: [{ role: "developer", content: "catalog" }],
-      client_metadata: clientMetadata(metadataFor("root", registration.generation)),
+      client_metadata: {
+        "x-codex-turn-metadata": JSON.stringify({
+          request_kind: "turn",
+          thread_id: "root",
+          [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+        }),
+      },
     };
-    const received = receiveBody("data: synthetic completion\n\n", (req, bytes, res) => {
-      expect(new URL(req.url!, transport.origin).searchParams.get("cursor")).toBe(
-        "synthetic/a\\b.c",
-      );
-      expect(req.url?.split("?")[0]).toBe("/v1/responses");
-      expect(req.httpVersion).toBe("1.1");
-      expect(req.headers["transfer-encoding"]).toBeUndefined();
-      expect(req.headers.authorization).toBe("Bearer synthetic-native-auth");
-      expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
-      expect(Number(req.headers["content-length"])).toBe(bytes.length);
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      return zstdDecompressSync(bytes);
-    });
-    const wire = json(body);
+    const received = createDeferred<Buffer>();
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        expect(new URL(req.url!, transport.origin).searchParams.get("cursor")).toBe(
+          "synthetic/a\\b.c",
+        );
+        expect(req.url?.split("?")[0]).toBe("/v1/responses");
+        expect(req.httpVersion).toBe("1.1");
+        expect(req.headers["transfer-encoding"]).toBeUndefined();
+        expect(req.headers.authorization).toBe("Bearer synthetic-native-auth");
+        expect(req.headers).not.toHaveProperty("x-openai-chatpass-test");
+        expect(Number(req.headers["content-length"])).toBe(bytes.length);
+        received.resolve(zstdDecompressSync(bytes));
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end("data: synthetic completion\n\n");
+      }, received.reject);
+    };
+    const wire = Buffer.from(JSON.stringify(body));
     const upload = post(zstdCompressSync(wire), {
       authorization: "Bearer synthetic-native-auth",
       "content-encoding": "zstd",
@@ -312,7 +359,7 @@ describe("inference HTTP transport ownership", () => {
     const response = await upload.response;
     expect(response.headers.connection).toBe("close");
     expect((await readBody(response)).toString()).toBe("data: synthetic completion\n\n");
-    expect(JSON.parse((await received).toString())).toEqual({
+    expect(JSON.parse((await received.promise).toString())).toEqual({
       ...body,
       instructions: "native instructions\n\nsynthetic root context",
     });
@@ -320,20 +367,32 @@ describe("inference HTTP transport ownership", () => {
   });
 
   it("preserves unchanged compressed native request bytes", async () => {
-    const registration = register("root", "");
-    let forwarded: Buffer | undefined;
-    receiveBody("synthetic completion", (req, bytes) => {
-      expect(Number(req.headers["content-length"])).toBe(bytes.length);
-      expect(req.headers["content-encoding"]).toBe("zstd");
-      forwarded = bytes;
+    const registration = proxy.context.register({
+      threadId: "root",
+      text: "",
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
     });
+    let forwarded: Buffer | undefined;
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        expect(Number(req.headers["content-length"])).toBe(bytes.length);
+        expect(req.headers["content-encoding"]).toBe("zstd");
+        forwarded = bytes;
+        res.end("synthetic completion");
+      });
+    };
     for (const metadata of [
       { request_kind: "turn", thread_id: "child", parent_thread_id: "root" },
       { request_kind: "turn", thread_id: "review", subagent_kind: "review" },
       { request_kind: "compaction" },
       { request_kind: "memory" },
       { request_kind: "prewarm" },
-      metadataFor("root", registration.generation),
+      {
+        request_kind: "turn",
+        thread_id: "root",
+        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+      },
     ]) {
       // Native serde keeps integer precision, escape spelling and existing tool JSON.
       const source = Buffer.from(
@@ -343,22 +402,32 @@ describe("inference HTTP transport ownership", () => {
       );
       const wire = zstdCompressSync(source);
       const upload = post(wire, { "content-encoding": "zstd" });
-      await consume(upload);
+      const response = await upload.response;
+      expect(response.statusCode).toBe(200);
+      await readBody(response);
       expect(forwarded).toEqual(wire);
       await Promise.all([upload.closed, waitForUpstreamClose()]);
     }
   });
 
   it("keeps replacement decoding for malformed UTF-8 instead of forwarding invalid bytes", async () => {
-    const received = receiveBody();
+    const received = createDeferred<Buffer>();
+    handle = (req, res) => {
+      void readBody(req).then((bytes) => {
+        received.resolve(bytes);
+        res.end("synthetic completion");
+      }, received.reject);
+    };
     const source = Buffer.concat([
       Buffer.from('{"input":"'),
       Buffer.from([0xff]),
       Buffer.from('","client_metadata":' + JSON.stringify(child.client_metadata) + "}"),
     ]);
     const upload = post(source);
-    await consume(upload);
-    expect((await received).toString()).toBe(JSON.stringify(JSON.parse(source.toString())));
+    const response = await upload.response;
+    expect(response.statusCode).toBe(200);
+    await readBody(response);
+    expect((await received.promise).toString()).toBe(JSON.stringify(JSON.parse(source.toString())));
     await Promise.all([upload.closed, waitForUpstreamClose()]);
   });
 
@@ -435,7 +504,9 @@ describe("inference HTTP transport ownership", () => {
     context.onTestFinished(() => {
       sendHeaders.unsubscribe(observe);
     });
-    const upload = post({ ...child, input: "x".repeat(24 * 1024 * 1024) });
+    const upload = post(
+      Buffer.from(JSON.stringify({ ...child, input: "x".repeat(24 * 1024 * 1024) })),
+    );
     const [response, incoming] = await Promise.all([upload.response, received.promise]);
     await drained.promise;
     headersReceived = true;

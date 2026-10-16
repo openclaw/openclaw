@@ -6,7 +6,7 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import type { DiagnosticsChannel } from "undici";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -19,34 +19,61 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 const sseEvent = (data: unknown, event?: string) =>
   `${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`;
-const responseEvent = (type: string, response = {}) =>
-  sseEvent(
-    { type: `response.${type}`, response: { id: "resp_keepalive", ...response } },
-    `response.${type}`,
-  );
-const completionEvent = (content: string, finish_reason: "stop" | null) =>
-  sseEvent({
-    id: "chatcmpl_keepalive",
-    choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason }],
-  });
-const text = "still connected";
+const initialResponse = {
+  id: "resp_keepalive",
+  object: "response",
+  status: "in_progress",
+  output: [],
+};
+const completion = {
+  id: "chatcmpl_keepalive",
+  object: "chat.completion.chunk",
+  created: 1,
+  model: "keepalive-model",
+};
 const transports = [
   {
     api: "openai-responses",
     path: "/v1/responses",
     createStream: createOpenAIResponsesTransportStreamFn,
-    initialEvent: responseEvent("created"),
-    finalEvent: responseEvent("completed", {
-      status: "completed",
-      output: [{ id: "msg_keepalive", type: "message", content: [{ type: "output_text", text }] }],
-    }),
+    initialEvent: sseEvent(
+      { type: "response.created", response: initialResponse },
+      "response.created",
+    ),
+    finalEvent: sseEvent(
+      {
+        type: "response.completed",
+        response: {
+          ...initialResponse,
+          status: "completed",
+          output: [
+            {
+              id: "msg_keepalive",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "still connected", annotations: [] }],
+            },
+          ],
+          usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
+        },
+      },
+      "response.completed",
+    ),
   },
   {
     api: "openai-completions",
     path: "/v1/chat/completions",
     createStream: createOpenAICompletionsTransportStreamFn,
-    initialEvent: completionEvent("", null),
-    finalEvent: completionEvent(text, "stop"),
+    initialEvent: sseEvent({
+      ...completion,
+      choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+    }),
+    finalEvent: sseEvent({
+      ...completion,
+      choices: [{ index: 0, delta: { content: "still connected" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+    }),
   },
 ] as const;
 
@@ -56,6 +83,8 @@ const scenarios = [
 ] as const;
 
 describe.each(transports)("guarded $api SSE liveness integration", (transport) => {
+  afterEach(() => vi.useRealTimers());
+
   it.for(scenarios)("$name", async (scenario, { signal }) => {
     const responseReady = createDeferred<ServerResponse>();
     const peerClosed = createDeferred();
@@ -95,7 +124,7 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
     };
     bodyChunks.subscribe(onBodyChunk);
     const abort = new AbortController();
-    let settled: Promise<unknown> | undefined;
+    let settleStream: (() => Promise<void>) | undefined;
     try {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const onIdleTimeout = vi.fn();
@@ -112,27 +141,35 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
       );
       const consuming = (async () => {
         for await (const event of stream) {
+          // Consume the public stream so the watchdog owns the complete request.
           void event;
         }
         return await stream.result();
       })();
       // Observe rejection while the test drives the peer between iterator waits.
-      settled = consuming.catch(() => undefined);
-      const waitForGate = <T>(gate: PromiseLike<T>, message: string) =>
-        withinTest(awaitGateBeforeSettlement(gate, consuming, message), signal);
+      const settled = consuming.catch(() => undefined);
+      settleStream = async () => {
+        await settled;
+      };
       const waitForReceipt = async (marker: string) => {
         const gate = createDeferred();
         pendingReceipt = { marker, resolve: gate.resolve };
         if (received.includes(marker)) {
           gate.resolve();
         }
-        await waitForGate(gate.promise, "stream settled before body receipt");
+        await withinTest(
+          awaitGateBeforeSettlement(gate.promise, consuming, "stream settled before body receipt"),
+          signal,
+        );
         // Diagnostics precede the body handler. Drain real I/O and the transport's
         // zero-delay cooperative yield before advancing the watchdog clock.
         await setImmediate();
         await vi.advanceTimersByTimeAsync(0);
       };
-      const response = await waitForGate(responseReady.promise, "stream settled before HTTP");
+      const response = await withinTest(
+        awaitGateBeforeSettlement(responseReady.promise, consuming, "stream settled before HTTP"),
+        signal,
+      );
       await waitForReceipt(transport.initialEvent);
       for (let heartbeat = 1; heartbeat <= scenario.comments; heartbeat += 1) {
         await vi.advanceTimersByTimeAsync(100);
@@ -149,7 +186,10 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
         await waitForReceipt(transport.finalEvent);
         const result = await withinTest(consuming, signal);
         expect(onIdleTimeout).not.toHaveBeenCalled();
-        expect(result).toMatchObject({ stopReason: "stop", content: [{ type: "text", text }] });
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toEqual([
+          expect.objectContaining({ type: "text", text: "still connected" }),
+        ]);
       } else {
         const reason = "no model progress";
         await expect(withinTest(consuming, signal)).rejects.toThrow(reason);
@@ -165,7 +205,7 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
       abort.abort();
       bodyChunks.unsubscribe(onBodyChunk);
       server.listener.closeAllConnections();
-      await settled;
+      await settleStream?.();
       vi.useRealTimers();
       try {
         await server.releaseListener();

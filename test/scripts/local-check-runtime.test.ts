@@ -147,7 +147,7 @@ function bounded(
   env: NodeJS.ProcessEnv = {},
   resources: Partial<CheckResources> = {},
 ) {
-  const inputEnv = makeEnv({
+  const inputEnv: NodeJS.ProcessEnv = makeEnv({
     CI: "true",
     OPENCLAW_LOCAL_CHECK: "0",
     OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",

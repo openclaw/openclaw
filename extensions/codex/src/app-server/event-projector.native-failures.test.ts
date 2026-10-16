@@ -1,57 +1,55 @@
 import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
-import * as h from "./event-projector.test-harness.js";
+import {
+  describe,
+  registerCodexEventProjectorTestLifecycle,
+  onInternalDiagnosticEvent,
+  expect,
+  it,
+  vi,
+  createMockPluginRegistry,
+  flushDiagnosticEvents,
+  initializeGlobalHookRunner,
+  createParams,
+  createProjector,
+  buildEmptyToolTelemetry,
+  findAgentEvent,
+  requireRecord,
+  mockCallArg,
+  forCurrentTurn,
+  readAttemptTerminal,
+  type DiagnosticEventPayload,
+} from "./event-projector.test-harness.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 
 function notify(
-  projector: Awaited<ReturnType<typeof h.createProjector>>,
-  item: Record<string, unknown>,
+  projector: Awaited<ReturnType<typeof createProjector>>,
+  method: Parameters<typeof forCurrentTurn>[0],
+  params: Record<string, unknown>,
 ) {
-  return projector.handleNotification(
-    h.forCurrentTurn(item.status === "inProgress" ? "item/started" : "item/completed", { item }),
-  );
+  return projector.handleNotification(forCurrentTurn(method, params));
 }
 
-function commandEvent(
-  projector: Awaited<ReturnType<typeof h.createProjector>>,
-  id: string,
-  status: string,
-  overrides: Record<string, unknown> = {},
-) {
-  return notify(
-    projector,
-    createNativeCommandItem({
-      id,
-      status,
-      exitCode: null,
-      durationMs: status === "inProgress" ? null : 1,
-      ...overrides,
-    }),
-  );
-}
+registerCodexEventProjectorTestLifecycle();
 
-h.registerCodexEventProjectorTestLifecycle();
-
-const diagnosticEvents: h.DiagnosticEventPayload[] = [];
+const diagnosticEvents: DiagnosticEventPayload[] = [];
 let unsubscribeDiagnostics: (() => void) | undefined;
 beforeEach(() => {
   diagnosticEvents.length = 0;
-  unsubscribeDiagnostics = h.onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+  unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 });
 afterEach(() => unsubscribeDiagnostics?.());
 
-function diagnosticValues(...keys: string[]) {
-  return diagnosticEvents
-    .filter((event) => event.type.startsWith("tool.execution."))
-    .map((event) => keys.map((key) => h.requireRecord(event, "tool diagnostic")[key]));
-}
-
-const blockedError = {
-  toolName: "bash",
-  meta: "run tests (workspace)",
-  error: "codex native tool blocked",
-  mutatingAction: false,
+const nativeCommand = {
+  type: "commandExecution" as const,
+  command: "pnpm test extensions/codex",
+  cwd: "/workspace",
+  processId: null,
+  source: "agent" as const,
+  commandActions: [],
+  aggregatedOutput: null,
+  exitCode: null,
 };
 
 describe("CodexAppServerEventProjector native tool failure recovery", () => {
@@ -66,12 +64,14 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     "records the native $status outcome without treating running as success",
     async ({ status, outcome }) => {
       const recordEvent = vi.fn();
-      const projector = await h.createProjector(undefined, {
+      const projector = await createProjector(undefined, {
         trajectoryRecorder: { recordEvent, flush: vi.fn() },
       });
-      const item = createNativeCommandItem({ id: "command-outcome", status, durationMs: 1 });
-      await notify(projector, { ...item, status: "inProgress" });
-      await notify(projector, item);
+      const item = { ...nativeCommand, id: "command-outcome", status, durationMs: 1 };
+      await notify(projector, "item/started", {
+        item: { ...item, status: "inProgress" },
+      });
+      await notify(projector, "item/completed", { item });
 
       const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
       expect(results).toHaveLength(1);
@@ -87,22 +87,54 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     const observeToolTerminal = vi.fn(
       createContractToolTerminalObserver("run-codex-native-declined"),
     );
-    const projector = await h.createProjector({
-      ...(await h.createParams()),
+    const projector = await createProjector({
+      ...(await createParams()),
       onAgentEvent,
       observeToolTerminal,
     });
 
-    await commandEvent(projector, "cmd-declined", "inProgress");
-    await commandEvent(projector, "cmd-declined", "declined");
-    await h.flushDiagnosticEvents();
+    await notify(projector, "item/started", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-declined",
+        status: "inProgress",
+        durationMs: null,
+      },
+    });
+    await notify(projector, "item/completed", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-declined",
+        status: "declined",
+        durationMs: 1,
+      },
+    });
+    await flushDiagnosticEvents();
 
-    expect(diagnosticValues("type", "toolName", "toolCallId")).toEqual([
-      ["tool.execution.started", "bash", "cmd-declined"],
-      ["tool.execution.blocked", "bash", "cmd-declined"],
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (event): event is Extract<DiagnosticEventPayload, { type: `tool.execution.${string}` }> =>
+        event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+      {
+        type: "tool.execution.blocked",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
     ]);
     expect(
-      h.findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data,
+      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data,
     ).toMatchObject({
       kind: "command",
       name: "bash",
@@ -110,16 +142,19 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       suppressChannelProgress: true,
     });
     expect(
-      h.findAgentEvent(onAgentEvent, {
+      findAgentEvent(onAgentEvent, {
         stream: "tool",
         phase: "result",
         itemId: "cmd-declined",
         name: "bash",
       }).data,
     ).toMatchObject({ toolCallId: "cmd-declined", status: "blocked", isError: true });
-    expect(projector.buildResult(h.buildEmptyToolTelemetry()).lastToolError).toEqual({
-      ...blockedError,
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "codex native tool blocked",
       executionStarted: false,
+      mutatingAction: false,
     });
     expect(observeToolTerminal).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -133,26 +168,33 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
   it("persists an approval timeout as failed tool evidence without aborting the turn", async () => {
     const afterToolCall = vi.fn();
     const recordTrajectoryEvent = vi.fn();
-    h.initializeGlobalHookRunner(
-      h.createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
-    const projector = await h.createProjector(undefined, {
+    const projector = await createProjector(undefined, {
       trajectoryRecorder: { recordEvent: recordTrajectoryEvent, flush: vi.fn() },
     });
-    const id = "cmd-approval-timeout";
+    const item = {
+      ...nativeCommand,
+      id: "cmd-approval-timeout",
+    };
     const timeoutExplanation = codexApprovalTimeoutText("command");
 
-    await commandEvent(projector, id, "inProgress");
-    projector.recordNativeToolApprovalFailure(id, "timed_out", "command");
-    await commandEvent(projector, id, "declined");
+    await notify(projector, "item/started", {
+      item: { ...item, status: "inProgress", durationMs: null },
+    });
+    projector.recordNativeToolApprovalFailure(item.id, "timed_out", "command");
+    await notify(projector, "item/completed", {
+      item: { ...item, status: "declined", durationMs: 1 },
+    });
 
-    const result = projector.buildResult(h.buildEmptyToolTelemetry());
+    const result = projector.buildResult(buildEmptyToolTelemetry());
     const toolResult = result.messagesSnapshot.find(
-      (message) => message.role === "toolResult" && message.toolCallId === id,
+      (message) => message.role === "toolResult" && message.toolCallId === item.id,
     );
     expect(toolResult).toMatchObject({
       role: "toolResult",
-      toolCallId: id,
+      toolCallId: item.id,
       isError: true,
       content: [{ type: "text", text: timeoutExplanation }],
     });
@@ -172,112 +214,171 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
         expect.anything(),
       ),
     );
-    expect(h.readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("finalizes a native pre-tool failure when no item arrives", async () => {
     const runAbortController = new AbortController();
-    const projector = await h.createProjector(undefined, {
+    const projector = await createProjector(undefined, {
       runAbortSignal: runAbortController.signal,
     });
 
-    const recordFailure = (toolCallId: string, durationMs: number) =>
-      projector.recordNativeToolPreToolUseFailure({
-        toolName: "exec",
-        toolCallId,
-        disposition: "failed",
-        durationMs,
-      });
-    recordFailure("native-no-item", 5);
+    projector.recordNativeToolPreToolUseFailure({
+      toolName: "exec",
+      toolCallId: "native-no-item",
+      disposition: "failed",
+      durationMs: 5,
+    });
     runAbortController.abort("codex_side_question_finished");
-    projector.buildResult(h.buildEmptyToolTelemetry());
-    recordFailure("native-late-no-item", 6);
-    await h.flushDiagnosticEvents();
+    projector.buildResult(buildEmptyToolTelemetry());
+    projector.recordNativeToolPreToolUseFailure({
+      toolName: "exec",
+      toolCallId: "native-late-no-item",
+      disposition: "failed",
+      durationMs: 6,
+    });
+    await flushDiagnosticEvents();
 
     expect(
-      diagnosticValues(
-        "type",
-        "toolName",
-        "errorCategory",
-        "toolCallId",
-        "durationMs",
-        "terminalReason",
+      diagnosticEvents.filter(
+        (event) =>
+          event.type.startsWith("tool.execution.") &&
+          "toolCallId" in event &&
+          (event.toolCallId === "native-no-item" || event.toolCallId === "native-late-no-item"),
       ),
     ).toEqual([
-      ["tool.execution.error", "exec", "before_tool_call", "native-no-item", 5, "failed"],
-      ["tool.execution.error", "exec", "before_tool_call", "native-late-no-item", 6, "cancelled"],
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolName: "exec",
+        toolCallId: "native-no-item",
+        durationMs: 5,
+        errorCategory: "before_tool_call",
+        terminalReason: "failed",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolName: "exec",
+        toolCallId: "native-late-no-item",
+        durationMs: 6,
+        errorCategory: "before_tool_call",
+        terminalReason: "cancelled",
+      }),
     ]);
   });
 
   it("clears a declined pre-execution error after an unrelated action succeeds", async () => {
-    const projector = await h.createProjector();
+    const projector = await createProjector();
 
-    await commandEvent(projector, "cmd-declined", "declined");
-    expect(projector.buildResult(h.buildEmptyToolTelemetry()).lastToolError).toEqual(blockedError);
-
-    await commandEvent(projector, "cmd-recovered", "completed", {
-      command: "pnpm test src/foo.test.ts",
-      aggregatedOutput: "ok",
-      exitCode: 0,
-      durationMs: 42,
+    await notify(projector, "item/completed", {
+      item: { ...nativeCommand, id: "cmd-declined", status: "declined", durationMs: 1 },
+    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "codex native tool blocked",
+      mutatingAction: false,
     });
 
-    expect(projector.buildResult(h.buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+    await notify(projector, "item/completed", {
+      item: {
+        ...nativeCommand,
+        id: "cmd-recovered",
+        command: "pnpm test src/foo.test.ts",
+        status: "completed",
+        aggregatedOutput: "ok",
+        exitCode: 0,
+        durationMs: 42,
+      },
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 });
 
-async function createObservedProjector(options?: Parameters<typeof h.createProjector>[1]) {
+async function createObservedProjector(options?: Parameters<typeof createProjector>[1]) {
   const afterToolCall = vi.fn();
-  h.initializeGlobalHookRunner(
-    h.createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
   );
-  const projector = await h.createProjector(
-    { ...(await h.createParams()), agentId: "main", sessionKey: "agent:main:session-1" },
+  const projector = await createProjector(
+    { ...(await createParams()), agentId: "main", sessionKey: "agent:main:session-1" },
     options,
   );
   return { afterToolCall, projector };
 }
 
 describe("CodexAppServerEventProjector native tool hook projection", () => {
-  const query = {
-    query: "native action query",
-    queries: ["native action query", "secondary query"],
-  };
-  it.each([true, false])("projects web search with native relay=%s once", async (relay) => {
-    const params = relay ? query : { action: "other", queryUnavailable: true };
-    const timing = relay ? { durationMs: 5 } : {};
+  it("does not duplicate native items already covered by PostToolUse relay", async () => {
     const { afterToolCall, projector } = await createObservedProjector({
-      nativePostToolUseRelayEnabled: relay,
+      nativePostToolUseRelayEnabled: true,
     });
-    if (relay) {
-      await notify(
-        projector,
-        createNativeCommandItem({ id: "cmd-relayed", aggregatedOutput: "ok" }),
-      );
-      expect(afterToolCall).not.toHaveBeenCalled();
-    }
-    await notify(projector, {
-      type: "webSearch",
-      id: "search-observed",
-      query: "",
-      action: relay ? { type: "search", ...query } : { type: "other" },
-      status: "completed",
-      ...timing,
+
+    await notify(projector, "item/completed", {
+      item: createNativeCommandItem({ id: "cmd-relayed", aggregatedOutput: "ok" }),
     });
+    expect(afterToolCall).not.toHaveBeenCalled();
+
+    await notify(projector, "item/completed", {
+      item: {
+        type: "webSearch",
+        id: "search-observed",
+        query: "",
+        action: {
+          type: "search",
+          query: "native action query",
+          queries: ["native action query", "secondary query"],
+        },
+        status: "completed",
+        durationMs: 5,
+      },
+    });
+
     await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
-    const event = h.requireRecord(h.mockCallArg(afterToolCall, 0, 0, "hook event"), "hook event");
-    expect(event.params).toEqual(params);
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+    expect(event.runId).toBe("run-1");
+    expect(event.toolCallId).toBe("search-observed");
     expect(event.result).toEqual({
       status: "completed",
-      ...timing,
-      ...params,
+      durationMs: 5,
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
     });
-    if (relay) {
-      expect([event.toolName, event.runId, event.toolCallId]).toEqual([
-        "web_search",
-        "run-1",
-        "search-observed",
-      ]);
-    }
+  });
+
+  it("marks unavailable Codex web search queries explicitly", async () => {
+    const { afterToolCall, projector } = await createObservedProjector();
+
+    await notify(projector, "item/completed", {
+      item: {
+        type: "webSearch",
+        id: "search-observed",
+        query: "",
+        action: { type: "other" },
+        status: "completed",
+      },
+    });
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.params).toEqual({
+      action: "other",
+      queryUnavailable: true,
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: "other",
+      queryUnavailable: true,
+    });
   });
 });

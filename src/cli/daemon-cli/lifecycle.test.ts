@@ -1,10 +1,7 @@
+// Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
-import {
-  expectNoCalls as expectUnused,
-  expectPartialCall,
-} from "./lifecycle-assertions.test-support.js";
 import {
   createHealthyRestartSnapshot,
   createDeferredSafeRestartResult,
@@ -18,9 +15,9 @@ import {
 } from "./lifecycle.test-helpers.js";
 
 const service = {
-  readCommand: vi.fn(async () => makeServiceCommand()),
-  readRuntime: vi.fn(async () => ({ status: "stopped" })),
-  restart: vi.fn(async () => ({ outcome: "completed" })),
+  readCommand: vi.fn(),
+  readRuntime: vi.fn(),
+  restart: vi.fn(),
   stop: vi.fn(),
 };
 
@@ -28,21 +25,24 @@ const runServiceStart = vi.fn(),
   runServiceRestart = vi.fn(),
   runServiceStop = vi.fn(),
   runServiceUninstall = vi.fn();
-const waitForListener = vi.fn(),
-  waitForRestart = vi.fn();
-const terminateStalePids = vi.fn();
-const portDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
-const restartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
+const waitForGatewayHealthyListener = vi.fn(),
+  waitForGatewayHealthyRestart = vi.fn();
+const terminateStaleGatewayPids = vi.fn();
+const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
+const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknown) => 18789));
-const findListeners = vi.fn<
+const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<
   typeof import("../../infra/gateway-processes.js").findVerifiedGatewayListenerPidsOnPortSync
 >(() => []);
-const signalPid =
+const signalVerifiedGatewayPidSync =
   vi.fn<typeof import("../../infra/gateway-processes.js").signalVerifiedGatewayPidSync>();
-const gatewayProcessChecks = createGatewayProcessExpectations(findListeners, signalPid);
-const writeRestartIntent = vi.fn(() => true);
-const clearRestartIntent = vi.fn();
-const resolveProbeHosts = vi.fn(
+const gatewayProcessChecks = createGatewayProcessExpectations(
+  findVerifiedGatewayListenerPidsOnPortSync,
+  signalVerifiedGatewayPidSync,
+);
+const writeGatewayRestartIntentSync = vi.fn();
+const clearGatewayRestartIntentSync = vi.fn();
+const resolveGatewayServiceProbeHosts = vi.fn(
   async (_params: { env?: Record<string, string | undefined>; command?: unknown }) =>
     ["127.0.0.1"] as readonly string[],
 );
@@ -52,9 +52,11 @@ const probePortUsage = vi.fn(
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
 const probeGateway =
   vi.fn<
-    (
-      opts: Parameters<typeof import("../../gateway/probe.js").probeGateway>[0],
-    ) => Promise<Pick<import("../../gateway/probe.js").GatewayProbeResult, "ok" | "configSnapshot">>
+    (opts: {
+      url: string;
+      auth?: { token?: string; password?: string };
+      timeoutMs: number;
+    }) => Promise<{ ok: boolean; configSnapshot: unknown }>
   >();
 const callGatewayCli = vi.fn();
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -63,22 +65,24 @@ const createConfigIO = vi.hoisted(() =>
     readBestEffortConfig: async () => loadConfig(),
   })),
 );
-const readLockPort = vi.hoisted(() => vi.fn<() => Promise<number | undefined>>());
+const readActiveGatewayLockPort = vi.hoisted(() => vi.fn<() => Promise<number | undefined>>());
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
 type LockIdentity = { pid: number; ownerId?: string; createdAt: string; port: number };
-const readLockIdentity = vi.hoisted(() => vi.fn<() => Promise<LockIdentity | undefined>>());
-const recoverLaunchAgent = vi.hoisted(() => vi.fn());
-const repairService = vi.hoisted(() => vi.fn());
+const readActiveGatewayLockIdentity = vi.hoisted(() =>
+  vi.fn<() => Promise<LockIdentity | undefined>>(),
+);
+const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 type SystemdScope = { scope: "user" | "system"; unitName: string; unitPath: string };
-const findSystemdScope = vi.hoisted(() =>
+const findInstalledSystemdGatewayScope = vi.hoisted(() =>
   vi.fn<() => Promise<SystemdScope | null>>(async () => null),
 );
-const restartSystemd = vi.hoisted(() =>
+const restartSystemdService = vi.hoisted(() =>
   vi.fn<() => Promise<{ outcome: "completed" }>>(async () => ({ outcome: "completed" })),
 );
-const stopSystemd = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
+const stopSystemdService = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 const isTerminalInteractive = vi.fn(() => true);
 const appendGatewayLifecycleAudit = vi.fn();
 const createGatewayLifecycleMutationAudit = vi.fn(
@@ -100,62 +104,64 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: findListeners,
-  signalVerifiedGatewayPidSync: signalPid,
-  formatGatewayPidList,
+  findVerifiedGatewayListenerPidsOnPortSync,
+  signalVerifiedGatewayPidSync,
+  formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));
 
 vi.mock("../../infra/gateway-lock.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-lock.js")>()),
-  readActiveGatewayLockPort: readLockPort,
-  readActiveGatewayLockIdentity: readLockIdentity,
+  readActiveGatewayLockPort: () => readActiveGatewayLockPort(),
+  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
 }));
 
 vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
   prepareGatewayRestartIntentLegacyProcess: async () => undefined,
-  writeGatewayRestartIntentSync: writeRestartIntent,
-  writeGatewayServiceRestartIntentSync: writeRestartIntent,
-  clearGatewayRestartIntentSync: clearRestartIntent,
+  writeGatewayRestartIntentSync: (params: unknown) => writeGatewayRestartIntentSync(params),
+  writeGatewayServiceRestartIntentSync: (params: unknown) => writeGatewayRestartIntentSync(params),
+  clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
 }));
 
 vi.mock("../../gateway/probe.js", () => ({ probeGateway }));
 
-vi.mock("../../gateway/call.js", () => ({ callGatewayCli }));
+vi.mock("../../gateway/call.js", () => ({
+  callGatewayCli: (opts: unknown) => callGatewayCli(opts),
+}));
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => service,
 }));
 
 vi.mock("../../daemon/systemd.js", () => ({
-  findInstalledSystemdGatewayScope: findSystemdScope,
+  findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
   refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
-  restartSystemdService: restartSystemd,
-  stopSystemdService: stopSystemd,
+  restartSystemdService: () => restartSystemdService(),
+  stopSystemdService: () => stopSystemdService(),
 }));
 vi.mock("./launchd-recovery.js", () => ({
-  recoverInstalledLaunchAgent: recoverLaunchAgent,
+  recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
+    recoverInstalledLaunchAgent(args),
 }));
 
 vi.mock("./start-repair.js", () => ({
-  repairLoadedGatewayServiceForStart: repairService,
+  repairLoadedGatewayServiceForStart: (args: unknown) => repairLoadedGatewayServiceForStart(args),
 }));
 
 vi.mock("../terminal-interactivity.js", () => ({
-  isTerminalInteractive,
+  isTerminalInteractive: () => isTerminalInteractive(),
   NON_INTERACTIVE_GATEWAY_STOP_MESSAGE:
     "This stops the operator's running gateway service. Use an isolated dev gateway (openclaw gateway run --dev, or --profile <name> with a free port) for testing, or re-run with --force if you really mean it.",
 }));
 
 vi.mock("./lifecycle-audit.js", () => ({
-  appendGatewayLifecycleAudit,
-  createGatewayLifecycleMutationAudit,
+  appendGatewayLifecycleAudit: (params: unknown) => appendGatewayLifecycleAudit(params),
+  createGatewayLifecycleMutationAudit: (params: { action: string; source?: string }) =>
+    createGatewayLifecycleMutationAudit(params),
 }));
 
-vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
-  resolveGatewayServiceProbeHosts: resolveProbeHosts,
-}));
+vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({ resolveGatewayServiceProbeHosts }));
 
 vi.mock("../../infra/ports-probe.js", () => ({ probePortUsage }));
 
@@ -163,11 +169,11 @@ vi.mock("./restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
-  waitForGatewayHealthyListener: waitForListener,
-  waitForGatewayHealthyRestart: waitForRestart,
-  renderGatewayPortHealthDiagnostics: portDiagnostics,
-  terminateStaleGatewayPids: terminateStalePids,
-  renderRestartDiagnostics: restartDiagnostics,
+  waitForGatewayHealthyListener,
+  waitForGatewayHealthyRestart,
+  renderGatewayPortHealthDiagnostics,
+  terminateStaleGatewayPids,
+  renderRestartDiagnostics,
 }));
 
 vi.mock("./lifecycle-core.js", () => ({
@@ -177,12 +183,8 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceUninstall,
 }));
 
-const {
-  runDaemonStart: start,
-  runDaemonRestart: restart,
-  runDaemonStop: stop,
-  runDaemonUninstall: uninstall,
-} = await import("./lifecycle.js");
+const { runDaemonStart, runDaemonRestart, runDaemonStop, runDaemonUninstall } =
+  await import("./lifecycle.js");
 
 function expectRestartRpc(params: Record<string, unknown>, port?: number, safeTarget = false) {
   expect(callGatewayCli).toHaveBeenCalledWith({
@@ -198,7 +200,7 @@ function expectListenerHealth(
   lock = createGatewayLockIdentity(),
   env?: NodeJS.ProcessEnv,
 ) {
-  expect(waitForListener).toHaveBeenCalledWith({
+  expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
     port: lock.port,
     attempts,
     delayMs: 500,
@@ -208,41 +210,15 @@ function expectListenerHealth(
   });
 }
 const restartTarget = { pid: 4200, ownerId: "gateway-owner-old", port: 18_789 };
-const stalePortIssue = { code: "port-mismatch", message: "service port is stale" };
 
-function makeServiceCommand(port = "18789", environment: NodeJS.ProcessEnv = {}) {
-  return { programArguments: ["openclaw", "gateway", "--port", port], environment };
-}
-function expectAudit(action: string, mode: string, pid = 4200, source = "cli") {
-  expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({ action, source, mode, pid });
-}
-function expectExpectedPort(mock: typeof runServiceRestart, port?: number) {
-  expect(requireMockCallArg(mock, "service lifecycle").expectedPort).toBe(port);
-}
-function mockRepairResult(result: "started" | "restarted") {
-  repairService.mockResolvedValue({
-    result,
-    message: `Gateway service definition repaired and ${result}.`,
-    loaded: true,
-  });
-}
-function repairContext(state: unknown = {}) {
-  return { json: true, stdout: process.stdout, state, issues: [stalePortIssue] };
-}
-function expectNoRestartDelivery(...otherMocks: unknown[]) {
-  expectUnused(writeRestartIntent, signalPid, ...otherMocks);
-}
-function mockPlatform(platform: NodeJS.Platform) {
-  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-}
-function unhealthySnapshot(overrides: Partial<RestartHealthSnapshot> = {}): RestartHealthSnapshot {
-  return { ...createHealthyRestartSnapshot(), healthy: false, ...overrides };
-}
-
-describe("restart health checks", () => {
+describe("runDaemonRestart health checks", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  function mockUnmanagedRestart(runPostRestartCheck = false) {
+  function mockUnmanagedRestart({
+    runPostRestartCheck = false,
+  }: {
+    runPostRestartCheck?: boolean;
+  } = {}) {
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
         const activationAccepted = Boolean(await params.onNotLoaded?.());
@@ -263,12 +239,11 @@ describe("restart health checks", () => {
         outcome = await params.onNotLoaded?.({ stdout: process.stdout });
       },
     );
-    await stop(opts);
+    await runDaemonStop(opts);
     return outcome;
   }
 
   beforeEach(() => {
-    vi.resetAllMocks();
     envSnapshot = captureEnv([
       "OPENCLAW_SUPERVISOR_MODE",
       "OPENCLAW_CONTAINER_HINT",
@@ -278,22 +253,61 @@ describe("restart health checks", () => {
     ]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
     delete process.env.OPENCLAW_SUPERVISOR_MODE;
-    runServiceStart.mockResolvedValue(undefined);
-    runServiceStop.mockResolvedValue(undefined);
-    readLockPort.mockResolvedValue(undefined);
-    readLockIdentity.mockResolvedValue(createGatewayLockIdentity());
-    recoverLaunchAgent.mockResolvedValue(null);
+    runServiceUninstall.mockReset();
+    service.readCommand.mockReset();
+    service.readRuntime.mockReset().mockResolvedValue({ status: "stopped" });
+    service.restart.mockReset().mockResolvedValue({ outcome: "completed" });
+    service.stop.mockReset();
+    runServiceStart.mockReset().mockResolvedValue(undefined);
+    runServiceRestart.mockReset();
+    runServiceStop.mockReset().mockResolvedValue(undefined);
+    waitForGatewayHealthyListener.mockReset();
+    waitForGatewayHealthyRestart.mockReset();
+    terminateStaleGatewayPids.mockReset();
+    renderGatewayPortHealthDiagnostics.mockReset();
+    renderRestartDiagnostics.mockReset();
+    resolveGatewayPort.mockReset();
+    findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+    signalVerifiedGatewayPidSync.mockReset().mockImplementation(() => {});
+    writeGatewayRestartIntentSync.mockReset().mockReturnValue(true);
+    clearGatewayRestartIntentSync.mockReset();
+    formatGatewayPidList.mockReset().mockImplementation((pids) => pids.join(", "));
+    probeGateway.mockReset();
+    callGatewayCli.mockReset();
+    loadConfig.mockReset();
+    createConfigIO
+      .mockReset()
+      .mockImplementation(() => ({ readBestEffortConfig: async () => loadConfig() }));
+    readActiveGatewayLockPort.mockReset().mockResolvedValue(undefined);
+    readGatewayOwnerLease.mockReset().mockReturnValue(undefined);
+    readActiveGatewayLockIdentity.mockReset();
+    recoverInstalledLaunchAgent.mockReset().mockResolvedValue(null);
+    repairLoadedGatewayServiceForStart.mockReset();
+    isTerminalInteractive.mockReset().mockReturnValue(true);
+    appendGatewayLifecycleAudit.mockClear();
+    createGatewayLifecycleMutationAudit.mockClear();
+    resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
+    probePortUsage.mockReset().mockResolvedValue("free");
     mockSystemAccountHome();
+
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    });
+    readActiveGatewayLockIdentity.mockResolvedValue(createGatewayLockIdentity());
+    findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
+    restartSystemdService.mockReset().mockResolvedValue({ outcome: "completed" });
+    stopSystemdService.mockReset().mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       await runRestartPostCheck(params, true);
       return true;
     });
-    waitForListener.mockResolvedValue({
+    waitForGatewayHealthyListener.mockResolvedValue({
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
-    waitForRestart.mockResolvedValue(createHealthyRestartSnapshot());
+    waitForGatewayHealthyRestart.mockResolvedValue(createHealthyRestartSnapshot());
     probeGateway.mockResolvedValue({
       ok: true,
       configSnapshot: { commands: { restart: true } },
@@ -306,37 +320,25 @@ describe("restart health checks", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["started", "restarted"] as const)(
-    "recovers an unloaded LaunchAgent (%s) before signaling",
-    async (result) => {
-      mockPlatform("darwin");
-      recoverLaunchAgent.mockResolvedValue({
-        result,
-        loaded: true,
-        message:
-          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-      });
-      if (result === "started") {
-        runServiceStart.mockImplementation(
-          async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-            await params.onNotLoaded?.();
-          },
-        );
-        await start({ json: true });
-        expectExpectedPort(runServiceStart);
-      } else {
-        findListeners.mockReturnValue([4200]);
-        mockUnmanagedRestart(true);
-        await restart({ json: true });
-        expectUnused(signalPid, waitForListener);
-        expectPartialCall(waitForRestart, { supervisorKeepsAlive: true });
-      }
-      expect(recoverLaunchAgent).toHaveBeenCalledWith({ result });
-    },
-  );
+  it("re-bootstraps an installed LaunchAgent when start finds it not loaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    recoverInstalledLaunchAgent.mockResolvedValue({
+      result: "started",
+      loaded: true,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    });
+    runServiceStart.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
 
-  it("revalidates native restart authority before mutation", async () => {
-    await restart({ json: true });
+    await runDaemonStart({ json: true });
+
+    expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "started" });
+    expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBeUndefined();
+  });
+
+  it("guards loaded service restart at the native mutation boundary", async () => {
+    await runDaemonRestart({ json: true });
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
@@ -345,82 +347,114 @@ describe("restart health checks", () => {
     );
   });
 
-  it("re-reads the service environment after repair", async () => {
+  it("re-reads the installed service environment after restart repair", async () => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway-maintenance.service";
     service.readCommand
-      .mockResolvedValueOnce(
-        makeServiceCommand("18789", { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" }),
-      )
-      .mockResolvedValue(
-        makeServiceCommand("19001", {
+      .mockResolvedValueOnce({
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" },
+      })
+      .mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "--port", "19001"],
+        environment: {
           OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
           OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-        }),
-      );
-    mockRepairResult("restarted");
+        },
+      });
+    repairLoadedGatewayServiceForStart.mockResolvedValue({
+      result: "restarted",
+      message: "Gateway service definition repaired and restarted.",
+      loaded: true,
+    });
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
-      await params.repairLoadedService?.(repairContext());
+      await params.repairLoadedService?.({
+        json: true,
+        stdout: process.stdout,
+        state: {},
+        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+      });
       await runRestartPostCheck(params, false);
       return true;
     });
 
-    await restart({ json: true });
+    await runDaemonRestart({ json: true });
 
-    expectExpectedPort(runServiceRestart);
-    expectPartialCall(waitForRestart, {
-      port: 19_001,
-      env: expect.objectContaining({
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
-        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+    expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBeUndefined();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: 19_001,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+        }),
       }),
-    });
+    );
   });
 
   it("rejects --skip-deferral without --safe", async () => {
-    await expect(restart({ json: true, skipDeferral: true })).rejects.toThrow(
+    await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
       "--skip-deferral requires --safe",
     );
-    expectUnused(callGatewayCli, runServiceRestart);
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(runServiceRestart).not.toHaveBeenCalled();
   });
 
-  it("repairs service port drift on start", async () => {
+  it("repairs loaded service definitions with port drift from gateway start", async () => {
     loadConfig.mockReturnValue({ gateway: { port: 19_001 } });
     resolveGatewayPort.mockReturnValue(19_001);
-    mockRepairResult("started");
-    const state = { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } };
+    repairLoadedGatewayServiceForStart.mockResolvedValue({
+      result: "started",
+      message: "Gateway service definition repaired and started.",
+      loaded: true,
+    });
     runServiceStart.mockImplementation(
-      async (params: Pick<RestartParams, "repairLoadedService">) => {
-        await params.repairLoadedService?.(repairContext(state));
+      async (params: {
+        repairLoadedService?: (args: {
+          json: boolean;
+          stdout: NodeJS.WritableStream;
+          state: unknown;
+          issues: unknown[];
+        }) => Promise<unknown>;
+      }) => {
+        await params.repairLoadedService?.({
+          json: true,
+          stdout: process.stdout,
+          state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
+          issues: [{ code: "port-mismatch", message: "service port is stale" }],
+        });
       },
     );
 
-    await start({ json: true });
+    await runDaemonStart({ json: true });
 
-    expectExpectedPort(runServiceStart, 19_001);
-    expectPartialCall(repairService, {
-      service,
-      json: true,
-      state,
-      issues: [stalePortIssue],
-    });
+    expect(requireMockCallArg(runServiceStart, "runServiceStart").expectedPort).toBe(19_001);
+    expect(repairLoadedGatewayServiceForStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service,
+        json: true,
+        state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
+        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+      }),
+    );
   });
 
   it.each([
-    { replaced: false, scheduled: false },
-    { replaced: true, scheduled: false },
-    { replaced: false, scheduled: true },
+    { terminated: true, replaced: false, scheduled: false },
+    { terminated: true, replaced: true, scheduled: false },
+    { terminated: true, replaced: false, scheduled: true },
   ])(
-    "retries stale cleanup (replaced=$replaced scheduled=$scheduled)",
-    async ({ replaced, scheduled }) => {
-      waitForRestart.mockResolvedValueOnce(
-        unhealthySnapshot({
-          staleGatewayPids: [1993],
-          runtime: { status: "stopped" },
-        }),
-      );
-      waitForRestart.mockResolvedValueOnce(createHealthyRestartSnapshot());
-      terminateStalePids.mockResolvedValue([1993]);
+    "retries stale cleanup only without a replacement owner (terminated=$terminated replaced=$replaced scheduled=$scheduled)",
+    async ({ terminated, replaced, scheduled }) => {
+      const unhealthy: RestartHealthSnapshot = {
+        healthy: false,
+        staleGatewayPids: [1993],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      };
+      waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy);
+      waitForGatewayHealthyRestart.mockResolvedValueOnce(createHealthyRestartSnapshot());
+      terminateStaleGatewayPids.mockResolvedValue(terminated ? [1993] : []);
       service.restart.mockResolvedValue({ outcome: scheduled ? "scheduled" : "completed" });
       if (replaced) {
         readGatewayOwnerLease.mockReturnValue({
@@ -436,83 +470,90 @@ describe("restart health checks", () => {
         });
       }
 
-      await expect(restart({ json: true })).resolves.toBe(true);
-      expect(service.restart).toHaveBeenCalledTimes(replaced ? 0 : 1);
-      expect(terminateStalePids).toHaveBeenCalledWith(
+      await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
+      expect(service.restart).toHaveBeenCalledTimes(terminated && !replaced ? 1 : 0);
+      expect(terminateStaleGatewayPids).toHaveBeenCalledWith(
         [1993],
         expect.objectContaining({ env: process.env, assertCurrent: expect.any(Function) }),
       );
-      expect(waitForRestart).toHaveBeenCalledTimes(scheduled ? 1 : 2);
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(scheduled ? 1 : 2);
     },
   );
 
   it.each([
-    [
-      "timeout",
-      360_000,
-      "running",
-      "Gateway restart timed out after 360s waiting for health checks.",
-    ],
-    [
-      "stopped-free",
-      12_500,
-      "stopped",
-      "Gateway restart failed after 13s: service stayed stopped and health checks never came up.",
-    ],
-  ] as const)(
-    "reports %s using the observed duration",
-    async (outcome, elapsedMs, runtime, message) => {
+    {
+      outcome: "timeout",
+      elapsedMs: 360_000,
+      runtime: "running",
+      message: "Gateway restart timed out after 360s waiting for health checks.",
+    },
+    {
+      outcome: "stopped-free",
+      elapsedMs: 12_500,
+      runtime: "stopped",
+      message:
+        "Gateway restart failed after 13s: service stayed stopped and health checks never came up.",
+    },
+  ])(
+    "reports $outcome using the observed duration",
+    async ({ outcome, elapsedMs, runtime, message }) => {
       const { formatCliCommand } = await import("../command-format.js");
       if (outcome === "timeout") {
-        mockPlatform("win32");
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       }
-      waitForRestart.mockResolvedValue(
-        unhealthySnapshot({
-          runtime: { status: runtime },
-          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-          waitOutcome: outcome,
-          elapsedMs,
-        }),
-      );
-      const error = await expectRestartError(restart({ json: true }));
-      expect({ message: error.message, hints: error.hints }).toEqual({
-        message,
-        hints: [
-          formatCliCommand("openclaw gateway status --deep"),
-          formatCliCommand("openclaw doctor"),
-        ],
+      waitForGatewayHealthyRestart.mockResolvedValue({
+        healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: runtime },
+        portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+        waitOutcome: outcome,
+        elapsedMs,
       });
+      const error = await expectRestartError(runDaemonRestart({ json: true }));
+      expect(error.message).toBe(message);
+      expect(error.hints).toEqual([
+        formatCliCommand("openclaw gateway status --deep"),
+        formatCliCommand("openclaw doctor"),
+      ]);
       if (outcome === "timeout") {
-        expectPartialCall(waitForRestart, {
-          attempts: 10_800,
-          delayMs: 500,
-          port: 18789,
-        });
+        expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            attempts: 10_800,
+            delayMs: 500,
+            port: 18789,
+          }),
+        );
       }
-      expect(terminateStalePids).not.toHaveBeenCalled();
-      expect(restartDiagnostics).toHaveBeenCalledTimes(1);
+      expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+      expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("force-stops verified listeners instead of the stale lock owner", async () => {
+  it("forces non-interactive stop of verified listeners instead of the stale lock owner", async () => {
     isTerminalInteractive.mockReturnValue(false);
-    findListeners.mockReturnValue([4300, 4300, 4400]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4300, 4300, 4400]);
 
     await runUnmanagedStop({ json: true, force: true });
 
     gatewayProcessChecks.listeners(18789, process.env);
     gatewayProcessChecks.signal(4300, "SIGTERM", 18789, process.env);
     gatewayProcessChecks.signal(4400, "SIGTERM", 18789, process.env);
+    // Verified listeners win over the lock owner (pid 4200) when lsof can see them.
     gatewayProcessChecks.noSignal(4200, "SIGTERM", 18789, process.env);
-    expectAudit("stop", "sigterm", 4300);
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "stop",
+      source: "cli",
+      mode: "sigterm",
+      pid: 4300,
+    });
   });
 
-  it("blocks non-interactive stop before service access", async () => {
+  it("blocks non-interactive stop without force before managed service access", async () => {
     isTerminalInteractive.mockReturnValue(false);
     const { defaultRuntime, ExitError } = await import("../../runtime.js");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    const stopping = stop({ json: true });
+    const stopping = runDaemonStop({ json: true });
     await expect(stopping).rejects.toBeInstanceOf(ExitError);
     await expect(stopping).rejects.toMatchObject({ code: 1 });
 
@@ -523,40 +564,56 @@ describe("restart health checks", () => {
         error: expect.stringContaining("openclaw gateway run --dev"),
       }),
     );
-    expectUnused(runServiceStop, service.stop, findListeners);
+    expect(runServiceStop).not.toHaveBeenCalled();
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
   });
 
-  it("disables unloaded macOS services through the service manager", async () => {
-    mockPlatform("darwin");
+  it("routes macOS disable stops through the service manager when not loaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
 
-    await stop({ json: true, disable: true });
+    await runDaemonStop({ json: true, disable: true });
 
-    expectPartialCall(runServiceStop, {
-      opts: { json: true, disable: true },
-      stopWhenNotLoaded: true,
-    });
-    expectUnused(service.readCommand, loadConfig, resolveGatewayPort);
+    expect(runServiceStop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { json: true, disable: true },
+        stopWhenNotLoaded: true,
+      }),
+    );
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(resolveGatewayPort).not.toHaveBeenCalled();
   });
 
-  it("stops disabled running systemd units through their manager", async () => {
-    mockPlatform("linux");
+  it("stops a running disabled systemd unit through the service manager", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     service.readRuntime.mockResolvedValue({ status: "running" });
 
     await runUnmanagedStop();
 
-    expectPartialCall(service.stop, { env: process.env, stdout: process.stdout });
-    expect(findListeners).not.toHaveBeenCalled();
+    expect(service.stop).toHaveBeenCalledWith(
+      expect.objectContaining({ env: process.env, stdout: process.stdout }),
+    );
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
   });
 
-  it("stops the active lock port despite config drift", async () => {
-    readLockIdentity.mockResolvedValue(
-      createGatewayLockIdentity({ pid: 4300, port: 39_471, ownerId: undefined }),
-    );
+  it("stops the active lock port when the configured port has drifted", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: 4300,
+      createdAt: "2026-07-16T12:00:00.000Z",
+      port: 39_471,
+    });
 
     const outcome = await runUnmanagedStop();
 
     expect(service.readCommand).not.toHaveBeenCalled();
-    expectAudit("stop", "sigterm", 4300);
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "stop",
+      source: "cli",
+      mode: "sigterm",
+      pid: 4300,
+    });
     expect(outcome).toEqual({
       result: "stopped",
       message: "Gateway stop signal sent to unmanaged process on port 39471: 4300.",
@@ -565,160 +622,217 @@ describe("restart health checks", () => {
     gatewayProcessChecks.signal(4300, "SIGTERM", 39_471, process.env);
   });
 
-  it("rejects denied Darwin recovery without a listener", async () => {
-    mockPlatform("darwin");
+  it("preserves SIGUSR1 restart delivery for a verified pre-upgrade gateway lock", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
+    readActiveGatewayLockIdentity.mockResolvedValue(
+      createGatewayLockIdentity({ ownerId: undefined }),
+    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true, wait: "30s" });
+
+    gatewayProcessChecks.listeners(18789);
+    expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
+    gatewayProcessChecks.signal(4200, "SIGUSR1", 18789);
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 4200,
+      reason: "gateway.restart",
+      intent: { waitMs: 30_000 },
+    });
+    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+      action: "restart",
+      source: "cli",
+      mode: "sigusr1",
+      pid: 4200,
+    });
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("rejects denied Darwin recovery when no unmanaged listener exists", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     mockUnmanagedRestart();
 
-    await expect(restart({ json: true })).rejects.toThrow(/non-default state dir/);
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(/non-default state dir/);
 
-    expectUnused(recoverLaunchAgent, signalPid);
+    expect(recoverInstalledLaunchAgent).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it.each([
     ["missing", undefined],
-    ["another process", createGatewayLockIdentity({ pid: 4300, ownerId: undefined })],
-    ["another port", createGatewayLockIdentity({ port: 19_001, ownerId: undefined })],
+    ["another process", { pid: 4300, createdAt: "2026-07-16T12:00:00.000Z", port: 18_789 }],
+    ["another port", { pid: 4200, createdAt: "2026-07-16T12:00:00.000Z", port: 19_001 }],
   ] as const)("refuses unmanaged restart when the lock identifies %s", async (_label, lock) => {
-    mockPlatform("linux");
-    readLockIdentity.mockResolvedValue(lock);
-    findListeners.mockReturnValue([4200]);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    readActiveGatewayLockIdentity.mockResolvedValue(lock);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart();
 
-    await expect(restart({ json: true })).rejects.toThrow(
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       'gateway lock identity does not match the verified listener on port 18789; use "openclaw gateway status --deep"',
     );
 
-    expectNoRestartDelivery(callGatewayCli);
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it.each(["linux", "win32"] as const)(
-    "preserves pre-upgrade restart delivery on %s",
-    async (platform) => {
-      mockPlatform(platform);
-      if (platform === "linux") {
-        process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
-      }
-      const lock = createGatewayLockIdentity({ ownerId: undefined });
-      readLockIdentity.mockResolvedValue(lock);
-      findListeners.mockReturnValue([4200]);
-      mockUnmanagedRestart(true);
+  it("uses the legacy local RPC contract for a pre-upgrade Windows gateway lock", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    readActiveGatewayLockIdentity.mockResolvedValue(
+      createGatewayLockIdentity({ ownerId: undefined }),
+    );
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
 
-      await restart({ json: true, wait: "30s" });
+    await runDaemonRestart({ json: true, wait: "30s" });
 
-      expect(writeRestartIntent).toHaveBeenCalledWith({
-        targetPid: 4200,
+    expectRestartRpc(
+      {
         reason: "gateway.restart",
-        intent: { waitMs: 30_000 },
-      });
-      if (platform === "win32") {
-        expectRestartRpc({ reason: "gateway.restart", skipDeferral: true }, 18_789);
-        expectUnused(signalPid, clearRestartIntent);
-        expectListenerHealth(10_860, lock, process.env);
-      } else {
-        gatewayProcessChecks.listeners(18789);
-        gatewayProcessChecks.signal(4200, "SIGUSR1", 18789);
-        expectUnused(
-          findSystemdScope,
-          callGatewayCli,
-          waitForRestart,
-          terminateStalePids,
-          service.restart,
-        );
-        expectAudit("restart", "sigusr1");
-        expect(probeGateway).toHaveBeenCalledTimes(1);
-        expect(waitForListener).toHaveBeenCalledTimes(1);
-      }
-    },
-  );
+        skipDeferral: true,
+      },
+      18_789,
+    );
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 4200,
+      reason: "gateway.restart",
+      intent: { waitMs: 30_000 },
+    });
+    expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expectListenerHealth(10_860, createGatewayLockIdentity({ ownerId: undefined }), process.env);
+  });
 
-  it("restarts and verifies the active port despite config drift", async () => {
+  it("restarts and verifies the active unmanaged port despite a config edit", async () => {
     loadConfig.mockReturnValue({ gateway: { port: 19_001 } });
     callGatewayCli.mockResolvedValueOnce({ ok: true, status: "emitted", pid: 4200 });
-    readLockPort.mockResolvedValue(18_789);
-    findListeners.mockImplementation((port) => (port === 18_789 ? [4200] : []));
-    mockUnmanagedRestart(true);
+    readActiveGatewayLockPort.mockResolvedValue(18_789);
+    findVerifiedGatewayListenerPidsOnPortSync.mockImplementation((port) =>
+      port === 18_789 ? [4200] : [],
+    );
+    mockUnmanagedRestart({ runPostRestartCheck: true });
 
-    await restart({ json: true });
+    await runDaemonRestart({ json: true });
 
-    expectExpectedPort(runServiceRestart, 19_001);
+    expect(requireMockCallArg(runServiceRestart, "runServiceRestart").expectedPort).toBe(19_001);
     gatewayProcessChecks.listeners(18_789);
-    expectPartialCall(probeGateway, { url: "ws://127.0.0.1:18789" });
-    expectPartialCall(callGatewayCli, {
-      method: "gateway.restart.request",
-      localPortOverride: 18_789,
-      params: expect.objectContaining({
-        target: { pid: 4200, ownerId: "gateway-owner-old", port: 18_789 },
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(callGatewayCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "gateway.restart.request",
+        localPortOverride: 18_789,
+        params: expect.objectContaining({
+          target: { pid: 4200, ownerId: "gateway-owner-old", port: 18_789 },
+        }),
       }),
-    });
-    expect(signalPid).not.toHaveBeenCalled();
-    expectPartialCall(waitForListener, { port: 18_789 });
+    );
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 18_789 }),
+    );
   });
 
-  it("rejects restart with multiple listeners", async () => {
+  it("prefers launchd repair over unmanaged restart when an installed LaunchAgent is unloaded", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    recoverInstalledLaunchAgent.mockResolvedValue({
+      result: "restarted",
+      loaded: true,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "restarted" });
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ supervisorKeepsAlive: true }),
+    );
+  });
+
+  it("fails unmanaged restart when multiple gateway listeners are present", async () => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
-    findListeners.mockReturnValue([4200, 4300]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
 
-    await expect(restart({ json: true })).rejects.toThrow(
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
     );
   });
 
-  it("honors commands.restart in the running gateway config", async () => {
-    findListeners.mockReturnValue([4200]);
+  it("fails unmanaged restart when the running gateway has commands.restart disabled", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     probeGateway.mockResolvedValue({
       ok: true,
       configSnapshot: { commands: { restart: false } },
     });
     mockUnmanagedRestart();
 
-    await expect(restart({ json: true })).rejects.toThrow(
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "Gateway restart is disabled in the running gateway config",
     );
   });
 
   function mockSystemdScope(unit: string) {
-    mockPlatform("linux");
-    findSystemdScope.mockResolvedValue({
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    findInstalledSystemdGatewayScope.mockResolvedValue({
       scope: "system" as const,
       unitName: unit,
       unitPath: `/etc/systemd/system/${unit}`,
     });
-    findListeners.mockReturnValue([4200]);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
   }
 
-  it.each([false, true])(
-    "delegates system restart (sudo required=%s, #87577)",
-    async (sudoRequired) => {
-      mockSystemdScope("openclaw.service");
-      if (sudoRequired) {
-        restartSystemd.mockRejectedValue(
-          new Error(
-            "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
-          ),
-        );
-      }
-      mockUnmanagedRestart();
+  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+    mockSystemdScope("openclaw.service");
+    restartSystemdService.mockResolvedValue({ outcome: "completed" });
+    mockUnmanagedRestart();
 
-      const restarting = restart({ json: true });
-      if (sudoRequired) {
-        await expect(restarting).rejects.toThrow(/sudo systemctl restart openclaw\.service/);
-      } else {
-        await expect(restarting).resolves.toBe(true);
-        expect(restartSystemd).toHaveBeenCalled();
-      }
-      expectUnused(signalPid, probeGateway);
-    },
-  );
+    await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
 
-  it("delegates system stop without signaling (#87577)", async () => {
+    expect(restartSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("surfaces systemd sudo guidance and never signals when restarting a system-scope unit as non-root (openclaw#87577)", async () => {
+    mockSystemdScope("openclaw.service");
+    restartSystemdService.mockRejectedValue(
+      new Error(
+        "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
+      ),
+    );
+    mockUnmanagedRestart();
+
+    await expect(runDaemonRestart({ json: true })).rejects.toThrow(
+      /sudo systemctl restart openclaw\.service/,
+    );
+
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("delegates system-scope stop to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
     mockSystemdScope("openclaw-gateway.service");
+    stopSystemdService.mockResolvedValue(undefined);
     await expect(runUnmanagedStop()).resolves.toEqual(
       expect.objectContaining({ result: "stopped" }),
     );
-    expect(stopSystemd).toHaveBeenCalled();
-    expect(signalPid).not.toHaveBeenCalled();
+    expect(stopSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -727,7 +841,8 @@ describe("restart health checks", () => {
   ] as const)(
     "handles an unowned gateway port reported as %s",
     async (portUsage, expectedError) => {
-      readLockIdentity.mockResolvedValue(undefined);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+      readActiveGatewayLockIdentity.mockResolvedValue(undefined);
       probePortUsage.mockResolvedValue(portUsage);
 
       const outcome = runUnmanagedStop();
@@ -739,7 +854,7 @@ describe("restart health checks", () => {
     },
   );
 
-  it("resolves port/hosts from service env without --port", async () => {
+  it("resolves port and probe hosts from selected service config/env (no --port arg)", async () => {
     const serviceCommand = {
       programArguments: ["openclaw", "gateway"],
       environment: { OPENCLAW_STATE_DIR: "/tmp/service-state" },
@@ -754,64 +869,78 @@ describe("restart health checks", () => {
     resolveGatewayPort.mockImplementation((cfg) => {
       return (cfg as { gateway?: { port?: number } } | undefined)?.gateway?.port ?? 18789;
     });
-    readLockIdentity.mockResolvedValue(undefined);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
     probePortUsage.mockResolvedValue("busy");
 
     await expect(runUnmanagedStop()).rejects.toThrow(/Port 19000/);
-    expectPartialCall(resolveProbeHosts, { command: serviceCommand });
+    expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith(
+      expect.objectContaining({ command: serviceCommand }),
+    );
     expect(probePortUsage).toHaveBeenCalledWith(19000, ["127.0.0.1"]);
   });
   describe("external supervision", () => {
     beforeEach(() => {
       process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-      findListeners.mockReturnValue([4200]);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
       callGatewayCli.mockResolvedValue({ ok: true, status: "emitted", pid: 4200 });
     });
     async function expectExternalRestartFailure(message: string) {
       const { defaultRuntime } = await import("../../runtime.js");
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-      await expectRestartError(restart({ json: true }));
+      await expectRestartError(runDaemonRestart({ json: true }));
 
-      expectPartialCall(writeJson, {
-        action: "restart",
-        ok: false,
-        error: expect.stringContaining(message),
-      });
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "restart",
+          ok: false,
+          error: expect.stringContaining(message),
+        }),
+      );
     }
 
-    it("targets the running Gateway without candidate state access", async () => {
-      const lockIdentity = createGatewayLockIdentity({ port: 19_455 });
-      readLockPort.mockResolvedValue(19_455);
-      readLockIdentity.mockResolvedValue(lockIdentity);
+    it("restarts through the exact running Gateway without candidate state access", async () => {
+      const lockIdentity = { ...createGatewayLockIdentity(), port: 19_455 };
+      readActiveGatewayLockPort.mockResolvedValue(19_455);
+      readActiveGatewayLockIdentity.mockResolvedValue(lockIdentity);
 
       const { defaultRuntime } = await import("../../runtime.js");
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      await expect(restart({ force: true })).resolves.toBe(true);
+      await expect(runDaemonRestart({ force: true })).resolves.toBe(true);
       expect(log).toHaveBeenCalledExactlyOnceWith(
         "Gateway restart request sent to externally supervised process on port 19455: 4200.",
       );
-      expect(waitForListener.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(waitForGatewayHealthyListener.mock.invocationCallOrder[0]).toBeLessThan(
         log.mock.invocationCallOrder[0]!,
       );
 
+      expect(runServiceRestart).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
+      expect(probeGateway).not.toHaveBeenCalled();
+      expect(loadConfig).not.toHaveBeenCalled();
       expectRestartRpc(
         {
           reason: "gateway.restart",
-          target: { ...restartTarget, port: 19_455 },
+          target: {
+            pid: 4200,
+            ownerId: "gateway-owner-old",
+            port: 19_455,
+          },
           restartIntent: { force: true, drainBudgetMs: 300_000 },
         },
         19_455,
       );
-      expectNoRestartDelivery(
-        runServiceRestart,
-        service.readCommand,
-        findSystemdScope,
-        probeGateway,
-        loadConfig,
-        clearRestartIntent,
-      );
-      expectAudit("restart", "rpc", 4200, "supervisor");
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+      expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
+        action: "restart",
+        source: "supervisor",
+        mode: "rpc",
+        pid: 4200,
+      });
       expectListenerHealth(720, lockIdentity);
     });
 
@@ -823,7 +952,7 @@ describe("restart health checks", () => {
         restart: { pid: 4200 },
       });
 
-      await restart({ json: true, safe: true, skipDeferral: true });
+      await runDaemonRestart({ json: true, safe: true, skipDeferral: true });
 
       expectRestartRpc(
         {
@@ -835,69 +964,76 @@ describe("restart health checks", () => {
         18_789,
         true,
       );
-      expectNoRestartDelivery(loadConfig);
+      expect(loadConfig).not.toHaveBeenCalled();
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    });
+
+    it("does not touch state when lock ownership changes before delivery", async () => {
+      const gatewayLockIdentity = createGatewayLockIdentity();
+      readActiveGatewayLockIdentity
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValueOnce(gatewayLockIdentity)
+        .mockResolvedValue({
+          ...gatewayLockIdentity,
+          pid: 4300,
+          ownerId: "gateway-owner-new",
+          createdAt: "2026-07-16T12:00:01.000Z",
+        });
+
+      await expectExternalRestartFailure("gateway lock owner changed");
+
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    });
+
+    it("rejects a legacy generic restart acknowledgement", async () => {
+      callGatewayCli.mockResolvedValue({
+        ok: true,
+        status: "deferred",
+        restart: { pid: 4200 },
+      });
+
+      await expectExternalRestartFailure("invalid restart acknowledgement");
+
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+      expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
+    });
+
+    it("fails closed before delivery for a pre-targeted-restart Gateway lock", async () => {
+      readActiveGatewayLockIdentity.mockResolvedValue({
+        pid: 4200,
+        createdAt: "2026-07-16T12:00:00.000Z",
+        port: 18_789,
+      });
+
+      await expectExternalRestartFailure("predates targeted restart ownership");
+
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     });
 
     it.each([
-      [
-        "gateway lock owner changed",
-        () => {
-          const lock = createGatewayLockIdentity();
-          readLockIdentity
-            .mockResolvedValueOnce(lock)
-            .mockResolvedValueOnce(lock)
-            .mockResolvedValue({
-              ...lock,
-              pid: 4300,
-              ownerId: "gateway-owner-new",
-              createdAt: "2026-07-16T12:00:01.000Z",
-            });
-        },
-        [clearRestartIntent, callGatewayCli],
-      ],
-      [
-        "invalid restart acknowledgement",
-        () => {
-          callGatewayCli.mockResolvedValue({
-            ok: true,
-            status: "deferred",
-            restart: { pid: 4200 },
-          });
-        },
-        [waitForListener],
-      ],
-      [
-        "predates targeted restart ownership",
-        () => {
-          readLockIdentity.mockResolvedValue(createGatewayLockIdentity({ ownerId: undefined }));
-        },
-        [callGatewayCli],
-      ],
-    ] as const)("fails closed: %s", async (message, setup, untouched) => {
-      setup();
-      await expectExternalRestartFailure(message);
-      expectNoRestartDelivery(...untouched);
-    });
-
-    it.each([
-      ["start", () => start({ json: true })],
-      ["stop", () => stop({ json: true })],
-      ["uninstall", () => uninstall({ json: true })],
-      ["preserved restart", () => restart({ json: true, preserveDefinition: true })],
+      ["start", () => runDaemonStart({ json: true })],
+      ["stop", () => runDaemonStop({ json: true })],
+      ["uninstall", () => runDaemonUninstall({ json: true })],
+      ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
     ])("blocks native %s lifecycle access", async (_action, run) => {
       await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
 
-      expectUnused(
-        runServiceStart,
-        runServiceRestart,
-        runServiceStop,
-        runServiceUninstall,
-        service.readCommand,
-        readLockIdentity,
-        callGatewayCli,
-        writeRestartIntent,
-        signalPid,
-      );
+      expect(runServiceStart).not.toHaveBeenCalled();
+      expect(runServiceRestart).not.toHaveBeenCalled();
+      expect(runServiceStop).not.toHaveBeenCalled();
+      expect(runServiceUninstall).not.toHaveBeenCalled();
+      expect(service.readCommand).not.toHaveBeenCalled();
+      expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+      expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,7 +2,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -15,10 +15,11 @@ import {
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createGatewayHarness,
+  createSessionCapabilityHarness,
   createTestSessionCapability,
-  runningSessionsResult,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 const mainKey = "agent:main:main";
 const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -29,67 +30,38 @@ const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySes
 });
 const emptyList = () => sessionsResult([], 2);
 const subscribed = () => ({ subscribed: true });
-const reconnectRoutes = { "sessions.subscribe": subscribed, "sessions.list": emptyList };
-const listRoute = (rows: GatewaySessionRow[], ts = 1) => ({
-  "sessions.list": () => sessionsResult(rows, ts),
-});
-const listReplies = (
-  first: SessionsListResult | Promise<SessionsListResult>,
-  next: SessionsListResult | Promise<SessionsListResult>,
-) => ({
-  "sessions.list": vi
-    .fn<() => Promise<SessionsListResult>>()
-    .mockImplementation(() => Promise.resolve(next))
-    .mockImplementationOnce(() => Promise.resolve(first)),
-});
 
-function requestRoutes(routes: Record<string, (params?: unknown) => unknown>) {
-  return createGatewayRequestMock(async (method, params) => {
+function sessionHarness(
+  routes: Record<string, (params?: unknown) => unknown>,
+  featureMethods?: string[],
+  sessionKey = mainKey,
+) {
+  const request = createGatewayRequestMock(async (method, params) => {
     const handler = routes[method];
     if (!handler) {
       throw new Error(`Unexpected request: ${method}`);
     }
     return await handler(params);
   });
-}
-
-function sessionHarness(
-  routes: Record<string, (params?: unknown) => unknown>,
-  featureMethods?: string[],
-  sessionKey = mainKey,
-  ownerId?: string,
-) {
-  const request = requestRoutes(routes);
-  const harness = createGatewayHarness(createTestGatewayClient(request), featureMethods, {
-    selfUser: ownerId ? { id: ownerId } : null,
-  });
+  const harness = createGatewayHarness(createTestGatewayClient(request), featureMethods);
   harness.gateway.snapshot.sessionKey = sessionKey;
-  const sessions = createTestSessionCapability(harness.gateway);
-  return {
-    ...harness,
-    request,
-    sessions,
-    current: () => sessions.state.result?.sessions[0],
-    refresh: () => sessions.refresh({ agentId: "main", force: true }),
-    change: (payload: Record<string, unknown>) => harness.emitEvent(event(payload)),
-  };
+  return { ...harness, request, sessions: createTestSessionCapability(harness.gateway) };
 }
 
-function event(payload: Record<string, unknown>, name = "sessions.changed") {
+function changed(key: string) {
   return {
     type: "event",
-    event: name,
-    payload,
+    event: "sessions.changed",
+    payload: {
+      sessionKey: key,
+      reason: "create",
+      key,
+      kind: "direct",
+      updatedAt: 2,
+      sessionId: "hidden-session",
+      label: "Hidden",
+    },
   } as const;
-}
-
-function groupHarness(
-  name: "list" | "put" | "rename",
-  handler: () => unknown,
-  routes: Record<string, () => unknown> = {},
-) {
-  const method = `sessions.groups.${name}`;
-  return sessionHarness({ ...routes, [method]: handler }, [method]);
 }
 
 afterEach(() => vi.useRealTimers());
@@ -99,16 +71,23 @@ it.each([false, null])(
   async (restored) => {
     const key = "agent:main:archive-from-agent";
     const held = row(key, { sessionId: "archive-session" });
-    const { sessions, change, refresh } = sessionHarness(listRoute([held]));
+    const { sessions, emitEvent } = sessionHarness({
+      "sessions.list": () => sessionsResult([held], 1),
+    });
     const reconcile = (archived: boolean | null, updatedAt: number) =>
-      change({ ...held, sessionKey: key, reason: "patch", archived, updatedAt });
-    await refresh();
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      });
+    await sessions.refresh({ agentId: "main", force: true });
     reconcile(true, 2);
     expect(sessions.archiveVisibility(key)).toBe("archived");
-    await refresh();
+    await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.archiveVisibility(key)).toBe("archived");
     reconcile(restored, 3);
     expect(sessions.archiveVisibility(key)).toBeUndefined();
+    sessions.dispose();
   },
 );
 
@@ -116,75 +95,102 @@ it("accepts a descriptor restore outside the primary list", async () => {
   const key = "agent:main:descriptor-restore";
   const held = row(key, { sessionId: "restored-session", archived: true, updatedAt: 2 });
   let listed = [held];
-  const { sessions, change, refresh } = sessionHarness({
+  const { sessions, emitEvent } = sessionHarness({
     "sessions.list": () => sessionsResult(listed, 2),
     "sessions.describe": () => ({ session: { ...held, archived: false, updatedAt: 3 } }),
   });
   const observation = sessions.observeRow({ key, agentId: "main" }, () => {});
-  onTestFinished(() => observation.dispose());
-  await refresh();
-  change({ ...held, sessionKey: key, reason: "patch" });
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  listed = [];
-  await refresh();
-  expect(sessions.state.result?.sessions).toEqual([]);
-  const reconcile = observation.captureReconcile();
-  const described = await sessions.describe({ key, agentId: "main" }, { refresh: true });
-  reconcile(described.session ?? undefined);
-  expect(observation.row?.archived).toBe(false);
-  expect(sessions.archiveVisibility(key)).toBeUndefined();
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { ...held, sessionKey: key, reason: "patch" },
+    });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    listed = [];
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions).toEqual([]);
+    const reconcile = observation.captureReconcile();
+    const described = await sessions.describe({ key, agentId: "main" }, { refresh: true });
+    reconcile(described.session ?? undefined);
+    expect(observation.row?.archived).toBe(false);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+  } finally {
+    observation.dispose();
+    sessions.dispose();
+  }
 });
 
 it("automatically retries an explicitly retryable group catalog failure", async () => {
   vi.useFakeTimers();
   let calls = 0;
-  const { sessions } = groupHarness("list", () => {
-    if (++calls === 1) {
-      throw new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "temporary catalog failure",
-        retryable: true,
-        retryAfterMs: 100,
-      });
-    }
-    return { groups: [{ name: "Recovered" }], sectionOrder: ["work", "category:Recovered"] };
-  });
+  const { sessions } = sessionHarness(
+    {
+      "sessions.groups.list": () => {
+        if (++calls === 1) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "temporary catalog failure",
+            retryable: true,
+            retryAfterMs: 100,
+          });
+        }
+        return { groups: [{ name: "Recovered" }], sectionOrder: ["work", "category:Recovered"] };
+      },
+    },
+    ["sessions.groups.list"],
+  );
   await sessions.groupsLoad();
   await vi.advanceTimersByTimeAsync(100);
-  expect(sessions.state).toMatchObject({
-    groups: ["Recovered"],
-    sectionOrder: ["work", "category:Recovered"],
-  });
+  expect(sessions.state.groups).toEqual(["Recovered"]);
+  expect(sessions.state.sectionOrder).toEqual(["work", "category:Recovered"]);
   expect(calls).toBe(2);
+  sessions.dispose();
 });
 
 it("publishes state.error when replacing the group catalog is rejected", async () => {
-  const { sessions } = groupHarness("put", () => {
-    throw new Error("group catalog rejected");
-  });
+  const { sessions } = sessionHarness(
+    {
+      "sessions.groups.put": () => {
+        throw new Error("group catalog rejected");
+      },
+    },
+    ["sessions.groups.put"],
+  );
   await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
   expect(sessions.state.error).toBe("group catalog rejected");
+  sessions.dispose();
 });
 
 it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
   const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
-  const { sessions, publish } = groupHarness("put", () => replaced.promise, reconnectRoutes);
+  const { sessions, publish } = sessionHarness(
+    {
+      "sessions.groups.put": () => replaced.promise,
+      "sessions.subscribe": subscribed,
+      "sessions.list": emptyList,
+    },
+    ["sessions.groups.put"],
+  );
   const operation = sessions.groupsPut(["Alpha"]);
   publish(false);
   publish(true);
   replaced.resolve({ groups: [{ name: "Alpha" }] });
   await expect(operation).resolves.toBe("stale");
-  expect(sessions.state).toMatchObject({ groups: [], error: null });
+  expect(sessions.state.groups).toEqual([]);
+  expect(sessions.state.error).toBeNull();
+  sessions.dispose();
 });
 
 it("keeps a confirmed group rename completed when its row refresh outlives the connection", async () => {
   const refreshed = createDeferred<SessionsListResult>();
-  const { sessions, publish, request } = groupHarness(
-    "rename",
-    () => ({ groups: [{ name: "Beta" }] }),
+  const { sessions, publish, request } = sessionHarness(
     {
+      "sessions.groups.rename": () => ({ groups: [{ name: "Beta" }] }),
       "sessions.list": () => refreshed.promise,
     },
+    ["sessions.groups.rename"],
   );
   const mutation = sessions.groupsRename("Alpha", "Beta");
   await waitForFast(() =>
@@ -193,53 +199,66 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   publish(false);
   refreshed.resolve(emptyList());
   await expect(mutation).resolves.toBe("completed");
+  sessions.dispose();
 });
 
 it("excludes lifecycle no-ops from batch deletion results", async () => {
-  const rejected = { key: "agent:main:rejected" };
-  const kept = { key: "agent:main:kept", expectedSessionId: "kept-generation" };
-  const deleted = { key: "agent:main:deleted", archivedOnly: true };
+  const rejectedKey = "agent:main:rejected";
+  const keptKey = "agent:main:kept";
+  const deletedKey = "agent:main:deleted";
   const error = new GatewayRequestError({
     code: "INVALID_REQUEST",
-    message: `Session ${rejected.key} changed before deletion. Retry.`,
+    message: `Session ${rejectedKey} changed before deletion. Retry.`,
   });
   const { sessions, request } = sessionHarness({
     "sessions.delete": (params) => {
       const key = asOptionalRecord(params)?.key;
-      if (key === rejected.key) {
+      if (key === rejectedKey) {
         throw error;
       }
-      return { ok: true, deleted: key === deleted.key };
+      return { ok: true, deleted: key === deletedKey };
     },
-    "sessions.list": () => sessionsResult([row(kept.key)], 2),
+    "sessions.list": () => sessionsResult([row(keptKey)], 2),
   });
   const deletedSnapshots: string[][] = [];
   const unsubscribe = sessions.subscribe((next) =>
     deletedSnapshots.push(next.deletedSessions.map((target) => target.key)),
   );
-  await expect(sessions.deleteMany([rejected, kept, deleted])).resolves.toEqual({
-    deleted: [deleted.key],
-    errors: [{ target: { key: rejected.key }, error }],
+  await expect(
+    sessions.deleteMany([
+      { key: rejectedKey },
+      { key: keptKey, expectedSessionId: "kept-generation" },
+      { key: deletedKey, archivedOnly: true },
+    ]),
+  ).resolves.toEqual({
+    deleted: [deletedKey],
+    errors: [{ target: { key: rejectedKey }, error }],
     preservedWorktrees: [],
   });
-  expect(deletedSnapshots.some((keys) => keys.includes(deleted.key))).toBe(true);
-  expect(deletedSnapshots.some((keys) => keys.includes(kept.key))).toBe(false);
+  expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
+  expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
   expect(request).toHaveBeenCalledTimes(4);
-  for (const target of [kept, deleted]) {
-    expect(request).toHaveBeenCalledWith(
-      "sessions.delete",
-      { ...target, deleteTranscript: true },
-      { timeoutMs: 10 * 60_000 },
-    );
-  }
+  expect(request).toHaveBeenCalledWith(
+    "sessions.delete",
+    { key: deletedKey, deleteTranscript: true, archivedOnly: true },
+    { timeoutMs: 10 * 60_000 },
+  );
+  expect(request).toHaveBeenCalledWith(
+    "sessions.delete",
+    { key: keptKey, deleteTranscript: true, expectedSessionId: "kept-generation" },
+    { timeoutMs: 10 * 60_000 },
+  );
   unsubscribe();
+  sessions.dispose();
 });
 
 it("creates a session while a list refresh is in flight", async () => {
   const pending = createDeferred<SessionsListResult>();
   const key = "agent:main:created";
+  let calls = 0;
   const { sessions, request } = sessionHarness({
-    ...listReplies(pending.promise, sessionsResult([row(key, { updatedAt: 2 })], 2)),
+    "sessions.list": () =>
+      ++calls === 1 ? pending.promise : sessionsResult([row(key, { updatedAt: 2 })], 2),
     "sessions.create": () => ({ key }),
   });
   const refresh = sessions.refresh({ force: true });
@@ -251,35 +270,48 @@ it("creates a session while a list refresh is in flight", async () => {
   pending.resolve(sessionsResult([], 1));
   await expect(created).resolves.toBe(key);
   await refresh;
-  expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
+  expect(calls).toBe(2);
   expect(sessions.state.result?.sessions[0]?.key).toBe(key);
+  sessions.dispose();
 });
 
-it.each(["reconnect", "rejection"])("reports a reset as uncertain after %s", async (outcome) => {
+it("reports a reset as stale when its connection epoch retires", async () => {
   const pending = createDeferred<unknown>();
   const { sessions, publish } = sessionHarness({
     "sessions.reset": () => pending.promise,
-    ...reconnectRoutes,
+    "sessions.subscribe": subscribed,
+    "sessions.list": emptyList,
   });
   const reset = sessions.reset(mainKey);
-  if (outcome === "reconnect") {
-    publish(false);
-    publish(true);
-    pending.resolve({});
-  } else {
-    pending.reject(new Error("post-commit lifecycle failed"));
-  }
+  publish(false);
+  publish(true);
+  pending.resolve({});
   await expect(reset).resolves.toBe("uncertain");
-  if (outcome === "rejection") {
-    expect(sessions.state.error).toContain("post-commit lifecycle failed");
-  }
+  sessions.dispose();
+});
+
+it("reports a same-connection reset rejection as uncertain", async () => {
+  const { sessions } = sessionHarness({
+    "sessions.reset": () => {
+      throw new Error("post-commit lifecycle failed");
+    },
+    "sessions.subscribe": subscribed,
+    "sessions.list": emptyList,
+  });
+  await expect(sessions.reset(mainKey)).resolves.toBe("uncertain");
+  expect(sessions.state.error).toContain("post-commit lifecycle failed");
+  sessions.dispose();
 });
 
 it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
   const pending = createDeferred<SessionsListResult>();
   const key = "agent:main:oldest";
+  let calls = 0;
   const { sessions } = sessionHarness(
-    listReplies(sessionsResult([row(key, { label: "Oldest" })], 1), pending.promise),
+    {
+      "sessions.list": () =>
+        ++calls === 1 ? sessionsResult([row(key, { label: "Oldest" })], 1) : pending.promise,
+    },
     undefined,
     key,
   );
@@ -295,89 +327,141 @@ it("keeps background hydration non-blocking and retains an omitted selected row"
     expect.objectContaining({ key, label: "Oldest" }),
   ]);
   stop();
+  sessions.dispose();
 });
 
-it("requires a terminal run ID and clips errors after redaction", async () => {
-  const { sessions, current, refresh } = sessionHarness({ "sessions.list": runningSessionsResult });
-  await refresh();
-  const terminal = {
-    sessionKeys: ["main"],
-    status: "failed" as const,
-    endedAt: 61,
-    errorMessage: `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
-  };
-  expect(sessions.reconcileRunTerminal(terminal)).toBe(false);
-  expect(sessions.reconcileRunTerminal({ ...terminal, runId: "run-1" })).toBe(true);
+it("publishes terminal run state to shared session subscribers", async () => {
+  const active = (updatedAt: number, activeRunIds?: string[]) =>
+    row(mainKey, {
+      updatedAt,
+      hasActiveRun: true,
+      ...(activeRunIds ? { activeRunIds } : {}),
+      status: "running",
+      startedAt: updatedAt * 100,
+    });
+  const { sessions } = sessionHarness({
+    "sessions.list": () => sessionsResult([active(1, ["run-1"])], 1),
+  });
+  await sessions.refresh({ agentId: "main", force: true });
+  const terminal = (
+    runId: string | undefined,
+    status: SessionRunTerminal["status"],
+    endedAt: number,
+    errorMessage?: string,
+  ) =>
+    sessions.reconcileRunTerminal({ sessionKeys: ["main"], runId, status, endedAt, errorMessage });
+  const current = () => sessions.state.result?.sessions[0];
+  expect(
+    terminal(
+      "run-1",
+      "failed",
+      160,
+      `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
+    ),
+  ).toBe(true);
+  const lastRunError = `Provider failed. password=[redacted] ${"x".repeat(123)}`;
   expect(current()).toMatchObject({
     key: mainKey,
     hasActiveRun: false,
     activeRunIds: [],
     status: "failed",
-    lastRunError: `Provider failed. password=[redacted] ${"x".repeat(123)}`,
-    endedAt: 61,
+    lastRunError,
+    endedAt: 160,
     runtimeMs: 60,
   });
+  expect(terminal("run-1", "failed", 160)).toBe(false);
+  expect(current()?.lastRunError).toBe(lastRunError);
+  expect(sessions.reconcile({ ...active(2, ["run-2"]), lastRunError })).toBe(true);
+  expect(terminal("run-1", "done", 260)).toBe(false);
+  expect(current()).toMatchObject({
+    hasActiveRun: true,
+    activeRunIds: ["run-2"],
+    status: "running",
+    lastRunError,
+  });
+  expect(terminal("run-2", "done", 260)).toBe(true);
+  expect(current()).toMatchObject({ hasActiveRun: false, status: "done" });
+  expect(current()?.lastRunError).toBeUndefined();
+  expect(sessions.reconcile(active(3))).toBe(true);
+  expect(terminal("run-1", "done", 360)).toBe(false);
+  expect(current()).toMatchObject({ hasActiveRun: true, status: "running" });
+  expect(terminal(undefined, "done", 360)).toBe(false);
+  sessions.dispose();
 });
 
 it("publishes remote deletion before refreshing the canonical list", async () => {
   vi.useFakeTimers();
   const pending = createDeferred<SessionsListResult>();
-  const { sessions, change, request } = sessionHarness(
-    listReplies(
-      sessionsResult([row(mainKey, { sessionId: "deleted-generation" })], 1),
-      pending.promise,
-    ),
-  );
+  let calls = 0;
+  const { sessions, emitEvent, request } = sessionHarness({
+    "sessions.list": () =>
+      ++calls === 1
+        ? sessionsResult([row(mainKey, { sessionId: "deleted-generation" })], 1)
+        : pending.promise,
+  });
   await sessions.refresh({ force: true });
   const deleted: string[][] = [];
   sessions.subscribe((next) => deleted.push(next.deletedSessions.map((target) => target.key)));
-  change({ sessionKey: mainKey, sessionId: "deleted-generation", reason: "delete" });
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: mainKey, sessionId: "deleted-generation", reason: "delete" },
+  });
   await vi.advanceTimersByTimeAsync(5_000);
   expect(request).toHaveBeenCalledTimes(2);
   expect(deleted.some((keys) => keys.includes(mainKey))).toBe(true);
   pending.resolve(emptyList());
   await vi.advanceTimersByTimeAsync(0);
   expect(sessions.state.loading).toBe(false);
+  sessions.dispose();
 });
 
 it("refreshes broad lists when the client omits the server-side window limit", async () => {
   vi.useFakeTimers();
   const hiddenKey = "agent:local:hidden";
-  const { sessions, change, request } = sessionHarness(listRoute([row()]));
+  const { sessions, emitEvent, request } = sessionHarness({
+    "sessions.list": () => sessionsResult([row()], 1),
+  });
   await sessions.refresh({ configuredAgentsOnly: false, force: true, limit: 0 });
   const params = request.mock.calls[0]?.[1];
-  expect(params).toMatchObject({
-    configuredAgentsOnly: false,
-    includeGlobal: true,
-    includeUnknown: true,
-  });
+  expect(params).toEqual(
+    expect.objectContaining({
+      configuredAgentsOnly: false,
+      includeGlobal: true,
+      includeUnknown: true,
+    }),
+  );
   expect(params).not.toHaveProperty("limit");
-  change({
-    sessionKey: hiddenKey,
-    reason: "create",
-    ...row(hiddenKey, { updatedAt: 2, sessionId: "hidden-session", label: "Hidden" }),
-  });
+  emitEvent(changed(hiddenKey));
   await vi.advanceTimersByTimeAsync(5_000);
   expect(request).toHaveBeenCalledTimes(2);
   expect(sessions.state.result?.sessions.map((entry) => entry.key)).not.toContain(hiddenKey);
+  sessions.dispose();
 });
 
 it("ignores stale archive state after a newer unarchive via Gateway events", async () => {
   const held = row(mainKey, { sessionId: "main-session", updatedAt: 30, archived: false });
-  const { sessions, change, refresh } = sessionHarness(listRoute([held], 30));
-  await refresh();
-  change({
-    ...held,
-    sessionKey: mainKey,
-    updatedAt: 20,
-    archived: true,
-    archivedAt: 20,
-    reason: "update",
+  const { sessions, emitEvent } = sessionHarness({
+    "sessions.list": () => sessionsResult([held], 30),
+  });
+  await sessions.refresh({ agentId: "main", force: true });
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      ...held,
+      sessionKey: mainKey,
+      updatedAt: 20,
+      archived: true,
+      archivedAt: 20,
+      reason: "update",
+    },
   });
   expect(sessions.state.result?.sessions.find((entry) => entry.key === mainKey)).toMatchObject({
     archived: false,
     updatedAt: 30,
   });
+  sessions.dispose();
 });
 
 it("does not probe for a group catalog when the method is explicitly absent", async () => {
@@ -386,22 +470,30 @@ it("does not probe for a group catalog when the method is explicitly absent", as
   await sessions.groupsLoad();
   expect(request).not.toHaveBeenCalled();
   expect(sessions.state.groups).toEqual([]);
+  sessions.dispose();
 });
 
 it("refreshes stale active rows after a terminal session message", async () => {
   vi.useFakeTimers();
-  const { sessions, emitEvent, request } = sessionHarness({
-    "sessions.list": vi
-      .fn()
-      .mockResolvedValueOnce(
-        sessionsResult([row(mainKey, { hasActiveRun: true, status: "running" })], 1),
-      )
-      .mockResolvedValueOnce(
-        sessionsResult([row(mainKey, { updatedAt: 2, hasActiveRun: false, status: "done" })], 2),
-      ),
-  });
+  const list = vi
+    .fn()
+    .mockResolvedValueOnce(
+      sessionsResult([row(mainKey, { hasActiveRun: true, status: "running" })], 1),
+    )
+    .mockResolvedValueOnce(
+      sessionsResult([row(mainKey, { updatedAt: 2, hasActiveRun: false, status: "done" })], 2),
+    );
+  const { sessions, emitEvent, request } = sessionHarness({ "sessions.list": list });
   await sessions.refresh({ agentId: "main", force: true });
-  emitEvent(event({ sessionKey: mainKey, updatedAt: 1, status: "done" }, "session.message"));
+  emitEvent({
+    type: "event",
+    event: "session.message",
+    payload: {
+      sessionKey: mainKey,
+      updatedAt: 1,
+      status: "done",
+    },
+  });
   await vi.advanceTimersByTimeAsync(5_000);
   expect(sessions.state.result?.sessions[0]).toMatchObject({
     key: mainKey,
@@ -409,27 +501,27 @@ it("refreshes stale active rows after a terminal session message", async () => {
     status: "done",
   });
   expect(request).toHaveBeenCalledTimes(2);
+  sessions.dispose();
 });
 
 describe("session capability dashboard default acknowledgements", () => {
   const key = "agent:main:dashboard";
   const sessionId = "dashboard-incarnation";
   const patchOptions = { agentId: "main", expectedSessionId: sessionId, deferListRefresh: true };
-  const retained = {
+  const initial: GatewaySessionRow = {
+    key,
+    agentId: "main",
     sessionId,
+    kind: "direct",
+    updatedAt: 10,
+    boardFace: "dashboard",
+    boardPresentation: "split",
     pinned: true,
     pinnedAt: 5,
     unread: true,
     lastReadAt: 1,
-  };
-  const initial = row(key, {
-    ...retained,
-    agentId: "main",
-    updatedAt: 10,
-    boardFace: "dashboard",
-    boardPresentation: "split",
     lastActivityAt: 10,
-  });
+  };
 
   function acknowledgement(
     presentation: GatewaySessionRow["boardPresentation"],
@@ -449,39 +541,46 @@ describe("session capability dashboard default acknowledgements", () => {
 
   async function createPresentationHarness(initialRow = initial) {
     let current = initialRow;
+    let listFailure = false;
     const patchReply = createDeferred<SessionsPatchResult>();
-    const list = vi.fn(async () => sessionsResult([current], current.updatedAt ?? 0));
-    const h = sessionHarness({
-      "sessions.list": list,
-      "sessions.patch": () => patchReply.promise,
-      "sessions.describe": () => ({ session: current }),
-      "sessions.subscribe": subscribed,
+    const request = createGatewayRequestMock(async (method) => {
+      if (method === "sessions.list") {
+        if (listFailure) {
+          throw new Error("Roster refresh unavailable");
+        }
+        return sessionsResult([current], current.updatedAt ?? 0);
+      }
+      if (method === "sessions.patch") {
+        return patchReply.promise;
+      }
+      if (method === "sessions.describe") {
+        return { session: current };
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
     });
-    onTestFinished(() => patchReply.resolve(acknowledgement("expanded")));
-    await h.refresh();
+    const client = createTestGatewayClient(request);
+    const gateway = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway.gateway);
+    onTestFinished(() => {
+      sessions.dispose();
+      patchReply.resolve(acknowledgement("expanded"));
+    });
+    await sessions.refresh({ agentId: "main", force: true });
     return {
-      ...h,
-      acknowledge: (
-        operation: Promise<unknown>,
-        presentation: GatewaySessionRow["boardPresentation"],
-      ) => {
-        patchReply.resolve(acknowledgement(presentation));
-        return operation;
-      },
-      patch: (
-        fields: Parameters<typeof h.sessions.patch>[1],
-        options: Parameters<typeof h.sessions.patch>[2] = patchOptions,
-      ) => {
-        const operation = h.sessions.patch(key, fields, options);
-        expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(
-          1,
-        );
-        return operation;
-      },
+      ...gateway,
+      sessions,
+      client,
+      request,
+      patchReply,
       setCurrent: (next: GatewaySessionRow) => {
         current = next;
       },
-      failList: () => list.mockRejectedValue(new Error("Roster refresh unavailable")),
+      failList: () => {
+        listFailure = true;
+      },
     };
   }
 
@@ -493,16 +592,26 @@ describe("session capability dashboard default acknowledgements", () => {
     });
     const query = { agentId: "main", hasBoard: true, archivedFilter: "all" as const };
     await h.sessions.refreshList({ ...query, force: true });
-    const operation = h.patch({ boardFace: "dashboard", boardPresentation: null });
+    const operation = h.sessions.patch(
+      key,
+      { boardFace: "dashboard", boardPresentation: null },
+      patchOptions,
+    );
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
       expect(result?.sessions[0]?.boardPresentation).toBe("expanded");
     }
-    await h.acknowledge(operation, undefined);
+    h.patchReply.resolve(acknowledgement(undefined));
+    await operation;
     for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
       expect(result?.sessions[0]).not.toHaveProperty("boardPresentation");
       expect(result?.sessions[0]).toMatchObject({
-        ...retained,
+        sessionId,
         boardFace: "dashboard",
+        pinned: true,
+        pinnedAt: 5,
+        unread: true,
+        lastReadAt: 1,
       });
     }
   });
@@ -510,100 +619,146 @@ describe("session capability dashboard default acknowledgements", () => {
   it("retains the acknowledged default when the follow-up list fails and an older read arrives", async () => {
     const h = await createPresentationHarness();
     const reconcileEarlierRead = h.sessions.captureReconcile();
-    const operation = h.patch(
+    const operation = h.sessions.patch(
+      key,
       { boardPresentation: "split" },
-      { agentId: "main", expectedSessionId: sessionId },
+      {
+        agentId: "main",
+        expectedSessionId: sessionId,
+      },
     );
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
     h.failList();
-    await expect(h.acknowledge(operation, "expanded")).resolves.toBeTruthy();
-    expect(h.current()?.boardPresentation).toBe("expanded");
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await expect(operation).resolves.toBeTruthy();
+    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
     reconcileEarlierRead({ ...initial });
-    expect(h.current()?.boardPresentation).toBe("expanded");
+    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
   });
 
   it("keeps a newer external default ahead of an older successful patch acknowledgement", async () => {
     const h = await createPresentationHarness();
-    const operation = h.patch({ boardPresentation: "expanded" });
-    h.change({
-      ...initial,
-      sessionKey: key,
-      reason: "patch",
-      updatedAt: 30,
-      boardPresentation: "split",
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    h.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        ...initial,
+        sessionKey: key,
+        reason: "patch",
+        updatedAt: 30,
+        boardPresentation: "split",
+      },
     });
-    await h.acknowledge(operation, "expanded");
-    expect(h.current()).toMatchObject({
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
       sessionId,
       updatedAt: 30,
       boardPresentation: "split",
     });
   });
 
-  it.each(["row", "Gateway"])(
-    "does not apply an old acknowledgement to a replacement %s",
-    async (replacementKind) => {
-      const h = await createPresentationHarness();
-      const operation = h.patch({ boardPresentation: "expanded" });
-      const replacement = { ...initial, sessionId: "other-gateway-session", updatedAt: 40 };
-      if (replacementKind === "row") {
-        h.setCurrent(replacement);
-      } else {
-        h.publish(false);
-        h.publish(true, createTestGatewayClient(requestRoutes(listRoute([replacement], 40))));
+  it("does not attach an old incarnation's acknowledgement to a replacement row", async () => {
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    const replacement = { ...initial, sessionId: "replacement-session", updatedAt: 30 };
+    h.setCurrent(replacement);
+    await h.sessions.refresh({ agentId: "main", force: true });
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: replacement.sessionId,
+      boardPresentation: "split",
+    });
+  });
+
+  it("does not project a successful acknowledgement into a replacement Gateway", async () => {
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    const replacement = { ...initial, sessionId: "other-gateway-session", updatedAt: 40 };
+    const replacementClient = createTestGatewayClient((method) => {
+      if (method === "sessions.list") {
+        return sessionsResult([replacement], 40);
       }
-      await h.refresh();
-      await h.acknowledge(operation, "expanded");
-      expect(h.current()).toMatchObject({
-        sessionId: replacement.sessionId,
-        boardPresentation: "split",
-      });
-    },
-  );
+      throw new Error(`Unexpected replacement Gateway request: ${method}`);
+    });
+    h.publish(false);
+    h.publish(true, replacementClient);
+    await h.sessions.refresh({ agentId: "main", force: true });
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: "other-gateway-session",
+      boardPresentation: "split",
+    });
+  });
 });
+
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 it("ignores recap-only changes for canonical, filtered, and child rosters", async () => {
   vi.useFakeTimers();
   const key = "agent:main:parent";
-  const recapRow = row(key);
+  const recapRow = { key, kind: "direct" as const, updatedAt: 1 };
   const child = { ...recapRow, key: "agent:main:child", spawnedBy: key };
-  const { sessions, change, request, refresh } = sessionHarness(
-    {
-      "sessions.list": (params) =>
-        sessionsResult(asOptionalRecord(params)?.spawnedBy ? [child] : [recapRow], 1),
-    },
-    undefined,
-    mainKey,
-    "viewer",
+  const request = vi.fn(async (method: string, params?: { spawnedBy?: string }) => {
+    if (method !== "sessions.list") {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return sessionsResult(params?.spawnedBy ? [child] : [recapRow], 1);
+  });
+  const { sessions, emitEvent } = createSessionCapabilityHarness(
+    request as unknown as GatewayBrowserClient["request"],
+    { ownerId: "viewer" },
   );
   const scopes = [
     { agentId: "main", involvingMe: true },
-    ...[100, 10_000].map((limit) => ({
+    { agentId: "main", spawnedBy: key, limit: 100, includeGlobal: false, includeUnknown: false },
+    {
       agentId: "main",
       spawnedBy: key,
-      limit,
+      limit: 10_000,
       includeGlobal: false,
       includeUnknown: false,
-    })),
+    },
   ];
   const stops = scopes.map((scope) => sessions.subscribeList(scope, vi.fn()));
-  onTestFinished(() => stops.forEach((stop) => stop()));
-  await refresh();
-  await Promise.all(scopes.map((scope) => sessions.refreshList({ ...scope, force: true })));
-  expect(request).toHaveBeenCalledTimes(4);
-  request.mockClear();
 
-  for (let index = 0; index < 4; index += 1) {
-    change({ agentId: "main", sessionKey: key, reason: "activity-summary" });
-    await vi.advanceTimersByTimeAsync(5_000);
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    await Promise.all(scopes.map((scope) => sessions.refreshList({ ...scope, force: true })));
+    expect(request).toHaveBeenCalledTimes(4);
+    request.mockClear();
+
+    for (let index = 0; index < 4; index += 1) {
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { agentId: "main", sessionKey: key, reason: "activity-summary" },
+      });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+    }
+    expect(request).not.toHaveBeenCalled();
+
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { agentId: "main", sessionKey: key, reason: "patch" },
+    });
+    await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ ownerFirst: true }),
+    );
+    expect(sessions.state.result?.sessions).toEqual([recapRow]);
+  } finally {
+    stops.forEach((stop) => stop());
+    sessions.dispose();
+    vi.useRealTimers();
   }
-  expect(request).not.toHaveBeenCalled();
-
-  change({ agentId: "main", sessionKey: key, reason: "patch" });
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledTimes(4);
-  expect(request).toHaveBeenCalledWith(
-    "sessions.list",
-    expect.objectContaining({ ownerFirst: true }),
-  );
-  expect(sessions.state.result?.sessions).toEqual([recapRow]);
 });

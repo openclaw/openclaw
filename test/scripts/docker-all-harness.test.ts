@@ -1338,7 +1338,7 @@ describe("Docker scheduler trusted harness execution", () => {
     expect(summary.lanes[0]).not.toHaveProperty("failureMetadata");
   });
 
-  posixIt.each(["timeout", "deterministic failure"])(
+  posixIt.each(["timeout", "deterministic failure", "rate limited", "ECONNRESET"])(
     "fails on the first lane outcome: %s",
     (failure) => {
       const fixture = setupFixture("split");
