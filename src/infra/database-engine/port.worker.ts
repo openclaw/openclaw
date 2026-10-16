@@ -105,11 +105,20 @@ async function* readBatches(
   derive: ((row: PortRow) => PortRow) | undefined,
   normalize: boolean,
 ) {
-  if (!table.pk.length) {
-    throw new DatabasePortDataError(`Port requires a canonical key: ${table.name}`);
-  }
   const names = table.columns.map((c) => quote(c.name));
-  const keys = table.pk.map(quote).join(",");
+  const keyed = table.pk.length > 0;
+  const orderColumns = keyed ? table.pk : table.columns.map((column) => column.name);
+  const keys = orderColumns
+    .map((name) => `${quote(name)}${keyed ? "" : " ASC NULLS FIRST"}`)
+    .join(",");
+  // Keyless retained tables are tiny; value ordering preserves duplicate rows without inventing identities.
+  const sourceOrder =
+    endpoint.engine === "sqlite"
+      ? orderColumns
+          .map((name) => `${quote(table.name)}.${quote(name)}${keyed ? "" : " ASC NULLS FIRST"}`)
+          .join(",")
+      : keys;
+  let offset = 0;
   const rowBytes = table.columns
     .map((c) =>
       ["text", "bytea"].includes(c.type) ? `coalesce(octet_length(${quote(c.name)}),0)` : "8",
@@ -131,12 +140,12 @@ async function* readBatches(
             ])
             .join(",")
         : names.join(",");
-    const page = `SELECT ${projection} FROM ${qualified(endpoint, table.name)}${where} ORDER BY ${keys} LIMIT ${limit}`;
+    const page = `SELECT ${projection} FROM ${qualified(endpoint, table.name)}${where} ORDER BY ${sourceOrder} LIMIT ${limit}${keyed ? "" : ` OFFSET ${offset}`}`;
     const sql =
       endpoint.engine === "sqlite"
         ? page
         : `WITH page AS (${page}), sized AS (
-      SELECT page.*, sum(${rowBytes}) OVER (ORDER BY ${keys}) AS __port_size,
+      SELECT page.*, sum(${rowBytes}) OVER (ORDER BY ${keys} ROWS UNBOUNDED PRECEDING) AS __port_size,
       row_number() OVER (ORDER BY ${keys}) AS __port_row FROM page)
       SELECT ${names.join(",")} FROM sized WHERE __port_size <= ${MAX_BYTES} OR __port_row = 1 ORDER BY ${keys}`;
     let rows: Iterable<PortRow>;
@@ -187,7 +196,11 @@ async function* readBatches(
       batch.push(row);
       bytes += size;
       count++;
-      cursor = table.pk.map((k) => row[k]!);
+      if (keyed) {
+        cursor = table.pk.map((k) => row[k]!);
+      } else {
+        offset++;
+      }
     }
     if (batch.length) {
       yield batch;
@@ -494,7 +507,7 @@ export async function readPostgresPortCapabilities(
   return { version: server.version, encoding: server.encoding };
 }
 
-/** Offline worker API: caller owns tracked readBigInts SQLite handles, migrated source, fresh destination, and exclusive custody. No publication. */
+/** Offline worker API: caller owns tracked SQLite handles (data statements read BigInts), migrated source, fresh destination, and exclusive custody. No publication. */
 export async function materializeDatabasePort(params: {
   source: Endpoint;
   destination: Endpoint;

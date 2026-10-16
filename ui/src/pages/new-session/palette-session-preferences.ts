@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { NewSessionDraftController } from "./draft-controller.ts";
+import type { NewSessionDraft } from "./draft-controller.ts";
 import type { PaletteIdentityPreferences } from "./palette-identity-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 
@@ -19,7 +19,7 @@ export class PaletteSessionPreferences {
 
   constructor(
     private readonly read: () => {
-      draft: NewSessionDraftController | undefined;
+      draft: NewSessionDraft | undefined;
       context: ApplicationContext | undefined;
     },
     private readonly restore: (preference: PaletteSessionPreference | null) => void,

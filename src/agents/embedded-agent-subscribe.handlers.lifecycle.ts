@@ -89,7 +89,6 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.state.deferBlockReplyDelivery =
     typeof ctx.params.onBeforeTerminalDelivery === "function" &&
     ctx.params.deferTerminalDelivery !== false;
-  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitLifecycleAgentEvent(ctx, { phase: "start", startedAt: Date.now() });
 }
 
@@ -229,8 +228,6 @@ export function handleAgentEnd(
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
-  } else {
-    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
   }
 
   const emitLifecycleTerminal = () => {

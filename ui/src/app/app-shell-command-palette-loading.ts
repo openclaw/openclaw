@@ -1,3 +1,4 @@
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   isCommandPaletteShortcut,
@@ -33,7 +34,6 @@ type CommandPaletteShellHost = {
   chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
   navigate(routeId: "chat", options?: ApplicationNavigationOptions): void;
   readonly lazyCustomElements: LazyCustomElementRequestController;
-  requestUpdate(): void;
 };
 
 type CommandPaletteShellActions = {
@@ -53,7 +53,7 @@ export class ShellCommandPaletteOwner {
   constructor(host: CommandPaletteShellHost, actions: CommandPaletteShellActions) {
     this.#host = host;
     this.#actions = actions;
-    this.loading = new CommandPaletteLoadingState(host);
+    this.loading = createCommandPaletteLoading(host);
   }
 
   readonly open = (): void => {
@@ -64,7 +64,7 @@ export class ShellCommandPaletteOwner {
       this.loading.handoff(() => {
         // The loader keeps keyboard custody until the replacement accepts focus.
         // Read its final value and recheck ownership at that boundary.
-        if (this.loading.active) {
+        if (this.loading.active()) {
           const take = this.loading.captureHandoff();
           palette.openPalette(() => {
             this.synchronizeScope();
@@ -85,13 +85,16 @@ export class ShellCommandPaletteOwner {
   closePending(): void {
     this.#actions.cancel();
     this.#host.lazyCustomElements.abandon();
-    this.#host.requestUpdate();
   }
 
   synchronizeScope(): void {
     const gateway = this.#host.context?.gateway;
     const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
-    if (this.#scope && this.#scope !== scope && (this.loading.active || this.#actions.pending())) {
+    if (
+      this.#scope &&
+      this.#scope !== scope &&
+      (this.loading.active() || this.#actions.pending())
+    ) {
       this.closePending();
     }
     this.#scope = scope;
@@ -99,7 +102,7 @@ export class ShellCommandPaletteOwner {
 
   toggle(): void {
     if (
-      this.loading.active ||
+      this.loading.active() ||
       this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
@@ -131,7 +134,7 @@ export class ShellCommandPaletteOwner {
       event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
-      !this.loading.active ||
+      !this.loading.active() ||
       !isCommandPaletteShortcut(event)
     ) {
       return false;
@@ -142,64 +145,56 @@ export class ShellCommandPaletteOwner {
   }
 }
 
-/** In-memory custody of input until the real palette takes over. Never persisted. */
-export class CommandPaletteLoadingState {
-  submitRequested = false;
-  #draft: CommandPaletteInputSnapshot | undefined;
-  #imageFiles: File[] = [];
-  #mentionTrigger: number | undefined;
-  #input: HTMLTextAreaElement | undefined;
-  #returnFocus: HTMLElement | null | undefined;
-  #composing = false;
-  #pendingHandoff: (() => void) | undefined;
-  #compositionFrame: number | undefined;
-  #handoffPending = false;
-  #generation = 0;
+/** In-memory custody outlives the loading view, until the real palette accepts it. */
+export function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
+  type Presentation = {
+    draft?: CommandPaletteInputSnapshot;
+    returnFocus?: HTMLElement | null;
+    submitRequested: boolean;
+    defined: boolean;
+  };
+  let current: Presentation = { submitRequested: false, defined: false };
+  // Shell connection publishes under its restored Solid owner.
+  const [read, write] = createSignal(current, { ownedWrite: true });
+  // Imperative custody reads the same receipt before Solid commits its publication.
+  const presentation = () => {
+    read();
+    return current;
+  };
+  const publish = (next: Presentation) => {
+    current = next;
+    write(next);
+  };
+  const active = () => current.returnFocus !== undefined;
+  const shown = createMemo(() => read().returnFocus !== undefined);
+  let imageFiles: File[] = [];
+  let mentionTrigger: number | undefined;
+  let input: HTMLTextAreaElement | undefined;
+  let composing = false;
+  let pendingHandoff: (() => void) | undefined;
+  let compositionFrame: number | undefined;
+  let handoffPending = false;
+  let generation = 0;
 
-  readonly #host: Pick<CommandPaletteShellHost, "requestUpdate" | "context">;
-
-  constructor(host: Pick<CommandPaletteShellHost, "requestUpdate" | "context">) {
-    this.#host = host;
-  }
-
-  get active(): boolean {
-    return this.#returnFocus !== undefined;
-  }
-
-  get waitingForComposition(): boolean {
-    return this.#handoffPending;
-  }
-
-  begin(): void {
-    if (!this.active) {
-      this.#returnFocus =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    }
-    if (!customElements.get("openclaw-modal-dialog")) {
-      void ensureCustomElementDefined(
-        "openclaw-modal-dialog",
-        () => import("../components/modal-dialog.ts"),
-      ).then(
-        () => {
-          if (this.active) {
-            this.#host.requestUpdate();
-          }
-        },
-        (error: unknown) => {
-          if (this.active) {
-            showToast({ message: formatUiError(error) });
-          }
-        },
-      );
+  function cancelCompositionFrame() {
+    if (compositionFrame !== undefined) {
+      cancelAnimationFrame(compositionFrame);
+      compositionFrame = undefined;
     }
   }
-
-  get value(): string {
-    return this.#draft?.value ?? "";
+  function reset() {
+    current = { submitRequested: false, defined: current.defined };
+    generation += 1;
+    handoffPending = false;
+    cancelCompositionFrame();
+    pendingHandoff = undefined;
+    composing = false;
+    input = undefined;
+    imageFiles = [];
+    mentionTrigger = undefined;
   }
-
-  #snapshot(): CommandPaletteInputSnapshot | undefined {
-    const input = this.#input;
+  onCleanup(reset);
+  function snapshot(): CommandPaletteInputSnapshot | undefined {
     return input
       ? {
           value: input.value,
@@ -207,186 +202,196 @@ export class CommandPaletteLoadingState {
           selectionEnd: input.selectionEnd,
           selectionDirection: input.selectionDirection,
         }
-      : this.#draft;
+      : current.draft;
   }
-
-  readonly captureInput = (_value?: string, event?: InputEvent): void => {
-    if (!this.active || !this.#input) {
-      return;
-    }
-    const input = this.#input;
-    if (
-      !this.#composing &&
-      !event?.isComposing &&
-      event?.inputType === "insertText" &&
-      event.data?.includes("@")
-    ) {
-      this.#mentionTrigger = input.selectionStart - event.data.length + event.data.lastIndexOf("@");
-    } else if (this.#mentionTrigger !== undefined) {
-      // A pasted/replaced token is ordinary text; only continuation of the typed
-      // trigger can open the full picker after its lazy module accepts focus.
-      const end = this.#mentionTrigger + 1;
-      if (
-        event?.inputType === "insertFromPaste" ||
-        event?.inputType === "insertFromDrop" ||
-        this.#draft?.value.slice(0, end) !== input.value.slice(0, end)
-      ) {
-        this.#mentionTrigger = undefined;
-      }
-    }
-    // The live field owns text and selection until replacement focus accepts it.
-    this.#draft = this.#snapshot();
-    this.#host.requestUpdate();
-  };
-
-  readonly inputRef = (element: Element | undefined, previous?: HTMLTextAreaElement): void => {
-    if (previous && previous !== this.#input) {
-      return;
-    }
-    if (this.active && this.#input && this.#input !== element) {
-      this.#draft = this.#snapshot();
-    }
-    if (!(element instanceof HTMLTextAreaElement)) {
-      this.#input = undefined;
-      return;
-    }
-    if (!this.active) {
-      return;
-    }
-    this.#input = element;
-    const draft = this.#draft;
-    element
-      .closest<OpenClawModalDialog>("openclaw-modal-dialog")
-      ?.setReturnFocusTarget(this.#returnFocus ?? null);
-    // The shared renderer binds value before this ref; the modal alone owns
-    // autofocus. Restoring selection here cannot steal a later picker focus.
-    if (draft && !this.#composing) {
-      element.setSelectionRange(draft.selectionStart, draft.selectionEnd, draft.selectionDirection);
-    }
-  };
-
-  readonly handleCompositionStart = (): void => {
-    if (!this.active) {
-      return;
-    }
-    this.#composing = true;
-    this.#mentionTrigger = undefined;
-    if (this.#compositionFrame !== undefined) {
-      cancelAnimationFrame(this.#compositionFrame);
-      this.#compositionFrame = undefined;
-    }
-  };
-
-  readonly handleCompositionEnd = (): void => {
-    if (!this.active) {
-      return;
-    }
-    this.#composing = false;
-    if (this.#compositionFrame !== undefined) {
-      cancelAnimationFrame(this.#compositionFrame);
-    }
-    // compositionend can precede the final input event. Keep the live field for
-    // that commit, and read it only when replacement focus accepts the handoff.
-    this.#compositionFrame = requestAnimationFrame(() => {
-      this.#compositionFrame = undefined;
-      const handoff = this.#pendingHandoff;
-      this.#pendingHandoff = undefined;
-      handoff?.();
-    });
-  };
-
-  readonly handlePaste = (event: ClipboardEvent): void => {
-    if (!this.active || this.submitRequested) {
-      return;
-    }
-    const files = Array.from(event.clipboardData?.items ?? [], (item) => item.getAsFile()).filter(
-      (file): file is File => file?.type.startsWith("image/") === true,
-    );
-    if (files.length) {
-      event.preventDefault();
-      if (!uploadsEnabled(this.#host.context?.config)) {
-        showToast({ message: uploadsDisabledMessage() });
-        return;
-      }
-      this.#imageFiles.push(...files);
-    }
-  };
-
-  readonly handleKeydown = (event: KeyboardEvent): void => {
-    if (this.#composing || event.isComposing || event.keyCode === 229) {
-      event.stopPropagation();
-      return;
-    }
-    if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (
-        !event.repeat &&
-        (this.value.trim() || this.#imageFiles.length > 0) &&
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)
-      ) {
-        this.submitRequested = true;
-        this.#host.requestUpdate();
-      }
-    }
-  };
-
-  handoff(open: () => void): void {
-    if (this.#composing || this.#compositionFrame !== undefined) {
-      this.#handoffPending = true;
-      this.#pendingHandoff = open;
-    } else {
-      open();
-    }
-  }
-
-  captureHandoff(): CommandPaletteInputHandoff {
-    const generation = this.#generation;
-    return () => (generation === this.#generation ? this.#take() : undefined);
-  }
-
-  #take(): CommandPaletteOpenInput | undefined {
-    if (!this.active) {
+  function take(): CommandPaletteOpenInput | undefined {
+    if (!active()) {
       return undefined;
     }
-    const draft = this.#snapshot() ?? {
+    const draft = snapshot() ?? {
       value: "",
       selectionStart: 0,
       selectionEnd: 0,
       selectionDirection: "none" as const,
     };
-    const returnFocus = this.#returnFocus;
-    const submitRequested = this.submitRequested;
-    const imageFiles = this.#imageFiles;
-    const mentionTrigger = this.#mentionTrigger;
-    // Retiring the loader must not restore the original field between the two
-    // palette inputs. The replacement dialog inherits that original target.
-    this.#input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
-    this.clear();
-    this.#host.requestUpdate();
+    const { returnFocus, submitRequested } = current;
+    const files = imageFiles;
+    const trigger = mentionTrigger;
+    // Transfer the original focus target without restoring it between the two inputs.
+    input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
+    loading.clear();
     return {
       ...draft,
       returnFocus,
       ...(submitRequested ? { submitRequested: true as const } : {}),
-      ...(imageFiles.length ? { imageFiles } : {}),
-      ...(mentionTrigger !== undefined ? { mentionTrigger } : {}),
+      ...(files.length ? { imageFiles: files } : {}),
+      ...(trigger !== undefined ? { mentionTrigger: trigger } : {}),
     };
   }
-
-  clear(): void {
-    this.submitRequested = false;
-    this.#generation += 1;
-    this.#handoffPending = false;
-    if (this.#compositionFrame !== undefined) {
-      cancelAnimationFrame(this.#compositionFrame);
-      this.#compositionFrame = undefined;
-    }
-    this.#pendingHandoff = undefined;
-    this.#composing = false;
-    this.#input = undefined;
-    this.#draft = undefined;
-    this.#imageFiles = [];
-    this.#mentionTrigger = undefined;
-    this.#returnFocus = undefined;
-  }
+  const loading = {
+    active: () => {
+      shown();
+      return active();
+    },
+    value: () => presentation().draft?.value ?? "",
+    submitRequested: () => presentation().submitRequested,
+    defined: () => presentation().defined,
+    waitingForComposition: () => handoffPending,
+    begin(): void {
+      const defined = Boolean(customElements.get("openclaw-modal-dialog"));
+      publish({
+        ...current,
+        defined,
+        returnFocus: active()
+          ? current.returnFocus
+          : document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null,
+      });
+      if (!defined) {
+        void ensureCustomElementDefined(
+          "openclaw-modal-dialog",
+          () => import("../components/modal-dialog.ts"),
+        ).then(
+          () => {
+            if (active()) {
+              publish({ ...current, defined: true });
+            }
+          },
+          (error: unknown) => {
+            if (active()) {
+              showToast({ message: formatUiError(error) });
+            }
+          },
+        );
+      }
+    },
+    captureInput(_value?: string, event?: InputEvent): void {
+      if (!active() || !input) {
+        return;
+      }
+      if (
+        !composing &&
+        !event?.isComposing &&
+        event?.inputType === "insertText" &&
+        event.data?.includes("@")
+      ) {
+        mentionTrigger = input.selectionStart - event.data.length + event.data.lastIndexOf("@");
+      } else if (mentionTrigger !== undefined) {
+        // Pasting/replacing a token cannot reopen a picker as a typed mention.
+        const end = mentionTrigger + 1;
+        if (
+          event?.inputType === "insertFromPaste" ||
+          event?.inputType === "insertFromDrop" ||
+          current.draft?.value.slice(0, end) !== input.value.slice(0, end)
+        ) {
+          mentionTrigger = undefined;
+        }
+      }
+      // The live field owns text and selection until replacement focus accepts it.
+      publish({ ...current, draft: snapshot() });
+    },
+    inputRef(element: Element | undefined, previous?: HTMLTextAreaElement): void {
+      if (previous && previous !== input) {
+        return;
+      }
+      if (active() && input && input !== element) {
+        publish({ ...current, draft: snapshot() });
+      }
+      if (!(element instanceof HTMLTextAreaElement)) {
+        input = undefined;
+        return;
+      }
+      if (!active()) {
+        return;
+      }
+      input = element;
+      const draft = current.draft;
+      element
+        .closest<OpenClawModalDialog>("openclaw-modal-dialog")
+        ?.setReturnFocusTarget(current.returnFocus ?? null);
+      // Binding precedes the ref; selection restoration must not steal picker focus.
+      if (draft && !composing) {
+        element.setSelectionRange(
+          draft.selectionStart,
+          draft.selectionEnd,
+          draft.selectionDirection,
+        );
+      }
+    },
+    handleCompositionStart(): void {
+      if (!active()) {
+        return;
+      }
+      composing = true;
+      mentionTrigger = undefined;
+      cancelCompositionFrame();
+    },
+    handleCompositionEnd(): void {
+      if (!active()) {
+        return;
+      }
+      composing = false;
+      cancelCompositionFrame();
+      // compositionend may precede final input; take only when replacement focus accepts it.
+      compositionFrame = requestAnimationFrame(() => {
+        compositionFrame = undefined;
+        const handoff = pendingHandoff;
+        pendingHandoff = undefined;
+        handoff?.();
+      });
+    },
+    handlePaste(event: ClipboardEvent): void {
+      if (!active() || current.submitRequested) {
+        return;
+      }
+      const files = Array.from(event.clipboardData?.items ?? [], (item) => item.getAsFile()).filter(
+        (file): file is File => file?.type.startsWith("image/") === true,
+      );
+      if (files.length) {
+        event.preventDefault();
+        if (!uploadsEnabled(host.context?.config)) {
+          showToast({ message: uploadsDisabledMessage() });
+          return;
+        }
+        imageFiles.push(...files);
+      }
+    },
+    handleKeydown(event: KeyboardEvent): void {
+      if (composing || event.isComposing || event.keyCode === 229) {
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (
+          !event.repeat &&
+          (current.draft?.value.trim() || imageFiles.length > 0) &&
+          matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)
+        ) {
+          publish({ ...current, submitRequested: true });
+        }
+      }
+    },
+    handoff(open: () => void): void {
+      if (composing || compositionFrame !== undefined) {
+        handoffPending = true;
+        pendingHandoff = open;
+      } else {
+        open();
+      }
+    },
+    captureHandoff(): CommandPaletteInputHandoff {
+      const captured = generation;
+      return () => (captured === generation ? take() : undefined);
+    },
+    clear(): void {
+      reset();
+      write(current);
+    },
+  };
+  return loading;
 }
+
+export type CommandPaletteLoadingState = ReturnType<typeof createCommandPaletteLoading>;

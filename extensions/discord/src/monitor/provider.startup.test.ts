@@ -28,16 +28,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   danger: (value: string) => value,
 }));
-vi.mock("../proxy-request-client.js", () => ({
-  DISCORD_REST_TIMEOUT_MS: 15_000,
-  createDiscordRequestClient: vi.fn(() => ({
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    patch: vi.fn(),
-    delete: vi.fn(),
-  })),
-}));
 vi.mock("./auto-presence.js", () => ({ createDiscordAutoPresenceController: vi.fn() }));
 vi.mock("./gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: vi.fn(),
@@ -68,7 +58,7 @@ vi.mock("./listeners.js", () => {
 });
 
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
-import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";

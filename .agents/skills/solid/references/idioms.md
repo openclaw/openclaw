@@ -5,6 +5,84 @@ Use this when writing or auditing rendering consumers. The installed rc.14
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
 
+## Replace Lit-era controllers
+
+Replace a rendering controller with `createThing(deps)`, called inside the owning
+component or Solid root. Return accessors and actions. Local interaction state
+belongs in signals; structured local drafts belong in `createStore` with its
+draft setter and `reconcile` for keyed updates. Derive values with `createMemo`,
+never effects that copy state. Domain owners stay plain TypeScript; their
+synchronous decisions do not become signals or stores.
+
+Replace `hostConnected`/`hostDisconnected` with owner-scoped setup and cleanup in
+the same function. Signals replace `requestUpdate`. For example, this local
+disclosure replaces a controller's mutable `open`, key listener, and host update:
+
+```ts
+import { createMemo, createSignal, onSettled } from "solid-js";
+import { listen } from "./listener.ts";
+
+function createDisclosure(trigger: () => HTMLElement, label: () => string) {
+  const [open, setOpen] = createSignal(false);
+  const accessibleLabel = createMemo(() => `${label()}: ${open() ? "open" : "closed"}`);
+  onSettled(() =>
+    listen(trigger(), "keydown", (event) => {
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpen(false);
+      }
+    }),
+  );
+  return { open, accessibleLabel, toggle: () => setOpen((value) => !value) };
+}
+```
+
+Prefer JSX handlers. When native capture/options or an external target requires
+an imperative listener, `lib/reactive/listener.ts` returns teardown for the
+owning `onSettled` callback, split-effect apply phase, or explicit lifetime.
+`lib/solid-native-listener.ts` remains the owned ref factory for native bubbling
+through custom-element boundaries. Ref callbacks capture nodes; they must not
+create cleanup registrations. Use refs instead of `querySelector`; retain
+deliberate xterm, noVNC, PDF, and canvas islands as ref-owned regions.
+JSX handlers can still fire on a detached node retained by another owner. Use
+explicit listener teardown when late events could observe replacement props.
+
+Remove `untrack` unless a read deliberately must not subscribe; explain
+non-obvious snapshots. Delete the old controller, host adapter wiring, and
+test-only exports together. Keep an adapter only while `git grep` shows real
+callers. Tests assert public behavior and cleanup, not controller internals.
+
+Keep routes, keyboard/focus behavior, tags, selectors, and lazy boundaries.
+Before editing, check open `solid2/*` PRs and skip files owned by another lane.
+Keep each PR focused (about 40 files maximum) and reduce production LOC. Report
+before/after controller-pattern references, `createEffect`, `untrack`, native
+listener registrations, and LOC for touched production files. The existing Lit
+ratchet reports controller-pattern growth while legacy callers remain; after
+the production baseline reaches zero it rejects reintroductions.
+
+## Choose the primitive
+
+Start from the narrowest primitive that expresses the data's owner and lifetime:
+
+| Data                                                                             | Primitive                                                                           |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Authoritative domain state (Gateway store, sessions, caches, mutation authority) | Plain TypeScript owner; never a signal. Read it through a projection.               |
+| An owner's snapshot in a view                                                    | `projectOwner`/`projectSource` (`lib/reactive/projection.ts`), narrowed with memos  |
+| A cheap value derived from props or signals                                      | An accessor `() => …` or a JSX expression                                           |
+| An expensive or shared derivation                                                | `createMemo` (with `equals` only for immutable values)                              |
+| Local interaction state (open, hovered, active tab)                              | `createSignal`                                                                      |
+| A local draft that resets or reconciles from a source                            | Writable derivation `createSignal(() => source())`, with the reset policy commented |
+| Structured or keyed local state                                                  | `createStore` with draft setters; `reconcile(rows, "id")` for keyed lists           |
+| A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                      |
+| An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                          |
+| Count-only repetition                                                            | `<Repeat count={n}>`                                                                |
+
+`createMemo(fn, { lazy: true })` defers the first computation until something
+reads it and disposes it when nothing observes it; `createSignal(v, { unobserved })`
+fires when the last subscriber leaves. Reach for them in new adapters that must
+release upstream work with their last reader. Keep the existing `projectSource`
+contract (read-through, revision equality, scope replacement) rather than
+reimplementing it piecemeal.
+
 ## Derive values; effects perform work
 
 A component body runs once. JSX bindings, memos, and effect compute phases track
@@ -249,6 +327,74 @@ settlement, then reconcile with the owner. These APIs do not replace write
 admission, rollback policy, target capture, or stale-result authority. Keep the
 owner's visible error/retry outcome and catch async rendering errors with
 `Errored` rather than an invented `.error` field on a read accessor.
+
+## Context, components, and children
+
+`createContext<T>()` without a default is the canonical form: `useContext`
+returns `T` and throws `ContextNotFoundError` outside a provider, so don't add a
+`useX()` wrapper whose only job is to rethrow. Use a default only for primitive
+fallbacks (theme, locale). The context itself is the provider:
+`<ThemeContext value={theme()}>`. App-wide state is not context: in OpenClaw it
+lives in plain TypeScript owners reached through `useApplication()`.
+
+Type components with `Component<P>`, `VoidComponent<P>`, `ParentComponent<P>`,
+or `FlowComponent<P, C>`; renderer-neutral children are `Element` from
+`solid-js`. Resolve children once with `children(() => props.children)` when a
+component must inspect or reuse them; otherwise render `props.children`
+directly.
+
+## Classes, attributes, and refs
+
+Compose classes with the array/object form,
+`class={["badge", props.class, { "badge--muted": muted() }]}`. Never build
+class strings with template literals, `.filter(Boolean).join(" ")`, or
+concatenation: the array form keeps each condition reactive and composable.
+Built-in attributes are lowercase (`tabindex`, not `tabIndex`); boolean
+attributes are presence/absence (`muted={false}` removes it).
+
+Refs are functions. Compose several with an array, `ref={[autofocus, tooltip(opts)]}`;
+a bare `let el` inside that array is never assigned (that rewrite only works for
+a single `ref`). Reusable DOM behavior is a two-phase directive factory: create
+primitives in the owned setup phase, return an unowned callback that only
+captures the node and writes to it.
+
+## Dev diagnostics are bug reports
+
+Treat these rc.14 dev warnings as real defects, not noise:
+
+- **Top-level reactive read in a component body.** The body runs once. Read in
+  JSX, a memo, or an accessor.
+- **Write under an owned scope.** Writing a signal or store from a memo, an
+  effect compute phase, or a component body throws in dev. `untrack` doesn't
+  help, because the guard checks the owner, not tracking. Move the write to an
+  event handler, `onSettled`, or effect apply, or derive instead of writing.
+- **`STRICT_READ_UNTRACKED`.** A value read in an effect apply callback or at
+  the top of a flow callback (`For`, `Show`, `Match`) is frozen. Read it in the
+  compute phase, JSX, or a memo.
+- **`LOADING_ON_OUTSIDE_HOLD`.** The same pending data is read outside the
+  `Loading` boundary, so its fallback can never show. Move the read under the
+  boundary.
+
+`onSettled` also works inside an event handler: it defers follow-up work
+(focus, measurement) until the transition that handler started has settled.
+
+## Effects: the rare cases
+
+`createEffect(compute, apply)` is the only effect form. Its options cover the
+common edge cases without extra primitives: `{ defer: true }` skips the initial
+run, and the object form `createEffect(compute, { effect, error })` routes
+async failures to `error`, replacing Solid 1's `onError`/`catchError`.
+`createRenderEffect` exists for render-phase bindings like the runtime's own;
+feature code uses `createEffect`. `createTrackedEffect` and `createReaction` are
+escape hatches for library internals, not for views.
+
+## Tests
+
+Reactive primitives need an owner: wrap ad hoc test code in
+`createRoot((dispose) => …)` and dispose it. Call `flush()` before asserting on
+a value you just wrote. For an async computation, `await resolve(() => value())`
+waits for it to settle instead of polling. Assert snapshots of stores with
+`snapshot(store)`, not the proxy.
 
 ## Audit and lint without fighting the contract
 

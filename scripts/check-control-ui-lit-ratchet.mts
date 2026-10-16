@@ -19,6 +19,7 @@ const METRICS = [
   "htmlTemplates",
   "waTags",
   "requestUpdate",
+  "controllerPatterns",
   "stateDecorators",
   "tasks",
   "todoSolid2",
@@ -116,6 +117,26 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       new Map([...sources].filter(([file]) => changed.has(file)));
     const currentCounts = countMigrationSources(root, changedSources(currentSources));
     const baseCounts = countMigrationSources(root, changedSources(previous));
+    // Most files contain no controller syntax. Parse candidates to distinguish code
+    // from comments without making every changed-file lint parse the whole UI.
+    const controllerBase = countMigrationSources(
+      root,
+      new Map(
+        [...previous].filter(
+          ([file, text]) =>
+            !isTest(file) &&
+            /\b(?:hostConnected|hostDisconnected|requestUpdate|\w*Controller)\b/u.test(text),
+        ),
+      ),
+    );
+    const controllersRetired = [...controllerBase.values()].every(
+      (counts) => counts.controllerPatterns === 0,
+    );
+    const newControllerPatterns = controllersRetired
+      ? [...currentCounts]
+          .filter(([file, counts]) => !isTest(file) && counts.controllerPatterns > 0)
+          .map(([file]) => file)
+      : [];
     const newLitFiles = [...currentCounts].filter(
       ([file, counts]) =>
         counts.litImports > 0 &&
@@ -148,6 +169,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
           {
             title: "New Control UI production files must not import Lit:",
             entries: newLitFiles.map(([file]) => file),
+          },
+          {
+            title: "Retired Control UI controller patterns must not be reintroduced:",
+            entries: newControllerPatterns,
           },
         ],
         "Use Solid; see .agents/skills/solid/SKILL.md and defineSolidBridge in ui/src/lit/solid-bridge.ts to mount Solid from Lit.",

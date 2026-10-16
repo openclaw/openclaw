@@ -610,13 +610,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     effectiveExtraParams,
   });
   const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
-  if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
-    const previousTransport = session.agent.transport;
-    log.debug(
-      `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-        `(${attempt.provider}/${attempt.modelId})`,
-    );
-  }
   session.agent.transport = effectiveAgentTransport;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   const serverToolClearingEnabled =

@@ -493,9 +493,13 @@ named work through its owning terminal or service, then retry; do not delete the
 lease database. Repair retains unreadable helper paths in its census instead of
 assuming their work has stopped.
 
-On Windows, identifying foreign process owners can require Administrator privileges.
-If repair requests elevation, use the same Windows account and preserve the failed
-update's profile and state overrides. Unknown ownership remains unverified.
+On Windows, run repair as the same Windows account that started the update and
+preserve its profile and state overrides. New handoffs record the launching account's
+SID in update history. When that SID matches, processes that deny access entirely cannot be children
+of the handoff, which never elevates its children; unrelated protected processes
+do not block repair. Positive process ancestry or retained-artifact references
+still block repair. Older handoffs without a recorded SID, or repair from a different
+or unverified account, retain the conservative refusal for unreadable processes.
 
 When no rollback step is recorded, repair uses ordinary current-installation
 finalization and records a handoff settlement in update history before releasing

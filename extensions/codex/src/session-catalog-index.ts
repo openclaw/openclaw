@@ -4,6 +4,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread } from "./app-server/protocol.js";
+import { CodexCatalogResponseTooLargeError } from "./app-server/rpc-error.js";
 import { CodexCatalogAvailability } from "./session-catalog-availability.js";
 import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
@@ -67,6 +68,7 @@ export class CodexCatalogIndex {
   private restored = false;
   private restoring: Promise<void> | undefined;
   private closed = false;
+  private reportedOverflow: CodexCatalogResponseTooLargeError | undefined;
   private readonly currency: CodexCatalogCurrency;
   private readonly projections = new CodexCatalogProjections();
   private readonly unsubscribe: () => void;
@@ -158,6 +160,11 @@ export class CodexCatalogIndex {
   }
 
   private report(error: unknown): void {
+    const overflow = CodexCatalogResponseTooLargeError.fromError(error);
+    if (overflow && overflow === this.reportedOverflow) {
+      return;
+    }
+    this.reportedOverflow = overflow;
     if (!this.closed && !this.currency.stopForTerminalFailure(error)) {
       embeddedAgentLog.warn("Codex resident catalog background update failed", { error });
     }

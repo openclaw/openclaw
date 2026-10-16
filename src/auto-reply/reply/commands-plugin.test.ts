@@ -631,13 +631,13 @@ describe("handlePluginCommand", () => {
     const cfg = { commands: { text: true } } as OpenClawConfig;
     expect(
       shouldBypassPluginOwnedBindingForCommand(
-        {
+        finalizeInboundContext({
           Body: "/card",
           CommandAuthorized: true,
           CommandSource: "text",
           Provider: "whatsapp",
           Surface: "whatsapp",
-        } as never,
+        }),
         cfg,
         replyOptions,
       ),

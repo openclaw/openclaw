@@ -31,9 +31,16 @@ particular behavior. Keep the approval and deprecation rules in
    Both consumers and coverage use the same window on every page.
 
    The helper follows all usage and coverage pages, including empty intermediate
-   pages. It prints distinct plugin counts, runtime/type counts, bounded evidence,
-   release/scan identities, and coverage gaps. Mixed references count in both
-   runtime and type totals. `--help` documents local endpoint and traversal limits.
+   pages. Counts and coverage include every result; `items`, `gaps`, and `warnings`
+   contain bounded examples with omitted counts in `output.omitted`. Mixed
+   references count in both runtime and type totals. For an investigation needing
+   every consumer or gap, save `--full` output to a file and read it in sections:
+
+   ```sh
+   node {baseDir}/scripts/query.mjs 'api-member:api.registerTool' --full > sdk-usage.json
+   ```
+
+   `--help` documents local endpoint and traversal limits.
 
 3. Inspect matched evidence against the proposed change. A method call may not use
    the behavior being changed. Type-only consumers still matter for type/export
@@ -70,7 +77,7 @@ Per-plugin inspection is available at
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Observed consumers                                              | “N current public plugins reference this surface.” Inspect their evidence before judging a behavior change.                                                                                |
 | No observed consumers, complete coverage                        | “No static references detected across N eligible public plugin artifacts.” This excludes private/unpublished plugins and unbundled dependencies; it is not proof that nobody uses the API. |
-| Partial, failed, missing, incompatible, or unresolved analysis  | State observed matches and list the gaps. Zero matches leaves impact unknown.                                                                                                              |
+| Partial, failed, missing, incompatible, or unresolved analysis  | State observed matches, gap counts, and representative gaps. Zero matches leaves impact unknown.                                                                                           |
 | Empty corpus                                                    | No eligible plugins were observed; this provides no ecosystem assurance.                                                                                                                   |
 | Unavailable endpoint, malformed result, or incomplete traversal | Impact is unknown. Preserve the error and use local evidence; never substitute zero.                                                                                                       |
 

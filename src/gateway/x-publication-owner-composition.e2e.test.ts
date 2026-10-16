@@ -100,7 +100,7 @@ let rejectIngress: ((error: unknown) => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
 const deniedWorkSessionReply =
-  "Work session creation was denied; no public work session was created.";
+  "[[x_failure]] Work session creation was denied; no public work session was created.";
 
 // Fail closed: never delegate to fetch, credentials, or the network.
 async function xResponse(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -489,7 +489,7 @@ describe("X publication production-owner composition", () => {
           expect(await params.userTurnTranscriptRecorder.persistApproved()).toBeTruthy();
         }
         params.onExecutionPhase?.({ phase: "model_call_started" });
-        let text = "Synthetic X invocation settled.";
+        let text = "[[x_success]] Synthetic X invocation settled.";
         if (!child) {
           const publication = readChildSessionPublication(admitted.operationalRunInstance);
           publications.set(activeCase, publication !== undefined);
@@ -827,13 +827,16 @@ describe("X publication production-owner composition", () => {
           rows().filter(({ entry }) => entry.parentSessionKey === "agent:main:x:group:" + rootId),
           kind,
         ).toHaveLength(kind === "allowed" ? 1 : 0);
-        if (kind === "author-revoked") {
+        // Only a declared success reaches X; denied work-session replies are withheld.
+        const outcome = outcomes.get(kind);
+        const succeeded =
+          publications.has(kind) &&
+          !spawnErrors.has(kind) &&
+          !(isRecord(outcome) && typeof outcome.error === "string");
+        if (!succeeded) {
           expect(networkCase.replies, kind).toEqual([]);
-        } else if (kind === "owner-retired") {
-          // Retirement may reject delivery or let the admitted invocation finish
-          // its harmless failure reply. Neither outcome may expose a public link.
-          expect([[], [deniedWorkSessionReply]], kind).toContainEqual(networkCase.replies);
-        } else {
+        } else if (kind !== "owner-retired") {
+          // Retirement may still reject delivery of an admitted success.
           expect(networkCase.replies, kind).toHaveLength(1);
         }
         const publicReads = networkCase.reads.filter((request) => request.appOnly);

@@ -1,4 +1,5 @@
 import { createEffect, onCleanup, untrack } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 
 type OverlayControlProps = {
@@ -48,8 +49,8 @@ export function useOverlayControl(overlay: Overlay, props: OverlayControlProps) 
         props.onBeforeHide?.(event);
       }
     };
-    overlay.surface.addEventListener("overlay-show", show);
-    overlay.surface.addEventListener("overlay-hide", hide);
+    const stopShow = listen(overlay.surface, "overlay-show", show);
+    const stopHide = listen(overlay.surface, "overlay-hide", hide);
     onConnect();
     if (props.open) {
       syncOpen(true);
@@ -57,8 +58,8 @@ export function useOverlayControl(overlay: Overlay, props: OverlayControlProps) 
     return () => {
       mounted = false;
       stopOpen();
-      overlay.surface.removeEventListener("overlay-show", show);
-      overlay.surface.removeEventListener("overlay-hide", hide);
+      stopShow();
+      stopHide();
     };
   };
 }

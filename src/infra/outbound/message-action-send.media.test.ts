@@ -14,6 +14,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
@@ -34,18 +35,6 @@ const workspaceConfig = {
     },
   },
 } as OpenClawConfig;
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg);
-}
 
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
@@ -112,7 +101,11 @@ describe("runMessageAction media behavior", () => {
         "artifact bytes",
       );
 
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       const sendCtx = requireRecord(sendArgs.ctx);
       expect(sendCtx.idempotencyKey).toBe("run-1:message-tool:send-1:fingerprint");
       expect(sendCtx.channelPlugin).toBe(workspacePlugin);
@@ -171,7 +164,11 @@ describe("runMessageAction media behavior", () => {
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       const sendCtx = requireRecord(sendArgs.ctx);
       const sendParams = requireRecord(sendCtx.params);
       const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
@@ -224,9 +221,10 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
-        const sendArgs = firstMockArg(
+        const sendArgs = mockFirstRecordArg(
           channelResolutionMocks.executeSendAction,
           "executeSendAction",
+          "Expected a non-array record",
         );
         const mediaUrls = [
           path.join(sandboxDir, "assets", "photo.png"),
@@ -267,7 +265,11 @@ describe("runMessageAction media behavior", () => {
       });
 
       expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
-      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendArgs = mockFirstRecordArg(
+        channelResolutionMocks.executeSendAction,
+        "executeSendAction",
+        "Expected a non-array record",
+      );
       expect(sendArgs.mediaUrls).toEqual(mediaUrls);
       expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
       expect(requireRecord(sendArgs.payload)).not.toHaveProperty("attachments");
