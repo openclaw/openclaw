@@ -38,20 +38,18 @@ setupRunAttemptTestHooks();
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
-function completedAssistant(id: string, text?: string): CodexServerNotification {
+function completedAssistant(id: string, text: string): CodexServerNotification {
   return itemNotification("item/completed", {
     id,
     type: "agentMessage",
-    ...(text !== undefined ? { text } : {}),
+    text,
     status: "completed",
   });
 }
 
 function finalizationHookNotification(
   method: "hook/started" | "hook/completed",
-  status: "running" | "completed" | "blocked" | "stopped",
-  eventName: "stop" | "subagentStop" = "stop",
-  runId = "stop-hook-1",
+  status: "running" | "completed",
 ): CodexServerNotification {
   return {
     method,
@@ -59,8 +57,8 @@ function finalizationHookNotification(
       threadId: "thread-1",
       turnId: "turn-1",
       run: {
-        id: runId,
-        eventName,
+        id: "stop-hook-1",
+        eventName: "stop",
         handlerType: "command",
         executionMode: "sync",
         scope: "turn",
@@ -68,27 +66,18 @@ function finalizationHookNotification(
         sourcePath: "/workspace/.codex/hooks.json",
         status,
         statusMessage: null,
-        entries: status === "blocked" ? [{ kind: "feedback", text: "Revise the answer." }] : [],
+        entries: [],
       },
     },
   };
 }
 
-function startedCommand(id: string, command: string): CodexServerNotification {
-  return itemNotification("item/started", {
+function commandNotification(id: string, command: string, completed = true) {
+  return itemNotification(completed ? "item/completed" : "item/started", {
     id,
     type: "commandExecution",
     command,
-    status: "inProgress",
-  });
-}
-
-function completedCommand(id: string, command: string): CodexServerNotification {
-  return itemNotification("item/completed", {
-    id,
-    type: "commandExecution",
-    command,
-    status: "completed",
+    status: completed ? "completed" : "inProgress",
   });
 }
 
@@ -98,22 +87,14 @@ function makeTestParams(overrides: Partial<TestParams> = {}): TestParams {
   return { ...createTestParams(), ...overrides };
 }
 
-function makeAgentMessageDelta(
-  overrides: Partial<{
-    threadId: string;
-    turnId: string;
-    itemId: string;
-    delta: string;
-  }> = {},
-): CodexServerNotification {
+function makeAgentMessageDelta(delta: string, itemId = "msg-partial-1"): CodexServerNotification {
   return {
     method: "item/agentMessage/delta",
     params: {
       threadId: "thread-1",
       turnId: "turn-1",
-      itemId: "msg-partial-1",
-      delta: "Still writing",
-      ...overrides,
+      itemId,
+      delta,
     },
   };
 }
@@ -133,20 +114,21 @@ async function expectTurnInterrupted(
 }
 
 function makeMediaProjectionGate() {
-  let releaseProjection!: () => void;
-  let markProjectionStarted!: () => void;
-  const projectionGate = new Promise<void>((resolve) => {
-    releaseProjection = resolve;
-  });
-  const projectionStarted = new Promise<void>((resolve) => {
-    markProjectionStarted = resolve;
-  });
+  const gate = createDeferred<void>();
+  const started = createDeferred<void>();
   vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
-    markProjectionStarted();
-    await projectionGate;
+    started.resolve();
+    await gate.promise;
     throw new Error("expected projection gate");
   });
-  return { projectionStarted, releaseProjection };
+  return { projectionStarted: started.promise, releaseProjection: gate.resolve };
+}
+
+function reasoningDelta(): CodexServerNotification {
+  return {
+    method: "item/reasoning/textDelta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "reasoning-1", delta: "thinking" },
+  };
 }
 
 async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
@@ -248,7 +230,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     await run.waitForTurnAccepted();
     for (let index = 0; index < 5; index += 1) {
       await vi.advanceTimersByTimeAsync(10_000);
-      await harness.notify(makeAgentMessageDelta({ delta: `progress ${index}` }));
+      await harness.notify(makeAgentMessageDelta(`progress ${index}`));
       expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
     }
     await vi.advanceTimersByTimeAsync(10_000);
@@ -300,7 +282,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   it("retains assistant text and usage without upgrading execution timeout to success", async () => {
     const { result } = await runExecutionTimeoutScenario([
-      completedCommand("cmd-1", "touch done.txt"),
+      commandNotification("cmd-1", "touch done.txt"),
       completedAssistant("msg-1", "Finished."),
       {
         method: "thread/tokenUsage/updated",
@@ -402,8 +384,8 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const turnStartRequested = createDeferred<void>();
     const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
-        await notify(startedCommand("cmd-1", "git status -sb"));
-        await notify(completedCommand("cmd-1", "git status -sb"));
+        await notify(commandNotification("cmd-1", "git status -sb", false));
+        await notify(commandNotification("cmd-1", "git status -sb"));
         turnStartRequested.resolve();
       }
     });
@@ -441,15 +423,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         vi.useFakeTimers();
-        await harness.notify({
-          method: "item/reasoning/textDelta",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "reasoning-1",
-            delta: "thinking",
-          },
-        });
+        await harness.notify(reasoningDelta());
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         return turnStartResult("turn-1", "inProgress");
       }
@@ -501,15 +475,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       await vi.waitFor(() => {
         expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
       }, fastWait);
-      const blockedProjection = harness.notify({
-        method: "item/reasoning/textDelta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "reasoning-1",
-          delta: "thinking",
-        },
-      });
+      const blockedProjection = harness.notify(reasoningDelta());
       await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
       const queuedTerminal = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       // Native receipt ends execution, while the local two-minute settlement still owns this tail.
@@ -552,22 +518,14 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         }),
       );
       await harness.notify(finalizationHookNotification("hook/started", "running"));
-      void harness.notify({
-        method: "item/reasoning/textDelta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "reasoning-1",
-          delta: "thinking",
-        },
-      });
+      void harness.notify(reasoningDelta());
       await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
 
       vi.useFakeTimers();
       const completedHook = harness.notify(
         finalizationHookNotification("hook/completed", "completed"),
       );
-      void harness.notify(makeAgentMessageDelta({ itemId: "msg-final-1", delta: "Done." }));
+      void harness.notify(makeAgentMessageDelta("Done.", "msg-final-1"));
       // Receipt sees the unsettled hook; its completion is still behind the first projection.
       void harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await vi.advanceTimersByTimeAsync(TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS / 2);
@@ -684,7 +642,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         id: "msg-completed-1",
         text: "Earlier complete reply.",
       }),
-      makeAgentMessageDelta({ itemId: "msg-partial-2", delta: "Later partial reply" }),
+      makeAgentMessageDelta("Later partial reply", "msg-partial-2"),
     ]);
 
     expect(readAttemptTerminal(result).promptError).toBe(

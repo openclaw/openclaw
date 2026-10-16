@@ -148,6 +148,12 @@ function childClaimed(item: JsonObject, turnId: string): CodexServerNotification
   return { method: "item/completed", params: { threadId: "thread-1", turnId, item } };
 }
 
+const successfulHook = { stdout: "", stderr: "", exitCode: 0 };
+
+function parentItem(item: JsonObject, turnId = "parent-a"): CodexServerNotification {
+  return { method: "item/completed", params: { threadId: "parent-thread", turnId, item } };
+}
+
 describe("runCodexAppServerAttempt native hook relay retention", () => {
   beforeEach(() => {
     // Retention owns this clock; cold preparation must not consume the execution budget.
@@ -217,14 +223,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     first.bindTurn("parent-a");
     await notifyChildStarted(client);
     await client.notify(turnStartedNotification("child-a"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-a",
-        item: directSpawnItem("v1", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(parentItem(directSpawnItem("v1", "parent-thread", "child-thread")));
     const second = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
@@ -302,6 +301,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       parentTurnId: "parent-a",
       rootTurnId: "parent-a",
     };
+    const followup = (turnId: string, callId: string, signal?: AbortSignal) =>
+      invoke(turnId, callId, "child-thread", "collaborationfollowup_task", signal);
     const capture = await codexNativeSubagentMonitorRuntime.captureModelSource(request);
     if (!capture) {
       throw new Error("Expected child execution custody");
@@ -323,17 +324,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       );
       expect(() => capture.assertCurrent()).not.toThrow();
       await expect(
-        invoke(
-          "parent-b",
-          "foreign-active-followup",
-          "child-thread",
-          "collaborationfollowup_task",
-        ).then(nativeWrite),
+        followup("parent-b", "foreign-active-followup").then(nativeWrite),
       ).rejects.toThrow("same admitted model source");
       expect(nativeWrite).not.toHaveBeenCalled();
-      await expect(
-        invoke("parent-a", "same-active-followup", "child-thread", "collaborationfollowup_task"),
-      ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      await expect(followup("parent-a", "same-active-followup")).resolves.toEqual(successfulHook);
       await client.notify(inputRejected("same-active-followup", "Input declined"));
 
       await invoke("parent-a", "initial-same-source-steer");
@@ -357,11 +351,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       for (let index = 0; index < 31; index++) {
         await client.notify(inputRejected(`pending-${index}`, "Input rejected"));
       }
-      await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual({
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-      });
+      await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual(successfulHook);
       await client.notify(
         successfulSendInputOutput({
           turnId: "parent-a",
@@ -373,12 +363,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
       // A stock V1 successful steer reports an opaque submission ID while the
       // receiver keeps its old native turn and lineage, including after a hook race.
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-b",
-          item: {
+      await client.notify(
+        parentItem(
+          {
             type: "collabAgentToolCall",
             tool: "sendInput",
             status: "completed",
@@ -386,8 +373,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
             senderThreadId: "parent-thread",
             receiverThreadIds: ["child-thread"],
           },
-        },
-      });
+          "parent-b",
+        ),
+      );
       await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
         "same admitted model source",
       );
@@ -408,14 +396,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const coldTarget = threadRead({ threadStatus: "notLoaded" });
       coldTarget.thread.modelProvider = "unqualified-provider";
       client.setThreadRead("child-thread", coldTarget);
-      await expect(
-        invoke(
-          "parent-b",
-          "denied-cold-followup",
-          "child-thread",
-          "collaborationfollowup_task",
-        ).then(nativeWrite),
-      ).rejects.toThrow("does not admit this model");
+      await expect(followup("parent-b", "denied-cold-followup").then(nativeWrite)).rejects.toThrow(
+        "does not admit this model",
+      );
       expect(nativeWrite).not.toHaveBeenCalled();
       const warmTarget = threadRead({ threadStatus: "idle" });
       warmTarget.thread.modelProvider = "test-provider";
@@ -428,13 +411,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         return lateRead.promise;
       });
       const requester = new AbortController();
-      const abandoned = invoke(
-        "parent-a",
-        "abandoned-input",
-        "child-thread",
-        "collaborationfollowup_task",
-        requester.signal,
-      );
+      const abandoned = followup("parent-a", "abandoned-input", requester.signal);
       await Promise.race([
         entered.promise,
         abandoned.then(() => {
@@ -450,30 +427,23 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       lateRead.resolve(warmTarget);
       await lateAdmissionSettled.promise;
       client.setThreadRead("child-thread", warmTarget);
-      await invoke(
-        "parent-b",
-        "followup-after-a",
-        "child-thread",
-        "collaborationfollowup_task",
-      ).then(nativeWrite);
+      await followup("parent-b", "followup-after-a").then(nativeWrite);
       expect(nativeWrite).toHaveBeenCalledOnce();
-      await expect(
-        invoke("parent-a", "incompatible-pending", "child-thread", "collaborationfollowup_task"),
-      ).rejects.toThrow("same admitted model source");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-b",
-          item: {
+      await expect(followup("parent-a", "incompatible-pending")).rejects.toThrow(
+        "same admitted model source",
+      );
+      await client.notify(
+        parentItem(
+          {
             type: "subAgentActivity",
             kind: "interacted",
             id: "followup-after-a",
             agentThreadId: "child-thread",
             agentPath: "/root/child-thread",
           },
-        },
-      });
+          "parent-b",
+        ),
+      );
       await client.notify(turnStartedNotification("child-b"));
       const next = await codexNativeSubagentMonitorRuntime.captureModelSource({
         ...request,
@@ -571,14 +541,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const replacement = invoke("replacement-child");
       await expect(invoke("capacity-control")).rejects.toThrow("capacity reached");
       releaseChild = relay.claimDirectChild("replacement-child");
-      await expect(replacement).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      await expect(replacement).resolves.toEqual(successfulHook);
       relay.authorizeRetentionAfterSuccessfulYield();
       relay.unregister();
-      await expect(invoke("replacement-child")).resolves.toEqual({
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-      });
+      await expect(invoke("replacement-child")).resolves.toEqual(successfulHook);
       releaseChild();
       releaseChild = undefined;
       await expect(invoke("replacement-child")).rejects.toThrow(/not found|inactive/);
@@ -729,8 +695,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           deferredTurnStart.resolve(undefined);
         }
         await expect(Promise.all([firstPending, duplicatePending])).resolves.toEqual([
-          { stdout: "", stderr: "", exitCode: 0 },
-          { stdout: "", stderr: "", exitCode: 0 },
+          successfulHook,
+          successfulHook,
         ]);
         expect(beforeToolCall).toHaveBeenCalledTimes(2);
 

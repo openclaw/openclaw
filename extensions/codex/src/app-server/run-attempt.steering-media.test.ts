@@ -260,6 +260,33 @@ function registerSteeringWorkspace(
   });
 }
 
+function queueMedia(fixture: MediaFixture, text = fixture.message.content) {
+  const accepted = vi.fn();
+  expect(
+    queueAgentHarnessMessage(fixture.params.sessionId, text, {
+      ...fixture.options,
+      onQueueAccepted: accepted,
+    }),
+  ).toBe(true);
+  return accepted;
+}
+
+function waitForAcceptance(accepted: ReturnType<typeof vi.fn>, value: boolean) {
+  return vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(value), fastWait);
+}
+
+function steers(harness: StartedHarness) {
+  return harness.requests
+    .filter((entry) => entry.method === "turn/steer")
+    .map((entry) => entry.params as SteerRequest);
+}
+
+async function expectUnpersisted(fixture: MediaFixture, harness: StartedHarness) {
+  expect(steers(harness)).toEqual([]);
+  expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
+  expect(await fixture.readSteeredMessages()).toEqual([]);
+}
+
 describe("Codex active-run steering media", () => {
   it.each(["ro"] as const)(
     "prepares remote attachments with sandbox access %s without changing images or transcript",
@@ -322,16 +349,9 @@ describe("Codex active-run steering media", () => {
       const harness = createStartedThreadHarness();
       try {
         await withActiveMediaTurn(fixture, harness, async () => {
-          const accepted = vi.fn();
-          expect(
-            queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
-              ...fixture.options,
-              onQueueAccepted: accepted,
-            }),
-          ).toBe(true);
-          await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
-          const steer = harness.requests.find((entry) => entry.method === "turn/steer")
-            ?.params as SteerRequest;
+          const accepted = queueMedia(fixture);
+          await waitForAcceptance(accepted, true);
+          const [steer] = steers(harness);
           expect(steer.input).toEqual([
             { type: "text", text: `${fixture.message.content}\n\n${note}`, text_elements: [] },
             ...fixture.expectedImages,
@@ -367,15 +387,9 @@ describe("Codex active-run steering media", () => {
       const harness = createStartedThreadHarness();
       try {
         await withActiveMediaTurn(fixture, harness, async () => {
-          const accepted = vi.fn();
-          expect(
-            queueAgentHarnessMessage(fixture.params.sessionId, fixture.message.content, {
-              ...fixture.options,
-              onQueueAccepted: accepted,
-            }),
-          ).toBe(true);
+          const accepted = queueMedia(fixture);
           await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce(), fastWait);
-          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+          expect(steers(harness)).toEqual([]);
           if (failure === "replaced") {
             release();
             releaseReplacement = registerSteeringWorkspace(fixture, prepare);
@@ -383,10 +397,8 @@ describe("Codex active-run steering media", () => {
             closeHost();
           }
           prepared.resolve("Attachments prepared.");
-          await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
-          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-          expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-          expect(await fixture.readSteeredMessages()).toEqual([]);
+          await waitForAcceptance(accepted, false);
+          await expectUnpersisted(fixture, harness);
         });
       } finally {
         prepared.resolve("Attachments prepared.");
@@ -444,9 +456,9 @@ describe("Codex active-run steering media", () => {
           }),
         ).toBe(true);
         await expect(question).resolves.toEqual(result);
-        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+        await waitForAcceptance(accepted, true);
         expect(onAttemptTimeout).not.toHaveBeenCalled();
-        expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+        expect(steers(harness)).toEqual([]);
       } finally {
         closeHost();
         answer.resolve(result);
@@ -468,17 +480,9 @@ describe("Codex active-run steering media", () => {
       fixture.options.userTurnTranscriptRecorder = fixture.recorder;
       const harness = createStartedThreadHarness();
       await withActiveMediaTurn(fixture, harness, async () => {
-        const accepted = vi.fn();
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "inspect this", {
-            ...fixture.options,
-            onQueueAccepted: accepted,
-          }),
-        ).toBe(true);
-        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
-        expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-        expect(await fixture.readSteeredMessages()).toEqual([]);
+        const accepted = queueMedia(fixture, "inspect this");
+        await waitForAcceptance(accepted, false);
+        await expectUnpersisted(fixture, harness);
       });
     },
   );
@@ -507,10 +511,8 @@ describe("Codex active-run steering media", () => {
         prepared.resolve(fixture.message);
         // Host closure does not settle the queue itself: rejection here comes
         // from the authority check after the real hydrator returns.
-        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
-        expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-        expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
-        expect(await fixture.readSteeredMessages()).toEqual([]);
+        await waitForAcceptance(accepted, false);
+        await expectUnpersisted(fixture, harness);
       } finally {
         closeHost();
         prepared.resolve(fixture.message);
@@ -543,22 +545,20 @@ describe("Codex active-run steering media", () => {
             onQueueAccepted: secondAccepted,
           }),
         ).toBe(true);
-        expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+        expect(steers(harness)).toEqual([]);
         prepared.resolve(fixture.message);
         await vi.waitFor(
           () => expect(secondAccepted).toHaveBeenCalledExactlyOnceWith(true),
           fastWait,
         );
         expect(firstAccepted).toHaveBeenCalledExactlyOnceWith(true);
-        const steers = harness.requests
-          .filter((entry) => entry.method === "turn/steer")
-          .map((entry) => entry.params as SteerRequest);
-        expect(steers.map((entry) => entry.input)).toEqual([
+        const requests = steers(harness);
+        expect(requests.map((entry) => entry.input)).toEqual([
           [{ type: "text", text: "first image", text_elements: [] }, ...fixture.expectedImages],
           [{ type: "text", text: "later text", text_elements: [] }],
         ]);
         expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-        for (const steer of steers) {
+        for (const steer of requests) {
           await notifyConsumed(harness, steer.clientUserMessageId);
         }
         expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
@@ -616,7 +616,7 @@ describe("Codex active-run steering media", () => {
           onQueueAccepted: accepted,
         }),
       ).toBe(true);
-      await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
+      await waitForAcceptance(accepted, false);
       const result = await fallbackResult;
       expect(result?.payload).toEqual(expectedPayload);
       expect(result?.recorder).toBe(fixture.recorder);
@@ -628,8 +628,7 @@ describe("Codex active-run steering media", () => {
       ).toEqual(fixture.expectedImages);
       expect(result?.hydrated.loadedCount).toBe(2);
       expect(fallback).toHaveBeenCalledOnce();
-      const steer = harness.requests.find((entry) => entry.method === "turn/steer")
-        ?.params as SteerRequest;
+      const [steer] = steers(harness);
       await notifyConsumed(harness, steer.clientUserMessageId);
       expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
       expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
@@ -664,17 +663,10 @@ describe("Codex active-run steering media", () => {
         },
       });
       await vi.waitFor(() => expect(fixture.params.onBlockReply).toHaveBeenCalledOnce(), fastWait);
-      const accepted = vi.fn();
-      expect(
-        queueAgentHarnessMessage(fixture.params.sessionId, "image caption", {
-          ...fixture.options,
-          onQueueAccepted: accepted,
-        }),
-      ).toBe(true);
-      await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+      const accepted = queueMedia(fixture, "image caption");
+      await waitForAcceptance(accepted, true);
       await expect(response).resolves.toEqual({ answers: {} });
-      const steer = harness.requests.find((entry) => entry.method === "turn/steer")
-        ?.params as SteerRequest;
+      const [steer] = steers(harness);
       expect(steer?.input).toEqual([
         { type: "text", text: "image caption", text_elements: [] },
         ...fixture.expectedImages,

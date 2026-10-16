@@ -38,33 +38,27 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
 
-describe("Codex app-server terminal settlement", () => {
-  beforeEach(() => {
-    resetSharedCodexAppServerClientForTests();
-  });
+async function createTranscriptParams(name: string) {
+  const params = createTestParams();
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), `session-${name}`);
+  const target = params.sessionTarget;
+  if (!target?.sessionId || !target.sessionKey) {
+    throw new Error("SQLite transcript target was not attached");
+  }
+  return {
+    params,
+    transcriptTarget: { ...target, sessionId: target.sessionId, sessionKey: target.sessionKey },
+  };
+}
 
-  afterEach(() => {
-    resetSharedCodexAppServerClientForTests();
-  });
+describe("Codex app-server terminal settlement", () => {
+  beforeEach(resetSharedCodexAppServerClientForTests);
+  afterEach(resetSharedCodexAppServerClientForTests);
 
   it.each([MAX_TIMER_TIMEOUT_MS])(
     "settles a native receipt while prompt persistence is blocked with execution budget %i",
     async (timeoutMs) => {
-      const params = createTestParams();
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, "held-prompt.sqlite"),
-        "session-held-prompt",
-      );
-      const target = params.sessionTarget;
-      if (!target?.sessionId || !target.sessionKey) {
-        throw new Error("SQLite transcript target was not attached");
-      }
-      const transcriptTarget = {
-        ...target,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      };
+      const { params, transcriptTarget } = await createTranscriptParams("held-prompt");
       const held = createDeferred<void>();
       const writerAcquired = createDeferred<void>();
       let writer: Promise<void> | undefined;
@@ -182,53 +176,46 @@ describe("Codex app-server terminal settlement", () => {
             params?: { threadId?: string };
           },
       );
-    try {
-      const initialize = await waitForHarnessRequest(physical, "initialize");
-      physical.send({
-        id: initialize.id,
-        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
-      });
-      const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: firstRequirements.id, result: { requirements: null } });
-      const firstThread = await waitForHarnessRequest(physical, "thread/start");
-      physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
-      const warmupTurn = await waitForHarnessRequest(physical, "turn/start");
-      physical.send({ id: warmupTurn.id, result: turnStartResult("turn-warmup") });
+    const reply = async (method: string, result: unknown, start?: number) => {
+      const request = await waitForHarnessRequest(physical, method, start);
+      physical.send({ id: request.id, result });
+    };
+    const complete = (threadId: string, turnId: string, id?: string, text?: string) => {
       physical.send({
         method: "turn/completed",
         params: {
-          threadId: "thread-settlement",
-          turn: { id: "turn-warmup", status: "completed", items: [] },
+          threadId,
+          turn: {
+            id: turnId,
+            status: "completed",
+            items: id ? [{ id, type: "agentMessage", text }] : [],
+          },
         },
       });
+    };
+    try {
+      await reply("initialize", {
+        userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)`,
+      });
+      await reply("configRequirements/read", { requirements: null });
+      await reply("thread/start", threadStartResult("thread-settlement"));
+      await reply("turn/start", turnStartResult("turn-warmup"));
+      complete("thread-settlement", "turn-warmup");
       await warmupRun;
       // Exact-claim cleanup is a warm-thread contract; a fresh auto-subscription
       // has no branded handle and must retain its separate guarded cleanup path.
       const firstStart = physical.writes.length;
       firstRun = runCodexAppServerAttempt(firstParams);
       void firstRun.then(firstSettled, firstSettled);
-      const firstRequirementsAgain = await waitForHarnessRequest(
-        physical,
-        "configRequirements/read",
-        firstStart,
-      );
-      physical.send({ id: firstRequirementsAgain.id, result: { requirements: null } });
-      const firstTurn = await waitForHarnessRequest(physical, "turn/start", firstStart);
-      physical.send({ id: firstTurn.id, result: turnStartResult("turn-settlement") });
+      await reply("configRequirements/read", { requirements: null }, firstStart);
+      await reply("turn/start", turnStartResult("turn-settlement"), firstStart);
       expect(isCodexAppServerLiveThreadClaimed(physical.client, "thread-settlement")).toBe(true);
 
       const siblingStart = physical.writes.length;
       siblingRun = runCodexAppServerAttempt(siblingParams);
-      const siblingRequirements = await waitForHarnessRequest(
-        physical,
-        "configRequirements/read",
-        siblingStart,
-      );
-      physical.send({ id: siblingRequirements.id, result: { requirements: null } });
-      const siblingThread = await waitForHarnessRequest(physical, "thread/start", siblingStart);
-      physical.send({ id: siblingThread.id, result: threadStartResult("thread-sibling") });
-      const siblingTurn = await waitForHarnessRequest(physical, "turn/start", siblingStart);
-      physical.send({ id: siblingTurn.id, result: turnStartResult("turn-sibling") });
+      await reply("configRequirements/read", { requirements: null }, siblingStart);
+      await reply("thread/start", threadStartResult("thread-sibling"), siblingStart);
+      await reply("turn/start", turnStartResult("turn-sibling"), siblingStart);
       await vi.waitFor(() => {
         expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBe(
           firstParams.sessionId,
@@ -249,19 +236,7 @@ describe("Codex app-server terminal settlement", () => {
       const receivedAt = Date.now();
       // Queue both frames before yielding. The second callback starts only after
       // the real router has finished handling the exact terminal notification.
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-settlement",
-          turn: {
-            id: "turn-settlement",
-            status: "completed",
-            items: [
-              { id: "answer", type: "agentMessage", text: "Completed work remains visible." },
-            ],
-          },
-        },
-      });
+      complete("thread-settlement", "turn-settlement", "answer", "Completed work remains visible.");
       physical.send({
         method: "item/reasoning/textDelta",
         params: {
@@ -312,19 +287,7 @@ describe("Codex app-server terminal settlement", () => {
         siblingParams.sessionId,
       );
 
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-sibling",
-          turn: {
-            id: "turn-sibling",
-            status: "completed",
-            items: [
-              { id: "sibling-answer", type: "agentMessage", text: "Sibling stayed healthy." },
-            ],
-          },
-        },
-      });
+      complete("thread-sibling", "turn-sibling", "sibling-answer", "Sibling stayed healthy.");
       const siblingResult = await siblingRun;
       expect(readAttemptTerminal(siblingResult)).toMatchObject({
         aborted: false,
@@ -358,21 +321,7 @@ describe("Codex app-server terminal settlement", () => {
     "settles $termination at $boundary with writer release $release",
     async ({ boundary, termination, release }) => {
       const queuedNetworkResult = boundary === "checkpoint" && termination === "timeout";
-      const params = createTestParams();
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, "settlement-checkpoint.sqlite"),
-        "session-checkpoint",
-      );
-      const target = params.sessionTarget;
-      if (!target?.sessionId || !target.sessionKey) {
-        throw new Error("SQLite transcript target was not attached");
-      }
-      const transcriptTarget = {
-        ...target,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      };
+      const { params, transcriptTarget } = await createTranscriptParams("checkpoint");
       const checkpoint = createDeferred<void>();
       const checkpointWrites: Promise<unknown>[] = [];
       const holdWriter = async () => {
