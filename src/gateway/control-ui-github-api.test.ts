@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -56,13 +57,8 @@ it("joins caller cancellation to the existing HTTP deadline", async () => {
       throw new Error("HTTP request has no signal");
     }
     started.resolve(signal);
-    return await new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener(
-        "abort",
-        () => reject(new DOMException("Request aborted", "AbortError")),
-        { once: true },
-      );
-    });
+    await once(signal, "abort");
+    throw new DOMException("Request aborted", "AbortError");
   });
   const pending = request(fetchImpl, { signal: controller.signal });
   const signal = await started.promise;

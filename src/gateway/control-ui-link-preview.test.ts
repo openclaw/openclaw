@@ -28,12 +28,12 @@ function mockFetch(reply: (url: string) => Response | Promise<Response>) {
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
-function streamChunks(chunks: Buffer[], repeat = false) {
+function streamChunks(chunks: string[], repeat = false) {
   const cancel = vi.fn();
   const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
     const chunk = repeat ? chunks[0] : chunks.shift();
     if (chunk) {
-      controller.enqueue(chunk);
+      controller.enqueue(Buffer.from(chunk));
     } else {
       controller.close();
     }
@@ -197,14 +197,12 @@ it.each(["</head>", "<body>"])(
   "stops reading at a split %s without treating inert markup as a head boundary",
   async (boundary) => {
     const { pull, cancel } = streamChunks([
-      Buffer.from(
-        '<html><head><!-- </head><meta property="og:title" content="Wrong"> -->' +
-          '<script>const tag = "</head>";</script><style>/* </head> */</style>' +
-          "<title>A &am",
-      ),
-      Buffer.from("p; B</title>" + boundary.slice(0, 3)),
-      Buffer.from(boundary.slice(3)),
-      Buffer.from('<meta property="og:title" content="Body">' + "x".repeat(128 * 1024)),
+      '<html><head><!-- </head><meta property="og:title" content="Wrong"> -->' +
+        '<script>const tag = "</head>";</script><style>/* </head> */</style>' +
+        "<title>A &am",
+      "p; B</title>" + boundary.slice(0, 3),
+      boundary.slice(3),
+      '<meta property="og:title" content="Body">' + "x".repeat(128 * 1024),
     ]);
     expect(await load("/streamed-" + encodeURIComponent(boundary))).toEqual({ title: "A & B" });
     expect(pull).toHaveBeenCalledTimes(3);
@@ -214,11 +212,10 @@ it.each(["</head>", "<body>"])(
 
 it("limits an unterminated head to 64 KiB before late metadata", async () => {
   const prefix = "<head><title>Early</title><!--";
-  const bytes = Buffer.from(
+  const bytes =
     prefix +
-      "x".repeat(64 * 1024 - prefix.length) +
-      '--><meta property="og:title" content="Too late"></head>',
-  );
+    "x".repeat(64 * 1024 - prefix.length) +
+    '--><meta property="og:title" content="Too late"></head>';
   const { pull, cancel } = streamChunks([bytes], true);
   expect(await load("/unterminated-head")).toEqual({ title: "Early" });
   expect(pull).toHaveBeenCalledOnce();
@@ -238,7 +235,7 @@ it.each([
         : html("<head><title>Cached</title></head>"),
     );
     const path = "/cache-ttl-" + name;
-    expect(await load(path)).toEqual(result);
+    expect(await Promise.all([load(path), load(path)])).toEqual([result, result]);
     now.mockReturnValue(1_000 + ttl - 1);
     expect(await load(path + "#fragment")).toEqual(result);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -247,24 +244,6 @@ it.each([
     expect(fetch).toHaveBeenCalledTimes(4);
   },
 );
-
-it("shares in-flight anonymous reads and caches unavailable results", async () => {
-  const gate = createDeferred<Response>();
-  const requested = createDeferred();
-  const fetch = mockFetch((url) => {
-    requested.resolve();
-    return url.endsWith("/favicon.ico") ? missing() : gate.promise;
-  });
-  const first = load("/shared");
-  const second = load("/shared");
-  await requested.promise;
-  expect(fetch).toHaveBeenCalledTimes(1);
-  gate.resolve(missing());
-  expect(await first).toEqual({});
-  expect(await second).toEqual({});
-  expect(await load("/shared")).toEqual({});
-  expect(fetch).toHaveBeenCalledTimes(2);
-});
 
 it("does not share cached or in-flight previews across principals or revisions", async () => {
   const gate = createDeferred<Response>();

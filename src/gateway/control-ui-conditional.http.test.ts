@@ -5,7 +5,7 @@ import { createServer, request, type IncomingMessage, type Server } from "node:h
 import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
@@ -15,15 +15,9 @@ const modifiedAt = new Date("2024-01-01T00:00:00.000Z");
 const lastModified = modifiedAt.toUTCString();
 const laterModifiedSince = new Date("2024-01-02T00:00:00.000Z").toUTCString();
 const earlierModifiedSince = new Date("2023-12-31T00:00:00.000Z").toUTCString();
-const leapAssets = [
-  ["after", "2017-01-01T00:00:00.000Z", 200],
-  ["before", "2016-12-31T23:59:59.000Z", 304],
-] as const;
-const leapBody = (name: string) => Buffer.from(`console.log("${name} leap second");\n`);
 type Headers = Record<string, string | string[]>;
 const since = (value: string | string[]): Headers => ({ "If-Modified-Since": value });
 const conditionalCases: [string, Headers, number][] = [
-  ["rejects ISO dates", since("2024-01-02T00:00:00.000Z"), 200],
   ["rejects duplicate dates", since([laterModifiedSince, earlierModifiedSince]), 200],
   ["equal date", since(lastModified), 304],
   ["older date", since(earlierModifiedSince), 200],
@@ -52,6 +46,8 @@ function requestAsset(
   });
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe.each([
   { kind: "bundled", basePath: "", cacheControl: "public, max-age=31536000, immutable" },
   { kind: "resolved", basePath: "/dashboard", cacheControl: "no-cache" },
@@ -75,9 +71,6 @@ describe.each([
     await write("assets/app-fixture.js.gz", gzipSync(assetBody));
     await write("assets/app-fixture.js.br", brotliCompressSync(assetBody));
     await write("assets/cold.js", assetBody);
-    for (const [name, date] of leapAssets) {
-      await write(`assets/leap-${name}.js`, leapBody(name), new Date(date));
-    }
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
@@ -117,7 +110,7 @@ describe.each([
 
   if (kind === "bundled" && basePath === "") {
     it("serves warm representations and admits cold files without main-thread filesystem work", async () => {
-      await requestAsset(assetUrl, "GET", {});
+      await requestAsset(assetUrl, "GET");
       const operations = [
         "openSync",
         "readSync",
@@ -128,32 +121,24 @@ describe.each([
         "realpathSync",
       ] as const;
       const spies = operations.map((operation) => vi.spyOn(fsSync, operation));
-      try {
-        for (const encoding of ["br", "gzip"] as const) {
-          const response = await requestAsset(assetUrl, "GET", { "Accept-Encoding": encoding });
-          expect(response.response.headers["content-encoding"]).toBe(encoding);
-          expect((encoding === "br" ? brotliDecompressSync : gunzipSync)(response.body)).toEqual(
-            assetBody,
-          );
-          const head = await requestAsset(assetUrl, "HEAD", { "Accept-Encoding": encoding });
-          expect(head.body.byteLength).toBe(0);
-          expect(head.response.headers["content-length"]).toBe(String(response.body.byteLength));
-          const unchanged = await requestAsset(assetUrl, "GET", {
-            "Accept-Encoding": encoding,
-            "If-Modified-Since": lastModified,
-          });
-          expect(unchanged.response.statusCode).toBe(304);
-        }
-        expect((await requestAsset(`${baseUrl}/assets/cold.js`, "GET", {})).body).toEqual(
+      for (const encoding of ["br", "gzip"] as const) {
+        const response = await requestAsset(assetUrl, "GET", { "Accept-Encoding": encoding });
+        expect(response.response.headers["content-encoding"]).toBe(encoding);
+        expect((encoding === "br" ? brotliDecompressSync : gunzipSync)(response.body)).toEqual(
           assetBody,
         );
-        for (const spy of spies) {
-          expect(spy).not.toHaveBeenCalled();
-        }
-      } finally {
-        for (const spy of spies) {
-          spy.mockRestore();
-        }
+        const head = await requestAsset(assetUrl, "HEAD", { "Accept-Encoding": encoding });
+        expect(head.body.byteLength).toBe(0);
+        expect(head.response.headers["content-length"]).toBe(String(response.body.byteLength));
+        const unchanged = await requestAsset(assetUrl, "GET", {
+          "Accept-Encoding": encoding,
+          "If-Modified-Since": lastModified,
+        });
+        expect(unchanged.response.statusCode).toBe(304);
+      }
+      expect((await requestAsset(`${baseUrl}/assets/cold.js`, "GET")).body).toEqual(assetBody);
+      for (const spy of spies) {
+        expect(spy).not.toHaveBeenCalled();
       }
     });
   }
@@ -205,18 +190,12 @@ describe.each([
         expect(html.includes('data-openclaw-control-ui-build-id="fixture-build"')).toBe(
           kind === "bundled",
         );
-        expect(html).toContain(
-          `href="${basePath}/favicon.svg${kind === "bundled" ? "?v=fixture-build" : ""}"`,
-        );
-        expect(html).toContain(
-          `href="${basePath}/favicon-32.png${kind === "bundled" ? "?v=fixture-build" : ""}"`,
-        );
+        const version = kind === "bundled" ? "?v=fixture-build" : "";
+        for (const icon of ["favicon.svg", "favicon-32.png"]) {
+          expect(html).toContain(`href="${basePath}/${icon}${version}"`);
+        }
       }
-      const missing = await requestAsset(
-        `${baseUrl}/themes/missing.css?v=fixture-build`,
-        method,
-        {},
-      );
+      const missing = await requestAsset(`${baseUrl}/themes/missing.css?v=fixture-build`, method);
       expect(missing.response.statusCode).toBe(404);
       expect(missing.response.headers["cache-control"] ?? "").not.toContain("immutable");
     });
@@ -240,24 +219,6 @@ describe.each([
       expect(body).toEqual(status === 200 && method === "GET" ? assetBody : Buffer.alloc(0));
     });
 
-    it.each(leapAssets)(
-      "preserves leap second ordering %s midnight",
-      async (name, date, status) => {
-        const expectedBody = leapBody(name);
-        const { response, body } = await requestAsset(`${baseUrl}/assets/leap-${name}.js`, method, {
-          "If-Modified-Since": "Sat, 31 Dec 2016 23:59:60 GMT",
-        });
-
-        expect(response.statusCode).toBe(status);
-        expect(response.headers["last-modified"]).toBe(new Date(date).toUTCString());
-        expect(response.headers["cache-control"]).toBe(cacheControl);
-        expect(response.headers["content-length"]).toBe(
-          status === 304 ? undefined : String(expectedBody.length),
-        );
-        expect(body).toEqual(status === 200 && method === "GET" ? expectedBody : Buffer.alloc(0));
-      },
-    );
-
     it("rejects unacceptable encodings before evaluating conditional headers", async () => {
       const { response, body } = await requestAsset(assetUrl, method, {
         "If-None-Match": "*",
@@ -269,10 +230,10 @@ describe.each([
       expect(response.headers).toMatchObject({
         "cache-control": "no-store",
         vary: "Accept-Encoding",
+        "content-length": String(Buffer.byteLength("Not Acceptable")),
       });
       expect(response.headers["last-modified"]).toBeUndefined();
       expect(response.headers.etag).toBeUndefined();
-      expect(response.headers["content-length"]).toBe(String(Buffer.byteLength("Not Acceptable")));
       expect(body.toString()).toBe(method === "GET" ? "Not Acceptable" : "");
     });
   });

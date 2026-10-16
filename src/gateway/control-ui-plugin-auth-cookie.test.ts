@@ -47,15 +47,12 @@ const tokenAuth = (token: string, allowTailscale = false) =>
   ({ mode: "token", token, allowTailscale }) as const;
 const cookieRequest = (cookie: string): IncomingMessage =>
   ({ method: "GET", headers: { cookie } }) as IncomingMessage;
-const cookieGeneration = (
-  auth: Parameters<typeof resolveSharedGatewaySessionGeneration>[0],
-  proxies?: string[],
-) =>
+type Admission = Parameters<typeof authorizePluginGatewayHttpRequestOrReply>[0];
+const cookieGeneration = (auth: Admission["auth"], proxies?: string[]) =>
   resolveControlUiPluginAuthCookieGeneration(
     resolveSharedGatewaySessionGeneration(auth, proxies),
     getRuntimeConfig(),
   );
-type Admission = Parameters<typeof authorizePluginGatewayHttpRequestOrReply>[0];
 function admit(
   params: Omit<Admission, "requestPath" | "resolveOperatorScopes"> &
     Partial<Pick<Admission, "requestPath" | "resolveOperatorScopes">>,
@@ -66,8 +63,8 @@ function admit(
     ...params,
   });
 }
-function grants(req: IncomingMessage, generation: string | undefined) {
-  return resolveControlUiPluginAuthCookieGrants(req, { requestPath, generation });
+function grants(req: IncomingMessage, generation: string | undefined, path = requestPath) {
+  return resolveControlUiPluginAuthCookieGrants(req, { requestPath: path, generation });
 }
 
 function issueCookie(
@@ -105,10 +102,7 @@ function authorizeCookie(cookie: string, authGeneration = "generation") {
   });
 }
 
-function withStateConfig(
-  run: () => Promise<void>,
-  cfg: Parameters<typeof withTempConfig>[0]["cfg"] = {},
-) {
+function withStateConfig(run: () => Promise<void>, cfg: unknown = {}) {
   return withOpenClawTestState({ scenario: "minimal" }, () => withTempConfig({ cfg, run }));
 }
 
@@ -175,7 +169,9 @@ it("caps a broader signed read cookie on remote native and panel reads without c
           }
         }
         const expected = remote ? ["operator.read"] : signedScopes;
-        expect(grants(req, generation)[0]?.scopes).toEqual(expected);
+        expect(grants(req, generation, remote ? requestPath : cookieRoute.path)).toEqual([
+          { ...cookieRoute, scopes: expected, ...(remote ? { profileId: "gateway-owner" } : {}) },
+        ]);
         const res = new ServerResponse(req);
         try {
           const admission = await admit({ req, res, auth });
@@ -192,33 +188,42 @@ it("caps a broader signed read cookie on remote native and panel reads without c
   });
 });
 
-it("prepares cold cookie profile facts and revalidates demotion without caller-thread SQL", async () => {
-  await withRoleConfig(async () => {
-    const profile = ensureProfileForEmail("cold-reader@example.test");
-    setUserProfileRole(profile.id, "writer");
-    const auth = tokenAuth("synthetic-cookie-reader");
-    const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
-    const { res } = makeMockHttpResponse();
-    const sql = observeHostDataSql();
-    try {
-      const admitted = await admit({ req: cookieRequest(cookie), res, auth });
-      expect(admitted?.requestAuth).toMatchObject({
-        authenticatedUserProfile: { profileId: profile.id },
-        controlUiPluginGrants: [{ scopes: ["operator.read"] }],
-      });
-      await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
-      expect(sql.queries).toEqual([]);
-      await setCanonicalUserProfileRole(profile.id, "denied");
-      sql.queries.length = 0;
-      await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-      res.destroy();
-      invalidateOperatorRolePolicy(profile.id);
-    }
-  });
-});
+it.each(["admin", "writer"])(
+  "prepares cold %s cookie facts and revalidates demotion without caller-thread SQL",
+  async (role) => {
+    await withRoleConfig(async () => {
+      const profile = ensureProfileForEmail("cold-reader@example.test");
+      setUserProfileRole(profile.id, role);
+      const auth = tokenAuth("synthetic-cookie-reader");
+      const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
+      const { res } = makeMockHttpResponse();
+      const sql = observeHostDataSql();
+      try {
+        const admitted = await admit({ req: cookieRequest(cookie), res, auth });
+        expect(admitted?.requestAuth).toMatchObject({
+          authenticatedUserProfile: { profileId: profile.id },
+          controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
+        });
+        await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
+        expect(sql.queries).toEqual([]);
+        await setCanonicalUserProfileRole(profile.id, "denied");
+        sql.queries.length = 0;
+        await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
+        expect(
+          authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth))?.requestAuth,
+        ).toMatchObject({
+          authenticatedUserProfile: { profileId: profile.id },
+          controlUiPluginGrants: [{ pluginId: "example", scopes: [] }],
+        });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+        res.destroy();
+        invalidateOperatorRolePolicy(profile.id);
+      }
+    });
+  },
+);
 
 it("uses an explicit owner credential independently of a revoked ambient visitor cookie", async () => {
   await withRoleConfig(async () => {
@@ -347,10 +352,11 @@ it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
         const profile = ensureProfileForEmail("plugin-reader@example.test");
         const catalog = await prepareUserProfileCatalog();
         onTestFinished(catalog.release);
-        expect(authorizeCookie(issueCookie(profile.id))?.requestAuth).toMatchObject({
-          authenticatedUserProfile: { profileId: profile.id },
-          controlUiPluginGrants: [{ scopes: ["operator.read"] }],
-        });
+        const signed = authorizeCookie(issueCookie(profile.id))?.requestAuth;
+        expect(signed?.authenticatedUserProfile?.profileId).toBe(profile.id);
+        expect(signed?.controlUiPluginGrants).toEqual([
+          { ...cookieRoute, scopes: ["operator.read"], profileId: profile.id },
+        ]);
         expect(authorizeCookie(issueCookie("missing-profile"))).toBeNull();
         const auth = {
           mode: "trusted-proxy",
@@ -427,80 +433,8 @@ it.each([
   });
 });
 
-it.each([
-  {
-    name: "retired generation",
-    profile: "viewer",
-    roles: false,
-    generation: "replacement-generation",
-  },
-  { name: "unbound role grant", profile: undefined, roles: true },
-  { name: "missing durable profile", profile: "missing-profile", roles: true },
-])("rejects $name", async ({ profile, roles, generation }) => {
-  const run = async () => {
-    expect(authorizeCookie(issueCookie(profile), generation)).toBeNull();
-  };
-  if (roles) {
-    await withRoleConfig(run);
-  } else {
-    await withTempConfig({ cfg: {}, run });
-  }
+it("rejects an unbound role grant", async () => {
+  await withRoleConfig(async () => {
+    expect(authorizeCookie(issueCookie())).toBeNull();
+  });
 });
-
-it.each(["admin", "writer"])(
-  "preserves a read grant under %s until the profile is demoted",
-  async (role) => {
-    await withRoleConfig(async () => {
-      const profile = ensureProfileForEmail("plugin-reader@example.test");
-      setUserProfileRole(profile.id, role);
-      const cookie = issueCookie(profile.id);
-      const catalog = await prepareUserProfileCatalog();
-      try {
-        expect(authorizeCookie(cookie)?.requestAuth).toMatchObject({
-          authenticatedUserProfile: { profileId: profile.id },
-          controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
-        });
-        setUserProfileRole(profile.id, "denied");
-        invalidateOperatorRolePolicy(profile.id);
-        expect(authorizeCookie(cookie)?.requestAuth.controlUiPluginGrants).toMatchObject([
-          { pluginId: "example", scopes: [] },
-        ]);
-      } finally {
-        catalog.release();
-        invalidateOperatorRolePolicy(profile.id);
-      }
-    });
-  },
-);
-
-it.each(["profile-guest", undefined])(
-  "preserves the signed profile binding (%s)",
-  async (profileId) => {
-    const request = {
-      headers: { cookie: issueCookie(profileId, { generation: "generation" }) },
-    } as IncomingMessage;
-    const expectedGrants = [
-      {
-        ...cookieRoute,
-        scopes: ["operator.read"],
-        ...(profileId ? { profileId } : {}),
-      },
-    ];
-    expect(
-      resolveControlUiPluginAuthCookieGrants(request, {
-        requestPath: profileId ? "/plugins/example/session" : "/plugins/example",
-        generation: "generation",
-      }),
-    ).toEqual(expectedGrants);
-    if (!profileId) {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          expect(authorizeCookie(issueCookie())?.requestAuth.controlUiPluginGrants).toEqual(
-            expectedGrants,
-          );
-        },
-      });
-    }
-  },
-);

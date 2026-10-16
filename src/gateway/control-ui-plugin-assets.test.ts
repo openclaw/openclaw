@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -45,7 +45,7 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-const roots: string[] = [];
+const tempDirs = createTempDirTracker();
 const firstSource = 'export default { id: "native-ui" };';
 const immutableCache = "private, max-age=31536000, immutable";
 type Response = ReturnType<typeof createResponse>;
@@ -67,6 +67,7 @@ function cookies(response: Response) {
 }
 
 function expectBody(response: Response, source: string) {
+  expect(response.res.statusCode).toBe(200);
   expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(source);
 }
 
@@ -114,8 +115,7 @@ function responseHeader(response: ReturnType<typeof createResponse>, name: strin
 }
 
 function activateFixture(origin: PluginRecord["origin"] = "bundled") {
-  const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-")));
-  roots.push(rootDir);
+  const rootDir = tempDirs.make("native-ui-");
   const directory = path.join(rootDir, "dist/control-ui");
   fs.mkdirSync(directory, { recursive: true });
   const write = (name: string, source: string) =>
@@ -186,9 +186,7 @@ function cookieForGrant(
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
-  for (const rootDir of roots.splice(0)) {
-    fs.rmSync(rootDir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 beforeAll(async () => {
@@ -227,9 +225,8 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
 
     setRuntimeConfigSnapshot(customPlugins(true));
     const entry = (await listControlUiPluginCatalog()).plugins[0]!;
-    expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
-      expect.objectContaining({ pluginId: entry.pluginId }),
-    );
+    const matchingPlugin = expect.objectContaining({ pluginId: entry.pluginId });
+    expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(matchingPlugin);
     const browser = {};
     const report = activation(entry.revision);
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
@@ -240,9 +237,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
     setRuntimeConfigSnapshot(customPlugins(false));
 
     expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-    expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-      expect.objectContaining({ pluginId: entry.pluginId }),
-    );
+    expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(matchingPlugin);
     expect(reportControlUiPluginActivation(browser, report)).toBe(false);
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     const credentials: Record<string, string>[] = [
@@ -258,12 +253,8 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
 
     setRuntimeConfigSnapshot(customPlugins(true));
     expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
-    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(
-      expect.objectContaining({ pluginId: entry.pluginId }),
-    );
-    expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
-      expect.objectContaining({ pluginId: entry.pluginId }),
-    );
+    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(matchingPlugin);
+    expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(matchingPlugin);
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
     expect(listControlUiPluginActivations(browser)).toEqual([report]);
@@ -317,7 +308,6 @@ it.each([
         ]) {
           await expectStatus(fetchAsset(server, assetUrl), requiresAuth ? 401 : 200);
           const asset = await fetchAsset(server, assetUrl, { headers: { cookie } });
-          expect(asset.res.statusCode).toBe(200);
           expect(responseHeader(asset, "cache-control")).toBe(immutableCache);
           expect(String(responseHeader(asset, "vary")).toLowerCase().split(/,\s*/)).not.toContain(
             "cookie",
@@ -529,7 +519,6 @@ it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserv
     const read = (url: string, method = "GET") =>
       fetchAsset(server, url, { method, headers: { cookie } });
     const original = await read(entry.entryUrl);
-    expect(original.res.statusCode).toBe(200);
     expectBody(original, firstSource);
     expect(original.setHeader).toHaveBeenCalledWith(
       "Content-Type",
@@ -566,7 +555,6 @@ it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserv
     ).toBe(true);
     // Failed activations still use the first renderer, including its later imports.
     const retainedChunk = await read(entry.entryUrl.replace(/index\.js$/u, "lazy.js"));
-    expect(retainedChunk.res.statusCode).toBe(200);
     expect(responseHeader(retainedChunk, "cache-control")).toBe(immutableCache);
     expectBody(retainedChunk, firstChunk);
     expectBody(await read(entry.entryUrl), firstSource);
@@ -595,7 +583,6 @@ it("serves profile-bound cookie assets with a replaced profile catalog", async (
         const response = await fetchAsset(server, entry.entryUrl, {
           headers: { cookie: cookieForGrant({ profileId: profile.id }) },
         });
-        expect(response.res.statusCode).toBe(200);
         expectBody(response, firstSource);
       });
     } finally {
@@ -688,7 +675,6 @@ it("retains advertised revisions and receipts only for the exact backend owner",
     const oldChunk = first.entryUrl.replace(/index\.js$/u, "lazy.js");
     const read = () => fetchAsset(server, oldChunk, { headers: { cookie } });
     const response = await read();
-    expect(response.res.statusCode).toBe(200);
     expectBody(response, firstChunk);
     const unactivated = createEmptyPluginRegistry();
     unactivated.plugins.push(fixture.record);
@@ -767,7 +753,6 @@ it("refuses reloads past 64 MiB without evicting advertised assets", async () =>
     const original = await fetchAsset(server, entry.entryUrl, {
       headers: { cookie: cookieForGrant() },
     });
-    expect(original.res.statusCode).toBe(200);
     expectBody(original, firstSource);
   });
   // Selecting an already advertised build needs no additional cache capacity.
@@ -797,6 +782,7 @@ it("requires owner-bound read grants and never serves source files, maps, or esc
       { cookie: cookieForGrant({ pluginId: "another-owner" }) },
       { cookie: cookieForGrant({ generation: "stale-generation" }) },
     ];
+    const read = (url: string) => fetchAsset(server, url, { headers: { cookie } });
     for (const headers of unauthorizedHeaders) {
       const denied = await fetchAsset(server, entry.entryUrl, { headers });
       expect(denied.res.statusCode).toBe(401);
@@ -807,13 +793,7 @@ it("requires owner-bound read grants and never serves source files, maps, or esc
       200,
     );
     for (const invalidRevision of ["latest", "", "0".repeat(64)]) {
-      const missing = await fetchAsset(
-        server,
-        entry.entryUrl.replace(entry.revision, invalidRevision),
-        {
-          headers: { cookie },
-        },
-      );
+      const missing = await read(entry.entryUrl.replace(entry.revision, invalidRevision));
       expect(missing.res.statusCode).toBe(404);
       expect(responseHeader(missing, "cache-control")).toBe("no-store");
     }
@@ -825,7 +805,7 @@ it("requires owner-bound read grants and never serves source files, maps, or esc
       "%252e%252e/server.js",
       "missing.js",
     ]) {
-      const missing = await fetchAsset(server, prefix + suffix, { headers: { cookie } });
+      const missing = await read(prefix + suffix);
       expect(missing.res.statusCode, suffix).toBe(404);
       expect(responseHeader(missing, "cache-control"), suffix).toBe("no-store");
     }

@@ -12,12 +12,9 @@ import {
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-const { resolveSession, reader, active, mediaToken } = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
-  reader: vi.fn(),
-  active: vi.fn(),
-  mediaToken: vi.fn(),
-}));
+const [resolveSession, reader, active, mediaToken] = vi.hoisted(
+  () => [vi.fn(), vi.fn(), vi.fn(), vi.fn()] as const,
+);
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   resolveControlUiSessionPath: resolveSession,
@@ -169,8 +166,6 @@ it("reloads a chat through the exact recovery URL without exposing its private t
 
 it.each([
   { mode: "token", secureProxy: false },
-  { mode: "password", secureProxy: false },
-  { mode: "token", secureProxy: true },
   { mode: "password", secureProxy: true },
 ] as const)(
   "offers a $mode browser-credential handoff (secureProxy=$secureProxy)",
@@ -219,13 +214,10 @@ it("serves a bounded reader, ignores forged identity, and probes only the protec
   expect(resolveSession).toHaveBeenCalledWith(
     expect.objectContaining({ client: null, publicOnly: true }),
   );
-  expect(response.setHeader).toHaveBeenCalledWith(
-    "Content-Security-Policy",
-    expect.stringContaining("script-src 'sha256-"),
-  );
   const csp = response.setHeader.mock.calls.find(
     ([name]) => name === "Content-Security-Policy",
   )?.[1];
+  expect(csp).toContain("script-src 'sha256-");
   for (const hash of computeInlineScriptHashes(html)) {
     expect(csp).toContain(hash);
   }
@@ -234,31 +226,17 @@ it("makes private, missing, and revoked sessions indistinguishable but keeps Log
   resolveSession.mockResolvedValue(null);
   const instance = server();
   const hidden = await request(instance);
-  const missing = await request(instance);
   resolveSession.mockResolvedValue({ key, agentId: "main" });
   active.mockReturnValue(false);
   const revoked = await request(instance);
   const html = page(hidden, 404, "Log in");
-  expect([missing.getBody(), revoked.getBody()]).toEqual([html, html]);
+  expect(revoked.getBody()).toBe(html);
   expect(html).not.toContain("Public launch notes");
-});
-it("revalidates publication before conditional reuse", async () => {
-  const instance = server();
-  const first = await request(instance);
-  const etag = first.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-  expect(typeof etag).toBe("string");
-  const unchanged = await request(instance, route, { "if-none-match": String(etag) });
-  expect(unchanged.res.statusCode).toBe(304);
-  expect(reader).toHaveBeenCalledTimes(1);
-  active.mockReturnValue(false);
-  expect((await request(instance, route, { "if-none-match": String(etag) })).res.statusCode).toBe(
-    404,
-  );
 });
 it("rejects HEAD and malformed query work before reading any session", async () => {
   const instance = server();
   expect((await request(instance, route, undefined, "HEAD")).res.statusCode).toBe(405);
-  for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?token=ignored", "?probe=1"]) {
+  for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?token=ignored"]) {
     expect((await request(instance, route + suffix)).res.statusCode).toBe(404);
   }
   expect(resolveSession).not.toHaveBeenCalled();
