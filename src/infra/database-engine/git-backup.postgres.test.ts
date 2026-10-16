@@ -14,6 +14,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { requireGitCommand } from "../git-exec.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -66,7 +67,9 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
   let root: string;
   let stateDir: string;
   let shared: string;
+  let agent: string;
   let workboard: string;
+  const namespaces = new Map<string, string>();
   let databaseCreated = false;
   const gitEnv = {
     GIT_AUTHOR_NAME: "Backup fixture",
@@ -86,9 +89,11 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     root = await fs.realpath(directories.make("git-postgres-"));
     stateDir = path.join(root, "state");
     shared = path.join(stateDir, "state/openclaw.sqlite");
+    agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
     workboard = path.join(stateDir, "plugins/workboard/workboard.sqlite");
     const config: OpenClawConfig = {
       database: { engine: "postgres", postgres: { connection: fixtureConnection.href } },
+      agents: { ownership: "explicit", entries: { main: { agentDir: path.dirname(agent) } } },
       plugins: {
         entries: {
           matrix: { enabled: false },
@@ -113,6 +118,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       vi.stubEnv(key, env[key]);
     }
     const stateDescriptor = await statePortProvider.loadDescriptor();
+    const agentDescriptor = await agentPortProvider.loadDescriptor();
     const stateSeed = `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION};
       INSERT INTO schema_meta VALUES ('primary','global',${OPENCLAW_STATE_SCHEMA_VERSION},NULL,NULL,1,1);
       INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${OPENCLAW_STATE_SCHEMA_VERSION}',1);
@@ -123,6 +129,15 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
         VALUES ('matrix','fixture','retained','{"marker":"matrix retained"}',1);`;
     const fixtures = [
       { file: shared, descriptor: stateDescriptor, seed: stateSeed },
+      {
+        file: agent,
+        descriptor: agentDescriptor,
+        seed: `PRAGMA user_version=${agentDescriptor.version};
+          INSERT INTO schema_meta VALUES ('primary','agent',${agentDescriptor.version},'main',NULL,1,1);
+          INSERT INTO session_key_contract (id,main_key,updated_at) VALUES (1,'main',0);
+          INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at)
+            VALUES ('agent:main:main','session','{}',1);`,
+      },
       {
         file: path.join(stateDir, "matrix/accounts/one/state/openclaw.sqlite"),
         descriptor: stateDescriptor,
@@ -148,6 +163,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
       await fs.mkdir(path.dirname(file), { recursive: true });
       const storeId = randomUUID();
       const namespace = `git_backup_${storeId.replaceAll("-", "")}`;
+      namespaces.set(file, namespace);
       {
         using source = openNodeSqliteDatabase(":memory:");
         source.exec(descriptor.sqlite);
@@ -194,26 +210,30 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     }
   });
 
-  it("keeps distinct family scopes and prunes removed Matrix stores without losing extras or history", async () => {
+  it("keeps distinct scopes, preserves degraded agents, and prunes removed Matrix stores without losing extras or history", async () => {
     const repositoryPath = path.join(root, "all-repository");
+    const databases = [
+      { path: shared, identity: { role: "global" } as const },
+      { path: agent, identity: { role: "agent", agentId: "main" } as const },
+    ];
     const result = await createGitBackup({
       repositoryPath,
       stateDir,
-      databases: [{ path: shared, identity: { role: "global" } }],
+      databases,
       all: true,
       excludeSecrets: true,
       gitEnv,
     });
-    expect(result.manifests).toHaveLength(5);
+    expect(result.manifests).toHaveLength(6);
     const ids = result.manifests.map(({ identity }) =>
       identity.role === "generic" ? identity.id : identity.role,
     );
-    expect(new Set(ids).size).toBe(5);
+    expect(new Set(ids).size).toBe(6);
     expect(ids).toEqual(expect.arrayContaining(["global", "workboard", "logbook"]));
     const files = (
       await requireGitCommand(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"])
     ).split("\n");
-    expect(files.filter((file) => /(?:^|\/)manifest.json$/.test(file))).toHaveLength(10);
+    expect(files.filter((file) => /(?:^|\/)manifest.json$/.test(file))).toHaveLength(12);
     const matrix = result.manifests.flatMap((manifest) =>
       manifest.identity.role === "generic" && manifest.identity.id.startsWith("state__matrix__")
         ? [{ manifest, id: manifest.identity.id }]
@@ -256,15 +276,44 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     }
     await requireGitCommand(repositoryPath, ["add", "--", ...extras]);
     await fs.rm(path.join(stateDir, "matrix/accounts/one/state/openclaw.sqlite"));
+    const previousAgentTree = await requireGitCommand(repositoryPath, [
+      "rev-parse",
+      "HEAD:agents/main",
+    ]);
+    await client.query(`DROP SCHEMA "${namespaces.get(agent)}" CASCADE`);
+    await client.query(
+      `UPDATE "${namespaces.get(shared)}".config_machine_state SET value_json=$1 WHERE state_key='ordinary.fixture'`,
+      ['"refreshed"'],
+    );
     const refreshed = await createGitBackup({
       repositoryPath,
       stateDir,
-      databases: [{ path: shared, identity: { role: "global" } }],
+      databases,
       all: true,
       excludeSecrets: true,
       gitEnv,
     });
     expect(refreshed.manifests).toHaveLength(4);
+    expect(refreshed.warnings).toEqual([
+      expect.stringMatching(/Agent main degraded.*missing namespace/u),
+    ]);
+    expect(await requireGitCommand(repositoryPath, ["rev-parse", "HEAD:agents/main"])).toBe(
+      previousAgentTree,
+    );
+    {
+      using exported = openNodeSqliteDatabase(
+        path.join(repositoryPath, "global/postgres/database.sqlite"),
+        { readOnly: true },
+      );
+      expect(
+        exported
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key='ordinary.fixture'")
+          .get()?.value_json,
+      ).toBe('"refreshed"');
+    }
+    await expect(
+      createGitBackup({ repositoryPath, stateDir, databases: [databases[1]!], gitEnv }),
+    ).rejects.toThrow("missing namespace");
     const removed = matrix.filter(
       ({ id }) =>
         !refreshed.manifests.some(

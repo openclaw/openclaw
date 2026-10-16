@@ -350,15 +350,23 @@ export async function createGitBackup(params: {
       const outputPath = path.join(staging.dir, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
       const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
-      let postgres: boolean;
       try {
-        postgres = readBackupEngine(database.path).engine === "postgres";
+        const postgres = readBackupEngine(database.path).engine === "postgres";
         if (!postgres) {
           await createOpenClawSnapshotCopy({
             database: { ...database, path: await fs.realpath(database.path) },
             targetPath: copyPath,
           });
         }
+        manifests.push(
+          await dumpGitBackupDatabase({
+            snapshotPath: postgres ? database.path : copyPath,
+            outputPath,
+            identity: database.identity,
+            physicalEngine: postgres ? "postgres" : "sqlite",
+            excludeSecrets: params.excludeSecrets,
+          }),
+        );
       } catch (error) {
         if (!params.all || database.identity.role !== "agent") {
           throw error;
@@ -368,15 +376,6 @@ export async function createGitBackup(params: {
         );
         continue;
       }
-      manifests.push(
-        await dumpGitBackupDatabase({
-          snapshotPath: postgres ? database.path : copyPath,
-          outputPath,
-          identity: database.identity,
-          physicalEngine: postgres ? "postgres" : "sqlite",
-          excludeSecrets: params.excludeSecrets,
-        }),
-      );
       await fs.rm(copyPath, { force: true });
     }
     if (manifests.length === 0) {
