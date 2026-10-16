@@ -15,10 +15,7 @@ import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
 } from "../../lib/sessions/navigation-handoff.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
+import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -232,16 +229,8 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
                   mainKey: resolveUiConfiguredMainKey(defaults),
                   globalScope: isUiGlobalScopeConfigured(defaults),
                   routing: personActivityRouting(context, close),
-                  openSession: (row, agentId) => {
+                  openSession: (row, agentId, options) => {
                     const face = resolveSessionPreferredFace(row);
-                    const target = sessionNavigationTarget({
-                      face,
-                      sessionKey: row.key,
-                      row,
-                      fallbackAgentId: agentId,
-                      basePath: context.basePath,
-                      mainKey: resolveUiConfiguredMainKey(defaults),
-                    });
                     close();
                     runSessionNavigationIntent(props.host, {
                       agentId,
@@ -255,12 +244,8 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
                         ) {
                           return false;
                         }
-                        prepareSessionNavigationHandoff(
-                          context.gateway,
-                          target.options.pathname,
-                          row.key,
-                        );
-                        context.navigate(face, target.options);
+                        prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
+                        context.navigate(face, options);
                         selectApplicationSession({
                           selection: context.agentSelection,
                           gateway: context.gateway,

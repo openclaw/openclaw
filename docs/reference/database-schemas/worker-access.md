@@ -50,6 +50,11 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Public GitHub coauthor attribution reads merge aliases, verified accounts, and
+credit preferences in one worker-owned snapshot statement. Enterprise attribution
+keeps a read transaction for its additional verified-email binding lookup. Both
+reuse profile write receipts and retain the final publication-authority check.
+
 Gateway boot history uses one `gatewayBoot.begin` writer operation to inspect
 previous boots, prune expired history, and append the current boot. The breaker
 decision excludes that new open row; a failed append preserves a successfully

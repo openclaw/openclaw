@@ -8,7 +8,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
 import { CustodianChangeHistory } from "./custodian-history.tsx";
@@ -29,13 +29,7 @@ function CustodianPageContent(props: Props) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
-  const store = createMemo(() =>
-    projectSource(props.store, {
-      read: (source) => source,
-      subscribe: (source, notify) => source.subscribe(notify),
-      equality: "revision",
-    }),
-  );
+  const store = createMemo(() => projectOwner(props.store, (source) => source));
   // The provided session owner decides when its Gateway transcript needs refreshing.
   createEffect(
     () => props.store,

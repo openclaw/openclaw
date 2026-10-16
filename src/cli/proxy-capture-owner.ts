@@ -1,8 +1,9 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { encodeDebugProxyPayload, type DebugProxyCliStore } from "../proxy-capture/cli-contract.js";
+import { encodeDebugProxyPayload } from "../proxy-capture/cli-contract.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import type { DebugProxyCliStore } from "../proxy-capture/store.types.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";

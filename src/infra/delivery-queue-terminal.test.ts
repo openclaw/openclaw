@@ -346,31 +346,39 @@ describe("delivery queue pending terminal transition", () => {
       1_000,
       1_000,
     );
-    seedDeliveryQueueEntry({
-      queueName,
-      entry: {
-        id: "health:ordinary-completed",
-        enqueuedAt: now - 31 * 24 * 60 * 60_000,
-        retryCount: 0,
-      },
-      status: "completed",
-      stateDir,
-    });
+    for (const [id, status, recoveryState, enqueuedAt] of [
+      ["health:ordinary-completed", "completed", undefined, now - 31 * 24 * 60 * 60_000],
+      ["health:ordinary-live", "completed", undefined, now],
+      ["health:completed-permanent", "completed", "completed_permanent", 1_000],
+      ["health:pending", "pending", undefined, 1_000],
+      ["health:settlement", "failed", "settlement_pending", 1_000],
+    ] as const) {
+      seedDeliveryQueueEntry({
+        queueName,
+        entry: { id, enqueuedAt, retryCount: 0, recoveryState },
+        status,
+        stateDir,
+      });
+    }
 
     expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
-      { queueName, count: 5, oldestFailedAt: 1_000 },
+      { queueName, count: 6, oldestFailedAt: 1_000 },
     ]);
     expect(
       db
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
         .all(queueName),
     ).toEqual([
+      { id: "health:completed-permanent" },
       { id: "health:expired" },
       { id: "health:malformed" },
       { id: "health:newest" },
       { id: "health:ordinary-completed" },
+      { id: "health:ordinary-live" },
       { id: "health:over-cap" },
+      { id: "health:pending" },
       { id: "health:permanent" },
+      { id: "health:settlement" },
     ]);
 
     await pruneExpiredDeliveryQueueTombstones(stateDir);
@@ -379,10 +387,17 @@ describe("delivery queue pending terminal transition", () => {
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
         .all(queueName),
     ).toEqual([
+      { id: "health:completed-permanent" },
       { id: "health:malformed" },
       { id: "health:newest" },
+      { id: "health:ordinary-live" },
       { id: "health:over-cap" },
+      { id: "health:pending" },
       { id: "health:permanent" },
+      { id: "health:settlement" },
+    ]);
+    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
+      { queueName, count: 5, oldestFailedAt: 1_000 },
     ]);
   });
 

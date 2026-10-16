@@ -360,9 +360,8 @@ export async function executePreparedDecision(params: {
         if (!validateDecisionResultV2(offered, value, model.inference?.decision)) {
           return { status: "unavailable", reason: "invalid-response" };
         }
-        const snapshot = structuredClone(value);
         assertPrepared();
-        return { status, result: snapshot };
+        return { status, result: value };
       }
       if (status !== "unavailable") {
         throw new Error("Invalid decision provider outcome");

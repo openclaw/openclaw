@@ -40,6 +40,7 @@ const { values } = parseArgs({
     seconds: { type: "string", default: "300" },
     "poll-ms": { type: "string", default: "5000" },
     "writer-reads": { type: "boolean", default: false },
+    "cheap-handlers": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -77,10 +78,16 @@ cfg.plugins = {
   enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
-if (values["writer-reads"]) {
+if (values["writer-reads"] || values["cheap-handlers"]) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
+if (values["cheap-handlers"]) {
+  cfg.plugins.entries.github = { enabled: true };
+  cfg.plugins.entries.workboard = { enabled: true };
+}
+const previewUrl = "https://github.com/openclaw-fixture/restart/issues/1";
+const previewTitle = "Synthetic post-restart issue";
 const catalogId = "synthetic-restart-catalog";
 const pluginDir = path.join(output, catalogId);
 mkdirSync(pluginDir);
@@ -131,6 +138,37 @@ writeFileSync(
 import { isMainThread } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
+  ${
+    values["cheap-handlers"]
+      ? `const { MockAgent } = await import(${JSON.stringify(import.meta.resolve("undici"))});
+  const transport = new MockAgent();
+  transport.disableNetConnect();
+  const github = transport.get('https://api.github.com');
+  const repository = '/repos/openclaw-fixture/restart';
+  github.intercept({ path: repository, method: 'GET' }).reply(200, {
+    private: false, visibility: 'public', full_name: 'openclaw-fixture/restart',
+  }).persist();
+  github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => {
+    process.send?.({ channel: 'post-restart-burst-github-fixture', pid: process.pid });
+    return { statusCode: 200, data: JSON.stringify({
+      title: ${JSON.stringify(previewTitle)}, state: 'open', number: 1,
+      created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      repository_url: 'https://api.github.com' + repository,
+      user: { login: 'synthetic-user' }, comments: 0,
+    }), responseOptions: { headers: { 'content-type': 'application/json' } } };
+  }).persist();
+  // Gateway startup replaces recognized global agents; bind this fixture per fetch instead.
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === 'https://api.github.com') {
+      return nativeFetch(input, { ...options, dispatcher: transport });
+    }
+    if (url.hostname !== '127.0.0.1') throw new Error('Benchmark blocked external fetch');
+    return nativeFetch(input, options);
+  };`
+      : ""
+  }
   let before = performance.eventLoopUtilization();
   let at = performance.now();
   let cpu = process.threadCpuUsage();
@@ -186,6 +224,8 @@ type EluSample = {
   mainThreadCpuMs: number;
 };
 const eluSamples: EluSample[] = [];
+let githubFixtureRequests = 0;
+let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
 let consecutiveLowSamples = 0;
 const mock = createServer((req, res) => {
@@ -345,6 +385,15 @@ function launch(name: string) {
   });
   child.on("message", (sample: unknown) => {
     if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-github-fixture" &&
+      sample.pid === child.pid
+    ) {
+      githubFixtureRequests++;
+      return;
+    }
+    if (
       !recovering ||
       !isRecord(sample) ||
       sample.channel !== "post-restart-burst-elu" ||
@@ -408,6 +457,32 @@ async function rpc(
   assertAlive();
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
+  }
+  if (values["cheap-handlers"]) {
+    const payload = reply.payload;
+    if (method === "push.web.vapidPublicKey") {
+      if (
+        !isRecord(payload) ||
+        typeof payload.vapidPublicKey !== "string" ||
+        !payload.vapidPublicKey ||
+        (vapidPublicKey !== undefined && payload.vapidPublicKey !== vapidPublicKey)
+      ) {
+        throw new Error("VAPID public key missing or changed across restart");
+      }
+      vapidPublicKey = payload.vapidPublicKey;
+    }
+    if (
+      method === "workboard.cards.list" &&
+      (!isRecord(payload) || !Array.isArray(payload.cards) || payload.cards.length < clientCount)
+    ) {
+      throw new Error("Bundled workboard did not return the seeded cards");
+    }
+    if (
+      method === "github.preview" &&
+      (!isRecord(payload) || payload.title !== previewTitle || payload.url !== previewUrl)
+    ) {
+      throw new Error("Bundled GitHub preview did not return the synthetic transport response");
+    }
   }
   if (method === "sessions.catalog.list") {
     const payload = reply.payload;
@@ -476,7 +551,7 @@ async function connect(index: number) {
       device = createSyntheticDevice();
       devices.set(index, device);
     }
-    const scopes = ["operator.read", "operator.admin"];
+    const scopes = ["operator.read", "operator.write", "operator.admin"];
     const identity = {
       id: "gateway-client",
       displayName: "synthetic-post-restart-burst",
@@ -524,16 +599,19 @@ async function connect(index: number) {
     if (scopes.some((scope) => !authorizedScopes.includes(scope))) {
       throw new Error("Benchmark device authentication did not retain requested operator scopes");
     }
-    const self = await rpc(client, "users.self", {});
-    if (
-      !isRecord(self) ||
-      !isRecord(self.profile) ||
-      typeof self.profile.id !== "string" ||
-      !self.profile.id
-    ) {
-      throw new Error("Benchmark client did not acquire the durable synthetic owner profile");
+    // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
+    if (!recovering || !values["cheap-handlers"]) {
+      const self = await rpc(client, "users.self", {});
+      if (
+        !isRecord(self) ||
+        !isRecord(self.profile) ||
+        typeof self.profile.id !== "string" ||
+        !self.profile.id
+      ) {
+        throw new Error("Benchmark client did not acquire the durable synthetic owner profile");
+      }
+      ownerProfileIds.add(self.profile.id);
     }
-    ownerProfileIds.add(self.profile.id);
     return client;
   } catch (error) {
     client.close();
@@ -569,15 +647,21 @@ const connectionErrors: Array<{ client: number; elapsedMs: number; error: string
 const connectedClients = new Set<number>();
 const ownerProfileIds = new Set<string>();
 const catalogRowCounts: number[] = [];
+const subscriptionParams = (index: number) => ({
+  endpoint: `https://push.example.test/post-restart/${cohort}/${index}`,
+  keys: { p256dh: "synthetic-browser-p256dh", auth: "synthetic-browser-auth" },
+});
 async function observeClient(index: number) {
   const deadline = restartAt + durationMs;
   let client: Awaited<ReturnType<typeof connect>> | undefined;
+  let firstBatch = true;
   while (performance.now() < deadline) {
     assertAlive();
     if (!client) {
       try {
         client = await connect(index);
         connectedClients.add(index);
+        firstBatch = true;
       } catch (error) {
         assertAlive();
         connectionErrors.push({
@@ -591,22 +675,33 @@ async function observeClient(index: number) {
     }
     const activeClient = client;
     await Promise.all(
-      shapes.map(async ({ method, params }) => {
-        const startedMs = performance.now() - restartAt;
-        try {
-          await rpc(activeClient, method, params);
-          timings.push({ method, startedMs, elapsedMs: performance.now() - restartAt - startedMs });
-        } catch (error) {
-          assertAlive();
-          timings.push({
-            method,
-            startedMs,
-            elapsedMs: performance.now() - restartAt - startedMs,
-            error: String(error),
-          });
-        }
-      }),
+      shapes
+        .filter(({ method }) => method !== "sessions.subscribe" || firstBatch)
+        .map(async ({ method, params }) => {
+          const startedMs = performance.now() - restartAt;
+          try {
+            await rpc(
+              activeClient,
+              method,
+              method === "push.web.subscribe" ? subscriptionParams(index) : params,
+            );
+            timings.push({
+              method,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+            });
+          } catch (error) {
+            assertAlive();
+            timings.push({
+              method,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+              error: String(error),
+            });
+          }
+        }),
     );
+    firstBatch = false;
     if (client.ws.readyState !== client.ws.OPEN) {
       client.close();
       clients.delete(client);
@@ -716,8 +811,32 @@ try {
       displayName: "Synthetic interrupted restart run",
     });
   }
-  if (values["writer-reads"]) {
+  if (values["writer-reads"] || values["cheap-handlers"]) {
     shapes.push({ method: "sessions.github.options", params: { sessionKey: keys[0] } });
+  }
+  if (values["cheap-handlers"]) {
+    // The UI registers this observer before its reconnect roster bootstrap.
+    shapes.unshift({ method: "sessions.subscribe", params: {} });
+    await rpc(sender, "push.web.vapidPublicKey", {});
+    for (const [index, client] of initialClients.entries()) {
+      const params = subscriptionParams(index);
+      await rpc(client, "push.web.subscribe", params);
+      await rpc(client, "push.web.preferences.set", {
+        endpoint: params.endpoint,
+        scope: "device",
+        preferences: { enabled: false, label: "Synthetic restart browser" },
+      });
+      await rpc(sender, "workboard.cards.create", { title: `Synthetic restart card ${index}` });
+    }
+    shapes.push(
+      { method: "push.web.vapidPublicKey", params: {} },
+      { method: "push.web.subscribe", params: { endpoint: "one synthetic endpoint per device" } },
+      { method: "workboard.cards.list", params: {} },
+      { method: "github.preview", params: { url: previewUrl } },
+    );
+    // Prove both bundled plugins are usable before measuring their cold restart.
+    await rpc(sender, "workboard.cards.list", {});
+    await rpc(sender, "github.preview", { url: previewUrl });
   }
   const runIds = keys.map(() => randomUUID());
   await Promise.all(
@@ -795,32 +914,27 @@ try {
   const readyMs = performance.now() - restartAt;
   console.log(`PHASE restarted-ready ${readyMs.toFixed(1)}ms`);
   loadStartedAt = performance.now();
-  const writerMetrics = values["writer-reads"]
-    ? delay(
-        Math.max(0, Math.min(durationMs, 300_000) - (performance.now() - restartAt)),
-        undefined,
-        { ref: false },
-      ).then(async () => {
-        const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
-          headers: { authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!response.ok) {
-          throw new Error(`Writer metrics scrape failed: ${response.status}`);
-        }
-        const metrics = await response.text();
-        writeFileSync(path.join(output, "writer-metrics.prom"), metrics);
-        return metrics
-          .split("\n")
-          .filter(
-            (line) =>
-              /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
-              line.includes('kind="sqlite_writer"'),
-          );
-      })
-    : Promise.resolve(undefined);
+  const diagnosticMetrics =
+    values["writer-reads"] || values["cheap-handlers"]
+      ? delay(
+          Math.max(0, Math.min(durationMs, 300_000) - (performance.now() - restartAt)),
+          undefined,
+          { ref: false },
+        ).then(async () => {
+          const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) {
+            throw new Error(`Diagnostic metrics scrape failed: ${response.status}`);
+          }
+          const metrics = await response.text();
+          writeFileSync(path.join(output, "writer-metrics.prom"), metrics);
+          return metrics.split("\n");
+        })
+      : Promise.resolve(undefined);
   // Observe a failed scrape immediately while the reconnect cohort is still running.
-  void writerMetrics.catch((error: unknown) => {
+  void diagnosticMetrics.catch((error: unknown) => {
     failure ??= error instanceof Error ? error : new Error(String(error));
   });
   await Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index)));
@@ -841,6 +955,7 @@ try {
       maxMs: successful.at(-1) ?? null,
     };
   };
+  const metrics = await diagnosticMetrics;
   const result = {
     output,
     fixture,
@@ -848,7 +963,27 @@ try {
     runCount,
     durationMs,
     pollMs,
-    writerQueueMetrics: await writerMetrics,
+    writerQueueMetrics: metrics?.filter(
+      (line) =>
+        /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
+        line.includes('kind="sqlite_writer"'),
+    ),
+    rpcPhaseMetrics: metrics?.filter((line) =>
+      /^openclaw_gateway_rpc_(admission|handler|first_response|queue_wait)_seconds_/.test(line),
+    ),
+    cheapHandlerFixture: values["cheap-handlers"]
+      ? {
+          githubFixtureRequests,
+          github:
+            "bundled plugin and host dispatch; anonymous identity; fixed in-process HTTP transport; no external GitHub latency",
+          workboardCards: clientCount,
+          push: "persisted VAPID key and one disabled subscription per paired browser",
+          reconnectOrder:
+            "sessions.subscribe starts first on each socket, before parallel list and cheap-handler requests",
+          diagnostics:
+            "cumulative histograms since exporter start; requests before exporter subscription are not covered",
+        }
+      : undefined,
     readyMs,
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,
@@ -870,6 +1005,15 @@ try {
         },
       ]),
     ),
+    firstTwoMinutes: Object.fromEntries(
+      shapes.map(({ method, params }) => [
+        method,
+        {
+          params,
+          ...summarize(timings.filter((row) => row.method === method && row.startedMs < 120_000)),
+        },
+      ]),
+    ),
     connectionErrors,
     timings,
     eluSamples,
@@ -879,6 +1023,7 @@ try {
   if (
     connectedClients.size < clientCount ||
     shapes.some(({ method }) => !timings.some((row) => row.method === method && !row.error)) ||
+    (values["cheap-handlers"] && githubFixtureRequests === 0) ||
     eluSamples.length === 0
   ) {
     throw new Error(`incomplete measurement; inspect ${output}/result.json`);

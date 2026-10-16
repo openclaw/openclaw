@@ -127,23 +127,12 @@ function createSharedResultObserver(
     if (!cached) {
       cached = Promise.resolve()
         .then(() => lifecycle.runInTransportContext(resultFn))
-        .then(
-          (resolved) => {
-            try {
-              lifecycle.observer.observeFinalResult(
-                lifecycle.eventBase,
-                lifecycle.startedAt,
-                resolved,
-              );
-              lifecycle.emitCompleted();
-              return resolved;
-            } catch (error) {
-              lifecycle.emitError(error);
-              throw error;
-            }
-          },
-          (err: unknown) => throwModelCallError(lifecycle, err),
-        );
+        .then((resolved) => {
+          lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, resolved);
+          lifecycle.emitCompleted();
+          return resolved;
+        })
+        .catch((err: unknown) => throwModelCallError(lifecycle, err));
       // Drain-only consumers never await this promise; retain rejection for callers.
       void cached.catch(() => undefined);
     }
@@ -208,16 +197,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
         streamFn(model, streamContext, lifecycle.propagatedOptions),
       );
       if (isPromiseLike(result)) {
-        return result.then(
-          (resolved) => {
-            try {
-              return observeModelCallStream(resolved, lifecycle);
-            } catch (error) {
-              return throwModelCallError(lifecycle, error);
-            }
-          },
-          (err: unknown) => throwModelCallError(lifecycle, err),
-        );
+        return result
+          .then((resolved) => observeModelCallStream(resolved, lifecycle))
+          .catch((err: unknown) => throwModelCallError(lifecycle, err));
       }
       return observeModelCallStream(result, lifecycle);
     } catch (err) {

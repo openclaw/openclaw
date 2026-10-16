@@ -18,7 +18,7 @@ import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
-} from "./components/chat-message-markdown.ts";
+} from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import {
