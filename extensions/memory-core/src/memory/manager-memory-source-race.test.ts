@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
@@ -12,6 +12,16 @@ import {
 import * as recallStore from "../short-term-promotion-store.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import type { MemoryIndexManager } from "./manager.js";
+
+function indexReader(manager: MemoryIndexManager) {
+  // This fixture owns the manager and its published native database.
+  const db = Reflect.get(manager, "db") as DatabaseSync;
+  return {
+    get: (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).get(...params),
+    all: (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params),
+  };
+}
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -20,6 +30,15 @@ describe("memory source changes during indexing", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+  async function keywordIndex(name: string, content: string) {
+    await fs.writeFile(path.join(fixture.paths.memory, name), content);
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+      "cli",
+    );
+    await manager.sync({ reason: "baseline", force: true });
+    return manager;
+  }
 
   it.each([
     ...["batch-test", "batch-wide-test"].flatMap((provider) =>
@@ -54,18 +73,12 @@ describe("memory source changes during indexing", () => {
       await fs.writeFile(changingFile, obsoleteContent);
       await fs.writeFile(siblingFile, "Updated beta sibling survives the concurrent edit.");
       Reflect.set(manager, "dirty", true);
-      let releaseEmbedding = () => {};
-      const embeddingGate = new Promise<void>((resolve) => {
-        releaseEmbedding = resolve;
-      });
-      let changingSourceEntered = () => {};
-      const changingSourceReady = new Promise<void>((resolve) => {
-        changingSourceEntered = resolve;
-      });
+      const embeddingGate = createDeferred<void>();
+      const changingSourceReady = createDeferred<void>();
       fixture.provider.providerRuntimeBatchEntered = (_activeCalls, texts) => {
         if (texts.some((text) => text.includes("Obsolete alpha source"))) {
-          fixture.provider.providerRuntimeBatchGate = embeddingGate;
-          changingSourceEntered();
+          fixture.provider.providerRuntimeBatchGate = embeddingGate.promise;
+          changingSourceReady.resolve();
         }
       };
       if (maintenance) {
@@ -80,8 +93,8 @@ describe("memory source changes during indexing", () => {
         : manager.sync({ reason: "watch", force });
       void activeSync.catch(() => undefined);
       try {
-        await Promise.race([changingSourceReady, activeSync]);
-        expect(fixture.provider.providerRuntimeBatchGate).toBe(embeddingGate);
+        await Promise.race([changingSourceReady.promise, activeSync]);
+        expect(fixture.provider.providerRuntimeBatchGate).toBe(embeddingGate.promise);
         if (!maintenance) {
           expect(manager.status().dirty).toBe(true);
         }
@@ -90,44 +103,40 @@ describe("memory source changes during indexing", () => {
         } else {
           await fs.writeFile(changingFile, latestContent);
         }
-        releaseEmbedding();
+        embeddingGate.resolve();
         await expect(activeSync).resolves.toBeUndefined();
-        const db = Reflect.get(manager, "db") as DatabaseSync;
+        const { all, get } = indexReader(manager);
         const indexedText = () =>
-          db
-            .prepare("SELECT text FROM memory_index_chunks")
-            .all()
+          all("SELECT text FROM memory_index_chunks")
             .map((row) => row.text)
             .join("\n");
-        expect(indexedText()).toContain("Updated beta sibling");
-        expect(indexedText()).not.toContain("Obsolete alpha");
+        const expectCurrentSibling = () => {
+          expect(indexedText()).toContain("Updated beta sibling");
+          expect(indexedText()).not.toContain("Obsolete alpha");
+        };
+        expectCurrentSibling();
         expect(manager.status().dirty).toBe(true);
         expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(false);
 
         fixture.provider.providerRuntimeBatchCalls = [];
         await manager.sync({ reason: "retry-source" });
         expect(manager.status().dirty).toBe(false);
-        expect(indexedText()).toContain("Updated beta sibling");
-        expect(indexedText()).not.toContain("Obsolete alpha");
+        expectCurrentSibling();
         if (mutation === "delete") {
           expect(
-            db
-              .prepare("SELECT path FROM memory_index_sources WHERE path = ?")
-              .get("memory/changing.md"),
+            get("SELECT path FROM memory_index_sources WHERE path = ?", "memory/changing.md"),
           ).toBeUndefined();
         } else {
           expect(indexedText()).toContain("Latest alpha source");
           expect(
-            db
-              .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = ?")
-              .get(hashText(latestContent)),
+            get("SELECT hash FROM memory_embedding_cache WHERE hash = ?", hashText(latestContent)),
           ).toEqual({ hash: hashText(latestContent) });
         }
         expect(fixture.provider.providerRuntimeBatchCalls.flat().join("\n")).not.toContain(
           "beta sibling",
         );
       } finally {
-        releaseEmbedding();
+        embeddingGate.resolve();
         await activeSync.catch(() => undefined);
         fixture.provider.providerRuntimeBatchGate = null;
         fixture.provider.providerRuntimeBatchEntered = null;
@@ -137,19 +146,16 @@ describe("memory source changes during indexing", () => {
 
   it("revalidates the file after a real SQLite BEGIN collision before replacing its index", async () => {
     const memoryPath = path.join(fixture.paths.memory, "contended.md");
-    await fs.writeFile(memoryPath, "Original indexed source.");
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-      "cli",
-    );
-    await manager.sync({ reason: "baseline", force: true });
+    const manager = await keywordIndex("contended.md", "Original indexed source.");
     await fs.writeFile(memoryPath, "Obsolete source waiting for the writer.");
     Reflect.set(manager, "dirty", true);
     const databasePath = manager.status().dbPath;
     if (!databasePath) {
       throw new Error("Expected a memory index database path");
     }
-    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const { all } = indexReader(manager);
+    const texts = () =>
+      all("SELECT text FROM memory_index_chunks WHERE path = ?", "memory/contended.md");
     const peer = new DatabaseSync(databasePath);
     const collision = createDeferred<void>();
     const revalidate = createDeferred<void>();
@@ -185,18 +191,10 @@ describe("memory source changes during indexing", () => {
       peer.exec("ROLLBACK");
       revalidate.resolve();
       await sync;
-      expect(
-        db
-          .prepare("SELECT text FROM memory_index_chunks WHERE path = ?")
-          .all("memory/contended.md"),
-      ).toEqual([{ text: "Original indexed source." }]);
+      expect(texts()).toEqual([{ text: "Original indexed source." }]);
       expect(manager.status().dirty).toBe(true);
       await manager.sync({ reason: "retry-current-source" });
-      expect(
-        db
-          .prepare("SELECT text FROM memory_index_chunks WHERE path = ?")
-          .all("memory/contended.md"),
-      ).toEqual([{ text: "Current source after the writer collision." }]);
+      expect(texts()).toEqual([{ text: "Current source after the writer collision." }]);
     } finally {
       revalidate.resolve();
       if (peer.isTransaction) {
@@ -210,23 +208,15 @@ describe("memory source changes during indexing", () => {
   it("settles an earlier recall before deleting a stale memory source", async () => {
     const stalePath = "memory/stale.md";
     const siblingPath = "memory/2026-01-12.md";
-    await fs.writeFile(path.join(fixture.paths.workspace, stalePath), "Obsolete violet source.");
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-      "cli",
-    );
-    await manager.sync({ reason: "baseline", force: true });
-    // SAFETY: The fixture owns this manager and its published native database.
-    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const manager = await keywordIndex("stale.md", "Obsolete violet source.");
+    const { all, get } = indexReader(manager);
     const sibling = () =>
-      db
-        .prepare("SELECT id, hash, text FROM memory_index_chunks WHERE path = ? ORDER BY id")
-        .all(siblingPath);
+      all("SELECT id, hash, text FROM memory_index_chunks WHERE path = ? ORDER BY id", siblingPath);
     const siblingBefore = sibling();
     expect(siblingBefore.length).toBeGreaterThan(0);
-    expect(
-      db.prepare("SELECT path FROM memory_index_sources WHERE path = ?").get(stalePath),
-    ).toEqual({ path: stalePath });
+    expect(get("SELECT path FROM memory_index_sources WHERE path = ?", stalePath)).toEqual({
+      path: stalePath,
+    });
     await fs.unlink(path.join(fixture.paths.workspace, stalePath));
     Reflect.set(manager, "dirty", true);
 
@@ -244,8 +234,7 @@ describe("memory source changes during indexing", () => {
       await releaseRecall.promise;
       return store;
     });
-    // Observe only the protected caller. Delegate unchanged before signaling its attempt.
-    // SAFETY: Observe the existing protected caller without changing its receiver or inputs.
+    // Delegate unchanged before signaling the protected caller's deletion attempt.
     const deletion = manager as unknown as {
       deleteIndexedFile(
         pathname: string,
@@ -312,14 +301,11 @@ describe("memory source changes during indexing", () => {
 
       expect(deletionObserved, "real incremental sync attempted stale-source deletion").toBe(true);
       expect(
-        db.prepare("SELECT path FROM memory_index_sources WHERE path = ?").get(stalePath),
+        get("SELECT path FROM memory_index_sources WHERE path = ?", stalePath),
       ).toBeUndefined();
-      expect(
-        db.prepare("SELECT id FROM memory_index_chunks WHERE path = ?").all(stalePath),
-      ).toEqual([]);
-      expect(
-        db.prepare("SELECT id FROM memory_index_chunks_fts WHERE path = ?").all(stalePath),
-      ).toEqual([]);
+      for (const table of ["memory_index_chunks", "memory_index_chunks_fts"]) {
+        expect(all(`SELECT id FROM ${table} WHERE path = ?`, stalePath)).toEqual([]);
+      }
       expect(sibling()).toEqual(siblingBefore);
       const recorded = await memoryOrigins.listMemoryEntryOrigins({
         agentId: "main",
@@ -339,16 +325,15 @@ describe("memory source changes during indexing", () => {
       ).toEqual([
         expect.objectContaining({ key: recorded[0]?.entryKey, path: siblingPath, recallCount: 1 }),
       ]);
-      expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      expect(all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
       expect(publicationsWhileRecallHeld).toBe(0);
       expect(events).toEqual(["origins", "delete"]);
     } finally {
       releaseRecall.resolve();
       await Promise.allSettled([recall, ...(sync ? [sync] : [])]);
-      publicationSpy.mockRestore();
-      originsSpy.mockRestore();
-      callerSpy.mockRestore();
-      readSpy.mockRestore();
+      for (const spy of [publicationSpy, originsSpy, callerSpy, readSpy]) {
+        spy.mockRestore();
+      }
     }
   });
 });
