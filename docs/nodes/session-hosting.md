@@ -392,7 +392,7 @@ choose **Existing folder on device** in the workspace picker and enter an
 absolute path on that device. This option is not available for **Auto**, cloud
 workers, runtimes without worker-turn execution, or devices that do not advertise
 the capability. Operators with `operator.admin` can also choose **Browse folders
-on <device>** to list folders on that device through its `fs.listDir` command.
+on** _device_ to list folders on that device through its `fs.listDir` command.
 The listing is not limited to `folders` roots; the device validates the chosen
 folder when the session is created. The Gateway never browses or resolves this
 path locally.
