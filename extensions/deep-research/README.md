@@ -1,6 +1,6 @@
 # Deep Research
 
-An opt-in, lazy bundled research tool. Enable `plugins.entries.deep-research.enabled` and allow `deep_research` through the existing tool policy.
+A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
 Supply a question; the host selects its configured API model. An explicit model
 override requires the existing plugin LLM policy permission. An optional
 `requiredAuthMode: "oauth"` refuses other credential modes through the auth owner.
