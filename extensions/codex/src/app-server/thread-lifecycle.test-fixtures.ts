@@ -32,6 +32,20 @@ import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecyc
 
 export { createCodexRuntimePlanFixture } from "./test-support.js";
 
+export function createLifecycleRequest(
+  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
+) {
+  return vi.fn((method: string, requestParams?: unknown) => {
+    if (method === "config/read") {
+      return Promise.resolve({ config: {}, origins: {}, layers: [] });
+    }
+    if (method === "configRequirements/read") {
+      return Promise.resolve({ requirements: null });
+    }
+    return respond(method, requestParams);
+  });
+}
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;
@@ -485,17 +499,6 @@ export async function writeNativeCatalogFixture(
     rolloutPath,
     `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
   );
-}
-
-export function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {
