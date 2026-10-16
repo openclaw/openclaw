@@ -925,6 +925,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-ownership.test.ts",
   "src/sessions/session-created.test.ts",
   "src/sessions/session-upstream-links.test.ts",
+  "src/sessions/session-upstream-links-presence.test.ts",
   "src/sessions/session-upstream-monitor.test.ts",
   "src/sessions/user-turn-transcript.test.ts",
   "src/sessions/user-turn-transcript.persistence.test.ts",
