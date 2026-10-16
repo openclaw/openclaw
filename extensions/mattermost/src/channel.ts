@@ -756,8 +756,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         });
         ctx.log?.info(`[${account.accountId}] starting channel`);
         return (await import("./mattermost/monitor.js")).monitorMattermostProvider({
-          botToken: account.botToken ?? undefined,
-          baseUrl: account.baseUrl ?? undefined,
+          botToken: account.botToken,
+          baseUrl: account.baseUrl,
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,

@@ -90,7 +90,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       logger,
     });
 
-  const account = resolveTlonAccount(cfg, opts.accountId ?? undefined);
+  const account = resolveTlonAccount(cfg, opts.accountId);
   if (!account.enabled) {
     return;
   }
@@ -381,7 +381,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "tlon",
-      accountId: opts.accountId ?? undefined,
+      accountId: opts.accountId,
       peer: {
         kind: isGroup ? "group" : "direct",
         id: isGroup ? (channelNest ?? senderShip) : senderShip,
@@ -585,7 +585,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             await sendGroupMessage({
               ...groupSendContext,
               text: replyText,
-              replyToId: parentId ?? undefined,
+              replyToId: parentId,
             });
             return { visibleReplySent: true, replyToId: parentId ?? undefined };
           }
@@ -1089,16 +1089,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     try {
       await settingsManager.startSubscription((newSettings) => {
-        settingsState.currentSettings = newSettings;
-
         // Keep watching during transitions; the authorization check handles removals.
         addWatchedChannels(
           newSettings.groupChannels ?? [],
           "[tlon] Settings: now watching channel ",
         );
 
-        // Recompute effective settings from the latest snapshot so deletions
-        // cleanly fall back to file config and empty arrays remain authoritative.
+        // Install the snapshot and effective overrides together; deleted overrides
+        // fall back to file config while empty arrays remain authoritative.
         Object.assign(
           settingsState,
           applyTlonSettingsOverrides({

@@ -113,10 +113,10 @@ export function reportLineQuoteCarrierMissing(chatId: string): void {
 export function applyLineQuoteToken(
   messages: readonly Message[],
   quoteToken: string | undefined,
-): Message[] {
+): readonly Message[] {
   const target = quoteToken ? messages.findIndex(canCarryLineQuoteToken) : -1;
   return target < 0
-    ? [...messages]
+    ? messages
     : messages.map((message, index) => (index === target ? { ...message, quoteToken } : message));
 }
 

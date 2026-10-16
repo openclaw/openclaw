@@ -232,7 +232,6 @@ async function fetchFreshSlackFileUrl(params: {
     }
     const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
     if (freshUrl) {
-      logVerbose(`slack: refreshed file URL via files.info for file id=${params.file.id}`);
       return freshUrl;
     }
     logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);

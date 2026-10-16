@@ -5951,9 +5951,10 @@ in the same synchronous consuming frame. Personal skill-library storage, exec-po
 eligibility, and incognito memory state remain with their respective owners.
 This changes no SDK, RPC schema, stored data, permission, or update contract.
 
-For writes, shared-state domain operations registered by
-`src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
-through their original store/projection owner.
+For writes, shared-state domain operations load on demand through
+`src/state/openclaw-state-worker-registry.ts`, reuse the broker, and publish results
+through their original store/projection owner. Cron preparation and the retained
+update-run writer remain owned by the shared-state backend.
 
 Native subagent completion, recovery, and delivery settlement use the subagent
 registry and its retained run records, not a Task projection or detached-task SDK

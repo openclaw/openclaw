@@ -8,6 +8,7 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
@@ -55,7 +56,7 @@ type CodexDiagnosticsCandidate = Omit<
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   context: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string,
 ): Promise<PluginCommandResult> {
   const ctx = { ...context };
@@ -199,7 +200,7 @@ function previewCodexDiagnosticsFeedbackApproval(
 async function confirmCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   token: string,
 ): Promise<string> {
   const pending = consumeCodexDiagnosticsConfirmation(ctx, token, "confirm");
@@ -249,7 +250,7 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
 async function sendCodexDiagnosticsFeedbackForTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   note: string,
   targets: CodexDiagnosticsTarget[],
   cooldownScope?: string,

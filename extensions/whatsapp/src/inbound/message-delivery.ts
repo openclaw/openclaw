@@ -135,7 +135,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     socketSession,
     groupMetadata,
     parseTimestampSeconds: parseWhatsAppTimestampSeconds,
-    logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
   });
   const normalizeInboundMessage = messageNormalizer.normalize;
   const shouldSkipRecentOutboundEcho = messageNormalizer.shouldSkipRecentOutboundEcho;

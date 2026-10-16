@@ -852,7 +852,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["patchConfigHealthEntryInDatabase"],
         evidence:
-          "Only openclaw-state-worker-runtime.ts calls this conditional patch through the shared-state worker. Native config compatibility reads and writes remain T1.",
+          "Only configSnapshotOperations[config.health.patch] in config-journal-snapshot.worker.ts calls this conditional patch through the shared-state worker. Native config compatibility reads and writes remain T1.",
       },
     ],
   ],
@@ -1561,7 +1561,7 @@ const reviewedOperations = new Map([
           "updateSecretStoreAllowedHostsInDatabase",
         ],
         evidence:
-          "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",
+          "Only secretStoreOperations in secret-store.worker.ts calls these ordinary secret mutation kernels",
       },
     ],
   ],
@@ -2018,7 +2018,7 @@ const reviewedOperations = new Map([
           "readSandboxRegistryRowInDatabase",
         ],
         evidence:
-          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
+          "Registry mutations, including reservation and removal-intent selection, run only through sandboxRegistryOperations in registry-write.worker.ts; insertIfMissing delegates to registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
       },
     ],
   ],
@@ -2822,7 +2822,7 @@ const reviewedOperations = new Map([
           "readAgentProvenanceBatchInDatabase",
         ],
         evidence:
-          "agentProvenance.list/readBatch/record execute through openclaw-state-worker-runtime.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
+          "agentProvenance.list/readBatch/record execute through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],
@@ -3112,7 +3112,8 @@ const workerModules = new Set([
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
   "src/config/sessions/session-pending-input-history-reconcile.ts", // Pending-input execution registry dispatches only in openclaw-agent-execution.worker.ts.
   "src/infra/session-cost-usage-cache-read.ts", // Usage-cache reads run only in session-transcript.worker.ts.
-  "src/claws/provenance-runtime-read.kernel.ts", // Only openclaw-state-worker-runtime.ts reads consent rows; host imports are types.
+  "src/claws/provenance-runtime-read.kernel.ts", // Only clawInstallSchemaOperations in provenance-runtime-read.worker.ts reads consent rows; host imports are types.
+  "src/claws/provenance-runtime-read.worker.ts", // Shared-state registry owns claws.install-schema-versions.
   "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
   "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
@@ -3210,6 +3211,7 @@ const workerModules = new Set([
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.
+  "src/infra/update-run-dispatch.worker.ts", // Shared-state backend owns update-run dispatch and retains its writer lifecycle.
   "src/infra/update-run-reconciliation.read.ts", // Reconciliation reads use state-read and reconciliation workers.
 
   "src/infra/outbound/delivery-queue-media-staging.kernel.ts", // Media retention SQL executes through delivery-queue.worker.
@@ -3225,25 +3227,28 @@ const workerModules = new Set([
 
   "src/projects/project-registry.kernel.ts", // Project registry handler table is the only runtime caller of its SQL kernels.
 
-  "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
+  "src/secrets/store/secret-store-config-ref.kernel.ts", // Only secretStoreOperations in secret-store.worker.ts calls config-ref writes.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
   "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
+  "src/secrets/store/secret-store.worker.ts", // Shared-state registry owns the secretStoreOperations map.
 
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
   "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
 
-  "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
+  "src/state/agent-provenance.worker.ts", // Shared-state registry owns agentProvenanceOperations.
+  "src/state/backup-run-records.kernel.ts", // Only backupRunOperations in backup-run-records.worker.ts calls backup record writes.
+  "src/state/backup-run-records.worker.ts", // Shared-state registry owns backup.recordOutcome.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
   "src/state/github-publication-source.kernel.ts", // Only github-publication-source.worker.ts:63,80; its reader is instantiated by openclaw-state.worker.ts:234.
   "src/state/openclaw-state-lease-worker.ts", // Lease transaction dispatch is called only by the shared-state worker backend.
-  "src/state/openclaw-state-worker-runtime.ts",
   "src/state/session-repository-workspaces.kernel.ts", // SQL callers are shared-state workspace dispatch and the state read worker.
 
   "src/transcripts/store-sqlite-read.ts", // SQL callers are transcript worker read/write dispatchers only.
   "src/transcripts/store-sqlite-write.ts", // SQL writes are called only by the transcript worker dispatcher.
   "src/transcripts/store-sqlite.ts", // SQL callers are transcript worker kernels; host imports are pure helpers.
-  "src/transcripts/store-worker-write.ts", // Called only by the shared-state worker runtime.
+  "src/transcripts/store-worker-read.ts", // Shared-state registry owns transcriptReadOperations and its snapshot reads.
+  "src/transcripts/store-worker-write.ts", // Shared-state registry owns transcriptWriteOperations.
 ]);
 const exceptionModules = new Set([
   "src/state/openclaw-state-db-transaction.ts",

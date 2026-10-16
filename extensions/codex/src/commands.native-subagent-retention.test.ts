@@ -11,6 +11,7 @@ import {
 } from "./app-server/client-runtime.js";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
+import type { CodexPluginConfig } from "./app-server/config.js";
 import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import { nativeCompletionNotification } from "./app-server/native-subagent-monitor.test-support.js";
 import { isJsonObject, type CodexServerNotification } from "./app-server/protocol.js";
@@ -75,7 +76,7 @@ describe("codex command", () => {
           homeScope: "user",
           requestTimeoutMs: 10_000,
         },
-      };
+      } satisfies CodexPluginConfig;
       const startedThread = threadStartResult(threadId, "/repo");
       const response = {
         ...startedThread,

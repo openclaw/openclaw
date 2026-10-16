@@ -300,15 +300,14 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
-    () => {
-      if (!list) {
-        return;
+    ([isOpen, highlighted]) => {
+      if (list) {
+        const node = optionElements.get(highlighted ?? "");
+        if (isOpen && node) {
+          revealInScrollRegion(list, node);
+        }
+        scrollFade();
       }
-      const node = optionElements.get(active() ?? "");
-      if (overlay.open && node) {
-        revealInScrollRegion(list, node);
-      }
-      scrollFade();
     },
   );
   onSettled(() => {
