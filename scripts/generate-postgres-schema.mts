@@ -22,6 +22,11 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
+import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
+import {
+  DOCTOR_OWNED_STATE_TABLES,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../src/state/openclaw-state-db-contract.ts";
 import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
   TASK_RUN_INDEX_REPLACEMENTS_V24,
@@ -99,7 +104,8 @@ function generateDatabasePortMetadata(
       .prepare(
         "SELECT name, tbl_name AS 'table', sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
       )
-      .all(),
+      .all()
+      .filter((trigger) => data.tables.some((table) => table.name === trigger.table)),
     preData: [0, split],
     postData: [split, source.postgres.length],
   };
@@ -189,7 +195,25 @@ export async function generatePostgresSchemas(
   const { DatabaseSync } = await import("node:sqlite");
   const catalogs: Record<string, Catalog> = {};
   const files: Record<string, string> = {};
-  const fragments = root === ROOT ? listOpenClawStateFeatureSchemas() : [];
+  const fragments =
+    root === ROOT
+      ? [
+          ...listOpenClawStateFeatureSchemas(),
+          // Absence means lost history: retain it on port without recreating it on admission.
+          ...DOCTOR_OWNED_STATE_TABLES.map((id) => ({
+            id,
+            tables: [id],
+            indexes: [],
+            dependencies: [],
+            activation: "version-additive" as const,
+            sql: () =>
+              extractSqliteTableSchema(
+                fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8"),
+                id,
+              ),
+          })),
+        ]
+      : [];
   const manifest = fragments.map(({ id, tables, indexes, dependencies, activation }) => ({
     id,
     tables,
@@ -310,6 +334,10 @@ export async function generatePostgresSchemas(
           )};\n`,
           { repoRoot: ROOT, outputPath: "runtime.ts", errorLabel: "state runtime" },
         );
+      }
+      if (root === ROOT && !options.reportOnly) {
+        files["state-port.json"] =
+          `${JSON.stringify(await generateStatePortMetadata(root, data, fragments, files), null, 2)}\n`;
       }
       continue;
     }
@@ -529,6 +557,65 @@ async function generateTeamReportsPostgresSchema(verify: boolean) {
     } else {
       fs.writeFileSync(path.join(ROOT, file), content);
     }
+  }
+}
+
+/** State uses the same catalog and fragments as runtime, including retained optional history. */
+async function generateStatePortMetadata(
+  root: string,
+  data: Catalog,
+  fragments: ReturnType<typeof listOpenClawStateFeatureSchemas>,
+  files: Record<string, string>,
+) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8"));
+    for (const fragment of fragments) {
+      db.exec(fragment.sql());
+    }
+    const entries = db
+      .prepare(
+        "SELECT tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid",
+      )
+      .all();
+    const fragmentTables = new Set(fragments.flatMap((fragment) => fragment.tables));
+    const schema = (id: string, tables: ReadonlySet<string>, postgres: string) => {
+      const subset = {
+        ...data,
+        schema: "",
+        tables: data.tables.filter((table) => tables.has(table.name)),
+        objects: data.objects.filter((item) => tables.has(item.table)),
+      };
+      return generateDatabasePortMetadata(db, subset, {
+        id,
+        version: OPENCLAW_STATE_SCHEMA_VERSION,
+        sqlite: entries
+          .filter((entry) => tables.has(String(entry.tbl_name)))
+          .map((entry) => `${String(entry.sql)};`)
+          .join("\n"),
+        postgres,
+      });
+    };
+    return {
+      ...schema(
+        "state",
+        new Set(
+          data.objects.filter((item) => !fragmentTables.has(item.table)).map((item) => item.table),
+        ),
+        files["state.postgres.sql"]!,
+      ),
+      fragments: fragments.map((fragment) => ({
+        ...schema(
+          fragment.id,
+          new Set(fragment.tables),
+          files[`fragment-${fragment.id}.postgres.sql`]!,
+        ),
+        dependencies: fragment.dependencies,
+      })),
+    };
+  } finally {
+    db.close();
   }
 }
 

@@ -57,7 +57,7 @@ it("redacts unresolved connection SecretRefs", async () => {
     },
   };
   const result = runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope);
-  await expect(result).rejects.toThrow("preflight: workboard, logbook, team-reports:");
+  await expect(result).rejects.toThrow("preflight: workboard, state, logbook, team-reports:");
   await expect(result).rejects.not.toThrow("OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION");
 });
 

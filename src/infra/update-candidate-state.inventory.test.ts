@@ -22,6 +22,7 @@ import {
 } from "./update-candidate-state.diagnostics.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
+  collectStateDatabasePaths,
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
@@ -30,6 +31,37 @@ import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => closeOpenClawStateDatabaseForTest());
+
+  it("queues retained custom shared-state roots for exact capture with plugins disabled", async () => {
+    const root = dirs.make("candidate-shared-roots-");
+    const stateDir = path.join(root, "selected");
+    const external = path.join(root, "external");
+    const discovered = await collectStateDatabasePaths(
+      {
+        stateDir,
+        config: {
+          plugins: {
+            enabled: false,
+            entries: {
+              "voice-call": { enabled: false, config: { store: external } },
+              "@openclaw/voice-call": { config: { store: "~/retained-calls" } },
+            },
+          },
+        },
+        env: { HOME: root, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      { includeUnconfiguredAgents: false },
+    );
+    for (const parent of [
+      stateDir,
+      path.join(stateDir, "voice-calls"),
+      external,
+      path.join(root, "retained-calls"),
+    ]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      expect(discovered.get(file)).toEqual({ spellings: [file], owners: [{ role: "global" }] });
+    }
+  });
 
   it.each([
     "missing plugin dependency",

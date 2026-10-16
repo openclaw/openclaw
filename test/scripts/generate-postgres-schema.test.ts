@@ -36,6 +36,27 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("generates state port metadata from every canonical table and optional fragment", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const metadata = JSON.parse(files["state-port.json"]!);
+    const schemas = [metadata, ...metadata.fragments];
+    expect(
+      schemas.flatMap((schema) => schema.tables.map((table) => table.name)).toSorted(),
+    ).toEqual(report.catalogs.state!.tables.map((table) => table.name).toSorted());
+    expect(
+      metadata.fragments.find((fragment) => fragment.id === "agent_deletion_journal"),
+    ).toBeDefined();
+    using db = new DatabaseSync(":memory:");
+    for (const schema of schemas) db.exec(schema.sqlite);
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .get()?.count,
+    ).toBe(134);
+  });
+
   it("preserves all agent relational objects and declares search separately", async () => {
     const { files, report } = await generatePostgresSchemas(root);
     const agent = report.catalogs.agent!;
@@ -204,6 +225,7 @@ describe("PostgreSQL schema generation", () => {
         "state.postgres.sql",
         "state-v23-v24.postgres.sql",
         "runtime.ts",
+        "state-port.json",
       ].toSorted(),
     );
     expect(

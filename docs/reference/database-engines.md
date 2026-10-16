@@ -70,8 +70,14 @@ including session transcripts and agent memory, still use SQLite, as do other
 stores without PostgreSQL support. Incognito storage remains memory-only.
 The supported PostgreSQL families are:
 
-- **Shared state:** runtime storage for fresh state directories. Porting existing
-  shared-state databases is not available yet.
+- **Shared state:** runtime storage, SQLite-to-PostgreSQL database ports, and
+  matched backups. The provider covers the selected `state/openclaw.sqlite` and
+  retained Voice Call state roots, including explicitly configured store paths
+  and disabled plugin entries. Matrix account/token roots are excluded from this
+  provider; their discovery and custody belong to the Matrix account-root lane.
+  PostgreSQL-to-SQLite and backup/restore conformance remain pending PostgreSQL
+  maintenance custody support; do not use these paths for recovery until that
+  support is available.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -98,11 +104,10 @@ Changing `database.engine` alone does not migrate existing data. Omitting
 configuration or data migration.
 
 Existing SQLite shared state refuses a PostgreSQL selection and names
-`openclaw database port` as the migration path. The port command currently handles
-Workboard, Logbook, and Team Reports; shared-state porting is not available yet. Keep existing
-installations on SQLite until that support lands, or use a fresh state directory
-for experimental PostgreSQL shared state. Do not remove existing data to switch
-engines.
+`openclaw database port` as the migration path. The port command handles
+current-schema shared state, Workboard, Logbook, and Team Reports. Upgrade older
+shared state with `openclaw doctor --fix` using a compatible binary before porting.
+Do not remove existing data to switch engines.
 
 ## Search on PostgreSQL
 
@@ -314,7 +319,12 @@ refuses the copy. Restore re-admits that same fragment set. Canonical triggers
 are installed after loading rows, while declared derived projections are omitted
 from copying and rebuilt by their owner before verification. Unknown triggers
 and views refuse the operation. Owners can migrate an older SQLite source only
-in the operation's private copy; the original capture remains intact.
+in the operation's private copy; the original capture remains intact. Shared-state
+ports require the current schema and preserve absent optional fragments, including
+Doctor-owned deletion history. Its persisted projection columns and tables are
+canonical data, so they are retained rather than rebuilt. Exact captures keep
+secrets and transient rows; user exports apply the existing shared-state sanitizer.
+Restore uses normal owner admission, including PostgreSQL catalog drift checks.
 
 Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.

@@ -17,6 +17,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
+import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -185,6 +186,9 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
+  for (const file of resolveStatePortRoots({ ...input, env: input.env ?? process.env })) {
+    queue(file, { role: "global" });
+  }
   // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
   queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   const directories =

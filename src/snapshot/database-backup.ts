@@ -177,7 +177,12 @@ async function preparePostgresRestoreInWorker(params: {
     const { loadDatabasePortDescriptor } =
       await import("../infra/database-engine/port-provider-descriptor.js");
     const descriptor = await loadDatabasePortDescriptor(manifest.source.owner, params.config);
-    return restorePostgresBackup({ ...params, client, descriptor, manifest });
+    const restored = await restorePostgresBackup({ ...params, client, descriptor, manifest });
+    const { resolveDatabaseEngineInput } = await import("../infra/database-engine/config.js");
+    const input = await resolveDatabaseEngineInput(params.config);
+    params.assertCurrent();
+    await descriptor.admit?.(params.anchorPath, input);
+    return restored;
   });
 }
 
