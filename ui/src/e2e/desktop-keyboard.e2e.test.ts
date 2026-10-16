@@ -6,6 +6,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
+const asciiText = "Aa7!z?Bb8@x#Cc9$w%Dd0^v&Ee1*f(G)";
 const suite = createControlUiE2eSuite({
   name: "desktop keyboard wire input",
   startServerBeforeBrowser: true,
@@ -45,6 +46,31 @@ async function openKeyboard(page: Page, beforeReady?: (panel: Locator) => Promis
   return { gateway, panel, peer, input: panel.locator(".desktop-keyboard-input") };
 }
 
+type ModifierRow = [string, string, string, number, string, number];
+function makeModifier([platform, key, code, location, flag, keysym]: ModifierRow) {
+  return { platform, key, code, location, flag, keysym };
+}
+function dispatchInput(
+  element: Element,
+  edit: { text: string; inputType: string; value?: string },
+) {
+  if (!(element instanceof HTMLTextAreaElement)) {
+    throw new Error("Expected the desktop keyboard textarea");
+  }
+  if (edit.value === undefined) {
+    element.setRangeText(edit.text, element.selectionStart, element.selectionEnd, "end");
+  } else {
+    element.value = edit.value;
+  }
+  element.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: edit.inputType,
+      data: edit.text || null,
+    }),
+  );
+}
+
 function keyPresses(keysyms: readonly number[]) {
   return keysyms.flatMap((keysym) => [
     { down: true, keysym },
@@ -80,19 +106,7 @@ suite.define(() => {
         }
         await keyboardButton.click();
         await expect.poll(() => input.evaluate((element) => element.matches(":focus"))).toBe(true);
-        await input.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected the desktop keyboard textarea");
-          }
-          element.setRangeText("p", element.selectionStart, element.selectionEnd, "end");
-          element.dispatchEvent(
-            new InputEvent("input", {
-              bubbles: true,
-              inputType: "insertFromPaste",
-              data: "p",
-            }),
-          );
-        });
+        await input.evaluate(dispatchInput, { text: "p", inputType: "insertFromPaste" });
         await expect
           .poll(peer.keyEvents)
           .toEqual([...keyPresses([0xffe1, 0x70]), ...(release ? [] : held)]);
@@ -107,38 +121,10 @@ suite.define(() => {
   );
 
   it.each([
-    {
-      platform: "MacIntel",
-      key: "Meta",
-      code: "MetaLeft",
-      location: 1,
-      flag: "metaKey",
-      keysym: 0xffe9,
-    },
-    {
-      platform: "MacIntel",
-      key: "Meta",
-      code: "MetaRight",
-      location: 2,
-      flag: "metaKey",
-      keysym: 0xffeb,
-    },
-    {
-      platform: "Win32",
-      key: "Control",
-      code: "ControlLeft",
-      location: 1,
-      flag: "ctrlKey",
-      keysym: 0xffe3,
-    },
-    {
-      platform: "Win32",
-      key: "Control",
-      code: "ControlRight",
-      location: 2,
-      flag: "ctrlKey",
-      keysym: 0xffe4,
-    },
+    makeModifier(["MacIntel", "Meta", "MetaLeft", 1, "metaKey", 0xffe9]),
+    makeModifier(["MacIntel", "Meta", "MetaRight", 2, "metaKey", 0xffeb]),
+    makeModifier(["Win32", "Control", "ControlLeft", 1, "ctrlKey", 0xffe3]),
+    makeModifier(["Win32", "Control", "ControlRight", 2, "ctrlKey", 0xffe4]),
   ])(
     "keeps $code paste local on $platform and sends literal text without held modifiers",
     async (modifier) => {
@@ -147,7 +133,7 @@ suite.define(() => {
           Object.defineProperty(navigator, "platform", { value: platform });
         }, modifier.platform);
         const { peer, input } = await openKeyboard(page);
-        const text = "Aa7!z?Bb8@x#Cc9$w%Dd0^v&Ee1*f(G)";
+        const text = asciiText;
         const defaults = await input.evaluate(
           (element, paste) => {
             if (!(element instanceof HTMLTextAreaElement)) {
@@ -223,7 +209,7 @@ suite.define(() => {
       });
       expect(await peer.keyEvents()).toEqual([]);
       const padding = await input.inputValue();
-      const text = "Aa7!z?Bb8@x#Cc9$w%Dd0^v&Ee1*f(G)";
+      const text = asciiText;
       const expected = keyPresses(Array.from(text, (character) => character.charCodeAt(0)));
 
       await page.keyboard.insertText(text);
@@ -288,22 +274,11 @@ suite.define(() => {
         const padding = await input.inputValue();
         await page.keyboard.insertText("🦞");
         await expect.poll(peer.keyEvents).toEqual(keyPresses([0x0101f99e]));
-        await input.evaluate(
-          (element, edit) => {
-            if (!(element instanceof HTMLTextAreaElement)) {
-              throw new Error("Expected the desktop keyboard textarea");
-            }
-            element.value = edit.value;
-            element.dispatchEvent(
-              new InputEvent("input", {
-                bubbles: true,
-                inputType: edit.inputType,
-                data: edit.replacement || null,
-              }),
-            );
-          },
-          { value: padding + replacement, inputType, replacement },
-        );
+        await input.evaluate(dispatchInput, {
+          value: padding + replacement,
+          inputType,
+          text: replacement,
+        });
         await expect.poll(peer.keyEvents).toEqual(keyPresses([0x0101f99e, ...keysyms]));
       });
     },

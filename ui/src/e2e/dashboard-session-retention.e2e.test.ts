@@ -35,6 +35,22 @@ function dashboardSnapshot(key: string, prefix: string) {
   };
 }
 
+function sessionList(dashboards = false) {
+  return {
+    count: 2,
+    defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
+    path: "",
+    sessions: [alphaKey, betaKey].map((key, index) => ({
+      key,
+      kind: "direct",
+      label: `${index === 0 ? "Alpha" : "Beta"} ${dashboards ? "dashboard" : "chat"}`,
+      updatedAt: 2 - index,
+      boardFace: dashboards ? "dashboard" : undefined,
+    })),
+    ts: Date.now(),
+  };
+}
+
 suite.define(() => {
   it("opens an empty task dashboard without editing the draft and preserves its chosen layout", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
@@ -117,16 +133,7 @@ suite.define(() => {
               { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
             ],
           },
-          "sessions.list": {
-            count: 2,
-            defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-            path: "",
-            sessions: [
-              { key: alphaKey, kind: "direct", label: "Alpha chat", updatedAt: 2 },
-              { key: betaKey, kind: "direct", label: "Beta chat", updatedAt: 1 },
-            ],
-            ts: Date.now(),
-          },
+          "sessions.list": sessionList(),
         },
       });
       await page.addInitScript(
@@ -177,21 +184,24 @@ suite.define(() => {
 
   it("shows a warmed dashboard immediately while its refresh is pending", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    const proofDir = path.join(suite.artifactDir, "dashboard-session-retention");
     if (recordProof) {
-      await mkdir(path.join(suite.artifactDir, "dashboard-session-retention"), { recursive: true });
+      await mkdir(proofDir, { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
         ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "dashboard-session-retention"),
-              size: { height: 900, width: 1280 },
-            },
+            recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } },
           }
         : {}),
     });
     const page = await context.newPage();
+    const screenshot = async (name: string) => {
+      if (recordProof) {
+        await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
+      }
+    };
     const gateway = await installMockGateway(page, {
       sessionKey: alphaKey,
       featureMethods: ["board.get", "chat.metadata", "chat.startup"],
@@ -202,28 +212,7 @@ suite.define(() => {
             { match: { sessionKey: betaKey }, response: dashboardSnapshot(betaKey, "beta") },
           ],
         },
-        "sessions.list": {
-          count: 2,
-          defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-          path: "",
-          sessions: [
-            {
-              boardFace: "dashboard",
-              key: alphaKey,
-              kind: "direct",
-              label: "Alpha dashboard",
-              updatedAt: 2,
-            },
-            {
-              boardFace: "dashboard",
-              key: betaKey,
-              kind: "direct",
-              label: "Beta dashboard",
-              updatedAt: 1,
-            },
-          ],
-          ts: Date.now(),
-        },
+        "sessions.list": sessionList(true),
       },
     });
 
@@ -231,14 +220,7 @@ suite.define(() => {
       await page.goto(new URL(dashboardPath(alphaKey), suite.server.baseUrl).href);
       const alphaTab = page.locator('[data-board-tab-id="alpha-main"]');
       await alphaTab.waitFor();
-      if (recordProof) {
-        await page.screenshot({
-          path: path.join(
-            path.join(suite.artifactDir, "dashboard-session-retention"),
-            "01-alpha-warmed.png",
-          ),
-        });
-      }
+      await screenshot("01-alpha-warmed");
 
       const sessionLink = (key: string) =>
         page.locator(
@@ -257,14 +239,7 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe(dashboardPath(betaKey));
       await expect.poll(() => dashboardActive(alphaKey)).toBe(false);
       await expect.poll(() => dashboardActive(betaKey)).toBe(true);
-      if (recordProof) {
-        await page.screenshot({
-          path: path.join(
-            path.join(suite.artifactDir, "dashboard-session-retention"),
-            "02-beta-selected.png",
-          ),
-        });
-      }
+      await screenshot("02-beta-selected");
 
       await gateway.deferNext("board.get", { sessionKey: alphaKey });
       await sessionLink(alphaKey).click();
@@ -272,24 +247,12 @@ suite.define(() => {
       expect(await alphaTab.textContent()).toContain("alpha main");
       await expect.poll(() => dashboardActive(alphaKey)).toBe(true);
       await expect.poll(() => dashboardActive(betaKey)).toBe(false);
-      if (recordProof) {
-        await page.screenshot({
-          path: path.join(
-            path.join(suite.artifactDir, "dashboard-session-retention"),
-            "03-alpha-retained.png",
-          ),
-        });
-      }
+      await screenshot("03-alpha-retained");
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(
-          path.join(
-            path.join(suite.artifactDir, "dashboard-session-retention"),
-            "dashboard-session-retention.webm",
-          ),
-        );
+        await video.saveAs(path.join(proofDir, "dashboard-session-retention.webm"));
       }
     }
   });

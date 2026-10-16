@@ -34,18 +34,30 @@ function sessionsResult(key: string, label: string, updatedAt: number) {
     count: 1,
     defaults: { contextTokens: null, model: null, modelProvider: null },
     path: "",
-    sessions: [
-      {
-        boardFace: "dashboard",
-        key,
-        kind: "direct",
-        label,
-        updatedAt,
-      },
-    ],
+    sessions: [{ boardFace: "dashboard", key, kind: "direct", label, updatedAt }],
     ts: updatedAt,
   };
 }
+
+const dashboardResponse = (response: unknown, match: object = { hasBoard: true }) => ({
+  cases: [{ match, response }],
+});
+const listError = (message: string, suspending = false) => ({
+  __mockError: {
+    code: "UNAVAILABLE",
+    message,
+    retryable: true,
+    ...(suspending ? { details: { reason: "gateway-suspending", phase: "draining" } } : {}),
+  },
+});
+const changedSession = (key: string, updatedAt?: number) => ({
+  agentId: "main",
+  key,
+  sessionKey: key,
+  kind: "direct",
+  reason: "update",
+  updatedAt,
+});
 
 function isDashboardRequest(request: { params?: unknown }): boolean {
   return (
@@ -73,14 +85,7 @@ suite.define(() => {
       const key = "agent:main:dashboard-12345678";
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.list": {
-            cases: [
-              {
-                match: { hasBoard: true },
-                response: sessionsResult(key, "Deploy monitor", 1),
-              },
-            ],
-          },
+          "sessions.list": dashboardResponse(sessionsResult(key, "Deploy monitor", 1)),
         },
       });
       await page.goto(`${suite.server.baseUrl}dashboards`);
@@ -88,14 +93,7 @@ suite.define(() => {
       await dashboards.getByText("Deploy monitor", { exact: true }).waitFor();
       const before = (await gateway.getRequests("sessions.list")).filter(isDashboardRequest);
       await gateway.deferNext("sessions.list", { hasBoard: true });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        agentId: "main",
-        key,
-        sessionKey: key,
-        kind: "direct",
-        reason: "update",
-        updatedAt: 2,
-      });
+      await gateway.emitGatewayEvent("sessions.changed", changedSession(key, 2));
       await expect
         .poll(
           async () =>
@@ -131,14 +129,10 @@ suite.define(() => {
       expect(await dashboards.getByRole("alert").textContent()).toContain("Showing stale data");
       expect(await dashboards.getByRole("alert").getByRole("button").count()).toBe(0);
 
-      await gateway.setMethodResponse("sessions.list", {
-        cases: [
-          {
-            match: { hasBoard: true },
-            response: sessionsResult(key, "Updated deploy monitor", 2),
-          },
-        ],
-      });
+      await gateway.setMethodResponse(
+        "sessions.list",
+        dashboardResponse(sessionsResult(key, "Updated deploy monitor", 2)),
+      );
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
       await dashboards.getByText("Updated deploy monitor", { exact: true }).waitFor();
@@ -162,23 +156,7 @@ suite.define(() => {
           awaitInitialRoster: !suspending,
           gatewaySuspensionPhase: suspending ? "draining" : "accepting",
           methodResponses: {
-            "sessions.list": {
-              cases: [
-                {
-                  match: { hasBoard: true },
-                  response: {
-                    __mockError: {
-                      code: "UNAVAILABLE",
-                      message: "Dashboard list unavailable",
-                      retryable: true,
-                      ...(suspending
-                        ? { details: { reason: "gateway-suspending", phase: "draining" } }
-                        : {}),
-                    },
-                  },
-                },
-              ],
-            },
+            "sessions.list": dashboardResponse(listError("Dashboard list unavailable", suspending)),
           },
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
@@ -191,21 +169,10 @@ suite.define(() => {
           expect(await dashboards.getByRole("alert").textContent()).toContain(
             "Dashboard list unavailable",
           );
-          await gateway.setMethodResponse("sessions.list", {
-            cases: [
-              {
-                match: { hasBoard: true },
-                response: {
-                  __mockError: {
-                    code: "UNAVAILABLE",
-                    message: "Gateway is suspending",
-                    retryable: true,
-                    details: { reason: "gateway-suspending", phase: "draining" },
-                  },
-                },
-              },
-            ],
-          });
+          await gateway.setMethodResponse(
+            "sessions.list",
+            dashboardResponse(listError("Gateway is suspending", true)),
+          );
           await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
           await gateway.emitGatewayEvent("sessions.changed", {
             agentId: "main",
@@ -222,9 +189,7 @@ suite.define(() => {
         expect(await dashboards.textContent()).not.toContain("Showing stale data");
         expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
         const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
-        await gateway.setMethodResponse("sessions.list", {
-          cases: [{ match: { hasBoard: true }, response: emptyResult }],
-        });
+        await gateway.setMethodResponse("sessions.list", dashboardResponse(emptyResult));
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
         await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
         await dashboards.locator("[data-dashboards-empty]").waitFor();
@@ -251,14 +216,10 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           deferredMethods: ["sessions.list"],
           methodResponses: {
-            "sessions.list": {
-              cases: [
-                {
-                  match: { archived: "all", hasBoard: true },
-                  response: sessionsResult(`agent:main:dashboard-${index}`, dashboardLabel, index),
-                },
-              ],
-            },
+            "sessions.list": dashboardResponse(
+              sessionsResult(`agent:main:dashboard-${index}`, dashboardLabel, index),
+              { archived: "all", hasBoard: true },
+            ),
           },
         });
         const canonicalLabel = `Older canonical tab ${index}`;
@@ -350,26 +311,21 @@ suite.define(() => {
       );
       await Promise.all(
         tabs.map(async ({ gateway, updatedDashboardLabel }, index) => {
-          await gateway.setMethodResponse("sessions.list", {
-            cases: [
-              {
-                match: { archived: "all", hasBoard: true },
-                response: sessionsResult(
-                  `agent:main:updated-dashboard-${index + 1}`,
-                  updatedDashboardLabel,
-                  20 + index,
-                ),
-              },
-            ],
-          });
-          await gateway.emitGatewayEvent("sessions.changed", {
-            agentId: "main",
-            key: `agent:main:changed-${index + 1}`,
-            kind: "direct",
-            reason: "update",
-            sessionKey: `agent:main:changed-${index + 1}`,
-            updatedAt: 20 + index,
-          });
+          await gateway.setMethodResponse(
+            "sessions.list",
+            dashboardResponse(
+              sessionsResult(
+                `agent:main:updated-dashboard-${index + 1}`,
+                updatedDashboardLabel,
+                20 + index,
+              ),
+              { archived: "all", hasBoard: true },
+            ),
+          );
+          await gateway.emitGatewayEvent(
+            "sessions.changed",
+            changedSession(`agent:main:changed-${index + 1}`, 20 + index),
+          );
         }),
       );
       await Promise.all(

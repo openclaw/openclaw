@@ -49,37 +49,30 @@ const dashboardRows = (
 }));
 
 const widgetMarkup = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#111827;color:#f8fafc;font:16px sans-serif"><main style="padding:24px"><h1>Live Gateway Pulse</h1><strong>All systems nominal</strong><p><label>Notes <input aria-label="Notes"></label></p><button onclick="document.querySelector('ul').replaceChildren(...Array.from(document.querySelectorAll('li')).reverse())">Reverse rows</button><ul><li>café</li><li>雪</li><li>🦞</li></ul></main></body></html>`;
+const resolveMatch = { shortId: "1234567890abcdef1234567890abcdef", agentId: "main" };
+const responseCase = (match: object, response: unknown) => ({ match, response });
+const boardWidget = (name: string, title: string, contentKind: string, position: number) => ({
+  name,
+  title,
+  contentKind,
+  position,
+  tabId: "main",
+  sizeW: 12,
+  sizeH: 6,
+  grantState: "granted",
+  revision: 1,
+});
 const boardSnapshots = dashboardRows.map((row) => ({
   sessionKey: row.key,
   revision: 1,
   tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
   widgets: [
     {
-      name: "gateway-pulse",
-      tabId: "main",
-      title: "Live Gateway Pulse",
-      contentKind: "html",
-      sizeW: 12,
-      sizeH: 6,
-      position: 0,
-      grantState: "granted",
-      revision: 1,
+      ...boardWidget("gateway-pulse", "Live Gateway Pulse", "html", 0),
       frameUrl: "/dashboard-gallery-widget.html",
     },
     ...(row.key === selectedSessionKey
-      ? [
-          {
-            name: "release-tools",
-            tabId: "main",
-            title: "Release tools",
-            contentKind: "mcp-app",
-            sizeW: 12,
-            sizeH: 6,
-            position: 1,
-            grantState: "granted",
-            revision: 1,
-          },
-        ]
+      ? [boardWidget("release-tools", "Release tools", "mcp-app", 1)]
       : []),
   ],
 }));
@@ -89,6 +82,11 @@ suite.define(() => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
+        const screenshot = async (name: string) => {
+          if (proofDir) {
+            await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
+          }
+        };
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
             contentType: "text/html; charset=utf-8",
@@ -107,18 +105,12 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.resolve": {
-              cases: [
-                {
-                  match: { shortId: "1234567890abcdef1234567890abcdef", agentId: "main" },
-                  response: selectedResolution,
-                },
-              ],
+              cases: [responseCase(resolveMatch, selectedResolution)],
             },
             "board.get": {
-              cases: boardSnapshots.map((snapshot) => ({
-                match: { sessionKey: snapshot.sessionKey },
-                response: snapshot,
-              })),
+              cases: boardSnapshots.map((snapshot) =>
+                responseCase({ sessionKey: snapshot.sessionKey }, snapshot),
+              ),
             },
             "board.widget.appView": {
               status: "ready",
@@ -127,14 +119,11 @@ suite.define(() => {
             },
             "chat.startup": {
               cases: [
-                {
-                  match: { shortId: "1234567890abcdef1234567890abcdef", agentId: "main" },
-                  response: {
-                    resolution: selectedResolution,
-                    messages: [],
-                    sessionInfo: dashboardRows[0],
-                  },
-                },
+                responseCase(resolveMatch, {
+                  resolution: selectedResolution,
+                  messages: [],
+                  sessionInfo: dashboardRows[0],
+                }),
               ],
             },
           },
@@ -175,9 +164,7 @@ suite.define(() => {
         expect(await releaseCard.locator("a").getAttribute("href")).toBe(
           "/dashboard/main/release-health-1234567890abcdef1234567890abcdef",
         );
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
-        }
+        await screenshot("01-gallery");
 
         await releaseCard.locator("a").click();
         await page.waitForURL(
@@ -190,11 +177,13 @@ suite.define(() => {
         const widget = page
           .locator('.board-session-surface iframe[title="Live Gateway Pulse"]')
           .contentFrame();
+        const noteInput = widget.getByRole("textbox", { name: "Notes" });
+        const widgetRows = widget.locator("li");
         const notes = "Release notes: café 雪 🦞";
-        await widget.getByRole("textbox", { name: "Notes" }).fill(notes);
-        expect(await widget.getByRole("textbox", { name: "Notes" }).inputValue()).toBe(notes);
+        await noteInput.fill(notes);
+        expect(await noteInput.inputValue()).toBe(notes);
         await clickBoardWidgetControl(page, widget.getByRole("button", { name: "Reverse rows" }));
-        expect(await widget.locator("li").allTextContents()).toEqual(["🦞", "雪", "café"]);
+        expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);
         const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
         await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
@@ -204,34 +193,26 @@ suite.define(() => {
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
         );
         await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
-        await widget.getByRole("textbox", { name: "Notes" }).waitFor();
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "02-gallery-return.png") });
-        }
-        expect(await widget.getByRole("textbox", { name: "Notes" }).inputValue()).toBe(notes);
-        expect(await widget.locator("li").allTextContents()).toEqual(["🦞", "雪", "café"]);
+        await noteInput.waitFor();
+        await screenshot("02-gallery-return");
+        expect(await noteInput.inputValue()).toBe(notes);
+        expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);
         expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt);
         // A cold route must resolve without the gallery's navigation handoff.
         await page.reload();
         await page.locator(".board-session-surface").waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         await expect.poll(() => task.locator(".chat-thread").isHidden()).toBe(true);
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
-        }
+        await screenshot("02-expanded-dashboard");
 
         await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await task.locator(".chat-thread").waitFor();
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
-        }
+        await screenshot("03-split-dashboard");
         await selectChatLayoutAction(page, "Minimize side panel");
         await page.locator(".board-session-surface").waitFor();
         await task.locator(".chat-thread").waitFor({ state: "hidden" });
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "04-dashboard-only.png") });
-        }
+        await screenshot("04-dashboard-only");
 
         await page.setViewportSize({ width: 390, height: 844 });
         await page.goto(`${suite.server.baseUrl}dashboards`);
@@ -252,9 +233,7 @@ suite.define(() => {
                 getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
             ),
         ).toBe(1);
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
-        }
+        await screenshot("05-gallery-mobile");
       },
     );
   });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
@@ -32,6 +33,24 @@ let artifactDirectory: string;
 beforeEach(() => {
   artifactDirectory = createControlUiE2eArtifactDir("mobile-desktop");
 });
+const button = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const exactText = (root: Page | Locator, name: string) => root.getByText(name, { exact: true });
+const remoteView = (panel: Locator) => panel.locator("[data-test-remote-desktop='true']");
+const unavailable = "The requested desktop is unavailable. Retry when the machine is ready.";
+const observe = (token: string, control = false) => ({
+  transport: "rfb",
+  wsPath: `/desktop/observe?token=${token}`,
+  expiresAtMs: 60_000,
+  control,
+});
+const screenshot = (page: Page, name: string) =>
+  page.screenshot({ path: path.join(artifactDirectory, `${name}.png`), fullPage: false });
+const activeLabel = (panel: Locator) =>
+  panel.evaluate((element) =>
+    (element.getRootNode() as Document | ShadowRoot).activeElement?.getAttribute("aria-label"),
+  );
+type GatewayWindow = Window & { openclawControlUiE2eGateway?: ControlUiMockGateway };
 const gatewayEnvironment = {
   id: "gateway",
   type: "local",
@@ -39,7 +58,7 @@ const gatewayEnvironment = {
   desktop: true,
 };
 
-async function installDesktopClientFake(panel: import("playwright").Locator) {
+async function installDesktopClientFake(panel: Locator) {
   await panel.evaluate((element) => {
     (
       element as HTMLElement & {
@@ -85,14 +104,9 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
 }
 
 async function startDesktopDocument(
-  page: import("playwright").Page,
+  page: Page,
   route: string,
-  desktopObserve: unknown = {
-    transport: "rfb",
-    wsPath: "/desktop/observe?token=document",
-    expiresAtMs: 60_000,
-    control: false,
-  },
+  desktopObserve: unknown = observe("document", false),
   describedSession?: unknown,
   inventoryMethod: "environments.list" | "environments.status" = route === "focus/desktop"
     ? "environments.list"
@@ -129,7 +143,7 @@ async function startDesktopDocument(
 }
 
 async function openDesktopDocument(
-  page: import("playwright").Page,
+  page: Page,
   route: string,
   environments: Array<{ id: string } & Record<string, unknown>>,
   desktopObserve?: unknown,
@@ -194,12 +208,7 @@ suite.define(() => {
               placement: { state: "active", environmentId: environment.id },
             },
           },
-          "desktop.observe": {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=targeted",
-            expiresAtMs: 60_000,
-            control: false,
-          },
+          "desktop.observe": observe("targeted", false),
         },
       });
       await page.goto(
@@ -224,9 +233,7 @@ suite.define(() => {
         )
         .toBe("24,180,160,255");
       expect(await gateway.getRequests("environments.list")).toHaveLength(0);
-      await page.screenshot({
-        path: path.join(artifactDirectory, "session-first-frame-without-global-inventory.png"),
-      });
+      await screenshot(page, "session-first-frame-without-global-inventory");
 
       for (let index = 0; index < 32; index += 1) {
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
@@ -303,12 +310,7 @@ suite.define(() => {
           featureMethods: ["desktop.observe", "environments.list", "environments.status"],
           methodResponses: {
             "sessions.list": chatSessionListResponse([session]),
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=chat-session",
-              expiresAtMs: 60_000,
-              control: false,
-            },
+            "desktop.observe": observe("chat-session", false),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -342,12 +344,8 @@ suite.define(() => {
           })),
         });
         if (initialState !== "active") {
-          await panel
-            .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
-              exact: true,
-            })
-            .waitFor();
-          await panel.getByRole("button", { name: "Retry", exact: true }).waitFor();
+          await exactText(panel, unavailable).waitFor();
+          await button(panel, "Retry").waitFor();
           expect(await gateway.getRequests("environments.status")).toHaveLength(0);
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
           await gateway.setSessionsListResponse(
@@ -370,7 +368,7 @@ suite.define(() => {
         const target = await gateway.waitForRequest("environments.status");
         expect(target.params).toEqual({ environmentId: sessionEnvironment.id });
         expect(await gateway.getRequests("environments.list")).toHaveLength(0);
-        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+        expect(await exactText(panel, "Desktop sources").count()).toBe(0);
         await gateway.resolveDeferred("environments.status", sessionEnvironment);
         const observed = await gateway.waitForRequest("desktop.observe");
         expect(observed.params).toEqual({
@@ -380,16 +378,14 @@ suite.define(() => {
               : { kind: "environment", environmentId: "worker-cloud" },
           control: false,
         });
-        await panel.locator("[data-test-remote-desktop='true']").waitFor();
+        await remoteView(panel).waitFor();
         const layoutMenu = await openChatLayoutMenu(page);
         const popout = layoutMenu.getByRole("link", { name: "Open desktop in new window" });
         expect(await popout.getAttribute("href")).toBe(
           `/focus/desktop/session/${encodeURIComponent(sessionKey)}`,
         );
         await closeChatLayoutMenu(page);
-        await page.screenshot({
-          path: path.join(artifactDirectory, `chat-session-${initialState}-connected.png`),
-        });
+        await screenshot(page, `chat-session-${initialState}-connected`);
 
         await page.evaluate(() => {
           window.dispatchEvent(
@@ -402,23 +398,16 @@ suite.define(() => {
           source: { kind: "node", nodeId: "maintenance" },
           control: false,
         });
-        await panel.locator("[data-test-remote-desktop='true']").waitFor();
-        const controlResponse = {
-          transport: "rfb",
-          wsPath: "/desktop/observe?token=manual-selection",
-          expiresAtMs: 60_000,
-          control: true,
-        };
+        await remoteView(panel).waitFor();
+        const controlResponse = observe("manual-selection", true);
         await gateway.setMethodResponse("desktop.observe", controlResponse);
-        await panel.getByRole("button", { name: "Take control", exact: true }).click();
+        await button(panel, "Take control").click();
         expect((await gateway.waitForRequest("desktop.observe", { after: 2 })).params).toEqual({
           source: { kind: "node", nodeId: "maintenance" },
           control: true,
         });
         await expect.poll(() => panel.getAttribute("data-view-only")).toBe("false");
-        await page.screenshot({
-          path: path.join(artifactDirectory, `chat-session-${initialState}-manual-selection.png`),
-        });
+        await screenshot(page, `chat-session-${initialState}-manual-selection`);
         const focusPath = "/focus/desktop/control/source/node%3Amaintenance";
         await openChatLayoutMenu(page);
         await expect.poll(() => popout.getAttribute("href")).toBe(focusPath);
@@ -455,9 +444,7 @@ suite.define(() => {
             ),
           )
           .toBe("worker-replacement");
-        await page.screenshot({
-          path: path.join(artifactDirectory, `chat-session-${initialState}-placement-update.png`),
-        });
+        await screenshot(page, `chat-session-${initialState}-placement-update`);
         expect(await selectedDesktop?.evaluate((element) => element.isConnected)).toBe(true);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(3);
         expect(await panel.getAttribute("data-view-only")).toBe("false");
@@ -489,33 +476,27 @@ suite.define(() => {
           await focusedPanel.waitFor({ state: "attached" });
           await popup.waitForFunction(
             () =>
-              (
-                window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-              ).openclawControlUiE2eGateway?.findRequests("environments.status").length,
+              (window as GatewayWindow).openclawControlUiE2eGateway?.findRequests(
+                "environments.status",
+              ).length,
           );
           await installDesktopClientFake(focusedPanel);
           await popup.evaluate((environment) => {
-            (
-              window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-            ).openclawControlUiE2eGateway?.resolveDeferred("environments.status", environment);
+            (window as GatewayWindow).openclawControlUiE2eGateway?.resolveDeferred(
+              "environments.status",
+              environment,
+            );
           }, inventory.environments[2]);
-          await focusedPanel.locator("[data-test-remote-desktop='true']").waitFor();
+          await remoteView(focusedPanel).waitFor();
           expect(
             await popup.evaluate(() =>
-              (
-                window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-              ).openclawControlUiE2eGateway
+              (window as GatewayWindow).openclawControlUiE2eGateway
                 ?.findRequests("desktop.observe")
                 .map((request) => request.params),
             ),
           ).toEqual([{ source: { kind: "node", nodeId: "maintenance" }, control: true }]);
           await expect.poll(() => focusedPanel.getAttribute("data-view-only")).toBe("false");
-          await popup.screenshot({
-            path: path.join(
-              artifactDirectory,
-              `chat-session-${initialState}-focused-selection.png`,
-            ),
-          });
+          await screenshot(popup, `chat-session-${initialState}-focused-selection`);
         } finally {
           await popup.close();
         }
@@ -530,10 +511,8 @@ suite.define(() => {
       await page.locator("openclaw-app-shell").waitFor();
       await page.goto(`${suite.server.baseUrl}focus/desktop`);
 
-      await page
-        .getByText("Desktop viewing is unavailable for this connection.", { exact: true })
-        .waitFor();
-      const back = page.getByRole("button", { name: "Back", exact: true });
+      await exactText(page, "Desktop viewing is unavailable for this connection.").waitFor();
+      const back = button(page, "Back");
       await back.waitFor();
       await back.click();
       await page.waitForURL(`${suite.server.baseUrl}dashboards`);
@@ -545,7 +524,7 @@ suite.define(() => {
       const { panel } = await openDesktopDocument(page, "focus/desktop", [gatewayEnvironment]);
       const viewer = panel.locator("section.desktop-document");
       await viewer.waitFor();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await exactText(panel, "Desktop sources").waitFor();
 
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(page.url()).not.toContain("model-setup");
@@ -556,10 +535,7 @@ suite.define(() => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
 
-      await page.screenshot({
-        path: path.join(artifactDirectory, "picker-390x844.png"),
-        fullPage: false,
-      });
+      await screenshot(page, "picker-390x844");
     });
   });
 
@@ -571,12 +547,8 @@ suite.define(() => {
         [gatewayEnvironment],
       );
 
-      await panel
-        .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
-          exact: true,
-        })
-        .waitFor();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await exactText(panel, unavailable).waitFor();
+      await exactText(panel, "Desktop sources").waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
     });
   });
@@ -634,7 +606,7 @@ suite.define(() => {
         source: scenario.source,
         control: false,
       });
-      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+      await remoteView(panel).waitFor();
       await gateway.setMethodResponse("sessions.describe", {
         session: {
           key: sessionKey,
@@ -648,26 +620,20 @@ suite.define(() => {
         environments: [gatewayEnvironment, { ...scenario.environment, desktop: true }],
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "reclaim" });
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
-      expect(await panel.locator("[data-test-remote-desktop='true']").count()).toBe(0);
+      await exactText(panel, "Desktop sources").waitFor();
+      expect(await remoteView(panel).count()).toBe(0);
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
 
       await gateway.setMethodResponse("sessions.describe", {
         session: { key: sessionKey, kind: "direct", updatedAt: 3, ...scenario.session },
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "placement" });
-      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+      await remoteView(panel).waitFor();
       expect((await gateway.getRequests("desktop.observe")).at(-1)?.params).toEqual({
         source: scenario.source,
         control: false,
       });
-      await page.screenshot({
-        path: path.join(
-          artifactDirectory,
-          `session-${scenario.name.replaceAll(" ", "-")}-390x844.png`,
-        ),
-        fullPage: false,
-      });
+      await screenshot(page, `session-${scenario.name.replaceAll(" ", "-")}-390x844`);
     });
   });
 
@@ -693,17 +659,10 @@ suite.define(() => {
         "environments.list",
       );
 
-      await panel
-        .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
-          exact: true,
-        })
-        .waitFor();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await exactText(panel, unavailable).waitFor();
+      await exactText(panel, "Desktop sources").waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-      await page.screenshot({
-        path: path.join(artifactDirectory, "unknown-session-picker-390x844.png"),
-        fullPage: false,
-      });
+      await screenshot(page, "unknown-session-picker-390x844");
     });
   });
 
@@ -716,7 +675,7 @@ suite.define(() => {
       });
 
       await panel.getByRole("alert").filter({ hasText: "inventory" }).waitFor();
-      const retry = panel.getByRole("button", { name: "Retry", exact: true });
+      const retry = button(panel, "Retry");
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
@@ -724,7 +683,7 @@ suite.define(() => {
       await retry.click();
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({ source: { kind: "host" }, control: false });
-      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+      await remoteView(panel).waitFor();
     });
   });
 
@@ -749,7 +708,7 @@ suite.define(() => {
       });
 
       // Resolution succeeded; retry still follows this session's current target.
-      const retry = panel.getByRole("button", { name: "Retry", exact: true });
+      const retry = button(panel, "Retry");
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
@@ -760,7 +719,7 @@ suite.define(() => {
         source: { kind: "node", nodeId: "workstation" },
         control: false,
       });
-      await panel.locator("[data-test-remote-desktop='true']").waitFor();
+      await remoteView(panel).waitFor();
     });
   });
 
@@ -771,20 +730,7 @@ suite.define(() => {
         "focus/desktop/source/gateway",
         [gatewayEnvironment],
         {
-          sequence: [
-            {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=view",
-              expiresAtMs: 60_000,
-              control: false,
-            },
-            {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=control",
-              expiresAtMs: 60_000,
-              control: true,
-            },
-          ],
+          sequence: [observe("view", false), observe("control", true)],
         },
       );
 
@@ -793,22 +739,15 @@ suite.define(() => {
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
       const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
       await expect.poll(() => touchActions.count()).toBe(6);
-      await expect
-        .poll(() =>
-          panel.getByRole("button", { name: "Audio unavailable", exact: true }).isDisabled(),
-        )
-        .toBe(true);
+      await expect.poll(() => button(panel, "Audio unavailable").isDisabled()).toBe(true);
       await panel
         .getByRole("button", { name: "Open desktop in Picture-in-Picture", exact: true })
         .waitFor();
-      await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
+      await button(panel, "Back").waitFor();
 
       for (const width of [320, 390, 1280]) {
         await page.setViewportSize({ width, height: 844 });
-        await page.screenshot({
-          path: path.join(artifactDirectory, "connected-toolbar-" + width + "x844.png"),
-          fullPage: false,
-        });
+        await screenshot(page, `connected-toolbar-${width}x844`);
         const actions = await touchActions.evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();
@@ -849,22 +788,10 @@ suite.define(() => {
       await page.setViewportSize({ width: 320, height: 844 });
       await panel.getByRole("combobox", { name: "Desktop size", exact: true }).focus();
       await page.keyboard.press("Tab");
-      expect(
-        await panel.evaluate((element) =>
-          (element.getRootNode() as Document | ShadowRoot).activeElement?.getAttribute(
-            "aria-label",
-          ),
-        ),
-      ).toBe("Back");
+      expect(await activeLabel(panel)).toBe("Back");
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Shift+Tab");
-      expect(
-        await panel.evaluate((element) =>
-          (element.getRootNode() as Document | ShadowRoot).activeElement?.getAttribute(
-            "aria-label",
-          ),
-        ),
-      ).toBe("Take control");
+      expect(await activeLabel(panel)).toBe("Take control");
       await page.keyboard.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
       expect((await gateway.getRequests("desktop.observe"))[1]?.params).toEqual({
@@ -878,7 +805,7 @@ suite.define(() => {
         .selectOption("actual");
       await expect.poll(() => panel.getAttribute("data-scale-viewport")).toBe("false");
 
-      await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
+      await button(panel, "Keyboard").click();
       expect(
         await panel.evaluate((element) =>
           (element.getRootNode() as Document | ShadowRoot).activeElement?.classList.contains(
@@ -897,10 +824,7 @@ suite.define(() => {
       });
       await expect.poll(() => panel.getAttribute("data-last-keyboard-text")).toBe("m");
 
-      await page.screenshot({
-        path: path.join(artifactDirectory, "controlled-toolbar-320x844.png"),
-        fullPage: false,
-      });
+      await screenshot(page, "controlled-toolbar-320x844");
     });
   });
 
@@ -910,12 +834,12 @@ suite.define(() => {
       ["focus/desktop/control/source/gateway", true],
     ] as const) {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-        const { gateway } = await openDesktopDocument(page, route, [gatewayEnvironment], {
-          transport: "rfb",
-          wsPath: `/desktop/observe?token=control-${String(expected)}`,
-          expiresAtMs: 60_000,
-          control: expected,
-        });
+        const { gateway } = await openDesktopDocument(
+          page,
+          route,
+          [gatewayEnvironment],
+          observe(`control-${String(expected)}`, expected),
+        );
         const request = await gateway.waitForRequest("desktop.observe");
         expect(request.params).toEqual({ source: { kind: "host" }, control: expected });
       });
