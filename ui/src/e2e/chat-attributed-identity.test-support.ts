@@ -12,23 +12,15 @@ export async function readFooterGeometry(group: Locator) {
     if (!actions || !identity || !name) {
       throw new Error("Expected message footer identity and actions");
     }
-    const actionsRect = actions.getBoundingClientRect();
+    const rect = (element: Element) => {
+      const { left, right, top, bottom } = element.getBoundingClientRect();
+      return { left, right, top, bottom };
+    };
     const footerRect = footer.getBoundingClientRect();
-    const identityRect = identity.getBoundingClientRect();
     const nameRect = name.getBoundingClientRect();
     return {
-      actions: {
-        left: actionsRect.left,
-        right: actionsRect.right,
-        top: actionsRect.top,
-        bottom: actionsRect.bottom,
-      },
-      identity: {
-        top: identityRect.top,
-        bottom: identityRect.bottom,
-        left: identityRect.left,
-        right: identityRect.right,
-      },
+      actions: rect(actions),
+      identity: rect(identity),
       footer: { right: footerRect.right },
       name: { left: nameRect.left - footerRect.left, top: nameRect.top - footerRect.top },
     };

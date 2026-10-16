@@ -1,8 +1,5 @@
-import path from "node:path";
-import { expect, type Locator, type Page } from "playwright/test";
-import { beforeEach, it } from "vitest";
-// Control UI E2E tests cover attributed chat identity placement.
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, type Locator } from "playwright/test";
+import { it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -23,23 +20,27 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-let proofArtifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  proofArtifactDir = parent
-    ? createControlUiE2eArtifactDir("chat-attributed-identity", parent)
-    : undefined;
-});
+function profile(id: string, name: string) {
+  return { id, name, identity: { type: "profile" as const, id } };
+}
 
-async function captureProof(page: Page, name: string) {
-  const artifactDir = proofArtifactDir;
-  if (!artifactDir) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    path: path.join(artifactDir, name),
-  });
+function userMessage(
+  sender: ReturnType<typeof profile>,
+  content: string,
+  timestamp: number,
+  identity: { id: string; seq: number },
+) {
+  return {
+    role: "user",
+    content,
+    timestamp,
+    __openclaw: {
+      ...identity,
+      senderId: sender.id,
+      senderIdentity: sender.identity,
+      senderName: sender.name,
+    },
+  };
 }
 
 suite.define(() => {
@@ -87,7 +88,6 @@ suite.define(() => {
           await page.evaluate((dir) => {
             document.documentElement.dir = dir;
           }, direction);
-          await captureProof(page, `restored-width-${direction}.png`);
           for (const frame of [transcript, page.locator(".agent-chat__composer-shell")]) {
             const bounds = await frame.evaluate((element) => {
               const rect = element.getBoundingClientRect();
@@ -258,40 +258,23 @@ suite.define(() => {
   );
 
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 760, width: 1180 } } }
-        : {}),
     });
     const page = await context.newPage();
     const now = Date.now();
+    const riley = profile("profile-riley", "Riley");
+    const colin = profile("profile-colin", "Colin");
+    const alexandria = profile("profile-alexandria", "Alexandria Montgomery-Winter");
     await page.route("**/api/users/*/avatar*", (route) =>
       route.fulfill({ status: 404, body: "No avatar" }),
     );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.rewind"],
       presenceUsers: [
-        {
-          self: true,
-          id: "profile-riley",
-          identity: { type: "profile", id: "profile-riley" },
-          name: "Riley",
-          email: "riley@example.test",
-        },
-        {
-          id: "profile-colin",
-          identity: { type: "profile", id: "profile-colin" },
-          name: "Colin",
-          email: "colin@example.test",
-        },
-        {
-          id: "profile-alexandria",
-          identity: { type: "profile", id: "profile-alexandria" },
-          name: "Alexandria Montgomery-Winter",
-          email: "alexandria@example.test",
-        },
+        { ...riley, self: true, email: "riley@example.test" },
+        { ...colin, email: "colin@example.test" },
+        { ...alexandria, email: "alexandria@example.test" },
       ],
       historyMessages: [
         {
@@ -299,52 +282,30 @@ suite.define(() => {
           content: "The shared thread now keeps every participant easy to identify.",
           timestamp: now - 180_000,
         },
-        {
-          role: "user",
-          content: "Can we keep one clear avatar and show who wrote each message?",
-          timestamp: now - 120_000,
-          __openclaw: {
-            id: "riley-message",
-            senderId: "profile-riley",
-            senderIdentity: { type: "profile", id: "profile-riley" },
-            senderName: "Riley",
-            seq: 2,
-          },
-        },
+        userMessage(
+          riley,
+          "Can we keep one clear avatar and show who wrote each message?",
+          now - 120_000,
+          { id: "riley-message", seq: 2 },
+        ),
         {
           role: "assistant",
           content: "Yes — one author marker is enough, with the name kept readable.",
           timestamp: now - 90_000,
         },
-        {
-          role: "user",
-          content: "This is much easier to scan in a team conversation.",
-          timestamp: now - 30_000,
-          __openclaw: {
-            id: "colin-message",
-            senderId: "profile-colin",
-            senderIdentity: { type: "profile", id: "profile-colin" },
-            senderName: "Colin",
-            seq: 4,
-          },
-        },
+        userMessage(colin, "This is much easier to scan in a team conversation.", now - 30_000, {
+          id: "colin-message",
+          seq: 4,
+        }),
         {
           role: "assistant",
           content: "Long participant names keep the same stable layout.",
           timestamp: now - 20_000,
         },
-        {
-          role: "user",
-          content: "My longer identity should remain fixed too.",
-          timestamp: now - 10_000,
-          __openclaw: {
-            id: "alexandria-message",
-            senderId: "profile-alexandria",
-            senderIdentity: { type: "profile", id: "profile-alexandria" },
-            senderName: "Alexandria Montgomery-Winter",
-            seq: 6,
-          },
-        },
+        userMessage(alexandria, "My longer identity should remain fixed too.", now - 10_000, {
+          id: "alexandria-message",
+          seq: 6,
+        }),
       ],
     });
 
@@ -371,13 +332,11 @@ suite.define(() => {
     const longNamePeerGroup = userGroups.last();
     const hoverDetails = peerGroup.locator(".chat-group-timestamp");
     await expect(hoverDetails).toHaveCSS("opacity", "0");
-    await captureProof(page, "after-default.png");
 
     const restingPeerGeometry = await readFooterGeometry(peerGroup);
     await peerGroup.hover();
     await expect(hoverDetails).toHaveCSS("opacity", "1");
     await expect(page.locator(".chat-group-footer .chat-author-avatar")).toHaveCount(0);
-    await captureProof(page, "after-hover.png");
     const hoveredPeerGeometry = await readFooterGeometry(peerGroup);
     expectStableNamePosition(hoveredPeerGeometry.name, restingPeerGeometry.name);
     expect(hoveredPeerGeometry.actions.left - hoveredPeerGeometry.identity.right).toBeCloseTo(8, 0);
@@ -504,7 +463,6 @@ suite.define(() => {
     await ownGroup.hover();
     const ownTimestamp = ownGroup.locator(".chat-group-timestamp");
     await expect(ownTimestamp).toHaveCSS("opacity", "1");
-    await captureProof(page, "own-group-hover.png");
     const hoveredNameBox = await ownName.boundingBox();
     const timestampBox = await ownTimestamp.boundingBox();
     expect(hoveredNameBox?.x).toBe(restingNameBox?.x);
@@ -597,17 +555,8 @@ suite.define(() => {
     const localSenderId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
     const peerSenderId = "315ee057-302f-45b4-829d-2c5db1bfed75";
     const localAvatarUrl = `/api/users/${localSenderId}/avatar?v=7`;
-    const localUser = {
-      id: localSenderId,
-      identity: { type: "profile" as const, id: localSenderId },
-      name: "Collin Johnson",
-      avatarUrl: localAvatarUrl,
-    };
-    const peerUser = {
-      id: peerSenderId,
-      identity: { type: "profile" as const, id: peerSenderId },
-      name: "Riley Chen",
-    };
+    const localUser = { ...profile(localSenderId, "Collin Johnson"), avatarUrl: localAvatarUrl };
+    const peerUser = profile(peerSenderId, "Riley Chen");
     const priorPrompt = "A prior attributed prompt.";
     const peerPrompt = "A peer attributed prompt.";
     const prompt = "A newly sent attributed prompt.";
@@ -688,7 +637,6 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText(priorPrompt, { exact: true }).waitFor();
-      await captureProof(page, "self-before-qualification.png");
       const connect = await gateway.waitForRequest("connect");
       const { client } = connect.params as { client: { instanceId: string } };
       await gateway.emitGatewayEvent("presence", {
@@ -707,7 +655,6 @@ suite.define(() => {
       const afterSend = await readUserAvatarLayout(prompt);
       const priorAfterSend = await readUserAvatarLayout(priorPrompt);
       const peerAfterSend = await readUserAvatarLayout(peerPrompt);
-      await captureProof(page, "self-after-qualification-send.png");
 
       const params = sendRequest.params;
       if (!params || typeof params !== "object" || !("idempotencyKey" in params)) {
@@ -745,17 +692,11 @@ suite.define(() => {
   });
 
   it("keeps an attributed failed send in the transcript with one-line retry metadata", async () => {
-    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("bubble-delivery", artifactRoot)
-      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
+      ...profile("c3e32452-0467-47e5-aafa-233cd5dae29f", "Collin Johnson"),
       self: true,
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-      identity: { type: "profile" as const, id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
-      name: "Collin Johnson",
     };
     const prompt = "Keep my identity stable when delivery fails.";
     const gateway = await installMockGateway(page, {
@@ -784,12 +725,6 @@ suite.define(() => {
       const sendingBackground = await group
         .locator(".chat-bubble")
         .evaluate((element) => getComputedStyle(element).backgroundColor);
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "delivery-sending.png"),
-        });
-      }
 
       await gateway.rejectDeferred("chat.send", {
         code: "INVALID_REQUEST",
@@ -801,12 +736,6 @@ suite.define(() => {
             (await page.locator(".chat-send-status, .chat-queue__item--failed").count()) > 0,
         )
         .toBe(true);
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "delivery-failed.png"),
-        });
-      }
 
       await expect(group).toBeVisible();
       await expect(page.locator(".chat-queue__item--failed")).toHaveCount(0);
@@ -839,12 +768,6 @@ suite.define(() => {
       await group.getByRole("button", { name: "Retry queued message" }).click();
       await expect(group.locator(".chat-send-status")).toHaveCount(0);
       await expect(group).toBeVisible();
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "delivery-retry.png"),
-        });
-      }
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
       const sends = await gateway.getRequests("chat.send");
       const retryRunId = String(
@@ -858,17 +781,11 @@ suite.define(() => {
   });
 
   it("discards an attributed failed send from the transcript footer and preserves dismissal after reload", async () => {
-    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("bubble-delivery-discard", artifactRoot)
-      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
+      ...profile("c3e32452-0467-47e5-aafa-233cd5dae29f", "Collin Johnson"),
       self: true,
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-      identity: { type: "profile" as const, id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
-      name: "Collin Johnson",
     };
     const prompt = "Discard my failed send from the transcript.";
     const gateway = await installMockGateway(page, {
@@ -908,22 +825,10 @@ suite.define(() => {
         .waitFor();
       await expect(group.locator(".chat-send-status__discard")).toBeVisible();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "before-discard.png"),
-        });
-      }
 
       await group.locator(".chat-send-status__discard").click();
       await expect(group).toHaveCount(0);
       await expect(page.locator(".chat-queue__item")).toHaveCount(0);
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "after-discard.png"),
-        });
-      }
 
       await page.reload();
       await page
@@ -932,24 +837,14 @@ suite.define(() => {
         .waitFor();
       await expect(page.locator(".chat-group.user", { hasText: prompt })).toHaveCount(0);
       await expect(page.locator(".chat-queue__item")).toHaveCount(0);
-      if (artifactDir) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(artifactDir, "after-reload.png"),
-        });
-      }
     } finally {
       await context.close();
     }
   });
 
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
-    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 760, width: 1180 } } }
-        : {}),
     });
     const page = await context.newPage();
     const viewer = {
@@ -1020,7 +915,6 @@ suite.define(() => {
       await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
-      await captureProof(page, "missing-local-avatar-after-404.png");
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -1040,7 +934,6 @@ suite.define(() => {
       await expect(image).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
-      await captureProof(page, "missing-local-avatar-after-rerender.png");
     } finally {
       await context.close();
     }

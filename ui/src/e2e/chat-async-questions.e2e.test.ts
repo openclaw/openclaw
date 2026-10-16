@@ -1,14 +1,11 @@
-import path from "node:path";
-import { expect as expectBrowser } from "playwright/test";
+import { type Page, type Locator, expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   reconnectMockGateway,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import { readStoredQuestionDrafts } from "./chat-async-questions.test-support.ts";
 import {
-  captureUiProof,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -19,6 +16,13 @@ import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const withPage = (run: Parameters<typeof suite.withPage>[1]) =>
+  suite.withPage(createControlUiE2eContextOptions(), run);
+const questionPanel = (page: Page) =>
+  page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+const summaryFor = (page: Page) =>
+  page.locator(".chat-thread .chat-question-summary").filter({ hasText: title });
+const button = (owner: Locator, name: string) => owner.getByRole("button", { name, exact: true });
 const title = "Which audience should the summary address?";
 const questionMessage = {
   role: "assistant",
@@ -32,14 +36,14 @@ const questionMessage = {
 
 suite.define(() => {
   it("keeps an admitted optional answer with its original outbox owner after reconnect", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+      const card = questionPanel(page);
       const answer = "The customer support team";
       await card.getByRole("textbox", { name: `Your own answer for ${title}` }).fill(answer);
       await gateway.deferNext("chat.send");
-      await card.getByRole("button", { name: "Submit", exact: true }).click();
+      await button(card, "Submit").click();
       const firstRequest = await gateway.waitForRequest("chat.send");
       const admitted = await readOutboxQueue(page);
       expect(admitted).toHaveLength(1);
@@ -58,7 +62,6 @@ suite.define(() => {
         admitted.map((item) => item.id),
       );
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await captureUiProof(suite, page, "async-question-reconnect", "after-reconnect.png");
       await gateway.deferNext("chat.send");
       await retry.click();
       const retried = await gateway.waitForRequest("chat.send", { after: 1 });
@@ -178,7 +181,7 @@ suite.define(() => {
           await expectBrowser(dock).toHaveCount(0);
           const summary = page.locator(".chat-question-summary").filter({ hasText: title });
           await expectBrowser(summary).toContainText("No longer pending");
-          await summary.getByRole("button", { name: "Answer", exact: true }).click();
+          await button(summary, "Answer").click();
           await expectBrowser(dock).toBeVisible();
           await expectBrowser(draft).toHaveValue("");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -190,7 +193,7 @@ suite.define(() => {
 
       // A fresh tab reconstructs archival from the saved transcript, not a
       // remembered dismissal or the first tab's reopened draft.
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await withPage(async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: completedHistory });
         await page.goto(`${suite.server.baseUrl}chat`);
         const dock = page.locator(".agent-chat__question-dock");
@@ -205,7 +208,7 @@ suite.define(() => {
         await page.reload();
         await expectBrowser(summary).toContainText("No longer pending");
         await expectBrowser(dock).toHaveCount(0);
-        await summary.getByRole("button", { name: "Answer", exact: true }).click();
+        await button(summary, "Answer").click();
         await expectBrowser(dock).toBeVisible();
         await dock.getByRole("button", { name: "Submit", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
@@ -217,7 +220,7 @@ suite.define(() => {
   );
 
   it("keeps an unfinished answer through later completion, reload, and reconnect", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const prompt = {
         ...questionMessage,
         runId: "draft-run",
@@ -229,12 +232,6 @@ suite.define(() => {
       const dock = page.locator(".agent-chat__question-dock");
       const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
       await draft.fill("New contributors and maintainers");
-      await captureUiProof(
-        suite,
-        page,
-        "async-question-draft-protection",
-        "before-later-completion.png",
-      );
       const ownFinal = {
         role: "assistant",
         content: "Draft ready.",
@@ -277,12 +274,6 @@ suite.define(() => {
       await expectBrowser(draft).toHaveValue("New contributors and maintainers");
       await reconnectMockGateway(page, gateway, "question-draft-reconnect");
       await expectBrowser(draft).toHaveValue("New contributors and maintainers");
-      await captureUiProof(
-        suite,
-        page,
-        "async-question-draft-protection",
-        "after-reload-reconnect.png",
-      );
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
     });
@@ -371,14 +362,7 @@ suite.define(() => {
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.locator(".chat-thread").getByText(title, { exact: true }).waitFor();
-        const artifactDir = createControlUiE2eArtifactDir(
-          `async-question-${active ? "active" : "idle"}`,
-        );
-        await page.screenshot({
-          path: path.join(artifactDir, "initial.png"),
-          animations: "disabled",
-        });
-        const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+        const card = questionPanel(page);
         await expect.poll(() => card.count()).toBe(1);
         await card.getByRole("radio", { name: /Engineers/ }).waitFor();
         expect(
@@ -401,7 +385,7 @@ suite.define(() => {
         expect(
           await card.getByRole("radio", { name: /Engineers/ }).getAttribute("aria-checked"),
         ).toBe("false");
-        await card.getByRole("button", { name: "Next", exact: true }).click();
+        await button(card, "Next").click();
         const freeText = card.getByRole("textbox", { name: "Answer", exact: true });
         await freeText.fill("Include one practical example.");
         await expect
@@ -430,8 +414,8 @@ suite.define(() => {
           .poll(async () => (await freeText.boundingBox())!.height)
           .toBe(multilineAnswerHeight);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await card.getByRole("button", { name: "Collapse question", exact: true }).click();
-        const expand = card.getByRole("button", { name: "Expand question", exact: true });
+        await button(card, "Collapse question").click();
+        const expand = button(card, "Expand question");
         await expand.waitFor();
         expect(await expand.textContent()).toContain(followUpTitle);
         expect(await expand.textContent()).toContain("2 unanswered questions");
@@ -466,22 +450,14 @@ suite.define(() => {
           expect(await expand.textContent()).toContain(followUpTitle);
           expect(await card.getByRole("textbox").count()).toBe(0);
         }
-        await page.screenshot({
-          path: path.join(artifactDir, "minimized.png"),
-          animations: "disabled",
-        });
         await expand.click();
         expect(await freeText.inputValue()).toBe(
           "Include one practical example.\nKeep the next steps separate.",
         );
-        await card.getByRole("button", { name: "Back", exact: true }).click();
+        await button(card, "Back").click();
         expect(await custom.inputValue()).toBe("/stop is an example for the whole team");
-        await card.getByRole("button", { name: "Next", exact: true }).click();
-        await page.screenshot({
-          path: path.join(artifactDir, "question.png"),
-          animations: "disabled",
-        });
-        await card.getByRole("button", { name: "Submit", exact: true }).click();
+        await button(card, "Next").click();
+        await button(card, "Submit").click();
         const request = await gateway.waitForRequest("chat.send");
         const params = requireRecord(request.params);
         expect(params.message).toBe(
@@ -497,9 +473,7 @@ suite.define(() => {
         if (!active) {
           await page.locator(".chat-work-group button").click();
         }
-        const summary = page
-          .locator(".chat-thread .chat-question-summary")
-          .filter({ hasText: title });
+        const summary = summaryFor(page);
         await summary.waitFor();
         expect(await summary.textContent()).toContain("Include one practical example.");
         await expectRequestCountStable(gateway, "chat.send", 1);
@@ -517,10 +491,6 @@ suite.define(() => {
             }),
           ).toHaveCount(1);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await page.screenshot({
-            path: path.join(artifactDir, "submitted-after-reload.png"),
-            animations: "disabled",
-          });
         }
       } finally {
         await suite.closeBrowserContext(context);
@@ -556,7 +526,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Continue researching while I decide.");
-      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+      const card = questionPanel(page);
       const messages: unknown[] = [initial];
       const arrive = async (question: typeof questionMessage, seq: number) => {
         const message = {
@@ -573,7 +543,7 @@ suite.define(() => {
         });
       };
       await arrive(questionMessage, 2);
-      const initialExpand = card.getByRole("button", { name: "Expand question", exact: true });
+      const initialExpand = button(card, "Expand question");
       await initialExpand.waitFor();
       expect(await initialExpand.textContent()).toContain("1 unanswered question");
       expect(await card.getByRole("textbox").count()).toBe(0);
@@ -583,8 +553,8 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe("Continue researching while I decide.");
       const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
       await custom.fill("Readers new to the project");
-      await card.getByRole("button", { name: "Collapse question", exact: true }).click();
-      const expand = card.getByRole("button", { name: "Expand question", exact: true });
+      await button(card, "Collapse question").click();
+      const expand = button(card, "Expand question");
       await expectBrowser(composer).toBeFocused();
       await arrive(secondQuestion, 3);
       await expect.poll(() => expand.textContent()).toContain("2 unanswered questions");
@@ -614,26 +584,26 @@ suite.define(() => {
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       expect(await card.textContent()).toContain("Waiting for your answer");
       expect(await composer.count()).toBe(0);
-      await card.getByRole("button", { name: "Next", exact: true }).click();
+      await button(card, "Next").click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");
       expect(await composer.isVisible()).toBe(true);
-      await card.getByRole("button", { name: "Previous", exact: true }).click();
+      await button(card, "Previous").click();
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       const answers = { answers: { destination: ["Project notes"] } };
       await gateway.setMethodResponse("question.resolve", { status: "answered", answers });
       await card.getByRole("radio", { name: /Project notes/ }).click();
-      await card.getByRole("button", { name: "Submit", exact: true }).click();
+      await button(card, "Submit").click();
       const request = await gateway.waitForRequest("question.resolve");
       expect(request.params).toEqual({ id: "summary-destination", answers });
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");
-      await card.getByRole("button", { name: "Next", exact: true }).click();
+      await button(card, "Next").click();
       await card.getByText(secondTitle, { exact: true }).waitFor();
-      await card.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await button(card, "Dismiss").click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");
-      await card.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await button(card, "Dismiss").click();
       await card.waitFor({ state: "detached" });
       expect(await composer.inputValue()).toBe("Continue researching while I decide.");
       const skipped = page.locator(".chat-thread .chat-question-summary");
@@ -657,46 +627,35 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [deliveryQuestion],
       });
-      const artifactDir = createControlUiE2eArtifactDir(`async-question-delivery-${confirmation}`);
       const answer = confirmation === "discard" ? "Engineers" : "The customer support team";
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+        const card = questionPanel(page);
         const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
         if (confirmation !== "discard") {
           await custom.fill(answer);
         }
         await gateway.deferNext("chat.send");
-        await card.getByRole("button", { name: "Submit", exact: true }).click();
+        await button(card, "Submit").click();
         const original = await gateway.waitForRequest("chat.send");
         expect(requireRecord(original.params)).toMatchObject({
           message: `> ${title}\n\n${answer}`,
           replyToId: "delivery-question",
         });
-        const summary = page
-          .locator(".chat-thread .chat-question-summary")
-          .filter({ hasText: title });
+        const summary = summaryFor(page);
         await expectBrowser(summary).toContainText("Sending answer");
-        await page.screenshot({
-          path: path.join(artifactDir, "sending.png"),
-          animations: "disabled",
-        });
         await gateway.resolveDeferred("chat.send", {
           __mockError: { code: "UNAVAILABLE", message: "Synthetic send rejection" },
         });
         await card.waitFor({ state: "detached" });
-        expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
+        expect(await button(card, "Submit").count()).toBe(0);
         await summary.waitFor();
         expect(await summary.textContent()).toContain(answer);
         const failedSend = page.locator('.chat-send-status[data-send-state="failed"]');
-        const retry = summary.getByRole("button", { name: "Retry answer", exact: true });
+        const retry = button(summary, "Retry answer");
         await retry.waitFor();
         await expectBrowser(summary).toContainText("Answer not sent");
         await expectBrowser(summary).toContainText("Synthetic send rejection");
-        await page.screenshot({
-          path: path.join(artifactDir, "failed.png"),
-          animations: "disabled",
-        });
         expect(await failedSend.getAttribute("title")).toBe("Synthetic send rejection");
         const queued = await readOutboxQueue(page);
         expect(queued).toHaveLength(1);
@@ -770,10 +729,6 @@ suite.define(() => {
           ).toBeVisible();
           await expectBrowser(summary).toContainText("Answer not sent");
           await failedSend.getByRole("button", { name: "Discard", exact: true }).click();
-          await page.screenshot({
-            path: path.join(artifactDir, "discard-after-completion.png"),
-            animations: "disabled",
-          });
           await expectBrowser(card).toBeVisible();
           await expectBrowser(card.getByRole("radio", { name: /Engineers/ })).toHaveAttribute(
             "aria-checked",
@@ -816,10 +771,6 @@ suite.define(() => {
         } else {
           await expectBrowser(summary).toContainText("Sending answer");
         }
-        await page.screenshot({
-          path: path.join(artifactDir, "retrying.png"),
-          animations: "disabled",
-        });
         await gateway.resolveDeferred("chat.send");
         if (confirmation !== "legacy") {
           await expectBrowser(summary).toContainText("Awaiting delivery confirmation");
@@ -837,10 +788,6 @@ suite.define(() => {
           expect(await userMessages.count()).toBe(1);
           expect(await readOutboxQueue(page)).toEqual([]);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await page.screenshot({
-            path: path.join(artifactDir, "sent-after-reload.png"),
-            animations: "disabled",
-          });
           return;
         }
         const runId = String(requireRecord(retried.params).idempotencyKey);
@@ -861,10 +808,9 @@ suite.define(() => {
           message: savedAnswer,
         });
         await expectBrowser(summary).toContainText("Answer sent");
-        await page.screenshot({ path: path.join(artifactDir, "sent.png"), animations: "disabled" });
         await failedSend.waitFor({ state: "detached" });
         expect(await userMessages.count()).toBe(1);
-        expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);
+        expect(await button(card, "Submit").count()).toBe(0);
         await expectRequestCountStable(gateway, "chat.send", 1);
       } finally {
         await suite.closeBrowserContext(context);
@@ -892,9 +838,8 @@ suite.define(() => {
     });
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+      const card = questionPanel(page);
       await card.getByRole("radio", { name: /Engineers/ }).waitFor();
-      await captureUiProof(suite, page, "async-question-answer-persistence", "before-answer.png");
 
       await gateway.setMethodResponse("chat.history", {
         messages: [savedQuestion, savedAnswer],
@@ -902,21 +847,15 @@ suite.define(() => {
       });
       await page.reload();
       await expectBrowser(card).toHaveCount(0);
-      const summary = page
-        .locator(".chat-thread .chat-question-summary")
-        .filter({ hasText: title });
+      const summary = summaryFor(page);
       await summary.waitFor();
       await expectBrowser(summary).toContainText("Everyone");
-      await captureUiProof(suite, page, "async-question-answer-persistence", "after-reload.png");
 
       // A second navigation must derive the same completed state from history rather than
       // relying on the first mount's local draft map.
       await page.reload();
       await expectBrowser(card).toHaveCount(0);
-      await expectBrowser(
-        page.locator(".chat-thread .chat-question-summary").filter({ hasText: title }),
-      ).toContainText("Everyone");
-      await captureUiProof(suite, page, "async-question-answer-persistence", "after-remount.png");
+      await expectBrowser(summaryFor(page)).toContainText("Everyone");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -925,7 +864,7 @@ suite.define(() => {
   it.each(["offline", "malformed"] as const)(
     "keeps the original question transcript readable when %s",
     async (fallback) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await withPage(async ({ page }) => {
         const followUpTitle = "What should I emphasize?";
         const gateway = await installMockGateway(page, {
           historyMessages: [
@@ -947,7 +886,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const transcript = page.locator(".chat-text");
         if (fallback === "offline") {
-          const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
+          const card = questionPanel(page);
           await card.getByRole("radio", { name: /Engineers/ }).waitFor();
           await gateway.setOnline(false);
           await card.waitFor({ state: "detached" });
@@ -957,12 +896,6 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         } else {
           await transcript.getByText(title).waitFor();
-          await captureUiProof(
-            suite,
-            page,
-            "async-question-plain-text",
-            "before-without-metadata.png",
-          );
           await gateway.setHistoryMessages([
             {
               ...questionMessage,

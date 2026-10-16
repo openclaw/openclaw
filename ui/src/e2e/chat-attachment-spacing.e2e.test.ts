@@ -39,6 +39,10 @@ async function gap(above: Locator, below: Locator) {
   return lower.y - upper.y - upper.height;
 }
 
+async function expectGap(above: Locator, below: Locator, reference: number) {
+  expect(Math.abs((await gap(above, below)) - reference)).toBeLessThanOrEqual(1);
+}
+
 suite.define(() => {
   for (const width of [1440, 390]) {
     it.each(neighbors)(
@@ -107,13 +111,9 @@ suite.define(() => {
       ).toBe("rgba(0, 0, 0, 0)");
       const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
       for (let index = 1; index < count; index += 1) {
-        expect(
-          Math.abs((await gap(cards.nth(index - 1), cards.nth(index))) - reference),
-        ).toBeLessThanOrEqual(1);
+        await expectGap(cards.nth(index - 1), cards.nth(index), reference);
       }
-      expect(
-        Math.abs((await gap(cards.last(), page.locator(".chat-text"))) - reference),
-      ).toBeLessThanOrEqual(1);
+      await expectGap(cards.last(), page.locator(".chat-text"), reference);
       expect(
         await page
           .locator(".chat-thread")
@@ -223,7 +223,7 @@ suite.define(() => {
         [text.locator("blockquote > p").first(), nestedCode],
         [nestedCode, text.locator("blockquote > p").last()],
       ] as const) {
-        expect(Math.abs((await gap(above, below)) - reference)).toBeLessThanOrEqual(1);
+        await expectGap(above, below, reference);
       }
     });
   });
@@ -261,12 +261,8 @@ suite.define(() => {
       await paragraphs.last().waitFor();
       const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
       const attachments = body.locator(":scope > .chat-assistant-attachments");
-      expect(Math.abs((await gap(attachments, text)) - reference)).toBeLessThanOrEqual(1);
-      expect(
-        Math.abs(
-          (await gap(body.locator(":scope > .chat-message-images"), attachments)) - reference,
-        ),
-      ).toBeLessThanOrEqual(1);
+      await expectGap(attachments, text, reference);
+      await expectGap(body.locator(":scope > .chat-message-images"), attachments, reference);
     });
   });
 });

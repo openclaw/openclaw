@@ -1,5 +1,3 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
@@ -34,6 +32,34 @@ type DeferredAttachmentProof = {
   aborts: number;
   finish: (() => Promise<void>) | undefined;
 };
+
+const withPage = (run: Parameters<typeof suite.withPage>[1]) =>
+  suite.withPage(createControlUiE2eContextOptions(), run);
+const activePane = (page: Page) => page.locator('openclaw-chat-pane[aria-hidden="false"]');
+const activeComposer = (page: Page) =>
+  activePane(page).locator(".agent-chat__composer-combobox textarea");
+const activeAttachments = (page: Page) => activePane(page).locator(".chat-attachment-thumb");
+
+function sessionList(...keys: string[]) {
+  return {
+    count: keys.length,
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    path: "",
+    sessions: keys.map((key, index) => ({ key, kind: "direct", updatedAt: keys.length - index })),
+    ts: Date.now(),
+  };
+}
+
+function finishRead(page: Page) {
+  return page.evaluate(() => {
+    const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+      .attachmentReadProof;
+    if (!proof.finish) {
+      throw new Error("Attachment read was not held");
+    }
+    return proof.finish();
+  });
+}
 
 async function installDeferredAttachmentReader(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -101,7 +127,7 @@ async function waitForCommittedAttachmentDraft(
 
 suite.define(() => {
   it("keeps a preparing Home attachment through the page and dock route", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installDeferredAttachmentReader(page);
       const homeKey = "agent:main:main";
       const draft = "QA attachment handoff: keep this file with my Home draft.";
@@ -112,8 +138,6 @@ suite.define(() => {
       });
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      const proofDir = path.join(suite.artifactDir, "home-handoff");
-      await mkdir(proofDir, { recursive: true });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
       const home = page.locator("openclaw-chat-page");
       const composer = home.locator(".agent-chat__composer-combobox textarea");
@@ -139,15 +163,7 @@ suite.define(() => {
           .getByRole("button", { name: "Send message", exact: true })
           .isDisabled(),
       };
-      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
-      await page.evaluate(async () => {
-        const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
-          .attachmentReadProof;
-        if (!proof.finish) {
-          throw new Error("Selected file read was not held");
-        }
-        await proof.finish();
-      });
+      await finishRead(page);
       await openHomeFullPage(page);
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => dockComposer.isVisible()).toBe(false);
@@ -161,15 +177,14 @@ suite.define(() => {
         pageErrors,
         requests: await gateway.getRequests("chat.send"),
       };
-      await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
-      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
-      console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
-      expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
-      expect(receipt.returnedDraft).toBe(draft);
-      expect(receipt.returnedFiles).toBe(1);
-      expect(receipt.removeAvailable).toBe(1);
-      expect(receipt.pageErrors).toEqual([]);
-      expect(receipt.requests).toEqual([]);
+      expect(receipt).toEqual({
+        pending: { files: 1, sendDisabled: true },
+        returnedDraft: draft,
+        returnedFiles: 1,
+        removeAvailable: 1,
+        pageErrors: [],
+        requests: [],
+      });
     });
   });
 
@@ -181,7 +196,7 @@ suite.define(() => {
     "rewind-newer-draft",
     "rewind-newer-file",
   ] as const)("rewind draft attachment custody: %s", async (scenario) => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installDeferredAttachmentReader(page);
       const earlierText = "Restore this earlier synthetic prompt.";
       const currentText = "Current synthetic draft with a selected file.";
@@ -207,8 +222,6 @@ suite.define(() => {
       });
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      const proofDir = path.join(suite.artifactDir, scenario);
-      await mkdir(proofDir, { recursive: true });
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const send = page.getByRole("button", { name: "Send message", exact: true });
@@ -223,17 +236,8 @@ suite.define(() => {
         await selectFile();
         await expect.poll(() => send.isDisabled()).toBe(true);
       }
-      const finishRead = () =>
-        page.evaluate(() => {
-          const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
-            .attachmentReadProof;
-          if (!proof.finish) {
-            throw new Error("Selected file read was not held");
-          }
-          return proof.finish();
-        });
       if (scenario === "same-draft" || scenario === "rewind-completed") {
-        await finishRead();
+        await finishRead(page);
         await page.getByRole("img", { name: "late-selection.png", exact: true }).waitFor();
         await expect.poll(() => send.isEnabled()).toBe(true);
       }
@@ -280,39 +284,23 @@ suite.define(() => {
         if (scenario !== "rewind-newer-file") {
           await expect.poll(() => composer.inputValue()).toBe(expectedText);
         }
-        await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
       }
       if (scenario !== "same-draft" && scenario !== "rewind-completed") {
-        await finishRead();
+        await finishRead(page);
       }
       await expect.poll(() => send.isEnabled()).toBe(true);
-      const observed = {
-        scenario,
-        composerText: await composer.inputValue(),
-        composerFiles: await page
-          .locator(".chat-attachment-thumb img")
-          .evaluateAll((images) => images.map((image) => image.getAttribute("alt"))),
-        readAborts: await page.evaluate(
-          () =>
-            (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
-              .attachmentReadProof.aborts,
-        ),
-        pageErrors,
-      };
-      await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      const composerFiles = await page
+        .locator(".chat-attachment-thumb img")
+        .evaluateAll((images) => images.map((image) => image.getAttribute("alt")));
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       const sent = request.params as {
         message: string;
         attachments?: { fileName: string; mimeType: string; content: string }[];
       };
-      await writeFile(
-        path.join(proofDir, "result.json"),
-        JSON.stringify({ ...observed, sent }, null, 2),
-      );
       expect(pageErrors).toEqual([]);
       expect(sent.message).toBe(expectedText);
-      expect(observed.composerFiles).toEqual(retainsFile ? ["late-selection.png"] : []);
+      expect(composerFiles).toEqual(retainsFile ? ["late-selection.png"] : []);
       expect(sent.attachments ?? []).toEqual(
         retainsFile
           ? [
@@ -337,21 +325,8 @@ suite.define(() => {
   ])(
     "admits $expectedTurns turn(s) from $gesture during terminal history (attachment=$attachment)",
     async ({ attachment, gesture, expectedTurns }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await withPage(async ({ page }) => {
         const held = gesture === "held Enter";
-        const capture = held && attachment;
-        const proofDir = path.resolve(
-          process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() || ".artifacts/control-ui-e2e",
-          "held-enter",
-        );
-        if (capture) {
-          await mkdir(proofDir, { recursive: true });
-          await Promise.all(
-            ["held-enter-before.png", "held-enter-after.png"].map((name) =>
-              rm(path.join(proofDir, name), { force: true }),
-            ),
-          );
-        }
         const ready = {
           content: [{ text: "Ready for the held Enter check.", type: "text" }],
           role: "assistant",
@@ -446,9 +421,6 @@ suite.define(() => {
             visibility: document.visibilityState,
           })),
         ).toEqual({ focused: true, visibility: "visible" });
-        if (capture) {
-          await pane.screenshot({ path: path.join(proofDir, "held-enter-before.png") });
-        }
 
         const keyProof = await composer.evaluateHandle((element) => {
           const textarea = element as HTMLTextAreaElement;
@@ -585,18 +557,7 @@ suite.define(() => {
             },
             attachment ? fileName : followUpText,
           );
-          console.info("held-enter admission proof", {
-            attachment,
-            gesture,
-            keys,
-            followUpRequestId: followUp.id,
-            followUpRunId,
-            observed,
-          });
           expect(pageErrors).toEqual([]);
-          if (capture) {
-            await pane.screenshot({ path: path.join(proofDir, "held-enter-after.png") });
-          }
           expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
           for (const rows of [observed.bubbles, observed.queued]) {
             expect(rows.every((row) => row.visible && row.id)).toBe(true);
@@ -619,7 +580,7 @@ suite.define(() => {
   );
 
   it("restores an attachment staged offline after reload and reconnect", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page);
       const sessionKey = "agent:main:main";
       const text = "offline attachment draft";
@@ -643,11 +604,6 @@ suite.define(() => {
       await gateway.setOnline(true);
       await expect.poll(() => composer.inputValue()).toBe(text);
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "offline-draft-restored.png") });
-      }
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
@@ -669,34 +625,12 @@ suite.define(() => {
   it("restores isolated session drafts across fresh pages and retires sent or removed attachments", async () => {
     const firstSession = "agent:main:restart-session-a";
     const secondSession = "agent:main:restart-session-b";
-    const sessionsList = {
-      count: 2,
-      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-      path: "",
-      sessions: [
-        { key: firstSession, kind: "direct", updatedAt: 2 },
-        { key: secondSession, kind: "direct", updatedAt: 1 },
-      ],
-      ts: Date.now(),
-    };
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const sessionsList = sessionList(firstSession, secondSession);
     const context = await suite.browser.newContext({
       locale: "en-US",
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
-    const activeComposer = (page: Page) =>
-      page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
-      );
-    const activeAttachments = (page: Page) =>
-      page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb');
     try {
       const firstPage = await context.newPage();
       await installMockGateway(firstPage, {
@@ -737,11 +671,6 @@ suite.define(() => {
         .toBe("restart draft A with image");
       await activeAttachments(restoredPage).first().waitFor();
       expect(await activeAttachments(restoredPage).count()).toBe(1);
-      if (artifactDir) {
-        await restoredPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-draft-restored.png"),
-        });
-      }
 
       await navigateToControlUiSession(restoredPage, secondSession);
       await expect
@@ -786,18 +715,13 @@ suite.define(() => {
         .poll(() => activeComposer(clearedPage).inputValue())
         .toBe("restart draft B with removable file");
       await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
-      if (artifactDir) {
-        await clearedPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
-        });
-      }
     } finally {
       await context.close();
     }
   });
 
   it("rejects the file that would overflow one send's frame at intake", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       // 400 bytes past the 256 KiB envelope slack leaves a 300-byte decoded batch
       // budget: each 200-byte file fits the per-file ceiling, both together do not.
       const gateway = await installMockGateway(page, {
@@ -824,12 +748,6 @@ suite.define(() => {
         "Too large to send: second.txt",
       );
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "attachment-frame-rejected.png") });
-      }
-
       await composer.press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
@@ -840,7 +758,7 @@ suite.define(() => {
   });
 
   it("waits for a pasted image before sending its complete gateway payload", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installDeferredAttachmentReader(page);
       const gateway = await installMockGateway(page);
 
@@ -854,14 +772,7 @@ suite.define(() => {
       await composer.press("Enter");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await page.evaluate(() => {
-        const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
-          .attachmentReadProof;
-        if (!proof.finish) {
-          throw new Error("Pasted image read was not started");
-        }
-        return proof.finish();
-      });
+      await finishRead(page);
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
       await send.click();
@@ -884,31 +795,18 @@ suite.define(() => {
   it("keeps a session's pending image isolated while another session is active", async () => {
     const firstSession = "agent:main:attachment-session-a";
     const secondSession = "agent:main:attachment-session-b";
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installDeferredAttachmentReader(page);
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.list": {
-            count: 2,
-            defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-            path: "",
-            sessions: [
-              { key: firstSession, kind: "direct", updatedAt: 2 },
-              { key: secondSession, kind: "direct", updatedAt: 1 },
-            ],
-            ts: Date.now(),
-          },
+          "sessions.list": sessionList(firstSession, secondSession),
         },
         sessionKey: firstSession,
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
-      const activeComposer = () =>
-        page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
-        );
-      await activeComposer().fill("Private session A attachment");
-      await pastePng(activeComposer());
+      await activeComposer(page).fill("Private session A attachment");
+      await pastePng(activeComposer(page));
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isDisabled())
         .toBe(true);
@@ -930,8 +828,8 @@ suite.define(() => {
         )
         .toBe(0);
 
-      await activeComposer().fill("Safe session B message");
-      await activeComposer().press("Enter");
+      await activeComposer(page).fill("Safe session B message");
+      await activeComposer(page).press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
         message: "Safe session B message",
@@ -940,14 +838,7 @@ suite.define(() => {
       expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
 
       await navigateToControlUiSession(page, firstSession);
-      await page.evaluate(() => {
-        const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
-          .attachmentReadProof;
-        if (!proof.finish) {
-          throw new Error("Pasted image read was not retained");
-        }
-        return proof.finish();
-      });
+      await finishRead(page);
       await page
         .locator('openclaw-chat-pane[aria-hidden="false"]')
         .getByRole("img", { name: "pixel.png" })
@@ -956,12 +847,9 @@ suite.define(() => {
   });
 
   it("settles an eventless stalled attachment read through failure, preserves draft, and releases send", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       await installDeferredAttachmentReader(page);
       const gateway = await installMockGateway(page);
-
-      const proofDir = path.join(suite.artifactDir, "stalled-attachment-read");
-      await mkdir(proofDir, { recursive: true });
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -972,35 +860,22 @@ suite.define(() => {
       await page.clock.install();
       await pastePng(composer);
 
-      // 1. Stalled preparing state
       await expect.poll(() => send.isDisabled()).toBe(true);
       await page.locator(".chat-attachment-loading").waitFor();
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
-      });
 
       // Advance virtual clock past the 15-second read timeout
       await page.clock.runFor(15_001);
 
-      // 2. Settles through failure, error icon visible, send released for draft text
       await page.locator(".chat-attachment-thumb--error").waitFor();
       await page.locator(".chat-attachment-error").waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
-      });
 
-      // 3. Remove failed attachment tile, draft retained, send still ready
       const removeButton = page.locator(".chat-attachment-remove").first();
       await removeButton.click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       expect(await composer.inputValue()).toBe(draftText);
       await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-3-attachment-removed-draft-ready.png"),
-      });
 
-      // 4. Send draft message successfully
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
@@ -1008,9 +883,6 @@ suite.define(() => {
       });
       expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
       await expect.poll(() => composer.inputValue()).toBe("");
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
-      });
 
       const aborts = await page.evaluate(
         () =>
