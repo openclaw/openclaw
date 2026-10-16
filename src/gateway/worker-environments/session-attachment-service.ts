@@ -7,7 +7,6 @@ import type { createWorkerEnvironmentAccess } from "./environment-access.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
-import type { WorkerEnvironmentServiceRecord } from "./service-contract.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import { prepareWorkerEnvironmentAttachmentSession } from "./session-attachment-session.js";
 import type {
@@ -118,11 +117,7 @@ export function createWorkerEnvironmentSessionAttachments(
       options.warn(retry.parked);
     }
   };
-  const destroyEnvironment = (
-    environmentId: string,
-    explicit = false,
-    onRequested?: (record: WorkerEnvironmentRecord) => void,
-  ) =>
+  const destroyEnvironment = (environmentId: string, explicit = false) =>
     cleanups.enqueue(environmentId, async () => {
       await store.ready();
       const record = store.get(environmentId);
@@ -151,10 +146,7 @@ export function createWorkerEnvironmentSessionAttachments(
       };
       retry.attempts += 1;
       try {
-        const stopped = await providerLifecycle.destroy(environmentId, {
-          requireUnattached: true,
-          onRequested,
-        });
+        const stopped = await providerLifecycle.destroy(environmentId, { requireUnattached: true });
         if (
           stopped.state !== "destroyed" &&
           !(stopped.state === "failed" && stopped.leaseId === null)
@@ -175,7 +167,7 @@ export function createWorkerEnvironmentSessionAttachments(
         cleanupRetries.set(environmentId, retry);
         if (retry.attempts >= 10 || options.now() - retry.startedAtMs >= 3_600_000) {
           parkCleanup(current, retry);
-        } else if (!explicit || onRequested) {
+        } else if (!explicit) {
           options.warn(
             `Conversation environment cleanup will retry (${environmentId}): ${retry.lastError}`,
           );
@@ -263,7 +255,6 @@ export function createWorkerEnvironmentSessionAttachments(
     environmentId?: string,
     keepCreation?: AbortController,
     explicit = false,
-    onRequested?: (record: WorkerEnvironmentRecord) => void,
   ) => {
     authorize();
     closingAttachments.set(sessionId, (closingAttachments.get(sessionId) ?? 0) + 1);
@@ -285,11 +276,7 @@ export function createWorkerEnvironmentSessionAttachments(
       if (!closed) {
         return undefined;
       }
-      const current = store.get(closed.environmentId);
-      if (current && current.destroyRequestedAtMs !== null) {
-        onRequested?.(current);
-      }
-      return await destroyEnvironment(closed.environmentId, explicit, onRequested);
+      return await destroyEnvironment(closed.environmentId, explicit);
     } finally {
       const remaining = closingAttachments.get(sessionId)! - 1;
       if (remaining === 0) {
@@ -557,15 +544,10 @@ export function createWorkerEnvironmentSessionAttachments(
     destroySessionAttachment(
       request: { sessionId: string; environmentId?: string },
       authorize: () => void,
-      onRequested?: (record: WorkerEnvironmentServiceRecord) => void,
     ) {
-      const notify = onRequested
-        ? (record: WorkerEnvironmentRecord) =>
-            onRequested(options.environmentAccess.project(record))
-        : undefined;
-      // Close the relation before cleanup; notify only once the lifecycle records destroy intent.
+      // Close the durable relation before waiting for provisioning or transport cleanup.
       return options.trackOperation(
-        close(request.sessionId, authorize, request.environmentId, undefined, true, notify).then(
+        close(request.sessionId, authorize, request.environmentId, undefined, true).then(
           (record) => (record ? options.environmentAccess.project(record) : undefined),
         ),
       );

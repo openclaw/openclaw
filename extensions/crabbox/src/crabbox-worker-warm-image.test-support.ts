@@ -13,6 +13,7 @@ import {
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import {
+  destroyAndWait,
   commandResult,
   createProviderFixtures,
   nodeEnrollmentFixture,
@@ -169,7 +170,7 @@ export async function captureWarmImage(
   machineClass?: string,
 ) {
   const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
-  await provider.destroy({ leaseId: lease.leaseId, profile });
+  await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 }
 
 export const PROJECT_KEY = "a".repeat(64);

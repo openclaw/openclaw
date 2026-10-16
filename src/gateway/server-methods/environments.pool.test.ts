@@ -109,12 +109,12 @@ describe("prepared worker pool projection", () => {
         expect(summary).toMatchObject({
           id: "worker-1",
           type: "worker",
-          status: "available",
+          status: listing ? "stopping" : "available",
           trust: "disposable",
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
-            state: listing ? "idle" : "attached",
+            state: listing ? "destroying" : "attached",
             ageMs: 9_000,
             ...(listing ? { idleMs: 4_000, attachedSessionIds: ["session-a", "session-z"] } : {}),
             tunnelStatus: "stopped",
