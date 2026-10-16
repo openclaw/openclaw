@@ -187,6 +187,8 @@ export type EmbeddedAgentRunMeta = {
   intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
   terminalReplyExpectation?: ReplyExpectation;
+  /** Retain a failed internal result without a user-facing retry notice. */
+  suppressErrorNotice?: boolean;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
