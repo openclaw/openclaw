@@ -7,6 +7,7 @@ import {
   readCapturedSessionActorEntry,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindInProcessSessionRun } from "../../gateway/in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
@@ -522,11 +523,19 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Communication target incarnation changed before admission.");
       }
-      const input = {
+      let input: Record<string, unknown> = {
         ...request.params,
         expectedExistingSessionId: endpoint.entry.sessionId,
         expectedExistingSessionLifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
       };
+      if (context && typeof request.params.idempotencyKey === "string") {
+        input = bindInProcessSessionRun(input, {
+          sessionKey: targetSessionKey,
+          sessionId: endpoint.entry.sessionId,
+          lifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
+          runId: request.params.idempotencyKey,
+        });
+      }
       const expectedInput = structuredClone(input);
       const assertAdmission = () => {
         request.sessionMutationCommitGuard?.();
@@ -574,13 +583,17 @@ export async function prepareSessionsSendCommunication(params: {
                 agentId: sender.agentId,
                 sessionKey: sender.sessionKey,
                 sessionId: sender.entry.sessionId,
-                lifecycleRevision: sender.entry.lifecycleRevision,
+                ...(sender.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: sender.entry.lifecycleRevision }),
               },
               target: {
                 agentId: endpoint.agentId,
                 sessionKey: endpoint.sessionKey,
                 sessionId: endpoint.entry.sessionId,
-                lifecycleRevision: endpoint.entry.lifecycleRevision,
+                ...(endpoint.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: endpoint.entry.lifecycleRevision }),
               },
               sandboxed,
               message: dispatchMessage,

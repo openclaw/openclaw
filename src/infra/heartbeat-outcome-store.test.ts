@@ -33,6 +33,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   claimHeartbeatContextForUserRun,
   claimHeartbeatOutcomeForRun,
@@ -123,7 +124,11 @@ describe("heartbeat outcome store", () => {
     const env = await createEnv();
     const target = { agentId: "main", sessionKey: "agent:main:main", env };
     let commits = 0;
+    let admissions = 0;
     sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        admissions++;
+      }
       if (request.stage === "commit") {
         commits++;
       }
@@ -133,6 +138,10 @@ describe("heartbeat outcome store", () => {
 
     expect(await claim("first-run")).toBeUndefined();
     expect(commits).toBe(0);
+    const afterAbsent = admissions;
+    expect(await claim("first-run")).toBeUndefined();
+    expect(await claim("second-run")).toBeUndefined();
+    expect(admissions).toBe(afterAbsent);
     await persistHeartbeatOutcome({
       ...target,
       runSessionKey: "agent:main:main:heartbeat",
@@ -143,9 +152,11 @@ describe("heartbeat outcome store", () => {
     const claimed = await claim("first-run");
     expect(claimed).toMatchObject({ summary: "Recorded progress" });
     expect(commits).toBe(2);
+    const afterClaim = admissions;
     expect(await claim("first-run")).toEqual(claimed);
     expect(await claim("second-run")).toBeUndefined();
     expect(commits).toBe(2);
+    expect(admissions).toBe(afterClaim);
   });
 
   it("leaves the outcome unclaimed when its admitted run retires before worker admission", async () => {
@@ -404,7 +415,7 @@ async function reserveWorker(env: NodeJS.ProcessEnv) {
 it("queues captured outcomes off-thread and claims once per run until the next heartbeat", async () => {
   const env = await createEnv();
   const target = { agentId: "main", sessionKey: "agent:main:main", env };
-  const db = openOpenClawAgentDatabase(target).db;
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(target).db);
   const databasePath = resolveOpenClawAgentSqlitePath(target);
   const initialWriteToken = readSqliteDatabaseWriteTokenForPath(databasePath);
   expect(initialWriteToken).toBeTypeOf("string");

@@ -6,7 +6,6 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
 import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
@@ -104,9 +103,6 @@ export async function processDiscordVoiceSegment(
   }
   logVoiceVerbose(
     `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
-  );
-  logVoiceVerbose(
-    `transcript from ${speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceLogPreview(transcript)}`,
   );
   if (recording?.capture.isCurrent()) {
     await recording.capture.onUtterance({

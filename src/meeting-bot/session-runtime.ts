@@ -543,8 +543,14 @@ export class MeetingSessionRuntime<
         throw new Error(this.options.messages.replacementBrowserLeaveFailed);
       }
     } catch (error) {
-      // Complete rollback now; keep only unfinished cleanup reachable for a later leave.
-      await this.#rollbackFailedJoinSession(session);
+      // Attempt cleanup once; retain unfinished work for an explicit leave retry.
+      try {
+        await this.#leaveSession(session);
+      } catch (cleanupError) {
+        this.options.logger.warn(
+          `${this.options.logScope} replacement cleanup failed: ${this.options.formatError(cleanupError)}`,
+        );
+      }
       if (this.#sessionCleanup.isPending(session.id)) {
         this.#sessionCleanup.retainFailedJoin(session.id);
         this.#sessions.set(session.id, session);
@@ -644,20 +650,6 @@ export class MeetingSessionRuntime<
   #meetingKey(transport: TTransport, url: string): string {
     const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
     return `${transport}:${meeting}`;
-  }
-
-  async #rollbackFailedJoinSession(session: TSession): Promise<void> {
-    await this.#sessionCleanup.rollbackFailedJoin({
-      sessionId: session.id,
-      browserLeft: session.browserLeft,
-      leave: async () => await this.#leaveSession(session),
-      hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
-      releaseBrowser: async () => await this.options.releaseBrowserTab(session),
-      formatError: (error) => this.options.formatError(error),
-      warn: (message) => this.options.logger.warn(`${this.options.logScope} ${message}`),
-      onBrowserResult: (left) => (session.browserLeft = left),
-      onComplete: () => this.#dropRuntimeHandles(session.id),
-    });
   }
 
   #attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void {

@@ -16,7 +16,6 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions } from "./chat-async-question.ts";
@@ -30,7 +29,7 @@ import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.t
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { resolveCollapsedToolDetail } from "./chat-tool-cards.ts";
+import { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 function messageVideoSlots(
   projection: Pick<
@@ -81,7 +80,7 @@ export function prepareGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   // Nested cards moved under their parent must not leave empty message shells.
-  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== litNothing);
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== null);
   const {
     images,
     attachments: visibleAttachments,

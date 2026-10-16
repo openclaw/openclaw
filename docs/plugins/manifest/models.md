@@ -158,7 +158,7 @@ Model fields:
 | `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`                | `Array<"text" \| "image" \| "video" \| "document">`            | Modalities the model accepts. Other values are silently dropped.                     |
 | `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
 | `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |

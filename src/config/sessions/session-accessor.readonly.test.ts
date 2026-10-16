@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionEntriesCore,
@@ -91,7 +92,7 @@ describe("session accessor readonly listing", () => {
         if (!result.found) {
           throw new Error("Expected existing shared database");
         }
-        return result.value;
+        return requireNativeSqliteDatabase(result.value);
       };
       const descendants: Promise<DatabaseSync>[] = [];
       let retained: DatabaseSync | undefined;
@@ -480,7 +481,7 @@ describe("session accessor readonly listing", () => {
     const options = { recentLimit: 5, agentIds };
     readSessionStoreSummaryReadOnly(scope, options);
     const queries = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["payloads", "participants"],
       (sql) => {
         if (sql.includes('from "session_participants"')) {
@@ -871,9 +872,10 @@ describe("session accessor readonly listing", () => {
 
     const external = new DatabaseSync(database.path);
     const events: string[] = [];
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const originalPrepare = database.db.prepare.bind(database.db);
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sqlText) => {
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+    const originalPrepare = nativeDb.prepare.bind(nativeDb);
+    const prepareSpy = vi.spyOn(nativeDb, "prepare").mockImplementation((sqlText) => {
       const statement = originalPrepare(sqlText);
       const normalized = sqlText.toLowerCase().replaceAll(/\s+/g, " ");
       if (!normalized.includes('from "session_nodes"')) {
@@ -935,7 +937,7 @@ describe("session accessor readonly listing", () => {
         { status: "unknown", reason: "row-invalid" },
       ]);
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(nativeDb);
       prepareSpy.mockRestore();
       external.close();
     }

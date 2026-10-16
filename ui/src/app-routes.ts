@@ -35,6 +35,7 @@ import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
+import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
@@ -71,17 +72,9 @@ import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = (
-  | {
-      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
-      renderSolid?: never;
-    }
-  | {
-      render?: never;
-      /** Mounted once per route renderer; props follow the current loader and presentation. */
-      renderSolid: (props: SolidRouteProps) => JSX.Element;
-    }
-) & {
+type AppRouteModule = {
+  /** Mounted once per route renderer; props follow the current loader and presentation. */
+  renderSolid: (props: SolidRouteProps) => JSX.Element;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
   renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
@@ -105,6 +98,7 @@ const APP_ROUTE_TREE = [
   appsPage,
   portalsPage,
   agentsHomePage,
+  clawsPage,
   agentsPage,
   approvalsPage,
   channelsPage,

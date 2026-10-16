@@ -4,8 +4,10 @@ import type {
   SessionTranscriptMessageByIdOptions,
 } from "../../gateway/session-transcript-read.types.js";
 import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -66,6 +68,22 @@ const recentHistoryWindows = new Map<
     page: SessionTranscriptMessageEventPage;
   }
 >();
+const historyWindowOwners = new WeakSet<CurrentTranscriptProjection["database"]["db"]>();
+
+function retainHistoryWindowOwner(database: CurrentTranscriptProjection["database"]["db"]): void {
+  if (historyWindowOwners.has(database)) {
+    return;
+  }
+  registerNodeSqliteDisposeCallback(sqlPublicationAnchor(database), () => {
+    // Closed handles must release cached pages and their connection-owned facts.
+    for (const [key, cached] of recentHistoryWindows) {
+      if (cached.database === database) {
+        recentHistoryWindows.delete(key);
+      }
+    }
+  });
+  historyWindowOwners.add(database);
+}
 
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
@@ -376,6 +394,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
   if (
     !projection.generation ||
     hasUncommittedSqliteWrites(projection.database.db) ||
+    isPostgresSqlConnection(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)
@@ -406,8 +425,10 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
       return;
     }
     try {
+      const database = projection.database.db;
+      retainHistoryWindowOwner(database);
       recentHistoryWindows.set(key, {
-        database: projection.database.db,
+        database,
         revision,
         page: structuredClone(page),
       });

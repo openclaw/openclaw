@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
@@ -111,6 +113,26 @@ function createHarness(
 }
 
 describe("active worker placement disk-space monitoring", () => {
+  it("cancels an optional probe without publishing a late sample", async ({ signal }) => {
+    const controller = new AbortController();
+    const stopped = new Error("disk probe stopped");
+    const entered = createDeferredCore();
+    const harness = createHarness(async (command) => {
+      entered.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        command.signal?.addEventListener("abort", () => reject(stopped), { once: true });
+      });
+      return result(6 * GIB, 10 * GIB);
+    });
+    const sweeping = harness.monitor.sweep(controller.signal);
+    await withinTest(entered.promise, signal);
+    controller.abort(stopped);
+    await withinTest(sweeping, signal);
+    expect(harness.releaseInventory).toHaveBeenCalledOnce();
+    expect(harness.monitor.read(harness.placement)).toBeUndefined();
+    expect(harness.warn).not.toHaveBeenCalled();
+  });
+
   it.each(["active", "inactive", "revoked"] as const)(
     "releases the %s placement inventory before leaving the sweep",
     async (state) => {
@@ -199,6 +221,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.startTunnel).toHaveBeenCalledWith({
         environmentId: "environment-disk",
         ownerEpoch: 7,
+        authorize: expect.any(Function),
       });
       expect(harness.monitor.version()).toBe(1);
       expect(events).toEqual([]);

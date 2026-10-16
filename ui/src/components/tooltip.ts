@@ -1,4 +1,3 @@
-import type { TemplateResult } from "lit";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
 import {
   TooltipController,
@@ -8,9 +7,6 @@ import {
 
 export { consumeTooltipEscape };
 
-export interface TooltipProps extends TooltipPolicyProps {
-  contentTemplate?: TemplateResult;
-}
 export interface TooltipRuntime {
   request(open: boolean): boolean;
   update(): void;
@@ -79,12 +75,12 @@ export class TooltipProvider extends HTMLElement {
 
 const defaults = {
   content: "",
-  contentTemplate: undefined,
   placement: "top",
   closeDelay: 100,
   hoverDismissDelay: undefined,
   delay: undefined,
   describe: true,
+  pointerThrough: false,
   autoSize: false,
   disabled: false,
   openOnClick: false,
@@ -105,15 +101,15 @@ type MountTooltipView = typeof import("./solid/tooltip.tsx").mountTooltipView;
 let viewImport: Promise<MountTooltipView> | undefined;
 
 /** Policy and descriptions are eager; presentation loads only for actual reveal intent. */
-export class TooltipElement extends HTMLElement implements TooltipProps {
+export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   static observedAttributes = [...attributes.keys()];
   declare content: string;
-  declare contentTemplate: TemplateResult | undefined;
   declare placement: TooltipPolicyProps["placement"];
   declare closeDelay: number;
   declare hoverDismissDelay: number | undefined;
   declare delay: number | undefined;
   declare describe: boolean;
+  declare pointerThrough: boolean;
   declare autoSize: boolean;
   declare disabled: boolean;
   declare openOnClick: boolean;
@@ -230,8 +226,8 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
     this.#controller.previewForAnchor(anchor, content, input);
   }
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
-    this.#controller.focusTriggerWithoutOpening(target);
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
+    this.#controller.focusTriggerWithoutOpening(target, options);
   }
 
   #scheduleUpdate() {
@@ -294,12 +290,15 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
   }
 }
 
-export function focusWithoutTooltip(target: HTMLElement | null | undefined) {
+export function focusWithoutTooltip(
+  target: HTMLElement | null | undefined,
+  options?: FocusOptions,
+) {
   const tooltip = target?.closest<TooltipElement>("openclaw-tooltip");
   if (tooltip && target) {
-    tooltip.focusTriggerWithoutOpening(target);
+    tooltip.focusTriggerWithoutOpening(target, options);
   } else {
-    target?.focus();
+    target?.focus(options);
   }
 }
 

@@ -38,7 +38,6 @@ import {
   getGatewayConfigModule,
   getSessionsHandlers,
   loadSeededTranscriptEvents,
-  seedSessionTranscript,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -297,56 +296,6 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
 
   ws.close();
 });
-
-test.each([["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]])(
-  "sessions.list preserves selected custom provider %s and nested models over WebSocket",
-  async (provider, model) => {
-    const { storePath } = await createSessionStoreDir();
-    await writeSessionStore({
-      entries: {
-        main: sessionStoreEntry("sess-parent"),
-        "dashboard:child": sessionStoreEntry("sess-custom-provider", {
-          providerOverride: provider,
-          modelOverride: model,
-          modelProvider: provider,
-          model,
-          parentSessionKey: "agent:main:main",
-        }),
-      },
-    });
-    await seedSessionTranscript({
-      sessionId: "sess-custom-provider",
-      sessionKey: "agent:main:dashboard:child",
-      storePath,
-      messages: [
-        {
-          role: "user",
-          content: `List ${provider}/${model} sessions.`,
-        },
-        {
-          role: "assistant",
-          provider,
-          model,
-          content: `${provider} remains a model provider, not a plugin directory.`,
-        },
-      ],
-    });
-
-    const { ws } = await openClient();
-    const listed = await rpcReq<{
-      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-    }>(ws, "sessions.list", {});
-    ws.close();
-
-    expect(listed.ok, JSON.stringify(listed)).toBe(true);
-    expect(
-      listed.payload?.sessions.find((session) => session.key === "agent:main:dashboard:child"),
-    ).toMatchObject({
-      modelProvider: provider,
-      model,
-    });
-  },
-);
 
 test("sessions.patch omits thinking metadata when an unrelated patch skips the catalog", async () => {
   testState.agentConfig = {

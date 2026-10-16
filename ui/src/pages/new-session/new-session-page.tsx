@@ -1,21 +1,21 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { renderLazyViewError } from "../../components/lazy-view-error.ts";
-import { renderSessionBackground } from "../../components/session-background-view.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
-import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -25,6 +25,8 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { createNewSessionTitle } from "./draft-title.ts";
+import { DraftWelcome } from "./draft-welcome.tsx";
 import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
@@ -69,7 +71,7 @@ function DraftBlock(props: {
     onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
     onFocusComposer: () =>
       submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
-    requestUpdate: () => props.page().requestUpdate(),
+    onChange: () => props.page().changed(),
   }));
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
@@ -98,9 +100,9 @@ function DraftBlock(props: {
     <div
       class="new-session-page__draft"
       aria-busy={submission().submitting ? "true" : "false"}
-      onCompositionStart={() => props.page().titlePreparation.setComposing(true)}
-      onCompositionEnd={() => props.page().titlePreparation.setComposing(false)}
-      onFocusOut={() => props.page().titlePreparation.setComposing(false)}
+      onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
+      onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
+      onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
     >
       <CatalogBar
         data={props.page().data}
@@ -127,6 +129,7 @@ function DraftBlock(props: {
                 onSelect: (agentId) => place().selectAgentId(agentId),
                 onOpenChange: (open) => {
                   props.page().agentPickerOpen = open;
+                  props.page().changed();
                 },
               }}
             />
@@ -181,26 +184,49 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   const owner = pageOwners.get(host) ?? new NewSessionPageOwner(host);
   pageOwners.set(host, owner);
   owner.context = useOptionalApplication();
-  const [revision, setRevision] = createSignal({}, { ownedWrite: true });
-  const unsubscribe = owner.subscribe(() => setRevision({}));
-  const page = () => {
-    revision();
-    return owner;
-  };
+  const pageState = projectOwner(owner, (value) => value);
+  const page = pageState.read;
+  const revision = createMemo(() => ({ value: pageState.revision() }));
+  owner.titlePreparation = createNewSessionTitle(() => ({
+    context: owner.context,
+    data: owner.data,
+    place: owner.place,
+    submission: owner.submission,
+    dictating: owner.dictation.active,
+  }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // The retained Lit slot must not republish identical Solid inputs on each
-  // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision, options };
-  createEffect(revision, () =>
-    untrack(() => {
-      owner.updated();
-      owner.titlePreparation.hostUpdated();
-    }),
-  );
+  // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
-  owner.requestUpdate();
-  onCleanup(unsubscribe);
+  onCleanup(() => owner.disconnect());
+  onSettled(() => {
+    const context = owner.context;
+    const notify = owner.changed;
+    const stops = context
+      ? [
+          context.theme,
+          context.agents,
+          context.agentIdentity,
+          context.sessions,
+          context.placementStartup,
+          context.runtimeConfig,
+          context.config,
+        ].map((source) => source.subscribe(notify))
+      : [];
+    const document = host.ownerDocument;
+    const window = document.defaultView!;
+    const dismiss = installChatComposerPickerDismissal(document);
+    const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
+    document.addEventListener("keydown", keydown, true);
+    window.addEventListener("beforeunload", owner.flushDraft);
+    notify();
+    return () => {
+      stops.forEach((stop) => stop());
+      dismiss();
+      document.removeEventListener("keydown", keydown, true);
+      window.removeEventListener("beforeunload", owner.flushDraft);
+    };
+  });
   const visibilityControl = {
     get visibility() {
       return page().submission.visibility;
@@ -243,6 +269,10 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     };
   };
   const panel = () => page().attachmentPanel;
+  const panelError = () => {
+    const state = page().attachmentPanelLoader.visibleState;
+    return state?.status === "error" ? state : undefined;
+  };
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
     const attachment = panel();
@@ -251,9 +281,15 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   return (
     <>
       <div
-        class={`new-session-page ${page().submission.pendingMessage ? "chat" : ""} ${page().submission.visibility === "incognito" ? "new-session-page--incognito" : ""}`}
+        class={[
+          "new-session-page",
+          {
+            chat: Boolean(page().submission.pendingMessage),
+            "new-session-page--incognito": page().submission.visibility === "incognito",
+          },
+        ]}
       >
-        <LitContent value={renderSessionBackground(page().context, "new-session")} />
+        <SessionBackgroundView context={page().context} surface="new-session" />
         <Show when={!catalog.isTarget(page().data)}>
           <NewSessionIncognitoControl
             submission={visibilityControl}
@@ -276,11 +312,10 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
             <Show
               when={Boolean(completed())}
               fallback={
-                <LitContent
-                  value={renderWelcomeState({
-                    ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, draftProps),
-                  })}
+                <DraftWelcome
+                  sessions={page().context?.sessions}
+                  options={page().welcomeOptions()}
+                  composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }
             >
@@ -306,7 +341,8 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
               mediaKind={item().kind ?? "image"}
               gallery={item().gallery}
               connectVideo={item().connectVideo}
-              loadFullResolution={item().loadFullResolution}
+              loadDisplayImage={item().loadDisplayImage}
+              readOriginalBlob={item().readOriginalBlob}
               src={item().src}
               originalSrc={item().originalSrc ?? ""}
               imageTitle={item().title}
@@ -320,26 +356,21 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       <Show when={panel()}>
         <aside class="new-session-attachment-panel">
           <Show
-            when={page().attachmentPanelLoader.visibleState?.status === "error"}
+            when={panelError()}
             fallback={
               <Show when={page().attachmentPanelLoader.visibleState}>
                 <div role="status">{t("common.loading")}</div>
               </Show>
             }
           >
-            <LitContent
-              value={(() => {
-                const state = page().attachmentPanelLoader.visibleState;
-                return state?.status === "error"
-                  ? renderLazyViewError({
-                      error: state.error,
-                      stale: state.stale,
-                      onRetry: () => owner.attachmentPanelLoader.retry(),
-                      onClose: owner.closeAttachmentPanel,
-                    })
-                  : undefined;
-              })()}
-            />
+            {(state) => (
+              <LazyViewError
+                error={state().error}
+                stale={state().stale}
+                onRetry={() => owner.attachmentPanelLoader.retry()}
+                onClose={owner.closeAttachmentPanel}
+              />
+            )}
           </Show>
           <openclaw-chat-detail-panel
             prop:content={panelContent()}
@@ -355,35 +386,20 @@ defineSolidBridge<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
-  connected: (host) => pageOwners.get(host)?.connect(),
-  disconnected: (host) =>
-    queueMicrotask(() => {
-      if (!host.isConnected) {
-        pageOwners.get(host)?.disconnect();
-      }
-    }),
-  propertyChanged: (host) => pageOwners.get(host)?.requestUpdate(),
+  propertyChanged: (host) => pageOwners.get(host)?.changed(),
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
-    requestUpdate: (host) => pageOwners.get(host)?.requestUpdate(),
   },
 });
 
-// These hosts remain custom elements so the detail panel keeps its lazy registration.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-new-session-page": HTMLAttributes<PageHost> & {
         "prop:data"?: NewSessionRouteData | undefined;
-      };
-      "openclaw-chat-detail-panel": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-detail-panel"]
-      > & {
-        "prop:content"?: SidebarContent | null;
       };
     }
   }

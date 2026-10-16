@@ -20,11 +20,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import {
-  formatVoiceLogPreview,
-  formatRealtimeInfoLog,
-  shouldLogRealtimeVerboseEvent,
-} from "./log-preview.js";
+import { formatRealtimeInfoLog, shouldLogRealtimeVerboseEvent } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
@@ -108,11 +104,9 @@ export class DiscordRealtimeSpeakerSession {
     },
   ) {
     this.outputEnabled = !params.standby;
-    const recordingEpoch = this.providerContinuityEpoch;
     this.recording = new DiscordRealtimeRecording({
       entry: this.params.entry,
-      isCurrent: () =>
-        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === recordingEpoch,
+      isCurrent: () => this.lifecycle.status !== "stopped",
       warn: (message) => logger.warn(message),
     });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
@@ -286,9 +280,7 @@ export class DiscordRealtimeSpeakerSession {
         }
         this.markProviderGenerationObserved();
         if (isFinal && text.trim()) {
-          logger.info(
-            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
-          );
+          logger.info(`discord voice: realtime ${role} transcript (${text.length} chars)`);
         }
         if (isFinal && role === "assistant") {
           this.playback.suppressDuplicateControlSpeech(text);

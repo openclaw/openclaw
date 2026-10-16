@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
 import {
   readSqliteNativeMutationRevision,
@@ -310,7 +311,7 @@ async function prepareSessionGenerationLease(
           const schemaChanged = () => {
             invalidated = true;
           };
-          if (native) {
+          if (native && !isPostgresSqlConnection(native.db)) {
             releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
           }
           assertNativeCurrent = (current) => {
@@ -318,7 +319,9 @@ async function prepareSessionGenerationLease(
             if (!native && opened) {
               native = opened;
               nativeRevision = undefined;
-              releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              if (!isPostgresSqlConnection(native.db)) {
+                releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              }
             } else if (opened !== native) {
               invalidated = true;
               throw new SessionDeliveryGenerationUnavailableError();
@@ -327,7 +330,7 @@ async function prepareSessionGenerationLease(
               return;
             }
             // Native callbacks and unfinished cursors cannot certify a committed write set.
-            if (hasPendingSqliteNativeExecution(native.db)) {
+            if (!isPostgresSqlConnection(native.db) && hasPendingSqliteNativeExecution(native.db)) {
               throw new SessionDeliveryGenerationUnavailableError();
             }
             const revision = readSqliteNativeMutationRevision(native.db);

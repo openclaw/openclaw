@@ -4,7 +4,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.versions.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
@@ -257,7 +257,7 @@ describe("Doctor Windows database path repair", () => {
       await runStateIntegrityHealth(ctx);
       expect(state.readRows()).toEqual(before);
       expect(ctx.updateWarnings).toEqual([
-        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix after the update finishes.",
+        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
       ]);
     },
   );

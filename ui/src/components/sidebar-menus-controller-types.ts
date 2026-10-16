@@ -39,6 +39,7 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly onRetryConnect?: () => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
+  navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &

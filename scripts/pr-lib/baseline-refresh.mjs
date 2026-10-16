@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { incomingReview } from "./incoming-review.mjs";
 import { validateReviewArtifacts } from "./review-artifacts.mjs";
 import { worktreeEntry } from "./review-transition-state.mjs";
 
@@ -24,12 +25,41 @@ function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
 }
 const text = (...args) => decoder.decode(git(args)).trim();
-const hash = (bytes, write = false) =>
-  decoder
-    .decode(
-      git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], { input: bytes }),
-    )
-    .trim();
+function hash(bytes, write = false) {
+  if (write) {
+    return decoder
+      .decode(git(["hash-object", "--no-filters", "-w", "--stdin"], { input: bytes }))
+      .trim();
+  }
+  const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
+  const path = join(directory, "snapshot");
+  let fd;
+  let directoryRemoved = false;
+  try {
+    // Finish and close the exclusive writer before opening a fresh read-only
+    // descriptor. Hash captured bytes, never a later read of the authority path.
+    fs.writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+    fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // PR supervision requires POSIX. Unlink before dispatch so interruption
+    // cannot leave authority bytes behind while Git owns the descriptor.
+    fs.unlinkSync(path);
+    fs.rmdirSync(directory);
+    directoryRemoved = true;
+    return decoder
+      .decode(git(["hash-object", "--no-filters", "--stdin"], { stdio: [fd, "pipe", "pipe"] }))
+      .trim();
+  } finally {
+    try {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    } finally {
+      if (!directoryRemoved) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  }
+}
 
 // Empty resolution files are valid blobs. Read the opened regular descriptor once;
 // Git receives those bytes without filters, pathname rereads or text normalization.
@@ -352,9 +382,14 @@ function bindingAt(anchor, suppliedBytes) {
     "authority",
     "resolutions",
     ...(Object.hasOwn(record, "sourceAdmission") ? ["sourceAdmission"] : []),
+    ...(Object.hasOwn(record, "incomingSource") ? ["incomingSource"] : []),
   ]);
   if (
     record.version !== 1 ||
+    (Object.hasOwn(record, "incomingSource") &&
+      (record.incomingSource !== true ||
+        Object.hasOwn(record, "sourceAdmission") ||
+        record.sourceHead !== record.incomingHead)) ||
     !Number.isSafeInteger(record.pr) ||
     record.pr < 1 ||
     ![
@@ -410,6 +445,44 @@ const retiredNames = [
   "correction-incoming-review.md",
 ];
 const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
+
+function incomingSourceAuthority(pr, source, reviewOid, contextPath) {
+  const { prMeta } = incomingReview(pr, source, reviewOid);
+  // Preparation env files belong to the shell owner, including its quoting rules.
+  execFileSync("bash", [
+    "-c",
+    `set -euo pipefail
+source .local/pr-meta.env
+[ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
+source "$1"
+[ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
+[ "$PREP_BRANCH" = "pr-$2-prep" ] && [ "$PREP_REVIEW_MODE" = correction ] || exit 1
+[ "$PREP_INCOMING_JSON_OID" = "$4" ]
+[ -z "\${PREP_BASELINE_REFRESH_HEAD:-}\${PREP_BASELINE_REFRESH_OID:-}" ]`,
+    "baseline-incoming-source",
+    contextPath,
+    String(pr),
+    source,
+    reviewOid,
+    prMeta.headRefName,
+  ]);
+}
+
+function incomingSourceSnapshot(pr, source, reviewOid) {
+  if (present(bindingPath) || present(".local/review-transition.json")) {
+    throw new Error("Incoming baseline admission requires an unbound preparation source.");
+  }
+  const authority = Object.fromEntries(
+    authorityPaths.map((path) => [path, present(path) ? hash(readRegular(path)) : "absent"]),
+  );
+  incomingSourceAuthority(pr, source, reviewOid, ".local/prep-context.env");
+  git(["verify-commit", source]);
+  process.stdout.write(
+    Object.entries(authority)
+      .map(([path, oid]) => `${path} ${oid}`)
+      .join("\n"),
+  );
+}
 
 function proofInventory(archives) {
   return Object.fromEntries(
@@ -515,7 +588,6 @@ function retainedAuthority(binding) {
     }
   }
   const meta = JSON.parse(readRegular(".local/pr-meta.json"));
-  const review = JSON.parse(retained(".local/correction-review.json"));
   const incoming = JSON.parse(readRegular(".local/review.json"));
   const required = incoming.findings.filter((finding) =>
     ["BLOCKER", "IMPORTANT"].includes(finding.severity),
@@ -526,29 +598,45 @@ function retainedAuthority(binding) {
       ? [...prior.scope, ...paths(predecessor.anchor, record.sourceHead)]
       : paths(record.incomingHead, record.sourceHead)),
   ]);
-  const violations = validateReviewArtifacts({
-    review,
-    prMeta: { ...meta, headRefOid: record.sourceHead, files: [...scope].map((path) => ({ path })) },
-  });
-  if (
-    violations.length ||
-    review.recommendation !== "READY FOR /prepare-pr" ||
-    meta.number !== record.pr ||
-    meta.headRefOid !== record.incomingHead ||
-    record.authority[".local/review.json"] !== record.incomingReviewOid ||
-    incoming.recommendation !== "NEEDS WORK" ||
-    !required.length ||
-    review.correction?.incomingHeadSha !== record.incomingHead ||
-    review.correction?.incomingReviewJsonOid !== record.incomingReviewOid ||
-    record.authority[".local/correction-incoming-review.json"] !== record.incomingReviewOid ||
-    review.correction.resolvedFindings?.length !== required.length ||
-    !required.every(({ id }) =>
-      review.correction.resolvedFindings.some((item) => item.id === id && item.resolution?.trim()),
-    )
-  ) {
-    throw new Error(
-      `Retained correction review does not authorize its source. ${violations.join("; ")}`,
+  if (record.incomingSource) {
+    incomingSourceAuthority(
+      record.pr,
+      record.sourceHead,
+      record.incomingReviewOid,
+      join(record.archive, "prep-context.env"),
     );
+  } else {
+    const review = JSON.parse(retained(".local/correction-review.json"));
+    const violations = validateReviewArtifacts({
+      review,
+      prMeta: {
+        ...meta,
+        headRefOid: record.sourceHead,
+        files: [...scope].map((path) => ({ path })),
+      },
+    });
+    if (
+      violations.length ||
+      review.recommendation !== "READY FOR /prepare-pr" ||
+      meta.number !== record.pr ||
+      meta.headRefOid !== record.incomingHead ||
+      record.authority[".local/review.json"] !== record.incomingReviewOid ||
+      incoming.recommendation !== "NEEDS WORK" ||
+      !required.length ||
+      review.correction?.incomingHeadSha !== record.incomingHead ||
+      review.correction?.incomingReviewJsonOid !== record.incomingReviewOid ||
+      record.authority[".local/correction-incoming-review.json"] !== record.incomingReviewOid ||
+      review.correction.resolvedFindings?.length !== required.length ||
+      !required.every(({ id }) =>
+        review.correction.resolvedFindings.some(
+          (item) => item.id === id && item.resolution?.trim(),
+        ),
+      )
+    ) {
+      throw new Error(
+        `Retained correction review does not authorize its source. ${violations.join("; ")}`,
+      );
+    }
   }
   if (!admission && /^PREP_BASELINE_REFRESH_(?:HEAD|OID)=/mu.test(decoder.decode(context))) {
     throw new Error("Source context is already baseline-bound.");
@@ -897,6 +985,15 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath, suc
     };
   }
   const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));
+  const incomingSource = !successor && source === prMeta.headRefOid;
+  if (incomingSource) {
+    incomingSourceAuthority(
+      pr,
+      source,
+      authority[".local/review.json"],
+      join(archive, "prep-context.env"),
+    );
+  }
   const manifest = manifestPath ? JSON.parse(readRegular(manifestPath)) : undefined;
   if (manifestPath) {
     exactKeys(manifest, ["version", "pr", "sourceHead", "baselineHead", "forkBase", "resolutions"]);
@@ -925,6 +1022,7 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath, suc
     authority,
     resolutions: replay.resolutions,
     ...(sourceAdmission ? { sourceAdmission } : {}),
+    ...(incomingSource ? { incomingSource: true } : {}),
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
@@ -1132,7 +1230,9 @@ function checkSigning(pr, root, lockRef, lockOid) {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "create" && args.length === 7) {
+    if (command === "incoming-source-snapshot" && args.length === 3) {
+      incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
+    } else if (command === "create" && args.length === 7) {
       create(Number(args[0]), ...args.slice(1));
     } else if (command === "create-successor" && args.length === 11) {
       create(Number(args[0]), ...args.slice(1, 7), args.slice(7));

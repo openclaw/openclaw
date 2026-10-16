@@ -39,7 +39,15 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message, options.composer)
+      ? new InstantThreadHandoff(
+          context,
+          key,
+          agentId,
+          draft,
+          options.message,
+          options.composer,
+          params.displayName,
+        )
       : undefined;
   };
 }
@@ -74,6 +82,7 @@ export class InstantThreadHandoff {
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
     composer?: CreationComposer,
+    displayName?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -109,6 +118,7 @@ export class InstantThreadHandoff {
       creation: this.creation,
       message,
       composer,
+      displayName,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),

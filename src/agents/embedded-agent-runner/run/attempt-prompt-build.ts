@@ -22,7 +22,6 @@ import {
   resolveInternalEventPromptBody,
 } from "../../internal-events.js";
 import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
-import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -44,7 +43,6 @@ import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
   reconcileToolResultPromptProjectionState,
-  toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
@@ -191,10 +189,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     activeAbortSignal,
   );
+  const assertHostActive = attempt.authProfileBinding
+    ? () => {
+        assertAdmittedActive?.();
+        attempt.authProfileBinding?.assertCurrent();
+      }
+    : assertAdmittedActive;
   assertHostActive?.();
   const hasPendingActionInstructions = Boolean(
     // Authorized enrichment runs after policy; do not pre-empt its required actions.
@@ -298,16 +302,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   if (promptBuildPrependContext) {
     effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;
-    log.debug(`hooks: prepended context to prompt (${promptBuildPrependContext.length} chars)`);
   }
   if (promptBuildAppendContext) {
     effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
-    log.debug(`hooks: appended context to prompt (${promptBuildAppendContext.length} chars)`);
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {
     setSystemPrompt(legacySystemPrompt);
-    log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
   }
   const composedSystemPrompt = composeSystemPromptWithHookContext({
     baseSystemPrompt: systemPromptText,
@@ -316,10 +317,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   });
   if (composedSystemPrompt) {
     setSystemPrompt(composedSystemPrompt);
-    log.debug(
-      `hooks: applied prependSystemContext/appendSystemContext ` +
-        `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
-    );
   }
   // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization
@@ -334,17 +331,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   if (modelAwareSystemPrompt !== systemPromptText) {
     setSystemPrompt(modelAwareSystemPrompt);
   }
-
-  const routingSummary = describeProviderRequestRoutingSummary({
-    provider: attempt.provider,
-    api: attempt.model.api,
-    baseUrl: attempt.model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-  });
-  log.debug(
-    `embedded run prompt start: runId=${attempt.runId} sessionId=${attempt.sessionId} ${routingSummary}`,
-  );
 
   const leafEntry = input.orphanRepair?.messageEntry;
   if (leafEntry && input.orphanRepair) {
@@ -381,10 +367,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       steeringPrompt: leasedSteeringPrompt,
       prompt: effectiveTranscriptPrompt,
     });
-    log.debug(
-      `agent steering: injected ${leasedSteering.runIds.length} queued item(s) into parent turn ` +
-        `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
-    );
   }
 
   const currentUserAdmission =
@@ -429,7 +411,7 @@ type PromptContextAttempt = Pick<
   | "sessionTarget"
   | "suppressNextUserMessagePersistence"
   | "operation"
->;
+> & { runId?: string };
 
 type PromptAssemblyContext = {
   effectivePrompt: string;
@@ -496,10 +478,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     promptToolResultAggregateMaxChars,
     createToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
-  const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
   sessionMessages = promptToolResultTruncation.messages;
-  if (promptHistoryChanged || aggregatePressureEngaged) {
+  if (promptToolResultTruncation.truncatedCount > 0) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =
       `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
@@ -508,15 +489,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       `aggregateBudgetChars=${promptToolResultAggregateMaxChars} ` +
       `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
       `sessionKey=${sessionLogKey}`;
-    if (aggregatePressureEngaged) {
-      if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
-        log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
-        );
-      }
-    } else {
-      log.info(truncationLog);
-    }
+    log.info(truncationLog);
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
@@ -563,6 +536,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
           sessionTarget: attempt.sessionTarget,
+          runId: attempt.runId,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });

@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -36,6 +37,10 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
+  const selected = getDatabaseEngineSelection()?.input;
+  if (selected) {
+    return selected;
+  }
   const connection: unknown =
     process.env.NODE_ENV === "test"
       ? getEnvironmentData("openclaw.test.state.connection")
@@ -103,11 +108,12 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  // SQLite may publish the current header without a redundant content-version row.
   if (
     meta?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    content?.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION)
+    (content !== undefined && content.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION))
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -118,10 +124,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   publishStateRuntimeSchemaAdmission(db, true);
 }
 
-export const stateEngineSchema = {
-  id: "state",
-  version: OPENCLAW_STATE_SCHEMA_VERSION,
-  sqlite: "",
+const statePostgresSchema = {
   postgres: runtime.eagerSql,
   postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
     const { activation } = fragment;
@@ -138,6 +141,21 @@ export const stateEngineSchema = {
   }),
 };
 
+export const stateEngineSchema = {
+  id: "state",
+  version: OPENCLAW_STATE_SCHEMA_VERSION,
+  sqlite: "",
+  ...statePostgresSchema,
+  postgresMigrations: [
+    {
+      version: 25,
+      sql: runtime.operatorRecoveryV25Sql,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+    },
+  ],
+};
+
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
   const facts = getPostgresPhysicalFacts(db);
   if (!facts) {
@@ -145,6 +163,12 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
+    const eager = runtime.expectedCatalog.some(
+      (fact) => fact.kind === "table" && fact.table === table,
+    );
+    if (eager && facts.catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
+      return;
+    }
     throw new Error(`No PostgreSQL state fragment owns ${table}`);
   }
   if (

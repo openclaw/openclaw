@@ -163,7 +163,7 @@ describe("bootstrapApplication", () => {
       if (!route) {
         throw new Error(`Missing route ${routeId}`);
       }
-      const component = vi.spyOn(route, "component").mockResolvedValue({ render: () => null });
+      const component = vi.spyOn(route, "component").mockResolvedValue({ renderSolid: () => null });
       const loader = vi.spyOn(route, "loader");
       const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {});
       try {

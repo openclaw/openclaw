@@ -21,6 +21,40 @@ Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep 
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
 
+Servers that do not enforce authentication are supported through an explicit
+`auth: "none"` on the provider. OpenClaw then sends no `Authorization` header,
+and setup/onboarding live checks pass without an API key. This is required for
+private-but-remote hosts (tailnet/VPN inference servers), where automatic
+no-auth detection only covers loopback and RFC1918 addresses:
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "my-studio/qwen3.8" } },
+  },
+  models: {
+    providers: {
+      "my-studio": {
+        baseUrl: "https://studio.example.ts.net/v1",
+        api: "openai-completions",
+        auth: "none",
+        models: [{ id: "qwen3.8", name: "Qwen3.8" }],
+      },
+    },
+  },
+}
+```
+
+Onboarding covers the same choice: leaving the API key blank on a non-local
+host prompts to confirm no-auth mode (loopback/RFC1918 hosts treat a blank
+key as no-auth automatically), or pass `--custom-no-auth` with
+`--custom-base-url`/`--custom-model-id` in non-interactive mode.
+`auth: "none"` applies only to the effective `openai-completions` adapter,
+including a model-level `api` override. It takes precedence over retained inline,
+environment, stored-profile, and SecretRef credentials. Unsupported adapters fail
+before credential fallback. Responses, Azure OpenAI, and Anthropic-compatible
+endpoints without auth still need a placeholder key.
+
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 
 ### Moonshot AI (Kimi)

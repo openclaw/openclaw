@@ -3,8 +3,7 @@
   "name": "MCP Events",
   "description": "Subscribe to events from configured MCP accounts and trigger authored automations.",
   "categories": [
-    "scheduling",
-    "integrations"
+    "scheduling"
   ],
   "activation": {
     "onStartup": true

@@ -45,7 +45,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
   "openai/gpt-5.6-luna",
-  "openrouter/openai/gpt-5.2-chat",
+  "openrouter/openai/gpt-5.6-luna",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5.3",
   "xai/grok-4.7",

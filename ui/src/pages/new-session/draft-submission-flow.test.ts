@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
@@ -272,38 +271,6 @@ describe("DraftSubmissionFlow", () => {
       }
     },
   );
-  it("replaces the native draft route with the started terminal session", async () => {
-    const { context, flow } = createDraftFixture({
-      scopes: ["operator.admin"],
-      methods: ["sessions.catalog.startTerminal", "terminal.open"],
-      data: {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "codex",
-        catalogLabel: "Codex",
-        startTerminal: true,
-        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-      },
-    });
-    Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
-    vi.spyOn(terminalStart, "startCatalogSessionInTerminal").mockResolvedValue({
-      sessionId: "terminal-created",
-      cwd: "/workspace",
-      shell: "codex",
-      agentId: "main",
-      confined: false,
-    });
-    flow.setMessage("Start this task");
-    await flow.submit();
-
-    expect(context.replace).toHaveBeenCalledWith("terminal", {
-      pathname: "/openclaw/terminal/terminal-created",
-      search: "",
-      hash: "",
-    });
-    expect(flow.message).toBe("");
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-  });
   it("starts a cloud repository with its selected ref without cloning on the Gateway", async () => {
     const { context, flow, gateway, place, request } = createDraftFixture({
       methods: ["sessions.create", "sessions.dispatch"],
@@ -524,7 +491,7 @@ describe("DraftSubmissionFlow", () => {
 
   it("makes attachment restore release only displaced payload ids", () => {
     const revokeObjectURL = stubObjectUrls("blob:shared", "blob:displaced", "blob:incoming");
-    const { flow, requestUpdate } = createDraftFixture();
+    const { flow, changed } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const shared = registerTextPayload("shared");
     const displaced = registerTextPayload("displaced");
@@ -536,7 +503,7 @@ describe("DraftSubmissionFlow", () => {
     ]);
     flow.attachmentDraft.replace([shared, displaced]);
     noteUserMutation.mockClear();
-    requestUpdate.mockClear();
+    changed.mockClear();
     revokeObjectURL.mockClear();
 
     flow.attachmentDraft.restore([shared, incoming]);
@@ -546,19 +513,19 @@ describe("DraftSubmissionFlow", () => {
     expect(getChatAttachmentDataUrl(incoming)).not.toBeNull();
     expect(getChatAttachmentDataUrl(displaced)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
     flow.attachmentDraft.reset();
   });
 
   it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
     const revokeObjectURL = stubObjectUrls("blob:current-draft");
-    const { flow, requestUpdate } = createDraftFixture();
+    const { flow, changed } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const current = registerTextPayload("current");
     expect(getChatAttachmentPreviewUrl(current)).toBe("blob:current-draft");
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
-    requestUpdate.mockClear();
+    changed.mockClear();
     revokeObjectURL.mockClear();
     expect(
       writeSessionPlacementRecovery({
@@ -593,7 +560,7 @@ describe("DraftSubmissionFlow", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
     expect(flow.message).toBe("@Alex recovered cloud prompt");
     expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([

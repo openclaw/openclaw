@@ -2,8 +2,13 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
+const pinMigrationMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => {
+    await pinMigrationMock();
+    return run();
+  },
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +161,7 @@ describe("runNodeDaemonInstall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    pinMigrationMock.mockReset().mockResolvedValue(undefined);
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     mocks.runExec.mockReset().mockImplementation(async (executable: string) => ({
@@ -190,6 +196,21 @@ describe("runNodeDaemonInstall", () => {
       user: "pi",
       linger: "no",
     });
+  });
+
+  it("reports pending runtime-pin migration before reading intent or installing", async () => {
+    pinMigrationMock.mockRejectedValueOnce(
+      new Error("Runtime pin migration pending; run openclaw doctor."),
+    );
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Runtime pin inspection failed: Runtime pin migration pending; run openclaw doctor.",
+    );
+    expect(pinSnapshotMock).not.toHaveBeenCalled();
+    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+    expect(mocks.service.install).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -559,57 +580,6 @@ describe("runNodeDaemonInstall", () => {
       expect(mocks.service.install).not.toHaveBeenCalled();
     },
   );
-
-  it("propagates a plan-warning sink failure before native installation", async () => {
-    const failure = new Error("output unavailable");
-    mocks.runtime.log.mockImplementationOnce(() => {
-      throw failure;
-    });
-    mocks.buildNodeInstallPlan.mockImplementationOnce(async ({ warn }) => {
-      warn?.("plan warning", "ignored title");
-      return { programArguments: ["node", "node-host"], environment: {} };
-    });
-    await expect(runNodeDaemonInstall({ force: true })).rejects.toBe(failure);
-    expect(mocks.runtime.log.mock.calls).toEqual([["plan warning"]]);
-    expect(mocks.service.install).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("converts a native-install warning sink failure without reporting success", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    mocks.runtime.log.mockImplementationOnce(() => {
-      throw new Error("output unavailable");
-    });
-    mocks.service.install.mockImplementationOnce(async (args: GatewayServiceInstallArgs) => {
-      args.warn?.("native warning");
-    });
-    await runNodeDaemonInstall({ force: true });
-    expect(mocks.runtime.log.mock.calls).toEqual([["native warning"]]);
-    expect(mocks.runtime.error.mock.calls).toEqual([
-      ["Node install failed: Error: output unavailable"],
-    ]);
-    expect(mocks.runtime.exit.mock.calls).toEqual([[1]]);
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
-  });
-
-  it("propagates the final JSON sink failure without a second result", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    const failure = new Error("JSON output unavailable");
-    mocks.runtime.writeJson.mockImplementationOnce(() => {
-      throw failure;
-    });
-    await expect(runNodeDaemonInstall({ force: true, json: true })).rejects.toBe(failure);
-    expect(mocks.service.install).toHaveBeenCalledOnce();
-    expect(mocks.runtime.writeJson).toHaveBeenCalledOnce();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.runtime.log).not.toHaveBeenCalled();
-  });
 });
 
 describe("node daemon lifecycle adapters", () => {

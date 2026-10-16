@@ -39,6 +39,13 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
+readiness produces a warning and prevents automatic rollback from restarting it;
+the updater does not wait for the incumbent to recover before replacing it.
+The replacement still receives the full startup and readiness verification.
+Certifying a service rooted in a different installation, or verifying a restored
+service after restart, still waits within the existing readiness budget.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -51,6 +58,14 @@ the original refusal in its output. The updater can then revalidate and restart
 the preserved service definition. Actual loss of native service authority still
 leaves recovery pending until ownership and restoration can be verified.
 
+On Linux, service refresh repairs group/other-writable unit files and legacy
+backups created by older installers, provided they are regular files owned by
+the service account in safe directories. It backs up the prior definition and
+regenerates the unit and backup with owner-only permissions. Unsafe directories,
+foreign ownership, symlinks, and protected mounts still refuse replacement.
+This repair runs in the candidate installer, including when an older installed
+updater invokes it.
+
 Load slows updates rather than establishing failure: startup inspections and
 recovery backlogs keep acceptance pending within the installation owner's bounded
 readiness budget. The managed-release controller waits for the marker agent's
@@ -60,10 +75,11 @@ The restored predecessor uses the same acceptance rules. Wrong identity, physica
 corruption, a wrong marker reply, or exhaustion of the readiness budget still
 requires failure recovery.
 
-Channel health collection timeouts are warnings during post-update verification.
+Channel probe failures, stopped channels, and health collection timeouts are
+warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and pass the normal health-settle checks. An explicit negative channel
-probe still fails verification. Timeout warnings remain in the update report even
+readiness, and pass the normal health-settle checks. A channel fault that also
+makes HTTP readiness fail still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
 reporting collection timeouts as negative probes to older updaters, although those
@@ -681,6 +697,16 @@ Git or npm installation. This continuation does not change the recovery limits b
 The new version can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
+
+If update recovery finds its managed service still stopped, an unverified service
+definition or installer backup receipt does not prohibit starting the installed
+runtime. The updater preserves the existing definition, revalidates service
+ownership, restarts through the service owner, and verifies normal readiness.
+Successful recovery completes with a warning and retains package backups for
+`openclaw update repair`. Failed startup reports its concrete error and directs
+you to `openclaw update repair` and `openclaw gateway status --deep`.
+Only named data risks, such as unsettled Doctor writers or unverified migrated
+state, instruct you to keep the Gateway stopped.
 
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing

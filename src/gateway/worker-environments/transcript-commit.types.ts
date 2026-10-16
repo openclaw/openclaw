@@ -25,6 +25,7 @@ export type TranscriptCommitInput = {
   lifecycleRevision: string | undefined;
   requestedBaseLeafId: string | null;
   recoverPersistedBatch: boolean;
+  runId?: string | null;
   messages: readonly CommittedAgentMessage[];
   cwd: string;
 };

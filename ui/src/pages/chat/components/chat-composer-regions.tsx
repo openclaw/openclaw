@@ -1,9 +1,10 @@
 import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
+import { isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 export function ComposerQueue(view: { composer: ChatComposerProps; showAbortableUi: boolean }) {
@@ -76,7 +77,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
           sessionStatus={view.composer.selectedSession?.status}
           startedAt={view.composer.selectedSession?.startedAt}
           endedAt={view.composer.selectedSession?.endedAt}
-          hasActiveRun={view.composer.runActive}
+          hasActiveRun={isChatRunWorking(view.composer)}
           collapseComposerByDefault={view.composer.collapseTaskProgress}
           composerDisclosureContext={{
             presented: view.shown,

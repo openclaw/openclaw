@@ -80,16 +80,12 @@ it("settles worker facts through admission without echoing snapshots in ordinary
   }
 });
 
-it.each([undefined, 42])(
-  "bootstraps complete host facts before any exchange, value=%s",
-  async (value) => {
-    const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
-    const database = openNodeSqliteDatabase(location);
-    if (value !== undefined) {
-      publishSqliteDatabaseAdmission(database, hostFactKey, value);
-    }
-    const worker = new Worker(
-      `
+it("bootstraps complete host facts before any exchange", async () => {
+  const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  publishSqliteDatabaseAdmission(database, hostFactKey, 42);
+  const worker = new Worker(
+    `
     const { parentPort, workerData } = require("node:worker_threads");
     (async () => {
       const { register } = await import(workerData.loader);
@@ -113,28 +109,27 @@ it.each([undefined, 42])(
       parentPort.close();
     })().catch((error) => { throw error; });
   `,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: {
-          location,
-          key: hostFactKey.name,
-          loader: import.meta.resolve("tsx/esm/api"),
-          native: new URL("./node-sqlite.ts", import.meta.url).href,
-          admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
-        },
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        location,
+        key: hostFactKey.name,
+        loader: import.meta.resolve("tsx/esm/api"),
+        native: new URL("./node-sqlite.ts", import.meta.url).href,
+        admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
       },
-    );
-    try {
-      const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
-      expect(code).toBe(0);
-      expect(facts).toEqual({ absent: undefined, value, exchanges: 0 });
-    } finally {
-      await worker.terminate();
-      database.close();
-    }
-  },
-);
+    },
+  );
+  try {
+    const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+    expect(code).toBe(0);
+    expect(facts).toEqual({ absent: undefined, value: 42, exchanges: 0 });
+  } finally {
+    await worker.terminate();
+    database.close();
+  }
+});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
@@ -192,8 +187,28 @@ it("settles scoped writes without host metadata round trips after peer registrat
       databasePath: location,
       input: undefined,
     });
+    const predecessor = store!.execute({ type: "admitted", input: undefined });
     let first = readSqliteDatabaseScopedWriteToken(database, "first");
     const second = readSqliteDatabaseScopedWriteToken(database, "second");
+    let current = true;
+    const refused = new Error("Queued scope lost authority");
+    const rejected = broker.runOperation(
+      store!,
+      (scope) =>
+        scope.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (-1)" } }),
+      undefined,
+      () => {
+        if (!current) {
+          throw refused;
+        }
+      },
+    );
+    current = false;
+    const outcomes = await Promise.allSettled([predecessor, rejected]);
+    expect(outcomes[0]!.status).toBe("fulfilled");
+    expect(outcomes[1]).toEqual({ status: "rejected", reason: refused });
+    // A new publication must not acknowledge scopes captured by a refused dispatch.
+    readSqliteDatabaseScopedWriteToken(database, "after-rejection");
     await store!.execute({
       type: "writeRows",
       input: { sql: "INSERT INTO original VALUES (2)", sessionKeys: ["second"] },

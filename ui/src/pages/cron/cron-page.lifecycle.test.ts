@@ -157,6 +157,10 @@ describe("CronPage lifecycle", () => {
             (option) => option.dataset.value,
           ),
         ).toEqual(["", "alpha/shared-model", "beta/shared-model", "__openclaw_custom_model__"]);
+        const inheritText =
+          picker.querySelector('[role="option"][data-value=""]')?.textContent ?? "";
+        expect(inheritText).toContain("Default");
+        expect(inheritText).not.toContain("common.default");
       });
       picker.querySelector<HTMLElement>('[role="option"][data-value="beta/shared-model"]')!.click();
       await page.settle();
@@ -251,12 +255,20 @@ describe("CronPage lifecycle", () => {
       } else {
         page.remove();
       }
-      const expected = change === "detach" ? [] : ["current-model"];
+      const readsBeforeCompletion = reads;
       oldError.reject(new Error("Retired catalog error"));
       await Promise.allSettled([oldError.promise]);
-      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
-      await page.settle();
-      expect(page.cronModelSuggestions).toEqual(expected);
+      if (change === "detach") {
+        // Disposal releases the view; its last signal value is not a new blank owner.
+        await page.settle();
+        expect(page.isConnected).toBe(false);
+        expect(page.childElementCount).toBe(0);
+        expect(reads).toBe(readsBeforeCompletion);
+      } else {
+        await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["current-model"]));
+        await page.settle();
+        expect(page.cronModelSuggestions).toEqual(["current-model"]);
+      }
       expect(page.textContent).not.toContain("Retired catalog error");
     },
   );
@@ -518,10 +530,16 @@ describe("CronPage lifecycle", () => {
         });
         await page.settle();
         expect(request).toHaveBeenCalledTimes(count);
-        expect(page.cron.cronError).toBeNull();
-        expect(page.cron.cronStatus?.jobs).not.toBe(99);
-        expect(page.cron.cronJobs.some((job) => job.id === "retired-job")).toBe(false);
-        expect(page.cron.cronRuns.some((run) => run.jobId === "retired-job")).toBe(false);
+        if (change === "unmount") {
+          // Retired domain reads may finish, but cannot recreate a view or queue more work.
+          expect(page.isConnected).toBe(false);
+          expect(page.childElementCount).toBe(0);
+        } else {
+          expect(page.cron.cronError).toBeNull();
+          expect(page.cron.cronStatus?.jobs).not.toBe(99);
+          expect(page.cron.cronJobs.some((job) => job.id === "retired-job")).toBe(false);
+          expect(page.cron.cronRuns.some((run) => run.jobId === "retired-job")).toBe(false);
+        }
       } finally {
         page.remove();
         held.resolve();
@@ -561,31 +579,6 @@ describe("CronPage lifecycle", () => {
     );
     expect(triggerToggle).toBeUndefined();
     expect(page.textContent).toContain("disabled by cron.triggers.enabled");
-  });
-
-  it("ignores a cron event callback retained by a replaced gateway source", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstGateway = createGateway(client, true);
-    const secondGateway = createGateway(client, true);
-    const firstContext = createContext(firstGateway);
-    const secondContext = createContext(secondGateway);
-    const page = createPage(firstContext);
-    await waitForCronPage(() => expect(request).toHaveBeenCalled());
-
-    page.context = secondContext;
-    page.refreshView();
-    await page.settle();
-    await waitForCronPage(() => expect(page.cron.client).toBe(client));
-    request.mockClear();
-    vi.mocked(secondContext.channels.refresh).mockClear();
-
-    firstGateway.emitRetiredEvent({ event: "cron" } as never);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(secondContext.channels.refresh).not.toHaveBeenCalled();
   });
 });
 

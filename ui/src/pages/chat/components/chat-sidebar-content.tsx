@@ -16,6 +16,7 @@ import {
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
 } from "../../../components/markdown-session-links.ts";
+import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
@@ -31,7 +32,6 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import {
   AttachmentCardHeader,
   AttachmentPreviewSkeleton,
@@ -44,10 +44,11 @@ import {
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
 import "./chat-audio-player.tsx";
-import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { isPdfAttachment } from "./chat-pdf-preview.ts";
+import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
   SidebarContent,
@@ -168,12 +169,12 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           !isCrossOriginHttpSource(model().src ?? "")
         }
       >
-        <openclaw-chat-pdf-preview
-          prop:src={model().src ?? ""}
-          prop:sourceIdentity={model().sourceIdentity}
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+        <ChatPdfPreview
+          src={model().src ?? ""}
+          sourceIdentity={model().sourceIdentity}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? ""}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
         />
       </Match>
       <Match
@@ -185,7 +186,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       >
         <ChatTextAttachment
           plainText={props.content.plainText ?? false}
-          actions={props.content.renderActions?.() ?? emptyLegacyContent}
+          actions={props.content.renderActions?.()}
           embedSandboxMode={props.embedSandboxMode}
           src={model().src ?? ""}
           sourceIdentity={model().sourceIdentity}
@@ -346,7 +347,10 @@ function sidebarTitle(content: ChatDetailPanelContent | null, showingRawText: bo
     case "session-diff":
       return t("chat.sessionDiff.title");
     case "markdown":
-      return t(showingRawText ? "chat.detailPanel.viewSource" : "chat.detailPanel.markdownPreview");
+      return (
+        content.fileDownload?.name ??
+        t(showingRawText ? "chat.detailPanel.viewSource" : "chat.detailPanel.markdownPreview")
+      );
     default:
       return t("chat.detailPanel.toolDetails");
   }
@@ -557,28 +561,68 @@ export function SidebarPanel(props: SidebarPanelProps) {
               <Match when={props.content?.kind === "markdown" ? props.content : undefined}>
                 {(content) => (
                   <section class="sidebar-markdown-shell">
-                    <div class="sidebar-markdown-shell__toolbar">
-                      <div class="sidebar-markdown-shell__intro">
-                        <div class="sidebar-markdown-shell__eyebrow">
-                          <Icon name="scrollText" />
-                          <span>
-                            {t(
-                              props.showingRawText
-                                ? "chat.detailPanel.viewSource"
-                                : "chat.detailPanel.renderedMarkdown",
-                            )}
-                          </span>
+                    <Show when={content().fileDownload}>
+                      {(file) => (
+                        <div class="sidebar-file-view__path-bar">
+                          <div class="sidebar-file-view__path-field">
+                            <span class="sidebar-file-view__path" title={file().path}>
+                              {file().path}
+                            </span>
+                            <CopyButton
+                              text={file().path}
+                              idleLabel={t("chat.detailPanel.copyPath")}
+                            />
+                          </div>
+                          <div class="sidebar-file-view__actions">
+                            <FileDownloadButton
+                              scopeKey={[
+                                content().fileLinkSessionKey,
+                                file().path,
+                                props.attachmentRuntime.connectionEpoch,
+                              ].join("\0")}
+                              download={(signal) => file().download(signal)}
+                              class="btn btn--sm sidebar-file-view__action"
+                            />
+                            <Show when={props.fileView?.onReveal}>
+                              <openclaw-tooltip prop:content={t("chat.detailPanel.showInFiles")}>
+                                <button
+                                  class="btn btn--sm sidebar-file-view__action"
+                                  type="button"
+                                  aria-label={t("chat.detailPanel.showInFiles")}
+                                  onClick={() => props.fileView?.onReveal?.(file().path)}
+                                >
+                                  <Icon name="folder" />
+                                </button>
+                              </openclaw-tooltip>
+                            </Show>
+                          </div>
+                        </div>
+                      )}
+                    </Show>
+                    <Show when={!content().fileDownload}>
+                      <div class="sidebar-markdown-shell__toolbar">
+                        <div class="sidebar-markdown-shell__intro">
+                          <div class="sidebar-markdown-shell__eyebrow">
+                            <Icon name="scrollText" />
+                            <span>
+                              {t(
+                                props.showingRawText
+                                  ? "chat.detailPanel.viewSource"
+                                  : "chat.detailPanel.renderedMarkdown",
+                              )}
+                            </span>
+                          </div>
+                          <Show when={!props.showingRawText}>
+                            <div class="sidebar-markdown-shell__hint">
+                              {t("chat.detailPanel.renderedMarkdownHint")}
+                            </div>
+                          </Show>
                         </div>
                         <Show when={!props.showingRawText}>
-                          <div class="sidebar-markdown-shell__hint">
-                            {t("chat.detailPanel.renderedMarkdownHint")}
-                          </div>
+                          <RawButton onClick={props.onViewRawText} class="btn btn--sm" />
                         </Show>
                       </div>
-                      <Show when={!props.showingRawText}>
-                        <RawButton onClick={props.onViewRawText} class="btn btn--sm" />
-                      </Show>
-                    </div>
+                    </Show>
                     <Show
                       when={content().content.trim()}
                       fallback={

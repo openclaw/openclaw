@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionStorePathCore,
@@ -35,9 +36,9 @@ import {
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
 
-vi.mock("../channels/plugins/bundled-ids.js", () => ({
+vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BundledIds>()),
   listBundledChannelIds: () => ["matrix", "whatsapp"],
-  listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
   listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],

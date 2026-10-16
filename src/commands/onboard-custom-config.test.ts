@@ -3,7 +3,9 @@ import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-
 import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import * as currentPluginMetadataSnapshot from "../plugins/current-plugin-metadata-snapshot.js";
 import * as manifestContractEligibility from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -327,17 +329,6 @@ describe("applyCustomApiConfig", () => {
       expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
     })),
     {
-      name: "invalid compatibility values at runtime",
-      params: {
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "invalid" as unknown as "openai",
-      },
-      expectedMessage:
-        'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
-    },
-    {
       name: "explicit provider ids that normalize to empty",
       params: {
         config: {},
@@ -396,6 +387,156 @@ describe("applyCustomApiConfig", () => {
     const provider = result.config.models?.providers?.[providerId];
 
     expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
+  });
+
+  it("persists auth none for no-auth custom endpoints", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      noAuth: true,
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
+  it.each([
+    { baseUrl: "https://claude-compatible.example.ts.net", compatibility: "anthropic" },
+    { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
+    { baseUrl: "https://llm.example.com/v1", compatibility: "openai-responses" },
+  ] as const)("rejects no-auth on $baseUrl before saving", ({ baseUrl, compatibility }) => {
+    expect(() =>
+      applyCustomApiConfig({
+        ...parseNonInteractiveCustomApiFlags({
+          baseUrl,
+          modelId: "some-model",
+          compatibility,
+          noAuth: true,
+        }),
+        config: {},
+      }),
+    ).toThrow(/auth: "none"/);
+  });
+
+  it("accepts no-auth flags when the selected model overrides Responses with Completions", () => {
+    const model = makeProviderModelFixture<"openai-completions">({
+      provider: "custom",
+      id: "foo-large",
+      baseUrl: "https://llm.example.com/v1",
+      api: "openai-completions",
+    });
+    const result = applyCustomApiConfig({
+      ...parseNonInteractiveCustomApiFlags({
+        baseUrl: model.baseUrl,
+        modelId: model.id,
+        providerId: "custom",
+        compatibility: "openai-responses",
+        noAuth: true,
+      }),
+      config: {
+        models: {
+          providers: {
+            custom: { baseUrl: model.baseUrl, api: "openai-responses", models: [model] },
+          },
+        },
+      },
+    });
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      api: "openai-responses",
+      auth: "none",
+      models: [{ id: model.id, api: "openai-completions" }],
+    });
+  });
+
+  it.each([true, false])(
+    "rejects a Responses model override with explicit no-auth: %s",
+    (noAuth) => {
+      const provider = {
+        baseUrl: "https://llm.example.com/v1",
+        api: "openai-completions",
+        auth: "none",
+        models: [
+          {
+            id: "foo-large",
+            name: "foo-large",
+            api: "openai-responses",
+            contextWindow: 128_000,
+            maxTokens: 4096,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            reasoning: false,
+          },
+        ],
+      } satisfies ModelProviderConfig;
+      expect(() =>
+        applyCustomApiConfig({
+          config: { models: { providers: { custom: provider } } },
+          baseUrl: provider.baseUrl,
+          modelId: "foo-large",
+          compatibility: "openai",
+          providerId: "custom",
+          noAuth,
+        }),
+      ).toThrow(/auth: "none"/);
+    },
+  );
+
+  it("clears stale keys and auth modes when switching a provider to no-auth", () => {
+    const providerId = "custom-studio-example-ts-net";
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://studio.example.ts.net/v1",
+              api: "openai-completions",
+              auth: "api-key",
+              apiKey: "stale-key",
+              models: [],
+            },
+          },
+        },
+      },
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      noAuth: true,
+      providerId,
+    });
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
+  it("clears a previous auth none when a real key is supplied later", () => {
+    const providerId = "custom-studio-example-ts-net";
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://studio.example.ts.net/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      apiKey: "fresh-key",
+      providerId,
+    });
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBe("fresh-key");
   });
 
   it("re-onboard updates existing Azure provider instead of creating a duplicate", () => {
@@ -551,6 +692,28 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
 
     expect(result.compatibility).toBe("openai-responses");
+  });
+
+  it("parses the no-auth opt-in", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      noAuth: true,
+    });
+
+    expect(result.noAuth).toBe(true);
+    expect(result.apiKey).toBeUndefined();
+  });
+
+  it("rejects no-auth combined with an API key", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        apiKey: "custom-test-key", // pragma: allowlist secret
+        noAuth: true,
+      }),
+    ).toThrow("--custom-no-auth cannot be combined with --custom-api-key");
   });
 
   it.each([

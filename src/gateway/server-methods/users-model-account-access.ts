@@ -1,4 +1,6 @@
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   prepareUserProfileRoleAuthority,
@@ -168,15 +170,59 @@ export async function prepareSessionModelAccountAccess(
     return { personalModelSelection: await personalModelSelection };
   }
   const { client } = options;
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const requiredScope =
+    requestAuthority.sessionScope === SESSION_WRITE_SCOPE ? SESSION_WRITE_SCOPE : WRITE_SCOPE;
+  const creation = client?.internal?.sessionCreation;
+  if (creation?.via === "operator" && creation.requesterSessionKey) {
+    // Ordinary tool creation may use the admitted person's saved default. This
+    // does not make the synthetic caller a human account-selection connection.
+    const operatorAuthority = client?.internal?.operatorRunAuthority;
+    const caller = client?.internal?.agentToolCaller;
+    if (!operatorAuthority) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    const assertCurrent = composeSessionSourceAssertion(
+      [requestAuthority.assertCurrent, operatorAuthority.assertCurrent, caller?.assertCurrent],
+      (assertSources) => {
+        try {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+          assertSources();
+          if (
+            options.req.method !== "sessions.create" ||
+            options.client !== client ||
+            client?.connect.role !== "operator" ||
+            client.internal?.operatorRunAuthority !== operatorAuthority ||
+            client.internal.sessionCreation !== creation ||
+            client.internal.agentToolCaller !== caller ||
+            !caller?.assertCurrent ||
+            caller.sessionKey !== creation.requesterSessionKey ||
+            creation.actor?.type !== "human" ||
+            creation.actor.source !== "profile" ||
+            creation.actor.id !== operatorAuthority.profileId ||
+            ![operatorAuthority.scopes, client.connect.scopes ?? []].every((allowedScopes) =>
+              roleScopesAllow({
+                role: "operator",
+                requestedScopes: [requiredScope],
+                allowedScopes,
+              }),
+            )
+          ) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+        } catch {
+          throw new ModelAccountConnectAuthorityError();
+        }
+      },
+    );
+    assertCurrent();
+    return {
+      personalAccountDefaults: { owner: operatorAuthority.profileId, assertCurrent },
+    };
+  }
   const personalAccountDefaults =
     hasCurrentPersonalGatewaySource(client, options.context) && client.authenticatedUserProfile
-      ? await prepareUserModelAccountAction(
-          options,
-          undefined,
-          readGatewayRequestMutationAuthority(options).sessionScope === SESSION_WRITE_SCOPE
-            ? SESSION_WRITE_SCOPE
-            : WRITE_SCOPE,
-        )
+      ? await prepareUserModelAccountAction(options, undefined, requiredScope)
       : undefined;
   return { personalAccountDefaults };
 }

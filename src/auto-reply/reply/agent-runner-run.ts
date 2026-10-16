@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  isRequiredReplyExpectation,
+  resolveReplyCompletion,
+} from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
@@ -605,7 +608,7 @@ export async function runReplyAgent(
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
+  if (replyOperationRunState && !isHeartbeat && isRequiredReplyExpectation(replyExpectation)) {
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.

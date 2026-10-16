@@ -1,12 +1,8 @@
 import {
-  applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
   supportsNativeStreamingUsageCompat,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const QWEN_BASE_URL = manifest.modelCatalog.providers.qwen.baseUrl;
@@ -128,15 +124,6 @@ export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
   });
 }
 
-export function applyQwenNativeStreamingUsageCompat(
-  provider: ModelProviderConfig,
-): ModelProviderConfig {
-  return applyProviderNativeStreamingUsageCompat({
-    providerId: "qwen",
-    providerConfig: provider,
-  });
-}
-
 export function buildQwenModelDefinition(params: {
   id: string;
   name?: string;
@@ -182,6 +169,5 @@ export const MODELSTUDIO_DEFAULT_MODEL_REF = `modelstudio/${QWEN_DEFAULT_MODEL_I
 /** @deprecated Use QWEN_MODEL_CATALOG. */
 export const MODELSTUDIO_MODEL_CATALOG = QWEN_MODEL_CATALOG;
 export const isNativeModelStudioBaseUrl = isNativeQwenBaseUrl;
-export const applyModelStudioNativeStreamingUsageCompat = applyQwenNativeStreamingUsageCompat;
 export const buildModelStudioModelDefinition = buildQwenModelDefinition;
 export const buildModelStudioDefaultModelDefinition = buildQwenDefaultModelDefinition;

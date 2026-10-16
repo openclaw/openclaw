@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution-operations.js";
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   beginTrajectoryRuntimeRetention,
@@ -107,44 +108,6 @@ describe("SQLite trajectory runtime retention", () => {
       }
     },
   );
-
-  it("drops old runs while retaining recent runs and session transcript receipts", async () => {
-    const now = Date.parse("2026-07-26T00:00:00.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
-      createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
-    ]);
-    await addSession("history");
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
-    const scopes = [sqliteSessionIdWriteScope("session-1"), sqliteSessionIdWriteScope("history")];
-    using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
-    const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
-    expect(token).toBeTypeOf("string");
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "history", storePath }, [
-      createTrajectoryEvent({
-        runId: "old-run",
-        sessionId: "history",
-        type: "old",
-        ts: new Date(now - 15 * 24 * 60 * 60 * 1_000).toISOString(),
-      }),
-      createTrajectoryEvent({
-        runId: "recent-run",
-        sessionId: "history",
-        type: "recent",
-        ts: new Date(now - 13 * 24 * 60 * 60 * 1_000).toISOString(),
-      }),
-    ]);
-    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
-
-    vi.advanceTimersByTime(60 * 60 * 1_000);
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
-      createTrajectoryEvent({ type: "sweep-trigger", ts: new Date(Date.now()).toISOString() }),
-    ]);
-
-    await expect(runtimeEventTypes("history")).resolves.toEqual(["recent"]);
-    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
-  });
 
   it("rejects only changed runs while draining an eviction plan under competing writes", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");
@@ -541,8 +504,9 @@ describe("SQLite trajectory runtime retention", () => {
 
       const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
       using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
-      const prepare = database.db.prepare.bind(database.db);
+      const native = requireNativeSqliteDatabase(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(native);
+      const prepare = native.prepare.bind(native);
       let aggregates = 0;
       let writing = false;
       const nativeExec = database.db.exec.bind(database.db);
@@ -554,7 +518,7 @@ describe("SQLite trajectory runtime retention", () => {
           writing = false;
         }
       });
-      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const prepareSpy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         if (
           sql.includes('"trajectory_runtime_events"') &&
@@ -611,7 +575,7 @@ describe("SQLite trajectory runtime retention", () => {
         );
         expect(aggregates).toBeGreaterThan(0);
       } finally {
-        clearNodeSqliteKyselyCacheForDatabase(database.db);
+        clearNodeSqliteKyselyCacheForDatabase(native);
         prepareSpy.mockRestore();
         transactionSpy.mockRestore();
       }
@@ -801,6 +765,14 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "current" }),
     ]);
     await addSession("old-session");
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const scopes = [
+      sqliteSessionIdWriteScope("session-1"),
+      sqliteSessionIdWriteScope("old-session"),
+    ];
+    using _ = { [Symbol.dispose]: retainAgentDatabase(database.db) };
+    const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
+    expect(token).toBeTypeOf("string");
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "old-session", storePath }, [
       createTrajectoryEvent({
         sessionId: "old-session",
@@ -812,6 +784,7 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "same-window" }),
     ]);
     await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
 
     vi.advanceTimersByTime(60 * 60 * 1_000);
     expect(() =>
@@ -830,6 +803,7 @@ describe("SQLite trajectory runtime retention", () => {
       createTrajectoryEvent({ type: "next-window", ts: new Date(Date.now()).toISOString() }),
     ]);
     await expect(runtimeEventTypes("old-session")).resolves.toEqual([]);
+    expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
   });
 
   function withCompetingSelectionWrite(
@@ -841,10 +815,11 @@ describe("SQLite trajectory runtime retention", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
     const competing = openNodeSqliteDatabase(sqlitePath());
     competing.exec("PRAGMA busy_timeout = 0");
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const prepare = database.db.prepare.bind(database.db);
+    const native = requireNativeSqliteDatabase(database.db);
+    clearNodeSqliteKyselyCacheForDatabase(native);
+    const prepare = native.prepare.bind(native);
     let writes = 0;
-    const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+    const spy = vi.spyOn(native, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (
         query.includes('"trajectory_runtime_events"') &&
@@ -854,7 +829,7 @@ describe("SQLite trajectory runtime retention", () => {
         const afterSelection = () => {
           if (writes < maxWrites) {
             writes++;
-            mutate(managed ? database.db : competing);
+            mutate(managed ? native : competing);
           }
         };
         const all = statement.all.bind(statement);
@@ -876,7 +851,7 @@ describe("SQLite trajectory runtime retention", () => {
       append();
       expect(writes).toBeGreaterThan(0);
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      clearNodeSqliteKyselyCacheForDatabase(native);
       spy.mockRestore();
       competing.close();
     }

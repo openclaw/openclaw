@@ -13,8 +13,10 @@ import type {
   GatewayRequest,
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
 import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerRequesterStartupAdmissionTests({
   requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
@@ -44,7 +46,7 @@ export function registerRequesterStartupAdmissionTests({
       const runId = "preparation-child";
       const childSessionKey = `agent:main:subagent:${runId}`;
       const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
-      await registry.addSubagentRunForTests({
+      const recovered: SubagentRunRecord = {
         runId,
         childSessionKey,
         childSessionIdentity: { sessionId, lifecycleRevision },
@@ -71,14 +73,19 @@ export function registerRequesterStartupAdmissionTests({
           status: "pending",
           attemptCount: 0,
           replayCount: 0,
-          deferralCount: 2,
           batchRunIds: [runId],
           requesterYieldBatch: true,
           rearmGeneration: 1,
           progressOperationId: "original-progress",
           retireAfterSettle: true,
         },
+      };
+      const { sessionStore, sessionStorePath } = getFixture();
+      await prepareSubagentRecoveryFixture(recovered, {
+        entries: sessionStore,
+        storePath: sessionStorePath,
       });
+      await registry.addSubagentRunForTests(recovered);
       const original = registry.getSubagentRunByRunId(runId)!;
       const read = vi
         .spyOn(sessionAccessor, "findTranscriptEvent")
@@ -150,7 +157,7 @@ export function registerRequesterStartupAdmissionTests({
     for (const runId of runIds) {
       const childSessionKey = `agent:main:subagent:${runId}`;
       const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
-      await registry.addSubagentRunForTests({
+      const recovered: SubagentRunRecord = {
         runId,
         childSessionKey,
         childSessionIdentity: { sessionId, lifecycleRevision },
@@ -179,7 +186,13 @@ export function registerRequesterStartupAdmissionTests({
           progressOperationId: runId,
           ...(runId === runIds[0] ? { retireAfterSettle: true } : {}),
         },
+      };
+      const { sessionStore, sessionStorePath } = getFixture();
+      await prepareSubagentRecoveryFixture(recovered, {
+        entries: sessionStore,
+        storePath: sessionStorePath,
       });
+      await registry.addSubagentRunForTests(recovered);
     }
     await registry.resetSubagentRegistryForTests({ persist: false });
     const pending = createAgentDatabaseInspectionRefusal({

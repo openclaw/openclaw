@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -67,14 +68,17 @@ describe("SQLite historical session preservation", () => {
         if (protection !== "recent") {
           return await operation();
         }
-        const reads = trackSqliteStatementExecutions(database().db, ["history"], (sql) =>
-          sql.startsWith("select") &&
-          sql.includes('"session_windows"') &&
-          sql.includes('"session_nodes"') &&
-          sql.includes('"entry_json"') &&
-          !sql.includes('where "session_windows"."session_id" =')
-            ? "history"
-            : null,
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database().db),
+          ["history"],
+          (sql) =>
+            sql.startsWith("select") &&
+            sql.includes('"session_windows"') &&
+            sql.includes('"session_nodes"') &&
+            sql.includes('"entry_json"') &&
+            !sql.includes('where "session_windows"."session_id" =')
+              ? "history"
+              : null,
         );
         try {
           const result = await operation();

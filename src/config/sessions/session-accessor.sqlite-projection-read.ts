@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
@@ -9,6 +8,7 @@ import {
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -225,7 +225,7 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-const messageRangeReaders = createSqliteQueryCache((db: DatabaseSync) => {
+const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
   const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
@@ -380,7 +380,7 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
+const projectionSnapshotReader = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<
     string,
     InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
@@ -394,7 +394,7 @@ const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  if (actor) {
+  if (actor?.transcript.complete) {
     return {
       ...projectSessionTranscriptFacts(actor),
       contextMetadata: projectSessionActorContextMetadata(actor),

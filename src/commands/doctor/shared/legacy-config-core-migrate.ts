@@ -22,6 +22,7 @@ import {
   seedMissingDefaultAccountsFromSingleAccountBase,
 } from "./legacy-config-core-normalizers.js";
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
+import { visitAgentEntries } from "./legacy-config-record-shared.js";
 import { migrateLegacySecretInputs } from "./legacy-secret-inputs.js";
 import {
   migrateLegacyWebFetchConfig,
@@ -29,27 +30,6 @@ import {
   migrateLegacyXSearchConfig,
 } from "./legacy-web-tools-migrate.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
-
-function repairAgentRoster(
-  cfg: OpenClawConfig,
-  repair: (agent: Record<string, unknown>, path: string) => void,
-): void {
-  // Blocked include migrations can still leave a legacy list in the candidate.
-  const roster = readAgentRosterProperty(cfg);
-  const values = roster?.value;
-  if (
-    !roster ||
-    (!isRecord(values) && !Array.isArray(values)) ||
-    Array.isArray(values) !== (roster.kind === "list")
-  ) {
-    return;
-  }
-  for (const [key, agent] of Object.entries(values)) {
-    if (isRecord(agent)) {
-      repair(agent, roster.kind === "entries" ? `agents.entries.${key}` : `agents.list[${key}]`);
-    }
-  }
-}
 
 function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[]): void {
   const repairHeartbeat = (heartbeat: unknown, path: string) => {
@@ -65,12 +45,12 @@ function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[
     }
   };
   repairHeartbeat(cfg.agents?.defaults?.heartbeat, "agents.defaults.heartbeat");
-  repairAgentRoster(cfg, (agent, path) => repairHeartbeat(agent.heartbeat, `${path}.heartbeat`));
+  visitAgentEntries(cfg, (agent, path) => repairHeartbeat(agent.heartbeat, `${path}.heartbeat`));
 }
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): void {
   let repaired = 0;
-  repairAgentRoster(cfg, (agent) => {
+  visitAgentEntries(cfg, (agent) => {
     if (agent.workspace === null) {
       repaired += 1;
       delete agent.workspace;

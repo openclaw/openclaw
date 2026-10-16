@@ -7,6 +7,7 @@ import {
   type MockSubagentRegistryRows,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const sessionStore = vi.hoisted((): Record<string, SessionEntry> => ({
@@ -259,6 +260,7 @@ describe("announce loop guard (#18264)", () => {
         ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
       },
     };
+    await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
     await hydrateAndActivateRegistry();
@@ -323,6 +325,9 @@ describe("announce loop guard (#18264)", () => {
       ]),
     );
 
+    const entry = mocks.loadSubagentRegistryFromSqlite().get(runId)!;
+    await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
+
     await hydrateAndActivateRegistry();
     await flushAsync();
 
@@ -330,6 +335,7 @@ describe("announce loop guard (#18264)", () => {
       runId,
       (run) => run.cleanupHandled === false && run.delivery?.attemptCount === 1,
     );
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(stored.cleanupCompletedAt).toBeUndefined();
     expect(stored.delivery?.lastAttemptAt).toBeTypeOf("number");
   });

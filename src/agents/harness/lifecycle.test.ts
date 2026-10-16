@@ -13,6 +13,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import {
   getCoreTtsAttemptResultMediaUrls,
@@ -315,6 +316,7 @@ describe("AgentHarness lifecycle runner", () => {
     const diagnostics = captureDiagnosticEvents();
     const result = {
       assistant: { ...createFinalAssistant(), content: [] },
+      preparedTerminalReply: prepareAgentRunTerminalReply({}),
       usage: { input: 1, output: 0, total: 1 },
     };
 

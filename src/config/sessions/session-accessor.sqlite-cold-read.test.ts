@@ -24,6 +24,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -32,10 +33,7 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
-} from "./session-accessor.sqlite-metadata-read.js";
+import { readTranscriptMutationStateSync } from "./session-accessor.sqlite-metadata-read.js";
 import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
@@ -198,9 +196,10 @@ async function prepareRace(state: OpenClawTestState) {
     matches = (query: string) => query.includes('from "session_transcript_cold_archives"'),
     afterArchive?: () => void,
   ) => {
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+    const prepare = nativeDb.prepare.bind(nativeDb);
+    vi.spyOn(nativeDb, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (!matches(query)) {
         return statement;
@@ -368,23 +367,6 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
   });
 });
 
-it("counts a header at seq zero as transcript presence", async () => {
-  await withOpenClawTestState({ label: "transcript-presence" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "presence",
-      sessionKey: "agent:main:presence",
-    };
-    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    expect(hasSessionTranscriptEventsSync(scope)).toBe(false);
-    await replaceTranscriptEvents(scope, [{ type: "session", id: scope.sessionId, version: 3 }]);
-    expect(readTranscriptStatsSync(scope)).toMatchObject({ eventCount: 1, maxSeq: 0 });
-    expect(hasSessionTranscriptEventsSync(scope)).toBe(true);
-  });
-});
-
 it("bounds hot and cold transcript stats selections in batches", async () => {
   await withRace("cold-stats-query-budget", async (race) => {
     const expectedStats = readTranscriptStatsSync(race.scope);
@@ -402,11 +384,14 @@ it("bounds hot and cold transcript stats selections in batches", async () => {
         ? expectedStats
         : { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
     );
-    const reads = trackSqliteStatementExecutions(race.database.db, ["stats"], (query) =>
-      query.startsWith("select ") &&
-      /"(?:transcript_events|session_transcript_cold_archives|session_windows)"/u.test(query)
-        ? "stats"
-        : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(race.database.db),
+      ["stats"],
+      (query) =>
+        query.startsWith("select ") &&
+        /"(?:transcript_events|session_transcript_cold_archives|session_windows)"/u.test(query)
+          ? "stats"
+          : null,
     );
     try {
       const first = read();

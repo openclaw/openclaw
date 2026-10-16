@@ -24,7 +24,6 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
@@ -45,6 +44,7 @@ import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
+import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -53,10 +53,10 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
-    // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
-    return (
-      this.presentationTitle ??
-      resolveSessionDisplayName(row?.key ?? this.state?.sessionKey ?? this.sessionKey, row)
+    return chatSessionPresentationTitle(
+      this.state,
+      row ?? this.transcriptSessionProps(row).transcriptMetadata,
+      this.sessionKey,
     );
   }
 
@@ -117,10 +117,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const isChild =
       !isSubagentSessionKey(row.key) &&
       Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
-    const hasChildren = hasSessionArchiveDescendants(
-      row,
-      this.state?.sessionsResult?.sessions ?? [],
-    );
     const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
     const pinned = this.context.navigation.snapshot.sidebarEntries.includes(
       serializeSidebarEntry({ type: "session", key: row.key }),
@@ -133,7 +129,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         row.agentId,
         row.sessionId,
         isChild,
-        hasChildren,
         pinned,
         pinnable,
         row.snoozedUntil,
@@ -153,7 +148,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
-        hasChildren,
         pinned,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
@@ -285,6 +279,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
       gatewayHasActiveRun: candidate.hasActiveRun,
       hasActiveSubagentRun: candidate.hasActiveSubagentRun,
+      hasArchiveDescendants: hasSessionArchiveDescendants(
+        candidate,
+        this.state?.sessionsResult?.sessions ?? [],
+      ),
     });
     const session = toActionSession(row);
     // Refresh metadata only on the selected instance; replacements must keep
@@ -369,9 +367,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         case "move-to-top-level":
           await operations.promoteSession(host, session, scope);
-          break;
-        case "archive-tree":
-          await operations.archiveSessionTreeWithUndo(host, session, scope);
           break;
         case "move-to-group":
           await assignCategory(action.category);

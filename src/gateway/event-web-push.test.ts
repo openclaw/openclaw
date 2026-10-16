@@ -61,13 +61,6 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/device-pairing.js")>(
-    "../infra/device-pairing.js",
-  );
-  return actual;
-});
-
 vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-pairing-worker.js")>()),
   withCurrentDevicePairingSnapshot: async <T>(

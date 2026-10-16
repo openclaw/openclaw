@@ -5,11 +5,15 @@ import {
   resolveMessageRole,
 } from "../../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import { hasVisiblePreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
-import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
+import {
+  assistantMessageCanOwnTurnActions,
+  resolveAssistantReplyPhase,
+} from "../chat-assistant-reply.ts";
 import { readPendingSendStatus } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -40,8 +44,13 @@ export function prepareGroupMessage(
   opts: NativeMessageGroupOptions,
 ) {
   const source = prepareChatMessageRender(item.message);
+  // Run frames give actions to their answer only; unframed groups apply the same rule per message.
+  const ownsActions =
+    normalizeRoleForGrouping(group.role) !== "assistant" ||
+    assistantMessageCanOwnTurnActions(item.message);
   const details = resolveMessageActionDetails(source, {
     ...opts,
+    onReply: ownsActions ? opts.onReply : undefined,
     messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
@@ -58,7 +67,7 @@ export function prepareGroupMessage(
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
   }
-  return { item, source, actions: details };
+  return { item, source, actions: details, ownsActions };
 }
 
 export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
@@ -78,6 +87,8 @@ export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = fal
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
+    (cards.length === 0 &&
+      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
   );
 }
@@ -180,6 +191,7 @@ export function prepareMessageGroupFrame(
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
+  // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =

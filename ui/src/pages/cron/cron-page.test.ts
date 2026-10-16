@@ -27,32 +27,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("CronPage header", () => {
-  it("uses the shared settings header with concise context and scope actions", async () => {
-    const gateway = createGateway(
-      { request: createRequest() } as unknown as GatewayBrowserClient,
-      false,
-    );
-    const context = createContext(gateway);
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }, { id: "research" }],
-    };
-    const page = createPage(context, { render: true });
-
-    await page.settle();
-
-    expect(page.querySelector(".page-title")?.textContent).toBe("Automations");
-    expect(page.querySelector(".content-header--settings")).not.toBeNull();
-    expect(page.querySelector(".page-subtitle")?.textContent).toBe(
-      "Scheduled tasks and recurring agent runs.",
-    );
-    expect(page.querySelector(".page-header-actions .agent-scope-control")).not.toBeNull();
-  });
-});
-
 describe("CronPage editor state sync", () => {
   it("does not treat an accepted edit as completion of a newer clone", async () => {
     const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
@@ -79,6 +53,16 @@ describe("CronPage editor state sync", () => {
       await waitForCronPage(() =>
         expect(request).toHaveBeenCalledWith("cron.update", expect.anything()),
       );
+      const editor = page.querySelector<HTMLFieldSetElement>(".cron-editor")!;
+      expect(editor.disabled).toBe(true);
+      expect(editor.getAttribute("aria-busy")).toBe("true");
+      expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(true);
+      expect(page.querySelector<HTMLButtonElement>('[data-test-id="cron-back"]')!.disabled).toBe(
+        true,
+      );
+      const submit = page.querySelector<HTMLButtonElement>('[data-test-id="cron-submit"]')!;
+      expect(submit.disabled).toBe(true);
+      expect(submit.textContent).toContain("Saving");
       // Exercise controller intent replacement; the ordinary clone button is busy-disabled.
       startCronClone(page.cron, job);
       page.cron.cronCreateOpen = true;

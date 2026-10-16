@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -24,6 +26,14 @@ class McpEventRequestError extends Error {
   ) {
     super("MCP Events request failed (code " + code + (reason ? ", reason " + reason : "") + ")");
     this.name = "McpEventRequestError";
+  }
+}
+
+/** Transport failures may carry credentials beyond their message; expose only redacted diagnostics. */
+class McpEventTransportError extends Error {
+  constructor(error: unknown) {
+    const diagnostic = redactMcpDiagnosticError(error);
+    super(diagnostic, { cause: diagnostic });
   }
 }
 
@@ -69,29 +79,30 @@ export async function requestMcpEvent(params: {
   const response = createDeferredCore<unknown>();
   // start/authority can fail before the response is awaited.
   void response.promise.catch(() => undefined);
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Transport callback contract.
-  transport.onmessage = (message) => {
-    if (!("id" in message) || message.id !== id) {
-      return;
-    }
-    if ("error" in message) {
-      const reason = isRecord(message.error.data) ? message.error.data.reason : undefined;
-      response.reject(
-        new McpEventRequestError(
-          message.error.code,
-          typeof reason === "string" && /^[a-z_]{1,64}$/.test(reason) ? reason : undefined,
-        ),
-      );
-    } else if ("result" in message) {
-      response.resolve(message.result);
-    } else {
-      response.reject(new Error("MCP Events received an invalid response."));
-    }
-  };
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Transport callback contract.
-  transport.onerror = (error) => response.reject(error);
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Transport callback contract.
-  transport.onclose = () => response.reject(new Error("MCP Events connection closed."));
+  const callbacks = {
+    onmessage: (message: JSONRPCMessage) => {
+      if (!("id" in message) || message.id !== id) {
+        return;
+      }
+      if ("error" in message) {
+        const reason = isRecord(message.error.data) ? message.error.data.reason : undefined;
+        response.reject(
+          new McpEventRequestError(
+            message.error.code,
+            typeof reason === "string" && /^[a-z_]{1,64}$/.test(reason) ? reason : undefined,
+          ),
+        );
+      } else if ("result" in message) {
+        response.resolve(message.result);
+      } else {
+        response.reject(new Error("MCP Events received an invalid response."));
+      }
+    },
+    onerror: (error: Error) => response.reject(error),
+    onclose: () => response.reject(new Error("MCP Events connection closed.")),
+  } satisfies Pick<Transport, "onmessage" | "onerror" | "onclose">;
+  // SDK transports use a single owned callback set rather than EventTarget listeners.
+  Object.assign(transport, callbacks);
   const onAbort = () => response.reject(signal.reason);
   signal.addEventListener("abort", onAbort, { once: true });
   let sending: Promise<void> | undefined;
@@ -120,13 +131,15 @@ export async function requestMcpEvent(params: {
     if (error instanceof McpEventRequestError) {
       throw error;
     }
-    // Transport causes can retain credential-bearing URLs; only the sanitized diagnostic may escape.
-    // oxlint-disable-next-line eslint/preserve-caught-error
-    throw new Error(redactMcpDiagnosticError(error));
+    throw new McpEventTransportError(error);
   } finally {
     signal.removeEventListener("abort", onAbort);
     // Closing cancels a still-open SSE response after its final JSON-RPC result.
-    await transport.close();
-    await sending?.catch(() => undefined);
+    try {
+      await transport.close();
+      await sending?.catch(() => undefined);
+    } finally {
+      Object.assign(transport, { onmessage: undefined, onerror: undefined, onclose: undefined });
+    }
   }
 }

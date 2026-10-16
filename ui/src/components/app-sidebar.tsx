@@ -11,11 +11,13 @@ import {
   untrack,
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -49,17 +51,25 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const context = useApplication();
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(props, context, host);
   owner.bindInputs(props, context);
+  const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
+  const presentationRevision = createParkedProjection(
+    () => {
+      Object.values(props);
+      return projection.revision();
+    },
+    () => props.navigationVisible,
+  );
   const observed = new WeakMap<object, object>();
   const observe = <T extends object>(target: T): T => {
     const proxy = new Proxy(target, {
       get(current, key, receiver) {
         if (getObserver()) {
-          projection.revision();
+          presentationRevision();
         }
         const value = Reflect.get(current, key, receiver);
         return value && typeof value === "object" ? (observed.get(value) ?? value) : value;
@@ -106,15 +116,20 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions);
+  const content = hostView.renderSidebar(Sessions, scroll);
   createEffect(
     () => {
       projection.revision();
       // Props remain on the bridge's live object; source changes refresh its subscriptions.
       Object.values(props);
       owner.prepareRender();
+      scroll.capture();
     },
-    () => untrack(() => owner.commitRender()),
+    () =>
+      untrack(() => {
+        owner.commitRender();
+        scroll.restore();
+      }),
   );
   onSettled(() => {
     sidebarOwners.set(host, owner);

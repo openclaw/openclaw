@@ -2,7 +2,8 @@ import { untrack } from "solid-js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
-import { renderLazySettingsSidebar } from "../components/settings-sidebar-lazy.ts";
+import type { SettingsSidebarLoader } from "../components/settings-sidebar-lazy.tsx";
+import type { SettingsSidebarProps } from "../components/settings-sidebar.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
@@ -42,16 +43,15 @@ import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly devicePairSetup: DevicePairSetupLoader;
   readonly shellRevision: () => number;
-  readonly settingsSidebar: Parameters<typeof renderLazySettingsSidebar>[0];
+  readonly settingsSidebar: SettingsSidebarLoader;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
-  readonly nativeHistoryState: NativeHistoryState;
+  readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
-  navResizing: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
@@ -210,10 +210,7 @@ export function readShellView(host: ShellViewHost) {
     sessionScope: true,
   });
   const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
-  const workspaceReplacement =
-    activeRoute === "plugins" || activeRoute === "plugin-settings"
-      ? undefined
-      : context.plugins.selectedReplacement("workspace");
+  const workspacePluginsEnabled = activeRoute !== "plugins" && activeRoute !== "plugin-settings";
   const uiSettings = context.theme.settings;
   // Unknown profile preferences are not absence. Keep the first shell paint
   // image-free so a saved None choice cannot download artwork before hydration.
@@ -265,7 +262,7 @@ export function readShellView(host: ShellViewHost) {
   const shellConnectionStatus =
     (navigationSurfaceHidden ||
       (settingsTakeover
-        ? host.settingsSidebar.renderer === null
+        ? host.settingsSidebar.renderer() === null
         : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
     !nativeEmbed &&
     !onboarding &&
@@ -283,72 +280,66 @@ export function readShellView(host: ShellViewHost) {
     onRefresh: host.refreshControlUi,
     onNavigate: host.navigate,
   };
-  const navigationContent =
-    settingsTakeover || embedNavigation
-      ? renderLazySettingsSidebar(host.settingsSidebar, {
-          presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
-          basePath: context.basePath,
-          activeRouteId: activeRoute,
-          agents: context.agents.state.agentsList?.agents ?? [],
-          agentIdentity: context.agentIdentity,
-          settingsAgentSelection: context.settingsAgentSelection,
-          activePathname: host.routeState.location?.pathname ?? "",
-          activeSearch: host.routeState.location?.search ?? "",
-          activeHash: host.routeState.location?.hash ?? "",
-          connectionStatus,
-          lastError: gatewaySnapshot.lastError,
-          gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
-          searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
-          searchParams: {
-            query: host.settingsSearchQuery,
-            schema: runtimeConfig.configSchema,
-            value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-            uiHints: runtimeConfig.configUiHints,
-            identityAvailable: Boolean(gatewaySnapshot.selfUser),
-            multipleProfiles:
-              gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
-            basePath: context.basePath,
-            canAdmin: operatorAccess.canAdmin,
-            nativeDeviceSettings: context.nativeDeviceSettings,
-          },
-          onExit: () => {
-            if (!nativeEmbed) {
-              host.exitSettings();
-            } else if (canGoBackInNativeEmbed()) {
-              window.history.back();
-            } else if (activeRoute === "memory-import") {
-              context.replace("memory");
-            } else {
-              host.navigate("settings");
-            }
-          },
-          onRetryConnect: callbacks.retryGateway,
-          onNavigate: host.navigate,
-          onPreload: callbacks.preloadRoute,
-          onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
-          preloadTimers: host.settingsPreloadTimers,
-          saveIndicator: {
-            status: runtimeConfig.configRecoveryError
-              ? "recovery"
-              : runtimeConfig.configAutoSaveStatus,
-            lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
-            needsApply: runtimeConfig.configNeedsApply,
-            applying: runtimeConfig.configApplying,
-            applyDisabled:
-              context.runtimeConfig.canApply === false ||
-              runtimeConfig.configLoading ||
-              runtimeConfig.configSaving ||
-              (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
-              updateBusy,
-            onRetry: () => void context.runtimeConfig.retry(),
-            onSave: () => void context.runtimeConfig.save(),
-            onReload: () => void context.runtimeConfig.discardDraft(),
-            onApply: () => void context.runtimeConfig.apply(),
-          },
-          canAdmin: operatorAccess.canAdmin,
-          nativeDeviceSettings: context.nativeDeviceSettings,
-        })
-      : null;
+  const settingsSidebarProps: SettingsSidebarProps = {
+    presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
+    basePath: context.basePath,
+    activeRouteId: activeRoute,
+    agents: context.agents.state.agentsList?.agents ?? [],
+    agentIdentity: context.agentIdentity,
+    settingsAgentSelection: context.settingsAgentSelection,
+    activePathname: host.routeState.location?.pathname ?? "",
+    activeSearch: host.routeState.location?.search ?? "",
+    activeHash: host.routeState.location?.hash ?? "",
+    connectionStatus,
+    lastError: gatewaySnapshot.lastError,
+    gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+    searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
+    searchParams: {
+      query: host.settingsSearchQuery,
+      schema: runtimeConfig.configSchema,
+      value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
+      uiHints: runtimeConfig.configUiHints,
+      identityAvailable: Boolean(gatewaySnapshot.selfUser),
+      multipleProfiles: gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
+      basePath: context.basePath,
+      canAdmin: operatorAccess.canAdmin,
+      nativeDeviceSettings: context.nativeDeviceSettings,
+    },
+    onExit: () => {
+      if (!nativeEmbed) {
+        host.exitSettings();
+      } else if (canGoBackInNativeEmbed()) {
+        window.history.back();
+      } else if (activeRoute === "memory-import") {
+        context.replace("memory");
+      } else {
+        host.navigate("settings");
+      }
+    },
+    onRetryConnect: callbacks.retryGateway,
+    onNavigate: host.navigate,
+    onPreload: callbacks.preloadRoute,
+    onSearchQueryChange: (nextQuery) => void host.handleSettingsSearchQueryChange(nextQuery),
+    preloadTimers: host.settingsPreloadTimers,
+    saveIndicator: {
+      status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
+      lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
+      needsApply: runtimeConfig.configNeedsApply,
+      applying: runtimeConfig.configApplying,
+      applyDisabled:
+        context.runtimeConfig.canApply === false ||
+        runtimeConfig.configLoading ||
+        runtimeConfig.configSaving ||
+        (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
+        updateBusy,
+      onRetry: () => void context.runtimeConfig.retry(),
+      onSave: () => void context.runtimeConfig.save(),
+      onReload: () => void context.runtimeConfig.discardDraft(),
+      onApply: () => void context.runtimeConfig.apply(),
+    },
+    canAdmin: operatorAccess.canAdmin,
+    nativeDeviceSettings: context.nativeDeviceSettings,
+  };
   return {
     nowMs: Date.now(),
     context,
@@ -366,6 +357,10 @@ export function readShellView(host: ShellViewHost) {
     custodianPanelAvailable,
     activeRoute,
     sessionRoute,
+    workbenchRoute:
+      !host.routeState.routeFailed &&
+      !host.routeState.sessionRouteNotice &&
+      isSessionRouteId(host.routeState.routeId),
     reloadRequired,
     pageActionsBlocked,
     nativeEmbed,
@@ -386,7 +381,7 @@ export function readShellView(host: ShellViewHost) {
     shellWidth,
     selectedAgentId,
     newSessionDisabledReason,
-    workspaceReplacement,
+    workspacePluginsEnabled,
     uiSettings,
     backgroundReady,
     chatLikeRoute,
@@ -395,7 +390,7 @@ export function readShellView(host: ShellViewHost) {
     collapsedControls,
     shellConnectionStatus,
     floatingUpdateCard,
-    navigationContent,
+    settingsSidebarProps,
     navigationSnapshot,
   };
 }

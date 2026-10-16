@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -19,7 +21,34 @@ const pools: Array<{ close(): Promise<void> }> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  resetDatabaseEngineSelectionForTest();
 });
+
+it.each([false, true])(
+  "carries boot selection into a prewarmed task worker (retained: %s)",
+  async (retainedTransport) => {
+    const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
+      {
+        workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
+        maxWorkers: 1,
+        idleTimeoutMs: 0,
+      },
+      retainedTransport ? { retainedTransport: true } : undefined,
+    );
+    pools.push(pool);
+    const run = () => pool.run({ label: "selection", readEngineSelection: true }, {});
+    const prewarmed = await run();
+    expect(prewarmed.engineSelection).toBeUndefined();
+    const selection = {
+      input: { connection: "postgresql://synthetic.invalid/r4", schemaPrefix: "r4" },
+    };
+    installDatabaseEngineSelection(selection);
+    const selected = await run();
+    expect(selected.threadId).toBe(prewarmed.threadId);
+    expect(selected.engineSelection).toEqual(selection);
+    expect((await run()).engineSelection).toEqual(selection);
+  },
+);
 
 it("preserves workerData through retained task startup", async () => {
   const workerData = { type: "user data", port: "user port" };

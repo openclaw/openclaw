@@ -3,7 +3,7 @@ import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   type postJsonRequest,
   type ProviderOperationRetryStage,
@@ -35,23 +35,22 @@ function resolveMinimaxMediaBaseUrl(
   return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
 }
 
-export function resolveMinimaxMediaRequestConfig(params: {
+export async function resolveMinimaxMediaRequestConfig(params: {
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"];
   providerId: string;
-  apiKey: string;
+  agentDir?: string;
+  authStore?: Parameters<typeof resolveApiKeyForProvider>[0]["store"];
   capability: "image" | "audio" | "video";
   baseUrl?: string;
 }) {
-  return resolveProviderHttpRequestConfig({
+  return resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "MiniMax API key missing",
+    jsonContentType: params.capability !== "audio",
     baseUrl: params.baseUrl ?? resolveMinimaxMediaBaseUrl(params.cfg, params.providerId),
     defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
-    defaultHeaders: {
-      Authorization: `Bearer ${params.apiKey}`,
-      ...(params.capability !== "audio" ? { "Content-Type": "application/json" } : {}),
-    },
     provider: params.providerId,
     capability: params.capability,
-    transport: "http",
     request: sanitizeConfiguredModelProviderRequest(
       params.cfg?.models?.providers?.[params.providerId]?.request,
     ),

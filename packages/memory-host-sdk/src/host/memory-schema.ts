@@ -5,6 +5,9 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
+import * as provenanceSchema from "./memory-schema-provenance.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import {
   backfillMemoryPathFtsRows,
   dropDisabledMemoryFts,
@@ -18,11 +21,6 @@ import {
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   reconcileMemoryChunkFtsRows,
-} from "./memory-schema-fts.js";
-import * as provenanceSchema from "./memory-schema-provenance.js";
-import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
-import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
-import {
   canReuseSqliteSchemaInTransaction,
   getSqliteDatabaseAdmission,
   migrateSqliteSchemaToStrict,
@@ -57,7 +55,7 @@ export {
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
   MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   rebuildMemoryChunkFts,
-} from "./memory-schema-fts.js";
+} from "./openclaw-runtime-sqlite.js";
 export {
   ensureMemoryChunkProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,

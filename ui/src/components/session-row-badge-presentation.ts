@@ -8,6 +8,7 @@ import type {
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { sessionPullRequestStateIcons } from "../lib/session-pull-request-presentation.ts";
 import { sessionMachineParts } from "./session-machine.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
@@ -39,7 +40,15 @@ export type SessionRowBadgesParams = {
 
 export type SessionRowBadge = {
   label: string;
-  icon: "incognito" | "gitMerge" | "gitPullRequest" | "alertTriangle" | "pencil" | "globe";
+  icon:
+    | "incognito"
+    | "gitMerge"
+    | "gitPullRequest"
+    | "gitPullRequestDraft"
+    | "gitPullRequestClosed"
+    | "alertTriangle"
+    | "pencil"
+    | "globe";
   modifier: string;
   count?: number;
   pullRequestState?: SessionCatalogPullRequestSummary["state"];
@@ -84,17 +93,6 @@ export function resolveSessionRowBadges(
           },
         )
       : "";
-  if (
-    !params.incognito &&
-    !pullRequestLabel &&
-    !params.hasApproval &&
-    attentionCount === 0 &&
-    !params.hasComposerDraft &&
-    !displayedPlacementState &&
-    !hasWorkspaceConflict
-  ) {
-    return [];
-  }
   const placementLabel = displayedPlacementState
     ? params.placementProviderId && params.placementProfileId
       ? [
@@ -134,10 +132,10 @@ export function resolveSessionRowBadges(
       modifier: "incognito",
     });
   }
-  if (pullRequestLabel) {
+  if (params.pullRequest && pullRequestLabel) {
     badges.push({
       label: pullRequestLabel,
-      icon: pullRequestState === "merged" ? "gitMerge" : "gitPullRequest",
+      icon: sessionPullRequestStateIcons[params.pullRequest.state],
       modifier: "pull-request",
       pullRequestState,
     });

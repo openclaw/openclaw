@@ -12,6 +12,7 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
@@ -56,6 +57,8 @@ import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.
 
 export type PreparedAgentRunUserTurn = {
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   bashElevated?: ExecElevatedDefaults;
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
@@ -139,6 +142,7 @@ export async function prepareAgentRunUserTurn(params: {
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
@@ -402,6 +406,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
     return {
       ...(params.privateCompletion ? { privateCompletion: true as const } : {}),
+      replyExpectation: params.replyExpectation,
       ...(releaseProcessingAbortObserver ? { releaseProcessingAbortObserver } : {}),
       ...(execApprovalFollowupRuntimeHandoff?.bashElevated
         ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }

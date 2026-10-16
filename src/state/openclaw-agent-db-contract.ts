@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -13,6 +13,7 @@ export const CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION = 25;
 export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
+export const MEDIA_ROWS_MIGRATION_META_KEY = "media-persistence-rows-v1";
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 // Bound the disk work shared by startup inspection, admission, and canonical preparation.
 export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
@@ -21,7 +22,7 @@ export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
 export type OpenClawAgentDatabase = {
   agentId: string;
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };

@@ -1,4 +1,4 @@
-import { createMemo, createRenderEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
@@ -19,7 +19,6 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
 import { McpServersForm } from "./mcp-servers-form.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -31,7 +30,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "./solid/settings-ui.tsx";
-import { WizardLogin, WizardLoginController } from "./wizard-login-controller.tsx";
+import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 
 registerMcpEnglish();
 
@@ -53,7 +52,7 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
   }
 }
 
-function McpServersCardContent(props: McpServersCardProps) {
+export function McpServersCard(props: McpServersCardProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectSource(context.runtimeConfig, {
@@ -74,29 +73,26 @@ function McpServersCardContent(props: McpServersCardProps) {
     return state;
   };
   let active = true;
-  const login = new WizardLoginController(
-    { requestUpdate: invalidate },
-    {
-      getClient: () => context.gateway.snapshot.client ?? null,
-      getAgentId: () => null,
-      onClose: () => login.reset(),
-      requestFailedMessage: () => t("mcpServers.signInFailed"),
-      sessionExpiredMessage: () => t("mcpServers.signInExpired"),
-    },
-  );
+  const login = createWizardLogin({
+    getClient: () => context.gateway.snapshot.client ?? null,
+    getAgentId: () => null,
+    onClose: () => login.reset(),
+    requestFailedMessage: () => t("mcpServers.signInFailed"),
+    sessionExpiredMessage: () => t("mcpServers.signInExpired"),
+  });
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
     state.message = { kind: "error", text: formatUiError(error) };
     invalidate();
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
-  createRenderEffect(hello, () => {
+  // A new transport retires the previous sign-in before another interaction can start one.
+  createEffect(hello, () => {
     login.reset();
   });
   const stopSelection = context.agentSelection.subscribe(() => login.reset());
   onCleanup(() => {
     active = false;
     stopSelection();
-    login.reset();
   });
 
   const mutationBlockedReason = (): string | null => {
@@ -111,7 +107,7 @@ function McpServersCardContent(props: McpServersCardProps) {
   };
   const canMutate = () => {
     revision();
-    return mutationBlockedReason() === null && login.runner.state.phase === "idle";
+    return mutationBlockedReason() === null && login.state().phase === "idle";
   };
   const signIn = (server: McpServerSummary) => {
     if (
@@ -184,12 +180,13 @@ function McpServersCardContent(props: McpServersCardProps) {
       note: `mcp settings: remove server ${name}`,
       successText: t("mcpServers.removedSuccess", { name }),
     });
-  const rows = () =>
-    summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot));
+  const rows = createMemo(() =>
+    summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot)),
+  );
   const disabled = () => view().busy || !canMutate();
 
   return (
-    <>
+    <openclaw-mcp-servers-card>
       <div class="mcp-server-list">
         <SettingsSection
           title={t("mcpPage.configuredServers")}
@@ -357,26 +354,8 @@ function McpServersCardContent(props: McpServersCardProps) {
       </div>
       <WizardLogin
         controller={login}
-        revision={revision}
         options={{ doneMessage: t("mcpServers.authenticationSaved") }}
       />
-    </>
+    </openclaw-mcp-servers-card>
   );
-}
-
-export const McpServersCard = defineSolidBridge<McpServersCardProps>(
-  "openclaw-mcp-servers-card",
-  (props) => <McpServersCardContent {...props} />,
-  {
-    properties: {
-      pluginsHref: { default: "" },
-      docsUrl: { default: "https://docs.openclaw.ai/tools/mcp" },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-mcp-servers-card": SolidBridgeElement<McpServersCardProps>;
-  }
 }

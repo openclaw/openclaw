@@ -29,12 +29,13 @@ const coreText = (origin: string) =>
 function containedFixture(
   command: CommandFixture,
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+  extraEntrypoints: readonly string[] = [],
 ) {
   const ancestor = fs.realpathSync.native(
     command.createTempDir("openclaw-declaration-resolution-"),
   );
   const root = path.join(ancestor, ".claude/worktrees/validation");
-  const fixture = createFixture(command, groups, root);
+  const fixture = createFixture(command, groups, root, extraEntrypoints);
   const ancestorPackage = path.join(ancestor, "node_modules/@types/synthetic-core");
   const ancestorInput = path.join(ancestorPackage, "index.d.ts");
   const wrapper = "node_modules/.pnpm/wrapper/node_modules/@types/synthetic-wrapper";
@@ -101,15 +102,13 @@ describe("tsdown checkout declaration resolution", () => {
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root, write } = containedFixture(command);
+      const { root, write } = containedFixture(command, undefined, [
+        "scripts/build-workspace-package.mts",
+      ]);
       fs.symlinkSync(
         fs.realpathSync("node_modules/semver"),
         path.join(root, "node_modules/semver"),
         "junction",
-      );
-      write(
-        "scripts/build-workspace-package.mts",
-        fs.readFileSync("scripts/build-workspace-package.mts", "utf8"),
       );
       const manifest = JSON.parse(
         fs.readFileSync("packages/gateway-client/package.json", "utf8"),
@@ -469,7 +468,7 @@ console.log("inherited ambient roots retained; unrelated roots excluded; selecte
     }));
 
   it.skipIf(process.platform === "win32").concurrent(
-    "admits cold sibling workspace outputs through installed aliases only in their build session",
+    "admits cold sibling workspace outputs through installed aliases",
     ({ command }) =>
       command.lifetime.run(async () => {
         const { root, write } = createFixture(command);
@@ -509,51 +508,43 @@ import fs from "node:fs";
 import path from "node:path";
 import { Program } from "typescript/unstable/async";
 import { build } from "tsdown";
-import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 const root = process.cwd();
 const output = path.join(root, "packages/output-producer/dist");
 const alias = ${JSON.stringify(alias)};
 assert.equal(fs.existsSync(output), false, "the producer must start cold");
 const originalEmit = Program.prototype.emitToString;
-let current;
-const begin = () => {
-  const started = Promise.withResolvers();
-  const written = Promise.withResolvers();
-  current = { started, written, compilers: 0 };
-  globalThis.consumerStarted = started.promise;
-  globalThis.finishProducer = written.resolve;
-  return current;
-};
+const started = Promise.withResolvers();
+const written = Promise.withResolvers();
+let compilers = 0;
+globalThis.consumerStarted = started.promise;
+globalThis.finishProducer = written.resolve;
 Program.prototype.emitToString = async function (...args) {
   const output = await originalEmit.apply(this, args);
   if ((await this.getSourceFileNames()).includes(path.join(root, "src/consumer.ts"))) {
-    const phase = current;
-    phase.compilers++;
-    phase.started.resolve();
-    // Delay only result delivery, preserving the real native compilation.
-    // The sibling writes between the consumer's before and after snapshots.
-    await phase.written.promise;
+    compilers++;
+    started.resolve();
+    // Delay only result delivery until the real sibling build writes its output.
+    await written.promise;
   }
   return output;
 };
 try {
-  const first = begin();
   const { bundles } = await build({ config: "tsdown.sibling.config.mts", clean: false, logLevel: "silent" });
   for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
-  assert.equal(first.compilers, 1);
+  assert.equal(compilers, 1);
   for (const file of ["index.mjs", "index.d.mts"]) {
     assert.ok(fs.existsSync(path.join(alias, "dist", file)), "missing sibling " + file);
   }
 } finally {
-  current?.written.resolve();
+  written.resolve();
   Program.prototype.emitToString = originalEmit;
 }
-console.log("cold sibling ownership and fresh build isolation verified");
+console.log("cold sibling outputs are available through the installed alias");
 `,
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toContain(
-          "cold sibling ownership and fresh build isolation verified",
+          "cold sibling outputs are available through the installed alias",
         );
       }),
   );
@@ -562,8 +553,7 @@ console.log("cold sibling ownership and fresh build isolation verified");
     ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
   )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
     command.lifetime.run(async () => {
-      const { root, write } = containedFixture(command);
-      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      const { root } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
       const outside = path.join(path.dirname(root), "runtime.ts");
       fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
       const result = await runFixtureModule(
@@ -572,11 +562,9 @@ console.log("cold sibling ownership and fresh build isolation verified");
         `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
 const root = process.cwd();
-const canonicalRoot = fs.realpathSync.native(root);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
@@ -584,7 +572,7 @@ const owner = ${JSON.stringify(owner)};
 const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
 assert.ok(config);
-assert.equal(config.dts, ${!dts});
+assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 let finishedRuntime;
@@ -652,8 +640,7 @@ console.log("resolved declaration override honored");
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root, write } = containedFixture(command);
-      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
+      const { root, write } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
       write(
         "src/second.ts",
         'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',
@@ -667,7 +654,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "tsdown";
 const root = process.cwd();
-const canonicalRoot = fs.realpathSync.native(root);
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
 const workspace = configs.find(config => config.outDir === "packages/gateway-protocol/dist");
@@ -824,6 +810,8 @@ console.log("workspace/AI native compilation settled after success and failure")
           ["-p", positiveConfig, "--pretty", "false"],
           { cwd: root, encoding: "utf8" },
         );
+        expect(positive.error).toBeUndefined();
+        expect(positive.signal).toBeNull();
         expect(positive.status, positive.stdout + positive.stderr).toBe(0);
         rejectedPath = ambient;
       } else if (kind === "package symlink") {

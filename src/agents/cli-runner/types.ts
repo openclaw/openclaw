@@ -146,6 +146,8 @@ export type RunCliAgentParams = {
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  /** An unbound scheduled run may use native login, never a host credential profile. */
+  nativeAuthOnly?: true;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;

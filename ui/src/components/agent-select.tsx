@@ -1,13 +1,13 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
-import { avatarArtwork } from "./identity-avatar-view.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -39,16 +39,14 @@ defineSolidBridge<AgentSelectProps>(
         : undefined);
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
-    const [revision, refresh] = createSignal(0, { ownedWrite: true });
-    const loader = new IdentityAvatarController(() => refresh((value) => value + 1));
-    loader.hostConnected();
-    onCleanup(() => loader.hostDisconnected());
+    const loader = createIdentityAvatars();
+    onCleanup(loader.connect());
+    const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
-      revision();
       const current = triggerOption();
       const candidates = [...props.options, ...(current ? [current] : [])];
       const identities = props.identityById;
-      return loader.withActiveRoutes(
+      return avatarSource.read().withActiveRoutes(
         () =>
           new Map(
             candidates.map((option) => {
@@ -70,26 +68,26 @@ defineSolidBridge<AgentSelectProps>(
       const resolved = () => avatars().get(avatarProps.option.value);
       return (
         <Show
-          when={!avatarProps.option.icon || Boolean(resolved()?.image)}
+          when={resolved()?.image ? undefined : avatarProps.option.icon}
           fallback={
-            <span
-              class="agent-select__avatar agent-select__avatar--icon"
-              aria-hidden="true"
-              ref={avatarArtwork(() => avatarProps.option.icon)}
+            <AgentIdentityAvatar
+              class="agent-select__avatar"
+              agent={{
+                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
+                avatar: resolved()?.image ?? null,
+                textAvatar: avatarProps.option.agent
+                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
+                  : null,
+              }}
+              onImageError={resolved()?.onError}
             />
           }
         >
-          <AgentIdentityAvatar
-            class="agent-select__avatar"
-            agent={{
-              id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-              avatar: resolved()?.image ?? null,
-              textAvatar: avatarProps.option.agent
-                ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                : null,
-            }}
-            onImageError={resolved()?.onError}
-          />
+          {(icon) => (
+            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
+              <Icon name={icon()} />
+            </span>
+          )}
         </Show>
       );
     }

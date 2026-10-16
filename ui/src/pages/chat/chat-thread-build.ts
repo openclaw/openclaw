@@ -103,6 +103,8 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** The answer is visible or the runtime only owns background settlement. */
+  runFinalizing?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
   /** Set while a run that handed off is idle and its subagents are still running. */
@@ -643,6 +645,7 @@ export function buildChatItems(
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
   const showWorkingIndicator =
+    !props.runFinalizing &&
     (!compaction || compaction.phase === "complete") &&
     ((props.runWorking === true && !initialHistoryLoad) ||
       hasEmptyLiveStream ||
@@ -722,9 +725,10 @@ export function buildChatItems(
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
-    items: complete,
-    people: props.replyPeople,
-    localPerson: props.replyLocalPerson,
-  });
+  return groupMessages(
+    projectYields(coalesceToolActivityMessages(items, hidden), complete),
+    { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
+    props.showReasoning ? props.reasoning : undefined,
+    props.showReasoning,
+  );
 }

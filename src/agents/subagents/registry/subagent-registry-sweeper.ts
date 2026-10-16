@@ -17,6 +17,7 @@ import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { retryDeferredSubagentCompletionSource } from "./subagent-registry-gateway-owner.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleController,
@@ -248,6 +249,10 @@ export function createSubagentRegistrySweeper(params: {
         );
       }
       for (const [runId, snapshot] of runEntries) {
+        const deferredSource = retryDeferredSubagentCompletionSource(snapshot);
+        if (deferredSource) {
+          await deferredSource;
+        }
         readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {

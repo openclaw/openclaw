@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import { NewSessionDictationView, NewSessionDictationStatus } from "./composer-dictation-view.tsx";
 
 const dictationHarness = vi.hoisted(() => ({
@@ -109,7 +109,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
 
     control.prepare("agent-a");
@@ -134,7 +134,7 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError,
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     const container = document.createElement("div");
     mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
@@ -172,7 +172,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     const container = document.createElement("div");
     control.prepare("agent-a");
@@ -225,7 +225,7 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {
-    const textarea = new NewSessionComposerTextareaController();
+    const textarea = createNewSessionComposerTextarea();
     const client = createTestGatewayClient(async () => ({}));
     const onSubmit = vi.fn();
     const control = new NewSessionDictationControl({
@@ -236,7 +236,7 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
     onTestFinished(() => {
       control.dispose();
@@ -277,7 +277,7 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
+      onChange: vi.fn(),
     });
 
     control.prepare("agent-a");

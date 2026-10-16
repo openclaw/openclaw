@@ -18,8 +18,8 @@ import {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
-import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
-import { renderConnectingSplash } from "../components/loading-skeleton.ts";
+import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { i18n } from "../i18n/index.ts";
 import {
@@ -35,7 +35,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "./app-shell-locale-recovery.ts";
 import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-focus.ts";
-import { connectLegacyApplicationContext, createLegacyFocusEscape } from "./app-root-lit.ts";
+import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
@@ -52,7 +52,6 @@ import {
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
-import { LitRouteHost } from "./lit-route-host.tsx";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
@@ -135,7 +134,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     lazyRevision();
     return loginGateLoader.visibleState;
   };
-  const disconnectLegacyContext = connectLegacyApplicationContext(host, context);
   const disconnectViewport = connectShellViewport();
   const disconnectTooltips = installTitleTooltips(host.ownerDocument);
   const embedHost = nativeEmbedHost();
@@ -308,7 +306,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     translations.dispose();
     disconnectViewport();
     disconnectTooltips();
-    disconnectLegacyContext();
     focusDashboardAbort.abort();
     lazyCustomElements.abandon();
     loginGateLoader.abandon();
@@ -326,12 +323,9 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   }
   function Splash(): SolidJSX.Element {
     return (
-      <LitRouteHost
-        renderValue={() => {
-          translations.revision();
-          return renderConnectingSplash(startupStatus());
-        }}
-      />
+      <openclaw-route-fragment style={{ display: "contents" }}>
+        <ConnectingSplash status={startupStatus()} />
+      </openclaw-route-fragment>
     );
   }
   function LazyDocument(documentProps: { element: OptionalCustomElement }): SolidJSX.Element {
@@ -339,16 +333,13 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
       <Show when={lazyState()?.element === documentProps.element && lazyState()}>
         {(state) => (
           <main class="connect-splash">
-            <LitRouteHost
-              renderValue={() => {
-                translations.revision();
-                return renderLazyElementState(
-                  state(),
-                  () => lazyCustomElements.retry(),
-                  () => lazyCustomElements.close(),
-                );
-              }}
-            />
+            <openclaw-route-fragment style={{ display: "contents" }}>
+              <LazyElementStateView
+                state={state()}
+                onRetry={() => lazyCustomElements.retry()}
+                onClose={() => lazyCustomElements.close()}
+              />
+            </openclaw-route-fragment>
           </main>
         )}
       </Show>
@@ -523,6 +514,10 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     );
   }
   function Login(): SolidJSX.Element {
+    const loadError = () => {
+      const state = loginLoadState();
+      return state?.status === "error" ? state : undefined;
+    };
     const registered = () => {
       lazyRevision();
       return isOptionalElementDefined(LOGIN_GATE_ELEMENT);
@@ -531,24 +526,15 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
       <Show
         when={registered()}
         fallback={
-          <Show
-            when={loginLoadState()?.status === "error" && loginLoadState()}
-            fallback={<Splash />}
-          >
+          <Show when={loadError()} fallback={<Splash />}>
             {(state) => (
-              <LitRouteHost
-                renderValue={() => {
-                  translations.revision();
-                  const current = state();
-                  return current.status === "error"
-                    ? renderLazyViewError({
-                        error: current.error,
-                        stale: current.stale,
-                        onRetry: () => loginGateLoader.retry(),
-                      })
-                    : undefined;
-                }}
-              />
+              <openclaw-route-fragment style={{ display: "contents" }}>
+                <LazyViewError
+                  error={state().error}
+                  stale={state().stale}
+                  onRetry={() => loginGateLoader.retry()}
+                />
+              </openclaw-route-fragment>
             )}
           </Show>
         }
@@ -625,7 +611,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     );
   }
   return (
-    <ApplicationProvider value={context}>
+    <ApplicationProvider value={context} host={host}>
       <openclaw-tooltip-provider>
         <Switch>
           <Match when={runtime.focusLocation?.status === "unsupported"}>

@@ -1,10 +1,12 @@
-import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "../new-session/composer-controller.ts";
 import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -12,11 +14,12 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
-const controllers: NewSessionComposerTextareaController[] = [];
+const controllers: NewSessionComposerTextarea[] = [];
 const fixtureDisposals: Array<() => void> = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
@@ -32,7 +35,7 @@ afterEach(async () => {
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
+  vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation(() => {});
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -63,14 +66,14 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (native) {
       native.unmount();
     } else {
-      render(nothing, container);
+      disposeComposer(container);
     }
     container.remove();
   });
   let draft = "";
   const send = vi.fn();
   const backgroundSend = vi.fn();
-  const controller = new NewSessionComposerTextareaController();
+  const controller = createNewSessionComposerTextarea();
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => redraw(),
     () => {},
@@ -91,7 +94,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       return;
     }
     if (kind === "chat") {
-      render(renderChatComposer({ ...props, draft }), container);
+      renderComposerInto(container, { ...props, draft });
     } else {
       nativeOptions = {
         agentId: "main",
@@ -106,7 +109,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
         submitting: false,
         messageLocked: locked,
         textareaController: controller,
-        requestUpdate: redraw,
+        onChange: redraw,
         onInput: (next) => {
           draft = next;
           redraw();

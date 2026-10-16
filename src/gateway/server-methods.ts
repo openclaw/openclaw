@@ -510,6 +510,7 @@ export async function handleGatewayRequest(
           : undefined;
         chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
+          req.method,
           () =>
             sharing
               ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {

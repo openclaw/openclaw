@@ -442,7 +442,7 @@ export async function replaceGatewayClient(page: Page) {
 
 export async function openNewSessionPlusMenu(page: Page) {
   const composer = page.locator(".new-session-page__composer");
-  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+  const menu = composer.locator(".agent-chat__capability-menu");
   await composer.getByRole("button", { name: "Add attachment" }).click();
   await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
   return menu;

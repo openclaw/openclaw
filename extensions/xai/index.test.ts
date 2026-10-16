@@ -16,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMo
 
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildLiveXaiOAuthProvider, buildLiveXaiProvider } from "./provider-catalog.js";
+import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
 import {
   createXaiPayloadCaptureStream,
@@ -242,7 +242,6 @@ describe("xai provider plugin", () => {
     ["Grok proxy", "https://cli-chat-proxy.grok.com/v1", true, undefined, undefined],
     ["native API", "https://api.x.ai/v1", false, undefined, undefined],
     ["unavailable Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, false],
-    ["cold prepared Grok token", "https://cli-chat-proxy.grok.com/v1", true, false, undefined],
     [
       "runtime-materialized Grok token",
       "https://cli-chat-proxy.grok.com/v1",
@@ -387,31 +386,6 @@ describe("xai provider plugin", () => {
       "Bearer xai-oauth-token",
     );
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("publishes concrete OAuth rows without reading remote defaults or inventing prices", async () => {
-    const urls: string[] = [];
-    const fetchGuard: LiveModelCatalogFetchGuard = async ({ url }) => {
-      urls.push(url);
-      return {
-        response: Response.json({
-          data: [
-            { id: "grok-4.6", api_backend: "responses" },
-            { id: "grok-fixture-next", api_backend: "responses" },
-          ],
-        }),
-        finalUrl: url,
-        release: async () => undefined,
-      };
-    };
-    const provider = await buildLiveXaiOAuthProvider({
-      discoveryApiKey: "xai-oauth-token",
-      fetchGuard,
-    });
-
-    expect(urls).toEqual(["https://cli-chat-proxy.grok.com/v1/models"]);
-    expect(provider.models.map((model) => model.id)).toEqual(["grok-4.6", "grok-fixture-next"]);
-    expect(provider.models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("reports OAuth discovery failure without retrying with an API key", async () => {
@@ -683,6 +657,9 @@ describe("xai provider plugin", () => {
         modelId: "grok-4.20-multi-agent-experimental-beta-0304",
       } as never),
     ).toBe(false);
+    expect(
+      provider.isModernModelRef?.({ provider: "xai", modelId: "grok-3-mini-fast" } as never),
+    ).toBe(false);
   });
 
   it("follows the listed reasoning efforts for a Grok model the ID rules do not cover", async () => {
@@ -706,6 +683,7 @@ describe("xai provider plugin", () => {
     );
     const { provider, result } = await runXaiCatalog();
     const model = result.models.find((entry) => entry.id === "grok-fixture-fast");
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
     expect(
       provider.resolveThinkingProfile?.({

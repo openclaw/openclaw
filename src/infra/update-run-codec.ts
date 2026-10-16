@@ -160,6 +160,7 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "diagnostic:database rollback" &&
+          item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? {
                 ...item,
@@ -220,6 +221,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    windowsUserSid,
     requester,
     sessionKey,
     deliveryContext,
@@ -228,7 +230,12 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   } = origin;
   // Operational receipts are not expendable diagnostics. Keep them exact inside
   // the existing database byte budget; oversized sets fail before replacing a row.
-  const retained = JSON.stringify({ driver, previousDrivers, updateRecoveryCapture });
+  const retained = JSON.stringify({
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    windowsUserSid,
+  });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
     throw new Error("Update run recovery receipts exceed the origin byte limit");
   }
@@ -236,7 +243,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
-    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, ...routing })
+    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...routing })
     : retained;
   const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
   // Merging removes the diagnostic braces and needs a comma only when identities exist.
@@ -304,7 +311,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Process identities and recovery receipts are operational facts, not diagnostics.
-  const { driver, previousDrivers, updateRecoveryCapture, ...originDiagnostics } = input.origin;
+  const { driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...originDiagnostics } =
+    input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -331,7 +339,12 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    windowsUserSid,
   });
+  // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    delete record.verification.recovery.dataAtRisk;
+  }
   return {
     run_id: record.runId,
     created_at_ms: record.createdAtMs,

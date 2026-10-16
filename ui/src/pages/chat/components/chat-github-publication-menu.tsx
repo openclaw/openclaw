@@ -1,11 +1,8 @@
 import { createEffect, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../../lit/presentation-binding.ts";
 
 export function GitHubPublicationMenu(props: {
   choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
@@ -40,7 +37,6 @@ export function GitHubPublicationMenu(props: {
       id: choice.source,
       label: `@${choice.login}${props.duplicateLogin ? ` · ${choice.label}` : ""}`,
       class: "session-menu__item",
-      attributes: { value: choice.source },
       type: "radio" as const,
       checked: props.selected === choice.source,
       disabled: props.busy,

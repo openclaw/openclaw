@@ -15,6 +15,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -112,8 +113,11 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
     { sessionKey: changed.sessionKey, storePath },
     { ...changed.expectedEntry, label: "newer" },
   );
-  const snapshots = trackSqliteStatementExecutions(database.db, ["snapshot"], (sql) =>
-    /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
+  const snapshots = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["snapshot"],
+    (sql) =>
+      /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
   );
   try {
     const result = await withSqliteSessionDeletions(
@@ -155,12 +159,15 @@ it("avoids inventory projection for sequential writes with no retention candidat
   const target = { sessionKey: "agent:main:planner-0", storePath };
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
-    sql.includes(
-      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-    )
-      ? "protection"
-      : null,
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
   );
   try {
     for (let index = 0; index < 3; index += 1) {
@@ -182,6 +189,190 @@ it("avoids inventory projection for sequential writes with no retention candidat
     }
     expect(loadSessionEntry(target)?.label).toBe("updated-2");
     expect(inventory.rowCounts.protection).toBe(0);
+  } finally {
+    inventory.restore();
+  }
+});
+
+it("preserves current provider keys without loading unrelated protection rows", async () => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const expired = now - 40 * 24 * 60 * 60 * 1_000;
+  const { database, storePath } = createPlannerStore(3, expired);
+  const scope = (index: number) => ({ sessionKey: `agent:main:planner-${index}`, storePath });
+  replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: now });
+  let protectedKey = scope(0).sessionKey;
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [protectedKey],
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
+  );
+  const maintain = () =>
+    runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
+          forceMaintenance: true,
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+  try {
+    expect(maintain().archivedEntries).toEqual([
+      { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
+    ]);
+    expect(loadSessionEntry(scope(0))).toMatchObject({ sessionId: "planner-0" });
+    expect(loadSessionEntry(scope(0))?.archivedAt).toBeUndefined();
+
+    protectedKey = scope(2).sessionKey;
+    replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: expired });
+    expect(maintain().archivedEntries).toEqual([
+      { sessionKey: scope(0).sessionKey, sessionId: "planner-0" },
+    ]);
+    expect(loadSessionEntry(scope(2))).toMatchObject({
+      sessionId: "planner-2",
+      updatedAt: expired,
+    });
+    expect(loadSessionEntry(scope(2))?.archivedAt).toBeUndefined();
+    expect(inventory.rowCounts.protection).toBe(0);
+  } finally {
+    inventory.restore();
+  }
+});
+
+it.each([false, true])(
+  "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
+  async (forceMaintenance) => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const day = 24 * 60 * 60 * 1_000;
+    const { database, storePath } = createPlannerStore(0);
+    const key = (name: string) => `agent:main:${name}`;
+    const oldModel = key("explicit:model-run-00000000-0000-0000-0000-000000000001");
+    const pressureModel = key("explicit:model-run-00000000-0000-0000-0000-000000000002");
+    const fixtures: Array<[string, number, Partial<SessionEntry>?]> = [
+      [key("normal-expired"), 31],
+      [key("normal-not-due"), 10],
+      [key("dashboard:expired"), 8],
+      [key("dashboard:not-due"), 3],
+      [key("dashboard:recent-activity"), 8, { lastActivityAt: now }],
+      [oldModel, 31],
+      [pressureModel, 10],
+    ];
+    for (const [index, [sessionKey, ageDays, entry]] of fixtures.entries()) {
+      replaceSessionEntrySync(
+        { sessionKey, storePath },
+        { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry },
+      );
+    }
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
+    const candidates = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["candidates"],
+      (sql) =>
+        sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
+    );
+    try {
+      const plan = runOpenClawAgentWriteTransaction(
+        (owner) =>
+          maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
+            forceMaintenance,
+            archiveDirectory: path.join(path.dirname(database.path), "archives"),
+            maintenanceConfig: {
+              ...resolveMaintenanceConfigFromInput(),
+              maxEntries: forceMaintenance ? 5 : 5_000,
+            },
+            storePath,
+          }),
+        { agentId: "main", path: database.path },
+      );
+      expect(plan.archivedEntries.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
+        key("dashboard:expired"),
+        key("normal-expired"),
+      ]);
+      expect(plan.entryRemovals.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
+        forceMaintenance ? [oldModel, pressureModel] : [oldModel],
+      );
+      for (const name of ["normal-not-due", "dashboard:not-due", "dashboard:recent-activity"]) {
+        const entry = loadSessionEntry({ sessionKey: key(name), storePath });
+        expect(entry).toBeDefined();
+        expect(entry?.archivedAt).toBeUndefined();
+      }
+      expect(
+        loadSessionEntry({ sessionKey: key("dashboard:recent-activity"), storePath }),
+      ).toMatchObject({ lastActivityAt: now });
+      expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
+    } finally {
+      candidates.restore();
+    }
+  },
+);
+
+it("limits protection reads to active ancestry and preserves cyclic or missing parents", async () => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const { database, storePath } = createPlannerStore(32, now);
+  const key = (index: number) => `agent:main:planner-${index}`;
+  const expired = now - 40 * 24 * 60 * 60 * 1_000;
+  // Root 0; child 1 -> 2; cycle 3 <-> 4; child 5 -> absent 32; unrelated victim 6.
+  const parents = [undefined, 2, undefined, 4, 3, 32, undefined];
+  for (const [index, parent] of parents.entries()) {
+    replaceSessionEntrySync(
+      { sessionKey: key(index), storePath },
+      {
+        sessionId: `planner-${index}`,
+        updatedAt: expired,
+        ...(parent === undefined ? {} : { parentSessionKey: key(parent) }),
+      },
+    );
+  }
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
+  const inventory = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
+  );
+  try {
+    const plan = runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
+          activeSessionKeys: [key(0), key(1), key(3), key(5)],
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+    expect(plan.archivedEntries).toEqual([{ sessionKey: key(6), sessionId: "planner-6" }]);
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const entry = loadSessionEntry({ sessionKey: key(index), storePath });
+      expect(entry).toMatchObject({ sessionId: `planner-${index}` });
+      expect(entry?.archivedAt).toBeUndefined();
+    }
+    expect(inventory.rowCounts.protection).toBe(6);
   } finally {
     inventory.restore();
   }

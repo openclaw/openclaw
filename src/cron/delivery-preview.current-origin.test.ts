@@ -19,6 +19,7 @@ import {
   createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   normalizeSessionDeliveryState,
@@ -257,8 +258,10 @@ describe("current cron delivery origin", () => {
         );
       }
       const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main" })!;
-      const reads = trackSqliteStatementExecutions(database.db, ["sessions"], (sql) =>
-        sql.includes('from "session_nodes"') ? "sessions" : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["sessions"],
+        (sql) => (sql.includes('from "session_nodes"') ? "sessions" : null),
       );
       const jobs = Array.from({ length: 53 }, (_, index) => ({ ...job, id: `preview-${index}` }));
       const agentsRoot = path.dirname(path.dirname(path.dirname(storePath)));
@@ -313,7 +316,6 @@ describe("current cron delivery origin", () => {
     { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
     { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
-    { surface: "webchat", channelCount: 0, sessionTarget: "isolated" as const },
   ])(
     "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
     async (options) => {

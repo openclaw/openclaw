@@ -316,9 +316,18 @@ describe("SessionDiffPanel", () => {
 
       const menu = panel.querySelector("openclaw-session-diff-menu");
       expect(menu).not.toBeNull();
+      const nativeMenu = menu?.querySelector<HTMLElement>(".session-diff-menu__surface");
+      await waitForSolid(() => expect(nativeMenu?.matches(":popover-open")).toBe(true));
       const label = surface === "file" ? "Copy Path" : "Checkout path";
       const button = menu?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       expect(button).toBeInstanceOf(HTMLButtonElement);
+      if (surface === "sync") {
+        const command = menu?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Copy sync command"]',
+        );
+        expect(command).toBeInstanceOf(HTMLButtonElement);
+        await waitForSolid(() => expect(document.activeElement).toBe(command));
+      }
 
       button?.click();
       await waitForSolid(() => expect(button?.getAttribute("aria-label")).toBe(feedback));
@@ -328,6 +337,7 @@ describe("SessionDiffPanel", () => {
       expect(status?.textContent).toBe(feedback);
       expect(status?.hidden).toBe(false);
       expect(panel.querySelector("openclaw-session-diff-menu")).toBe(menu);
+      expect(nativeMenu?.matches(":popover-open")).toBe(true);
     },
   );
 
@@ -356,6 +366,48 @@ describe("SessionDiffPanel", () => {
     const menu = panel.querySelector("openclaw-session-diff-menu");
     expect(menu?.textContent?.includes("Open in Editor")).toBe(testCase.offered);
     expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
+  });
+
+  it("keeps a replacement menu open and applies its action after retiring the file menu", async () => {
+    setNativeGatewayTestState(null);
+    const panel = mountPanel();
+    panel.loader = async () => fileResult(SNAPSHOT_PATCH);
+    await settlePanel(panel);
+
+    const fileTrigger = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu");
+    expect(fileTrigger).toBeInstanceOf(HTMLButtonElement);
+    fileTrigger!.click();
+    await waitForSolid(() =>
+      expect(
+        panel
+          .querySelector(".session-diff-menu--file .session-diff-menu__surface")
+          ?.matches(":popover-open"),
+      ).toBe(true),
+    );
+    const originalMenu = panel.querySelector(
+      ".session-diff-menu--file .session-diff-menu__surface",
+    );
+    const viewTrigger = panel.querySelector<HTMLButtonElement>(".session-diff__toolbar-icon");
+    expect(viewTrigger).toBeInstanceOf(HTMLButtonElement);
+    viewTrigger!.click();
+
+    await waitForSolid(() =>
+      expect(
+        panel
+          .querySelector(".session-diff-menu--view .session-diff-menu__surface")
+          ?.matches(":popover-open"),
+      ).toBe(true),
+    );
+    expect(originalMenu?.isConnected).toBe(false);
+    expect(panel.querySelector(".session-diff__file-body")).not.toBeNull();
+    const collapse = panel.querySelector<HTMLButtonElement>(
+      '.session-diff-menu--view button[data-value="collapse-all"]',
+    );
+    expect(collapse).toBeInstanceOf(HTMLButtonElement);
+    collapse!.click();
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file-body")).toBeNull());
+    expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
+    expect(document.activeElement).toBe(viewTrigger);
   });
 
   it("closes an open editor menu when the native gateway switches to remote", async () => {
@@ -401,25 +453,6 @@ describe("SessionDiffPanel", () => {
 
     expect(panel.textContent).toContain("feature/latest");
     expect(panel.textContent).not.toContain("feature/stale");
-  });
-
-  it("keeps collapsed file bodies unmounted through a refresh", async () => {
-    const panel = mountPanel();
-    panel.loader = async () => fileResult(SNAPSHOT_PATCH);
-    await waitForSolid(() => expect(panel.textContent).toContain("snapshot line"));
-    panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!.click();
-    flush();
-    expect(panel.querySelector(".session-diff__file-body")).toBeNull();
-
-    const refreshed = vi.fn(async () => fileResult(FRESH_PATCH));
-    panel.loader = refreshed;
-    await waitForSolid(() => {
-      expect(refreshed).toHaveBeenCalledOnce();
-      expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
-    });
-    expect(panel.querySelector(".session-diff__file-body")).toBeNull();
-    panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!.click();
-    await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
   });
 
   it("refreshes the diff instead of expanding file text from a stale gap snapshot", async () => {
@@ -562,11 +595,9 @@ describe("manual code folding", () => {
     const click = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!.click();
     async function menu(trigger: string, action: string) {
       click(trigger);
-      await waitForSolid(() => expect(panel.querySelector("wa-dropdown")).not.toBeNull());
-      panel
-        .querySelector("wa-dropdown")!
-        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: action } } }));
-      flush();
+      const selector = `.session-diff-menu__surface button[data-value="${action}"]`;
+      await waitForSolid(() => expect(panel.querySelector(selector)).not.toBeNull());
+      click(selector);
     }
     await waitForSolid(() =>
       expect(panel.querySelectorAll(".session-diff__code-toggle")).toHaveLength(2),

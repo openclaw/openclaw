@@ -41,6 +41,7 @@ import { runPostgresTransactionSync } from "./transaction.js";
 export class PostgresSyncConnection implements PostgresSqlConnection {
   isOpen = true;
   isTransaction = false;
+  mutationRevision = 0;
   readonly advisoryLockKey: bigint;
   private readonly port: MessagePort;
   private readonly control = new Int32Array(new SharedArrayBuffer(8));
@@ -194,11 +195,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
     }
-    const autocommitWrite =
-      !wasTransaction &&
+    const mutated =
       /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
         result.command ?? "",
       );
+    if (mutated) {
+      // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
+      this.mutationRevision++;
+    }
+    const autocommitWrite = !wasTransaction && mutated;
     if (result.command === "COMMIT" || autocommitWrite) {
       // All confirmed commits advance the anchor, including callers using raw SQL.
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {

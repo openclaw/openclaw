@@ -70,6 +70,11 @@ setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.
 
+For an executable-plus-sidecar packaging input, the separate
+[standalone builder](/install/standalone) emits `openclaw`, `runtime/`, and a
+manifest with compiler provenance and mode-specific signing entitlements.
+Desktop packaging owns seeding and replacement of that complete artifact.
+
 The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
 consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
 `scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
@@ -373,6 +378,10 @@ the rest of the run.
 If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
 check the `hdiutil` error on stderr. Routine image creation and attachment output stays
 quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
+A transient `Resource temporarily unavailable` attach failure is retried, up to three
+attempts in total. If attachment fails before mounting, cleanup detaches the snapshot image
+by device; if it stays attached, cleanup fails, retains the files, and prints the
+`hdiutil detach /dev/diskN` command to run.
 Snapshot images and build outputs stay in the checkout. Their read-only mount directories
 use macOS's per-user temporary location (`getconf DARWIN_USER_TEMP_DIR`), independently of
 `TMPDIR`, so an external checkout does not need to support nested mounts. If attachment

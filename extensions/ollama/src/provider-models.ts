@@ -169,7 +169,7 @@ function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelSho
 
 function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return (
-    typeof info.contextWindow === "number" ||
+    info.contextWindow !== undefined ||
     (info.capabilities?.length ?? 0) > 0 ||
     info.thinkingLevelMap !== undefined
   );
@@ -553,11 +553,11 @@ async function fetchOllamaModelRows(params: {
         response,
         auditContext,
       );
-      if (params.opts?.discoveryMode === "strict" && !Array.isArray(data.models)) {
+      const models = Array.isArray(data.models) ? data.models : undefined;
+      if (params.opts?.discoveryMode === "strict" && !models) {
         throw new Error("Ollama model discovery response must contain models[]");
       }
-      const models = Array.isArray(data.models) ? data.models : [];
-      return { reachable: true, models };
+      return { reachable: true, models: models ?? [] };
     } finally {
       await release();
     }

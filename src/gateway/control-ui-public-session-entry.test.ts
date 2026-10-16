@@ -61,6 +61,7 @@ function openReader(
     : undefined;
   runInNewContext(document.querySelector("script")!.textContent!, {
     document,
+    window: dom.window,
     location: { protocol: location.protocol, host: location.host, hash: location.hash, replace },
     localStorage: storage ?? localStorage,
     sessionStorage: storage ?? sessionStorage,
@@ -115,6 +116,18 @@ describe("public reader operator handoff", () => {
     const main = f.document.querySelector("main")!;
     expect(main.hasAttribute("data-entry-pending")).toBe(true);
     probe.resolve({ status });
+    await probe.promise;
+    expect(main.hasAttribute("data-entry-pending")).toBe(false);
+    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+    expect(f.loginVisibility()).toBe("visible");
+    expect(f.replace).not.toHaveBeenCalled();
+  });
+
+  it("offers login when an auth proxy redirects the signed-out probe", async () => {
+    const probe = createDeferred<{ status: number; type?: string }>();
+    const f = openReader({ probe: probe.promise });
+    const main = f.document.querySelector("main")!;
+    probe.resolve({ status: 0, type: "opaqueredirect" });
     await probe.promise;
     expect(main.hasAttribute("data-entry-pending")).toBe(false);
     expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
@@ -230,7 +243,7 @@ describe("public reader operator handoff", () => {
     expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
     expect(f.fetch).toHaveBeenCalledWith(
       `${entry}&probe=1`,
-      expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+      expect.objectContaining({ credentials: "same-origin", redirect: "manual" }),
     );
   });
 

@@ -33,7 +33,7 @@ describe("heartbeat event prompts", () => {
       name: "builds user-relay cron prompt by default",
       events: ["Cron: rotate logs"],
       expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply NO_REPLY."],
+      unexpected: ["Handle this reminder internally", "Reply with exactly NO_REPLY"],
     },
     {
       name: "builds internal-only cron prompt when delivery is disabled",
@@ -45,14 +45,21 @@ describe("heartbeat event prompts", () => {
     {
       name: "falls back to bare heartbeat reply when cron content is empty",
       events: ["", "   "],
-      expected: ["Reply NO_REPLY."],
+      expected: [
+        "Reply with exactly NO_REPLY as the entire final answer.",
+        "send confirmations before ending silently",
+      ],
       unexpected: ["Handle this reminder internally"],
     },
     {
       name: "uses internal empty-content fallback when delivery is disabled",
       events: ["", "   "],
       opts: { deliverToUser: false },
-      expected: ["Handle this internally", "NO_REPLY when nothing needs user-facing follow-up"],
+      expected: [
+        "Handle this internally",
+        "If nothing needs user-facing follow-up",
+        "reply with exactly NO_REPLY as the entire final answer",
+      ],
       unexpected: ["Please relay this reminder to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
@@ -67,15 +74,60 @@ describe("heartbeat event prompts", () => {
 
   it.each([
     {
+      name: "makes exec follow-ups conditional on new user-relevant information",
+      events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
+      opts: undefined,
+      expected: [
+        "Exec finished",
+        "Uploaded file",
+        "requested result not yet delivered",
+        "continue any outstanding authorized work",
+        "routine output, duplicate or superseded results",
+        "failures already recovered from",
+        "reply with exactly NO_REPLY as the entire final answer",
+      ],
+      unexpected: ["system messages above", "Please relay the command output", "[truncated]"],
+    },
+    {
       name: "builds internal-only exec prompt when delivery is disabled",
       events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
-      expected: ["user delivery is disabled", "Handle the result internally", "NO_REPLY only"],
+      expected: [
+        "user delivery is disabled",
+        "Handle the result internally",
+        "reply with exactly NO_REPLY as the entire final answer",
+      ],
       unexpected: [
         "Upload failed",
         "system messages above",
         "Please relay the command output to the user",
       ],
+    },
+    {
+      name: "keeps metadata-only successful exec completions as continuations",
+      events: ["Exec completed (abc12345, code 0)"],
+      opts: undefined,
+      expected: [
+        "Exec completed (abc12345, code 0) without captured stdout/stderr.",
+        "continue any outstanding authorized work",
+        "Do not ask the user to provide missing logs",
+        "reply with exactly NO_REPLY as the entire final answer",
+      ],
+      unexpected: ["Please relay the command output to the user"],
+    },
+    {
+      name: "applies relevance guidance to failures without captured logs",
+      events: ["Exec failed (abc12345, code 1)"],
+      opts: undefined,
+      expected: [
+        "without captured stdout/stderr",
+        "include the exit status or signal",
+        "Do not ask the user to provide missing logs",
+        "Notify the user only",
+        "failures already recovered from",
+        "reply with exactly NO_REPLY as the entire final answer",
+      ],
+      unexpected: ["Please relay the command output to the user"],
     },
     {
       name: "keeps timeout retry guidance when the command printed nothing",
@@ -91,7 +143,7 @@ describe("heartbeat event prompts", () => {
         "continue any outstanding authorized work",
         "routine output, duplicate or superseded results",
         "failures already recovered from",
-        "reply NO_REPLY only",
+        "reply with exactly NO_REPLY as the entire final answer",
       ],
       unexpected: ["no command output was found"],
     },
@@ -115,7 +167,7 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).toContain("notify=true with notificationText");
-    expect(prompt).not.toContain("reply NO_REPLY only");
+    expect(prompt).not.toContain("reply with exactly NO_REPLY");
     expect(prompt).not.toContain("Please relay the command output");
   });
 
@@ -131,6 +183,9 @@ describe("heartbeat event prompts", () => {
 describe("heartbeat event classification", () => {
   it.each([
     { value: "   ", expected: false },
+    { value: "NO_REPLY", expected: true },
+    { value: "no_reply: actual reminder", expected: true },
+    { value: "HEARTBEAT_OK", expected: false },
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "Exec completed (abc12345, code 0)", expected: false },
   ])("classifies cron system events for %j", ({ value, expected }) => {

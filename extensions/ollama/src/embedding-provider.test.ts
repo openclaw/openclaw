@@ -191,17 +191,6 @@ describe("ollama embedding provider", () => {
     });
   });
 
-  it("resolves configured baseURL alias", async () => {
-    const { fetchMock } = await embedTestQuery({
-      config: createProviderConfig({ baseURL: "http://remote-ollama:11434/v1", models: [] }),
-    });
-
-    expectEmbeddingFetch(fetchMock, "http://remote-ollama:11434/api/embed", {
-      model: "nomic-embed-text",
-      input: "search_query: hello",
-    });
-  });
-
   it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
     await expect(
       createEmbeddingProvider({

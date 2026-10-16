@@ -121,16 +121,22 @@ export function buildProviderStreamFamilyHooks(
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
           const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
-          // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
-          // Skip fast for valid config so its payload hook cannot install priority first.
-          if (!serviceTier && hasFastModeParam(ctx.extraParams)) {
-            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
-              resolveOpenAIFastMode(ctx.extraParams),
-            );
-          }
-
-          if (serviceTier) {
-            nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+          if (serviceTier || hasFastModeParam(ctx.extraParams)) {
+            const underlying = nextStreamFn;
+            // Snapshot the preference for each request, not each payload callback.
+            // Configured tiers are inherited defaults; explicit Standard clears them.
+            nextStreamFn = (model, context, options) => {
+              const fastMode = resolveOpenAIFastMode(ctx.extraParams);
+              const stream =
+                fastMode === undefined
+                  ? serviceTier
+                    ? createOpenAIServiceTierWrapper(underlying, serviceTier)
+                    : underlying
+                  : fastMode === false && serviceTier
+                    ? createOpenAIServiceTierWrapper(underlying, "default")
+                    : createOpenAIFastModeWrapper(underlying, fastMode);
+              return stream(model, context, options);
+            };
           }
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
@@ -183,6 +189,10 @@ export {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { createOpenRouterSystemCacheWrapper } from "../llm/providers/stream-wrappers/proxy.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveMoonshotThinkingType } from "./provider-stream-shared.js";
 export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,

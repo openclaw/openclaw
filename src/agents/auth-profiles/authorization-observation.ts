@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
-import { McpConnectionAuthorityError } from "../mcp-connection-authority-error.js";
+import { AuthProfileAuthorizationError } from "./authorization-contract.js";
 import { readAuthProfileAuthorizationLifetime } from "./authorization-lifetime.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 
@@ -130,10 +130,10 @@ export function retainAuthProfileAuthorizationObservation(inputPath: string, pro
   let disposed = false;
   const assertSettled = () => {
     if (disposed) {
-      throw new McpConnectionAuthorityError("retired");
+      throw new AuthProfileAuthorizationError("retired");
     }
     if (owner.pending || owner.uncertain) {
-      throw new McpConnectionAuthorityError("unavailable");
+      throw new AuthProfileAuthorizationError("unavailable");
     }
   };
   return {
@@ -147,7 +147,7 @@ export function retainAuthProfileAuthorizationObservation(inputPath: string, pro
       return (raw: unknown) => {
         assertSettled();
         if (retained.revision !== revision) {
-          throw new McpConnectionAuthorityError("unavailable");
+          throw new AuthProfileAuthorizationError("unavailable");
         }
         const fact = projectAuthProfileAuthorization(raw, profileId);
         if (!isDeepStrictEqual(retained.fact, fact)) {

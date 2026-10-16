@@ -79,8 +79,12 @@ suite.define(() => {
         }
         await answer.waitFor();
         await expect.poll(() => reasoning.isVisible()).toBe(false);
-        await worked.click();
-        await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        if (withTools || reasoningLevel === "on") {
+          await worked.click();
+          await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        } else {
+          expect(await worked.count()).toBe(0);
+        }
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
         if (reasoningLevel === "on") {
           expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);
@@ -98,7 +102,7 @@ suite.define(() => {
       const localReasoning = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       for (const showReasoning of [false, true]) {
         await menuTrigger.click();
-        await menu.getByRole("menuitem", { name: "View", exact: true }).hover();
+        await menu.getByRole("menuitem", { name: "View", exact: true }).click();
         await localReasoning.click();
         await expect
           .poll(() => localReasoning.getAttribute("aria-checked"))

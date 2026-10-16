@@ -10,6 +10,7 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   installSqliteDatabaseAdmissions,
@@ -124,7 +125,7 @@ async function closeInActorContext(
   const admission = operationAdmission?.actor === actor ? operationAdmission.context : undefined;
   let active = true;
   try {
-    await runInActorContext(actor, () =>
+    await runWithActorFacts(actor, () =>
       admission
         ? withSqliteDatabaseAdmissionExchange((facts, location, create) => {
             if (!active) {
@@ -198,6 +199,17 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         };
       }
       if (request.stateContext) {
+        installDatabaseEngineSelection({ input: request.stateContext.databaseEngineInput });
+        const retained = stateContexts.get(request.actor);
+        if (retained) {
+          if (Object.hasOwn(request.stateContext, "stateIntegrity")) {
+            request.stateContext.stateIntegrity ??= retained.stateIntegrity;
+          }
+          if (Object.hasOwn(request.stateContext, "scheduledMaintenanceSuspension")) {
+            request.stateContext.scheduledMaintenanceSuspension ??=
+              retained.scheduledMaintenanceSuspension;
+          }
+        }
         stateContexts.set(request.actor, request.stateContext);
       }
     }
@@ -471,7 +483,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw new Error("SQLite worker actor is closed");
       }
       try {
-        // Facts settle through async close; transaction grants still expire at the synchronous boundary.
+        // Cleanup owns its bounded fact exchange, without borrowing an expired operation grant.
         await closeInActorContext(request.actor, () => backend.close());
         closeReceipt = runInActorContext(request.actor, () =>
           backend[SQLITE_WORKER_CLOSE_RECEIPT]?.(),

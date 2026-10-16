@@ -7,7 +7,10 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
+import {
+  resolveCodexAppServerLocalHomeDir,
+  usesManagedCodexThreadUnloading,
+} from "./auth-start-options.js";
 import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
@@ -55,11 +58,16 @@ import type {
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadStartParams } from "./thread-requests.js";
+import {
+  buildRestrictedThreadConfigFingerprint,
+  isRestrictedThreadConfigCompatible,
+} from "./thread-restricted-resume.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
-type CodexResumeThreadContext = CodexThreadRequestContext & {
+export type CodexResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
+  requireRestrictedThreadConfigFingerprint?: boolean;
   stageBindingReplacement: (operation: string) => void;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   buildLoadedPluginThreadConfig?: (
@@ -70,7 +78,7 @@ type CodexResumeThreadContext = CodexThreadRequestContext & {
   releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
 };
 
-type CodexStartThreadContext = CodexThreadRequestContext & {
+export type CodexStartThreadContext = CodexThreadRequestContext & {
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   preserveExistingBinding: boolean;
   rotatedContextEngineBinding: boolean;
@@ -139,9 +147,12 @@ export async function resumeExistingCodexThread(
       resumeBinding.ringZeroClientInstanceId !== undefined ||
       resumeBinding.ringZeroConfigFingerprint !== undefined ||
       context.ringZeroActive;
+    const managedThreadUnloading = usesManagedCodexThreadUnloading(params.appServer.start);
+    const threadUnloaded = managedThreadUnloading && (await configuration.waitForUnload());
     const sharedEntry = getCurrentSharedClientEntry(params.client);
     if (
       configuration.settledSystemError &&
+      !threadUnloaded &&
       !clientBoundThread &&
       resumeBinding.connectionScope !== "supervision" &&
       // This attempt owns one lease. Other leases and pending startups can
@@ -154,6 +165,11 @@ export async function resumeExistingCodexThread(
       // retirement, so only an otherwise inactive client can recover this way.
       await abandonClient();
       throw new CodexThreadClientReplacementError();
+    }
+    // A timed-out managed teardown must preserve history, never rotate a closing thread.
+    // External servers keep their native idle-thread reload path during resume.
+    if (managedThreadUnloading) {
+      configuration.assertConfigured();
     }
     const authProfileId =
       resumeBinding.connectionScope === "supervision"
@@ -184,6 +200,10 @@ export async function resumeExistingCodexThread(
     const resumeParams = await lifecycleTiming.measure("thread-resume-params", () =>
       context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
     );
+    if (!isRestrictedThreadConfigCompatible(params, context, resumeParams, authProfileId)) {
+      stageBindingReplacement("rotating changed restricted thread configuration");
+      return undefined;
+    }
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
@@ -288,6 +308,9 @@ export async function resumeExistingCodexThread(
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
+      restrictedThreadConfigFingerprint: context.requireRestrictedThreadConfigFingerprint
+        ? resumeBinding.restrictedThreadConfigFingerprint
+        : undefined,
       nativeHookRelayGeneration:
         finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
       appServerRuntimeFingerprint:
@@ -548,6 +571,12 @@ export async function startFreshCodexThread(
   );
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
+  const restrictedThreadConfigFingerprint = buildRestrictedThreadConfigFingerprint(
+    params,
+    context,
+    startParams,
+    { model: response.model, modelProvider: bindingModelProvider ?? null },
+  );
   const startedBinding: CodexAppServerThreadBinding = {
     threadId: response.thread.id,
     ...(clientId ? { clientId } : {}),
@@ -558,6 +587,7 @@ export async function startFreshCodexThread(
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
     ...buildCodexThreadBindingPolicy(params, context),
+    restrictedThreadConfigFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,

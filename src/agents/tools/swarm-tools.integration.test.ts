@@ -25,6 +25,7 @@ import {
 } from "../subagents/announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../subagents/announce/subagent-announce.requester-settle-wake.js";
 import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryChangesToSqlite } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
@@ -107,7 +108,7 @@ describe("swarm tools integration", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setRuntimeConfigSnapshot(config);
     const publicToGateway = new Map<string, string>();
-    const resultTextBySession = new Map<string, string>();
+    const resultTextByRun = new Map<string, string>();
     const modelStructuredCalls: number[] = [];
     const childGuidance: string[] = [];
     const acceptedNotes: string[] = [];
@@ -151,7 +152,7 @@ describe("swarm tools integration", () => {
         expect(structuredOutput).toBeUndefined();
       }
       publicToGateway.set(publicRunId, gatewayRunId);
-      resultTextBySession.set(childSessionKey, `result-${index}`);
+      resultTextByRun.set(gatewayRunId, `result-${index}`);
       return { runId: gatewayRunId, status: "accepted", acceptedAt: Date.now() };
     });
     spawnTesting.setDepsForTest({
@@ -183,16 +184,22 @@ describe("swarm tools integration", () => {
             waitsStarted.resolve();
           }
         });
-        return { status: "ok", startedAt: 1, endedAt: Date.now() } as T;
+        const resultText = resultTextByRun.get(runId);
+        assert(resultText, "collector run must have a terminal result");
+        return {
+          status: "ok",
+          startedAt: 1,
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: resultText },
+        } as T;
       },
     );
-    vi.mocked(captureSubagentCompletionReply).mockImplementation(async (sessionKey) => {
-      return resultTextBySession.get(sessionKey) ?? "";
-    });
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
     vi.mocked(getRuntimeConfig).mockReturnValue(config);
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockResolvedValue(false);
-    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
+    await configureMockSubagentRegistryPersistence({
+      persistRegistryRows: saveSubagentRegistryChangesToSqlite,
+    });
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(1_000);
     vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
@@ -258,24 +265,14 @@ describe("swarm tools integration", () => {
     const pending = new Set(runIds);
     const completionOrder: string[] = [];
     for (const publicRunId of [runIds[1] ?? "", runIds[2] ?? "", runIds[0] ?? ""]) {
-      const captureStarted = createDeferred();
-      const releaseCapture = createDeferred();
-      vi.mocked(captureSubagentCompletionReply).mockImplementationOnce(async (sessionKey) => {
-        captureStarted.resolve();
-        await releaseCapture.promise;
-        return resultTextBySession.get(sessionKey) ?? "";
-      });
       const gatewayRunId = publicToGateway.get(publicRunId);
       expect(gatewayRunId).toBeTruthy();
       completionResolvers.get(gatewayRunId ?? "")?.();
-      await captureStarted.promise;
-      releaseCapture.resolve();
-      // Gateway completion precedes the registry's waitable result publication.
-      await settleRootWork(true);
       const result = await wait.execute("wait", {
         ids: [...pending],
-        timeoutSeconds: 0,
+        timeoutSeconds: 30,
       });
+      await settleRootWork(true);
       const details = result.details as {
         completed: Array<{ runId: string; result: string; structured?: unknown }>;
       };
@@ -291,6 +288,7 @@ describe("swarm tools integration", () => {
     await settleRootWork();
     expect(completionOrder).toEqual([runIds[1], runIds[2], runIds[0]]);
     expect(pending.size).toBe(0);
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
     for (const runId of runIds) {
       expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
     }

@@ -321,9 +321,10 @@ it("reclaims its captures during signal cleanup when the process outlives the dr
       ...runtimeArgs,
       "--input-type=module",
       "-e",
-      `${childCapture}
-      import { installCliSignalExitHandlers, registerSignalExitFinalizer } from ${JSON.stringify(signalModule)};
+      // Handlers precede the capture lines: the parent signals as soon as it reads them.
+      `import { installCliSignalExitHandlers, registerSignalExitFinalizer } from ${JSON.stringify(signalModule)};
       installCliSignalExitHandlers();
+      ${childCapture}
       registerSignalExitFinalizer(async () => fs.writeSync(1, "drained\\n"));
       // Hung work keeps the process alive after the drain until its supervisor force-kills it.
       setInterval(() => {}, 60_000);`,

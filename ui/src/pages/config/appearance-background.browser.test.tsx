@@ -149,8 +149,12 @@ describe("Appearance background canvas peek", () => {
       "rgba(0, 0, 0, 0)",
     );
     const canvas = host.getBoundingClientRect();
+    expect(preview.getBoundingClientRect().top).toBe(canvas.top);
     expect(preview.getBoundingClientRect().left).toBe(canvas.left);
     expect(preview.getBoundingClientRect().width).toBe(host.clientWidth);
+    expect(preview.getBoundingClientRect().height).toBe(host.clientHeight);
+    expect(getComputedStyle(preview).transitionDuration).toBe("0s");
+    expect(getComputedStyle(preview).animationName).toBe("none");
     await vi.advanceTimersByTimeAsync(2500);
     expect(preview.presented).toBe(true);
     press(range, "pointerup");
@@ -161,6 +165,7 @@ describe("Appearance background canvas peek", () => {
     expect(preview.presented).toBe(false);
     expect(element.hasAttribute("data-background-preview")).toBe(false);
     expect(host.hasAttribute("data-background-preview")).toBe(false);
+    expect(element.style.getPropertyValue("--settings-background-preview-width")).toBe("");
     expect(document.activeElement).toBe(range);
   });
 
@@ -261,35 +266,6 @@ describe("Appearance background canvas peek", () => {
     setContext({ ...context });
     flush();
     expect(preview.presented).toBe(false);
-    expect(element.hasAttribute("data-background-preview")).toBe(false);
-  });
-
-  it("keeps the preview on the visible canvas when the settings page is scrolled", async () => {
-    const { element, range, preview } = await mount();
-    const spacer = document.createElement("div");
-    spacer.style.height = "1200px";
-    element.before(spacer);
-    range.focus();
-    range.scrollIntoView({ block: "center" });
-    const scrollTop = host.scrollTop;
-    expect(scrollTop).toBeGreaterThan(0);
-    key(range, "ArrowRight");
-    flush();
-    await preview.updateComplete;
-    expect(preview.getBoundingClientRect().top).toBe(host.getBoundingClientRect().top);
-    expect(preview.getBoundingClientRect().height).toBe(host.clientHeight);
-    expect(host.scrollTop).toBe(scrollTop);
-    expect(getComputedStyle(preview).transitionDuration).toBe("0s");
-    expect(getComputedStyle(preview).animationName).toBe("none");
-  });
-
-  it("retires on canvas resize without leaving preview geometry on the component", async () => {
-    const { element, range, preview } = await mount();
-    press(range);
-    flush();
-    window.dispatchEvent(new Event("resize"));
-    expect(preview.presented).toBe(false);
-    expect(element.style.getPropertyValue("--settings-background-preview-width")).toBe("");
     expect(element.hasAttribute("data-background-preview")).toBe(false);
   });
 

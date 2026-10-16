@@ -303,6 +303,10 @@ This metadata lets an operator see how a card moved through the board without
 opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+New and edited comments are limited to 2000 characters. Unchanged stored comment
+bodies, including older oversized comments, retain their exact text during dispatch
+and other card updates. The existing per-card metadata budget still applies.
+
 The plugin and Control UI use one Workboard card contract. Control UI refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller
@@ -427,6 +431,11 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+
+Creating linked cards, linking existing cards, and decomposition save one card at a
+time. If a later step fails, completed steps remain visible; Workboard reports the
+original error without rolling them back. Inspect the board before retrying, and
+repair missing links or remove unwanted partial cards as needed.
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded. Consumers that need
@@ -631,10 +640,18 @@ Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Subagent completion hooks persist terminal
 outcomes immediately. Agent attempt hooks consult the linked session state:
 finishing a model attempt does not move a card into `review` or `blocked` while
-its run is still active. A bounded session sweep runs once per minute to reconcile
-terminal, active, idle, missing, and stale session state. Each store mutation emits
+its run is still active. A recovery sweep runs once per minute and reads only the
+sessions linked to active cards, sharing each read across cards with the same link.
+Settled cards stop polling unless they retain pending lifecycle state. Provisional
+Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous
+or incomplete results leave the card unchanged. Legacy unqualified links use a bounded
+search tagged `workboard-lifecycle`. Each store mutation emits
 the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
 the stored card instead of writing its own lifecycle projection.
+
+Archiving a linked session does not hide its terminal outcome from this sweep.
+After a restart or missed completion hook, Workboard still reconciles active cards linked
+to archived sessions into `review` or `blocked`.
 
 Incognito sessions remain absent from session discovery. Explicitly linked
 Incognito cards use authorized exact-session metadata reads, without derived

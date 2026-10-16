@@ -9,7 +9,7 @@ import {
   captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent,
 } from "../config/sessions/session-store-read-candidates.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -138,6 +138,14 @@ export async function retainGatewaySessionEntryReadOnly(
     prepared?: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   } = {},
 ) {
+  const matches = (previous: SessionEntry | undefined, current: SessionEntry | undefined) =>
+    previous && current
+      ? previous.sessionId === current.sessionId &&
+        previous.lifecycleRevision === current.lifecycleRevision &&
+        (JSON.stringify({ ...previous, lastReadAt: undefined }) ===
+          JSON.stringify({ ...current, lastReadAt: undefined }) ||
+          allowMetadataChanges?.(previous, current) === true)
+      : previous === current;
   const memory = captureMemoryRead({ cfg, key: sessionKey, agentId, projection: "list" });
   if (memory) {
     const selected = memory.loaded();
@@ -167,17 +175,7 @@ export async function retainGatewaySessionEntryReadOnly(
         } catch {
           return false;
         }
-        const previous = selected.entry;
-        if (!previous || !current) {
-          return previous === current;
-        }
-        return (
-          previous.sessionId === current.sessionId &&
-          previous.lifecycleRevision === current.lifecycleRevision &&
-          (JSON.stringify({ ...previous, lastReadAt: undefined }) ===
-            JSON.stringify({ ...current, lastReadAt: undefined }) ||
-            allowMetadataChanges?.(previous, current) === true)
-        );
+        return matches(selected.entry, current);
       },
       release() {
         released = true;
@@ -224,14 +222,7 @@ export async function retainGatewaySessionEntryReadOnly(
         databaseIdentity: `file:${source.databaseIdentity}`,
         sessionKey: selected.legacyKey ?? selected.canonicalKey,
         entry: selected.entry,
-        matches: (previous, current) =>
-          previous && current
-            ? previous.sessionId === current.sessionId &&
-              previous.lifecycleRevision === current.lifecycleRevision &&
-              (JSON.stringify({ ...previous, lastReadAt: undefined }) ===
-                JSON.stringify({ ...current, lastReadAt: undefined }) ||
-                allowMetadataChanges?.(previous, current) === true)
-            : previous === current,
+        matches,
       });
       unregister = registerOpenClawAgentDatabaseAsyncResource({
         agentId: source.agentId,

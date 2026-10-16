@@ -1,16 +1,15 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
+  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
   setData: (data: ModelProvidersData) => void;
@@ -23,9 +22,10 @@ type SupplementalKind = "usage" | "cost";
 /** Loads usage and cost after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
   private readonly requests = new Map<SupplementalKind, AbortController>();
+  private forceReload = false;
 
   constructor(
-    private readonly host: ControllerHost,
+    private readonly notify: () => void,
     private readonly options: SupplementalOptions,
   ) {}
 
@@ -59,21 +59,33 @@ export class ModelProviderSupplementalLoader {
       client &&
       !this.options.isCoreLoading() &&
       !this.loading &&
+      (previous?.providerUsage == null || this.forceReload) &&
       data.providerUsage === null &&
       data.costByProvider === null
     ) {
+      this.forceReload = false;
       void this.loadRequests(client, true);
     }
   }
 
+  resume(): void {
+    const data = this.options.getData();
+    const client = this.options.getDataClient();
+    if (data?.providerUsage === null && client) {
+      this.adoptCoreData(client, data);
+    }
+  }
+
   invalidate(): void {
+    this.forceReload = true;
     this.options.refreshPolicy.interrupt();
     this.cancelGeneration();
   }
 
   beginCoreRefresh(force: boolean): void {
-    this.cancelGeneration();
     if (force) {
+      this.cancelGeneration();
+      this.forceReload = true;
       this.options.refreshPolicy.resetPayload();
     }
   }
@@ -84,7 +96,7 @@ export class ModelProviderSupplementalLoader {
     for (const request of retired) {
       request.abort();
     }
-    this.host.requestUpdate();
+    this.notify();
   }
 
   loadUsage(): Promise<void> {
@@ -118,7 +130,7 @@ export class ModelProviderSupplementalLoader {
     this.requests.get(kind)?.abort();
     const request = new AbortController();
     this.requests.set(kind, request);
-    this.host.requestUpdate();
+    this.notify();
     try {
       const patch:
         | { providerUsage: ProviderUsageRequestResult }
@@ -146,7 +158,7 @@ export class ModelProviderSupplementalLoader {
       if (this.requests.get(kind) === request) {
         this.requests.delete(kind);
         this.options.refreshPolicy.flushPending();
-        this.host.requestUpdate();
+        this.notify();
       }
     }
   }

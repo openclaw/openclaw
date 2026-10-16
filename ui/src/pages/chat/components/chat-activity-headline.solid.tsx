@@ -2,10 +2,10 @@ import { createEffect, createSignal, For, onCleanup, Show, untrack, useContext }
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { renderToolIcon } from "./chat-tool-cards.ts";
+import { ChatToolIcon } from "./chat-tool-cards.solid.tsx";
 
 export type ChatActivityHeadlineProps = {
   scope: string;
@@ -18,11 +18,11 @@ export type ChatActivityHeadlineProps = {
 
 /** One disclosure owns its readable cadence; fast calls replace pending copy, not a queue. */
 export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
-  // Retained Lit ranges can initialize this presentation state during their parent's commit.
+  // Retained content can initialize this presentation state during its parent's commit.
   const [shown, setShown] = createSignal<ActivityHeadline | undefined>(undefined, {
     ownedWrite: true,
   });
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let scope: string | undefined;
   let wasPresented = true;
   let shownAt = 0;
@@ -105,11 +105,10 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       >
         <Show when={name()} fallback={<Icon name="listTree" />}>
           {(tool) => (
-            <LitContent
-              value={renderToolIcon(
-                shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool()),
-                { toolName: tool(), pluginToolIcons: props.pluginToolIcons },
-              )}
+            <ChatToolIcon
+              style={{ display: "contents" }}
+              name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
+              tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
             />
           )}
         </Show>

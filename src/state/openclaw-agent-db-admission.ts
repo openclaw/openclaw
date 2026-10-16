@@ -3,6 +3,7 @@ import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
@@ -428,9 +429,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           const assertOperationCurrent = () =>
             assertAgentDatabaseOperationCurrent(step.value, options, pending, assertCurrent);
           assertOperationCurrent();
-          const flushMaintenance = isMainThread
-            ? undefined
-            : registerDeferredSqliteWalWriteAdmission(step.value.db);
+          const flushMaintenance =
+            isMainThread || isPostgresSqlConnection(step.value.db)
+              ? undefined
+              : registerDeferredSqliteWalWriteAdmission(step.value.db);
           flushMaintenance?.(assertOperationCurrent);
           const result = await operation(step.value);
           flushMaintenance?.(assertOperationCurrent);

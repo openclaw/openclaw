@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -14,6 +13,7 @@ import {
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type CacheDatabase = Pick<DB, "cache_entries">;
 
@@ -23,12 +23,10 @@ function assertUsagePartitionWorker(): void {
   }
 }
 
-export function writeSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+export function deleteSessionCostUsagePartitionsInDatabase(
+  db: EngineConnection,
   params: {
     rollupId: string;
-    updatedAt: number;
-    partitions?: UsageCostPartition[];
     removedDates?: string[];
     replacePartitions?: boolean;
   },
@@ -54,35 +52,10 @@ export function writeSessionCostUsagePartitionsInDatabase(
         .where("key", "=", usageCostPartitionKey(params.rollupId, date)),
     );
   }
-  for (const partitions of chunkItems(params.partitions ?? [], 100)) {
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("cache_entries")
-        .values(
-          partitions.map((partition) => ({
-            scope: USAGE_COST_PARTITION_SCOPE,
-            key: usageCostPartitionKey(params.rollupId, partition.date),
-            value_json: partition.valueJson,
-            blob: partition.blob,
-            expires_at: null,
-            updated_at: params.updatedAt,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
-            value_json: eb.ref("excluded.value_json"),
-            blob: eb.ref("excluded.blob"),
-            expires_at: eb.ref("excluded.expires_at"),
-            updated_at: eb.ref("excluded.updated_at"),
-          })),
-        ),
-    );
-  }
 }
 
 export function readSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[],
   startMs = Number.NEGATIVE_INFINITY,
   endMs = Number.POSITIVE_INFINITY,
@@ -176,7 +149,7 @@ export function readSessionCostUsagePartitionsInDatabase(
 }
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   snapshot: { key: string; updatedAt: number; valueJson: string },
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
@@ -224,7 +197,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
 }
 
 export function pruneSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly { key: string; valueJson: string | Uint8Array; updatedAt: number }[],
 ): void {
   assertUsagePartitionWorker();

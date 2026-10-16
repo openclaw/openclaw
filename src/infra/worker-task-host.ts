@@ -4,6 +4,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
@@ -113,7 +114,9 @@ export function createWorkerTaskHost(
         });
       }
       // The retained relay supplies current facts on demand; global snapshots grow with sessions.
+      const selection = getDatabaseEngineSelection();
       const context: WorkerTaskContext = {
+        ...(selection ? { databaseEngineSelection: selection } : {}),
         deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
         ...(!admission.sent ? { databaseAdmissionPort: admission.owner.port } : {}),
       };

@@ -26,7 +26,11 @@ a final transcript after the utterance ends. The catalog marks file transcriptio
 ready only when a configured provider or CLI command is available.
 
 Capture pauses during the agent response and speech playback, then resumes for
-the next utterance. Stop cancels the call's own chat run and playback. Split Talk
+the next utterance. Stop cancels the call's own chat run and playback. A Talk
+failure, including the two-minute answer timeout, ends capture and playback but
+leaves the accepted chat run to finish in the conversation. The timeout message
+explains that the answer will appear in chat. Leaving the chat, disconnecting, or
+switching away from Talk also detaches without cancelling accepted work. Split Talk
 does not offer realtime voice switching or camera input. Leaving the mode unset
 preserves realtime Talk.
 
@@ -194,6 +198,13 @@ If session creation fails, Talk releases the microphone before reporting the err
 If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.
+
+Browser Gateway-relay Talk tolerates slow audio acknowledgments while keeping
+at most three seconds of microphone audio in flight. Excess frames are dropped
+with a notice asking you to repeat the last part. A successful acknowledgment
+renews the relay's liveness window; if pending audio receives no acknowledgment
+for 30 seconds, Talk ends with a connection error and guidance to restart it.
+Explicit Gateway errors or a lost connection still end the call immediately.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

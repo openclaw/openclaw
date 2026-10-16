@@ -18,7 +18,6 @@ import { formatGatewayChannelsStatusLines } from "../commands/channels/status.ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
-import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -219,90 +218,69 @@ describe("server-channels auto restart", () => {
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
 
-  it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
-    const continueApprovalDescendant = createDeferred();
-    const observedAdmission = createDeferred<boolean>();
-    hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
-      void Promise.resolve().then(async () => {
-        await continueApprovalDescendant.promise;
-        observedAdmission.resolve(isGatewaySubordinateWorkAdmissionClosed());
+  it.each(["approval descendant", "automatic restart"] as const)(
+    "keeps %s admitted after the starting request finishes",
+    async (descendant) => {
+      const finishFirstChannelTask = createDeferred();
+      const approvalAdmission = createDeferred<boolean>();
+      const observedAdmission: boolean[] = [];
+      if (descendant === "approval descendant") {
+        hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
+          void Promise.resolve().then(async () => {
+            await finishFirstChannelTask.promise;
+            approvalAdmission.resolve(isGatewaySubordinateWorkAdmissionClosed());
+          });
+          return async () => {};
+        });
+      }
+      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        observedAdmission.push(isGatewaySubordinateWorkAdmissionClosed());
+        if (descendant === "automatic restart" && observedAdmission.length === 1) {
+          await finishFirstChannelTask.promise;
+          return;
+        }
+        await waitForAbort(abortSignal);
       });
-      return async () => {};
-    });
-    const startAccount = vi.fn(stayRunning);
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-    const requestAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(requestAdmission).not.toBeNull();
-    if (!requestAdmission) {
-      return;
-    }
-
-    try {
-      await requestAdmission.run(async () => {
-        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
-        await waitForImmediate();
-        await waitForMicrotaskCondition(
-          () => startAccount.mock.calls.length === 1,
-          "expected channel task to start",
-        );
-      });
-      requestAdmission.release();
-      continueApprovalDescendant.resolve();
-
-      await expect(observedAdmission.promise).resolves.toBe(false);
-    } finally {
-      requestAdmission.release();
-      continueApprovalDescendant.resolve();
-    }
-  });
-
-  it("keeps automatic restarts admitted after the starting request finishes", async () => {
-    const finishFirstChannelTask = createDeferred();
-    const observedAdmission: boolean[] = [];
-    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      observedAdmission.push(isGatewaySubordinateWorkAdmissionClosed());
-      if (observedAdmission.length === 1) {
-        await finishFirstChannelTask.promise;
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createManager();
+      const requestAdmission = tryBeginGatewayRootWorkAdmission();
+      expect(requestAdmission).not.toBeNull();
+      if (!requestAdmission) {
         return;
       }
-      await waitForAbort(abortSignal);
-    });
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-    const requestAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(requestAdmission).not.toBeNull();
-    if (!requestAdmission) {
-      return;
-    }
 
-    try {
-      await requestAdmission.run(async () => {
-        await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
-        await waitForImmediate();
-        await waitForMicrotaskCondition(
-          () => startAccount.mock.calls.length === 1,
-          "expected initial channel task to start",
+      try {
+        await requestAdmission.run(async () => {
+          await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true });
+          await waitForImmediate();
+          await waitForMicrotaskCondition(
+            () => startAccount.mock.calls.length === 1,
+            "expected initial channel task to start",
+          );
+        });
+        requestAdmission.release();
+        finishFirstChannelTask.resolve();
+        if (descendant === "approval descendant") {
+          await expect(approvalAdmission.promise).resolves.toBe(false);
+          return;
+        }
+        await advanceTimersUntil(
+          () => startAccount.mock.calls.length === 2,
+          "expected channel task to restart",
+          { stepMs: 10, maxMs: 100 },
         );
-      });
-      requestAdmission.release();
-      finishFirstChannelTask.resolve();
-      await advanceTimersUntil(
-        () => startAccount.mock.calls.length === 2,
-        "expected channel task to restart",
-        { stepMs: 10, maxMs: 100 },
-      );
 
-      expect(observedAdmission).toEqual([false, false]);
-      const account = readAccount(manager);
-      expect(account?.running).toBe(true);
-      expect(account).not.toHaveProperty("connected");
-      expect(healthOf(account)).toEqual({ healthy: true, reason: "healthy" });
-    } finally {
-      requestAdmission.release();
-      finishFirstChannelTask.resolve();
-    }
-  });
+        expect(observedAdmission).toEqual([false, false]);
+        const account = readAccount(manager);
+        expect(account?.running).toBe(true);
+        expect(account).not.toHaveProperty("connected");
+        expect(healthOf(account)).toEqual({ healthy: true, reason: "healthy" });
+      } finally {
+        requestAdmission.release();
+        finishFirstChannelTask.resolve();
+      }
+    },
+  );
 
   it("clears a previous lifecycle's dead-ingress verdict once ingress starts again", async () => {
     let failIngress = true;
@@ -2904,58 +2882,45 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.running).not.toBe(true);
   });
 
-  // Bun does not implement async_hooks before/after callbacks used by the stall monitor.
-  it.skipIf(process.versions.bun)(
-    "does not attribute later Discord gateway callbacks to account startup",
-    async () => {
-      let now = 0;
-      const monitor = createMainThreadStallMonitor(() => now);
-      const gatewayEvent = createDeferred();
-      const eventHandled = createDeferred();
-      const started = createDeferred();
-      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-        started.resolve();
-        await gatewayEvent.promise;
-        now += 1_928;
-        eventHandled.resolve();
-        await waitForAbort(abortSignal);
-      });
-      const log = createSubsystemLogger("gateway/stall-test");
-      const info = vi.spyOn(log, "info");
-      const trace = createGatewayStartupTrace(log);
-      installTestRegistry(createTestPlugin({ startAccount }));
-      const manager = createChannelManager({
-        scheduler: createTestGatewayScheduler(),
-        getRuntimeConfig: () => ({}),
-        getPluginRegistry: requireActivePluginChannelRegistry,
-        channelLogs: { discord: log },
-        channelRuntimeEnvs: {},
-        startupTrace: trace,
-      });
-      createdManagers.push({ channelIds: ["discord"], manager });
-      try {
-        await manager.startChannels();
-        await started.promise;
-        await flushMicrotasks();
-        gatewayEvent.resolve();
-        await eventHandled.promise;
-        expect(startAccount).toHaveBeenCalledTimes(1);
-        expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual(
-          [["[default] starting account (reason: startup)"]],
-        );
-        expect(monitor.drain()).toEqual({
-          stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
-          dropped: 0,
-          delayMaxMs: 1_928,
-        });
-      } finally {
-        monitor.stop();
-        trace.close();
-        info.mockRestore();
-        await manager.stopChannel("discord");
-      }
-    },
-  );
+  it("logs account startup once before later gateway callbacks", async () => {
+    const gatewayEvent = createDeferred();
+    const eventHandled = createDeferred();
+    const started = createDeferred();
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      started.resolve();
+      await gatewayEvent.promise;
+      eventHandled.resolve();
+      await waitForAbort(abortSignal);
+    });
+    const log = createSubsystemLogger("gateway/startup-test");
+    const info = vi.spyOn(log, "info");
+    const trace = createGatewayStartupTrace(log);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
+      getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      channelLogs: { discord: log },
+      channelRuntimeEnvs: {},
+      startupTrace: trace,
+    });
+    createdManagers.push({ channelIds: ["discord"], manager });
+    try {
+      await manager.startChannels();
+      await started.promise;
+      await flushMicrotasks();
+      gatewayEvent.resolve();
+      await eventHandled.promise;
+      expect(startAccount).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
+        ["[default] starting account (reason: startup)"],
+      ]);
+    } finally {
+      trace.close();
+      info.mockRestore();
+      await manager.stopChannel("discord");
+    }
+  });
 
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(
@@ -3122,63 +3087,58 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("starts and stops approval bootstrap and task contexts with the account", async () => {
-    const channelRuntime = createRuntimeChannel();
-    const nativeApprovalRuntime = {
-      request: vi.fn(),
-      requestRoute: vi.fn(),
-      routeCoordinator: {} as never,
-      subscribe: vi.fn(),
-    } as GatewayNativeApprovalRuntime;
-    const stopBootstrap = vi.fn(async () => {});
-    hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(stopBootstrap);
-    const key = {
-      channelId: "discord",
-      accountId: DEFAULT_ACCOUNT_ID,
-      capability: "approval.native",
-    };
-    installTestRegistry(
-      createTestPlugin({
-        startAccount: async (ctx) => {
-          expect(getGatewayNativeApprovalRuntime()).toBe(nativeApprovalRuntime);
-          ctx.channelRuntime?.runtimeContexts.register({ ...key, context: { token: "tracked" } });
-          await waitForAbort(ctx.abortSignal);
-        },
-      }),
-    );
-    const manager = createManager({
-      channelRuntime,
-      getNativeApprovalRuntime: () => nativeApprovalRuntime,
-    });
-    await manager.startChannels();
-    expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plugin: expect.objectContaining({ id: "discord" }),
-        cfg: {},
+  it.each([false, true])(
+    "owns approval bootstrap and task contexts (bootstrapFails=%s)",
+    async (bootstrapFails) => {
+      const channelRuntime = createRuntimeChannel();
+      const nativeApprovalRuntime = {
+        request: vi.fn(),
+        requestRoute: vi.fn(),
+        routeCoordinator: {} as never,
+        subscribe: vi.fn(),
+      } as GatewayNativeApprovalRuntime;
+      const stopBootstrap = vi.fn(async () => {});
+      if (bootstrapFails) {
+        hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));
+      } else {
+        hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(stopBootstrap);
+      }
+      const key = {
+        channelId: "discord",
         accountId: DEFAULT_ACCOUNT_ID,
-        gatewayRuntime: nativeApprovalRuntime,
-      }),
-    );
-    expect(channelRuntime.runtimeContexts.get(key)).toEqual({ token: "tracked" });
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(stopBootstrap).toHaveBeenCalledOnce();
-    expect(channelRuntime.runtimeContexts.get(key)).toBeUndefined();
-  });
-
-  it("continues account startup when approval bootstrap fails", async () => {
-    hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));
-    const startAccount = vi.fn(stayRunning);
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ channelRuntime: createRuntimeChannel() });
-    await manager.startChannels();
-    expect(startAccount).toHaveBeenCalledOnce();
-    expect(readAccount(manager)).toMatchObject({
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: true,
-      restartPending: false,
-      lastError: null,
-    });
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-  });
+        capability: "approval.native",
+      };
+      const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+        expect(getGatewayNativeApprovalRuntime()).toBe(nativeApprovalRuntime);
+        ctx.channelRuntime?.runtimeContexts.register({ ...key, context: { token: "tracked" } });
+        await waitForAbort(ctx.abortSignal);
+      });
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createManager({
+        channelRuntime,
+        getNativeApprovalRuntime: () => nativeApprovalRuntime,
+      });
+      await manager.startChannels();
+      expect(startAccount).toHaveBeenCalledOnce();
+      expect(hoisted.startChannelApprovalHandlerBootstrap).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plugin: expect.objectContaining({ id: "discord" }),
+          cfg: {},
+          accountId: DEFAULT_ACCOUNT_ID,
+          gatewayRuntime: nativeApprovalRuntime,
+        }),
+      );
+      expect(channelRuntime.runtimeContexts.get(key)).toEqual({ token: "tracked" });
+      expect(readAccount(manager)).toMatchObject({
+        accountId: DEFAULT_ACCOUNT_ID,
+        running: true,
+        restartPending: false,
+        lastError: null,
+      });
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      expect(stopBootstrap).toHaveBeenCalledTimes(bootstrapFails ? 0 : 1);
+      expect(channelRuntime.runtimeContexts.get(key)).toBeUndefined();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

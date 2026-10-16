@@ -6,6 +6,7 @@ import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
@@ -36,13 +37,17 @@ import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
+  retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
@@ -106,6 +111,77 @@ async function startIsolatedPairedAttempt(params: {
 }
 
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
+
+/** Binds the session to a retired owner whose native writer another session's lease keeps alive. */
+async function bindToRetiredLeasedOwner() {
+  const paths = createAttemptPaths(tempRoots);
+  const respond = async (method: string) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start" || method === "thread/resume") {
+      return threadStartResult("bound-thread");
+    }
+    throw new Error(`unexpected method: ${method}`);
+  };
+  const owner = createCodexLifecycleHarness({ respond });
+  const ownerExitCodesAtResume: Array<number | null> = [];
+  const healthy = createCodexLifecycleHarness({
+    persistedThreads: ["bound-thread"],
+    respond: async (method) => {
+      if (method === "thread/resume") {
+        ownerExitCodesAtResume.push(owner.process.exitCode);
+      }
+      return await respond(method);
+    },
+  });
+  const start = vi
+    .spyOn(CodexAppServerClient, "start")
+    .mockResolvedValueOnce(owner.client)
+    .mockResolvedValueOnce(healthy.client)
+    .mockRejectedValue(new Error("unexpected replacement app-server"));
+  const startOn = (harness: ClientHarness, signal?: AbortSignal, startupTimeoutMs = 5_000) =>
+    startThreadWithHarness(startupTimeoutMs, signal, {
+      paths,
+      harness,
+      skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
+    }).run;
+  const bound = await startOn(owner);
+  expect(
+    testCodexAppServerBindingStore.read({
+      kind: "session",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+    }),
+  ).toMatchObject({ threadId: bound.thread.threadId });
+  await owner.endTurn(bound.thread.threadId);
+  bound.turnRoute.release();
+  bound.releaseSharedClientLease();
+  const releaseOwnerPeer = retainSharedCodexAppServerClientIfCurrent(owner.client);
+  expect(releaseOwnerPeer).toBeTypeOf("function");
+  retireSharedCodexAppServerClientIfCurrent(owner.client);
+  // A handoff observes the owner's physical exit only after releasing its retain.
+  const exitWaitStarted = createDeferred<void>();
+  const addTransportExitHandler = owner.client.addTransportExitHandler.bind(owner.client);
+  vi.spyOn(owner.client, "addTransportExitHandler").mockImplementation((handler) => {
+    exitWaitStarted.resolve();
+    return addTransportExitHandler(handler);
+  });
+  return {
+    owner,
+    healthy,
+    start,
+    startOn,
+    ownerExitCodesAtResume,
+    exitWaitStarted: exitWaitStarted.promise,
+    releaseOwnerPeer: () => releaseOwnerPeer?.(),
+  };
+}
 
 describe("startCodexAttemptThread", () => {
   beforeEach(async () => {
@@ -244,7 +320,12 @@ describe("startCodexAttemptThread", () => {
       },
     });
     const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const common = { paths, harness, skipStartSpy: true };
+    const common = {
+      paths,
+      harness,
+      skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
+    };
     const ordinary = await startThreadWithHarness(5_000, undefined, common).run;
     await harness.endTurn(ordinary.thread.threadId);
     ordinary.turnRoute.release();
@@ -252,7 +333,7 @@ describe("startCodexAttemptThread", () => {
     const incognito = {
       ...common,
       buildAttemptParams: () => ({
-        ...createAttemptParams(paths),
+        ...common.buildAttemptParams(),
         sessionId: "incognito-session",
         sessionKey: "agent:agent-1:dashboard:incognito-refusal",
       }),
@@ -269,7 +350,7 @@ describe("startCodexAttemptThread", () => {
     expect(sibling).toBeTypeOf("function");
     const before = harness.writes.length;
     const refused = new AgentHarnessPreflightError("session owner revoked");
-    const attemptParams = createAttemptParams(paths);
+    const attemptParams = common.buildAttemptParams();
     const assertActive = () => {
       throw refused;
     };
@@ -290,6 +371,52 @@ describe("startCodexAttemptThread", () => {
     expect(start).toHaveBeenCalledTimes(1);
     continued.turnRoute.release();
     continued.releaseSharedClientLease();
+  });
+
+  it("keeps the healthy startup client when a stop ends its wait for a retired owner's exit", async () => {
+    const fixture = await bindToRetiredLeasedOwner();
+    const stop = new AbortController();
+    const stopped = fixture.startOn(fixture.healthy, stop.signal).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await fixture.exitWaitStarted;
+    stop.abort();
+
+    // The stop settles while another lease still keeps the owner's native writer alive.
+    expect(isCodexAppServerStartupError(await stopped, "aborted")).toBe(true);
+    expect(fixture.owner.process.exitCode).toBeNull();
+    expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+    expect(fixture.healthy.stdinDestroyed).toBe(false);
+
+    const successor = fixture.startOn(fixture.healthy);
+    fixture.releaseOwnerPeer();
+    const resumed = await successor;
+    // The successor reuses the same client and writes only after the owner exits.
+    expect(resumed.client).toBe(fixture.healthy.client);
+    expect(resumed.thread.threadId).toBe("bound-thread");
+    expect(fixture.ownerExitCodesAtResume).toEqual([0]);
+    expect(fixture.start).toHaveBeenCalledTimes(2);
+    expect(fixture.healthy.stdinDestroyed).toBe(false);
+    resumed.turnRoute.release();
+    resumed.releaseSharedClientLease();
+  });
+
+  it("retires the startup client when its deadline ends a wait for a retired owner's exit", async () => {
+    const fixture = await bindToRetiredLeasedOwner();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const timedOut = fixture.startOn(fixture.healthy, undefined, 1_000).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await fixture.exitWaitStarted;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
+    expect(fixture.healthy.stdinDestroyed).toBe(true);
+    expect(fixture.owner.process.exitCode).toBeNull();
+    expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+    fixture.releaseOwnerPeer();
   });
 
   it.each([

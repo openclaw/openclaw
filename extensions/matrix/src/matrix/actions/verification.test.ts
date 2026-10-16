@@ -650,6 +650,7 @@ describe("matrix verification actions", () => {
           mockCrossSigningPublicationStatus(false),
         ),
         getOwnDeviceVerificationStatus: vi.fn(async () => mockUnverifiedOwnerStatus()),
+        trustOwnIdentityAfterSelfVerification: vi.fn(async () => {}),
       });
     });
 

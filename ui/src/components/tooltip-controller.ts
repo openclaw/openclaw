@@ -23,6 +23,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** Read-only cards must not block nearby actions when their surface overlaps them. */
+  pointerThrough?: boolean;
   autoSize?: boolean;
   disabled?: boolean;
   openOnClick?: boolean;
@@ -529,7 +531,10 @@ export class TooltipController {
     this.options
       .richContainer()
       ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty("pointer-events", richText ? "auto" : "none");
+      ?.style.setProperty(
+        "pointer-events",
+        richText && !this.options.props().pointerThrough ? "auto" : "none",
+      );
     if (!this.describe) {
       this.#restoreDescription();
       return;
@@ -692,13 +697,13 @@ export class TooltipController {
     }
   };
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
     if (this.#triggerElement?.contains(target) && !target.matches(":focus")) {
       // Navigation can replace a focused toggle with its inverse. Preserve the
       // focus handoff without presenting it as fresh tooltip intent.
       this.#suppressNextFocusOpen = true;
     }
-    target.focus();
+    target.focus(options);
   }
 }
 

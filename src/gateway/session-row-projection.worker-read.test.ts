@@ -804,9 +804,15 @@ it.each([
         }
         const result = await reading;
         if (changesSibling) {
+          const sibling = { agentId: unrelated.agentId, key: unrelated.sessionKey };
+          expect(projection.capture(sibling)?.storedEntry?.label).toBe("Current sibling");
+          // Off-page metadata stays current; display facts are prepared when that row is read.
           expect(
-            projection.snapshot({ agentId: unrelated.agentId, key: unrelated.sessionKey }).row
-              ?.label,
+            await withReadySessionRows(
+              projection,
+              () => [sibling],
+              () => projection.snapshot(sibling).row?.label,
+            ),
           ).toBe("Current sibling");
         }
         expect(result.sessions).toEqual([

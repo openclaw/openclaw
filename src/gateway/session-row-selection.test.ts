@@ -458,6 +458,7 @@ it.each([false, true])(
         path: "(multiple)",
         agentId: undefined,
         configuredAgentIds: new Set(["main", "ops"]),
+        ownerAgentIds: new Set(["main", "ops"]),
       });
       try {
         const prepared = prepareSessionRowSelection(projection, {

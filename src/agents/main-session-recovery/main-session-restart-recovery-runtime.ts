@@ -19,7 +19,10 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
+import {
+  runWithMainSessionRecoveryAdmission,
+  type MainSessionRecoveryAdmission,
+} from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
@@ -160,6 +163,7 @@ export async function retryRestartAbortedMainSessionRecovery(
     expectedRecoveryRunId?: string;
     expectedRecoverySourceRunId?: string;
     expectedSessionId: string;
+    lane?: MainSessionRecoveryAdmission["lane"];
     stateDir?: string;
     gatewayRuntime: GatewayRecoveryRuntime;
   },
@@ -183,6 +187,7 @@ async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
     expectedTarget: ExpectedRestartRecoveryTarget;
+    lane?: MainSessionRecoveryAdmission["lane"];
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;

@@ -2,10 +2,11 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const UiSplitCommandSchema = closedObject({
   kind: Type.Literal("split"),
-  direction: Type.Union([Type.Literal("right"), Type.Literal("down")]),
+  direction: stringLiteralUnion(["right", "down"]),
   sessionKey: NonEmptyString,
 });
 export const UiClosePaneCommandSchema = closedObject({
@@ -23,7 +24,7 @@ export const UiSidebarCommandSchema = closedObject({
 const UiPanelCommandFields = {
   kind: Type.Literal("panel"),
   open: Type.Boolean(),
-  dock: Type.Optional(Type.Union([Type.Literal("bottom"), Type.Literal("right")])),
+  dock: Type.Optional(stringLiteralUnion(["bottom", "right"])),
 };
 export const UiPanelCommandSchema = Type.Union([
   closedObject({
@@ -80,22 +81,18 @@ export type UiCommandParams = Static<typeof UiCommandParamsSchema>;
 
 export const UiPortalPresentationSchema = closedObject({
   portalId: Type.Optional(NonEmptyString),
-  status: Type.Union([
-    Type.Literal("blocked"),
-    Type.Literal("unverified"),
-    Type.Literal("new-tab-required"),
-  ]),
-  reason: Type.Union([
-    Type.Literal("remote-ingress-required"),
-    Type.Literal("network-unreachable"),
-    Type.Literal("new-tab-required"),
-    Type.Literal("network-reachable"),
-    Type.Literal("probe-blocked"),
-    Type.Literal("portal-unavailable"),
-    Type.Literal("access-required"),
-    Type.Literal("waiting-for-app"),
-    Type.Literal("client-timeout"),
-    Type.Literal("client-disconnected"),
+  status: stringLiteralUnion(["blocked", "unverified", "new-tab-required"]),
+  reason: stringLiteralUnion([
+    "remote-ingress-required",
+    "network-unreachable",
+    "new-tab-required",
+    "network-reachable",
+    "probe-blocked",
+    "portal-unavailable",
+    "access-required",
+    "waiting-for-app",
+    "client-timeout",
+    "client-disconnected",
   ]),
 });
 export type UiPortalPresentation = Static<typeof UiPortalPresentationSchema>;

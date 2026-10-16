@@ -33,6 +33,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
@@ -284,17 +285,17 @@ describe("historical transcript directive migration", () => {
           event.fixturePadding = "compression fixture ".repeat(256);
         }
       }
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [tagged, user, tool],
         generation: "tagged-before",
         sessionId: "tagged-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [code],
         generation: "code-before",
         sessionId: "code-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [reaction],
         generation: "reaction-before",
         sessionId: "reaction-session",
@@ -384,7 +385,24 @@ describe("historical transcript directive migration", () => {
 
       const result = await migrateHistoricalTranscriptDirectives({ env });
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toHaveLength(1);
+      expect(result.changes).toHaveLength(2);
+      const recoveryDirectories = () =>
+        fs
+          .readdirSync(path.dirname(databasePath))
+          .filter((name) => name.startsWith("openclaw-transcript-directives-recovery-"));
+      const backups = recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      const backupPath = path.join(path.dirname(databasePath), backups[0]!, "database.sqlite");
+      expect(readEventJson(backupPath, "tagged-session", 0)).toBe(JSON.stringify(tagged));
+      expect(readEventJson(backupPath, "reaction-session", 0)).toBe(JSON.stringify(reaction));
+      const backup = openNodeSqliteDatabase(backupPath, { readOnly: true });
+      try {
+        expect(
+          backup.prepare("SELECT archive_blob FROM session_transcript_archives").get(),
+        ).toEqual({ archive_blob: new Uint8Array(archiveBytes) });
+      } finally {
+        backup.close();
+      }
 
       const migratedTagged = JSON.parse(readEventJson(databasePath, "tagged-session", 0)) as {
         message: Record<string, unknown>;
@@ -459,6 +477,7 @@ describe("historical transcript directive migration", () => {
         generationsAfterFirstRun.reaction,
       );
       expect(fs.readFileSync(archivePath)).toEqual(archiveBytesAfterFirstRun);
+      expect(recoveryDirectories()).toEqual(backups);
     },
   );
 
@@ -687,7 +706,7 @@ describe("historical transcript directive migration", () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    insertSession(opened.db, {
+    insertSession(requireNativeSqliteDatabase(opened.db), {
       events: [
         messageEvent({
           content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
@@ -861,7 +880,7 @@ describe("historical transcript directive migration", () => {
     const sessionIdAt = (index: number) =>
       `session-${String(index).padStart(String(batchSize).length, "0")}`;
     for (let index = 0; index <= batchSize; index += 1) {
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [
           messageEvent({
             content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],

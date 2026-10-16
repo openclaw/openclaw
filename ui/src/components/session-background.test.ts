@@ -20,6 +20,7 @@ import { createSolidApplicationContextProvider } from "../test-helpers/solid-app
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
+import { SessionBackgroundView } from "./session-background-view.tsx";
 import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
@@ -108,6 +109,27 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("activates the lazy background slot when its existing theme owner changes from None", async () => {
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundView, {
+      context: source.context,
+      surface: "new-session",
+    }),
+  );
+  const slot = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  expect(slot.hidden).toBe(true);
+
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => {
+    expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+    expect(slot.hidden).toBe(false);
+    expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
+  });
 });
 
 it("keeps absent preferences distinct from None and independent disabled surfaces", () => {
@@ -391,6 +413,33 @@ it("does not restore a private mirror before profile hydration, including unchan
   notify();
   expect(background.querySelector("img")?.getAttribute("src")).toBeNull();
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
+});
+
+it("paints pre-dimmed plugin artwork at upload strength in both presentations", async () => {
+  const { context, settings, notify } = fixture();
+  document.documentElement.dataset.themeBackground = "plugin";
+  try {
+    settings.background = {
+      ...selectBackgroundSource({ kind: "theme" }),
+      presentation: "full-bleed",
+      visibility: 0.5,
+    };
+    const background = document.createElement("openclaw-session-background") as SessionBackground;
+    background.context = context;
+    background.surface = "preview";
+    document.body.append(background);
+    await background.updateComplete;
+    const opacity = () =>
+      background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity;
+    // The token already carries upload dimming; the bundled 0.7 cap would dim it twice.
+    expect(opacity()).toBe("1");
+    settings.background = { ...settings.background, visibility: 0.25 };
+    notify();
+    await background.updateComplete;
+    expect(opacity()).toBe("0.5");
+  } finally {
+    delete document.documentElement.dataset.themeBackground;
+  }
 });
 
 it("also keeps bundled Full bleed artwork beneath the permanent overlay", async () => {

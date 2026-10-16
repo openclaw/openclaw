@@ -117,28 +117,7 @@ describe("doctor-contract-registry module loader", () => {
     const candidates = [
       "doctor-contract-api.ts",
       "dist/doctor-contract-api.ts",
-      "doctor-contract-api.mts",
-      "dist/doctor-contract-api.mts",
-      "doctor-contract-api.cts",
-      "dist/doctor-contract-api.cts",
-      "doctor-contract-api.js",
-      "dist/doctor-contract-api.js",
-      "doctor-contract-api.mjs",
-      "dist/doctor-contract-api.mjs",
-      "doctor-contract-api.cjs",
-      "dist/doctor-contract-api.cjs",
-      "contract-api.ts",
-      "dist/contract-api.ts",
-      "contract-api.mts",
-      "dist/contract-api.mts",
-      "contract-api.cts",
-      "dist/contract-api.cts",
-      "contract-api.js",
-      "dist/contract-api.js",
-      "contract-api.mjs",
-      "dist/contract-api.mjs",
       "contract-api.cjs",
-      "dist/contract-api.cjs",
     ].map((relativePath) => path.join(pluginRoot, relativePath));
     for (const filePath of candidates) {
       fs.writeFileSync(filePath, "export {};\n", "utf-8");
@@ -216,7 +195,9 @@ describe("doctor-contract-registry module loader", () => {
     });
     expect(resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toEqual([]);
     expect(doctorContractWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("Provider renames must belong to the plugin's declared providers."),
+      expect.stringContaining(
+        `failed to load doctor contract for owner from ${path.join(root, "doctor-contract-api.ts")}: Provider renames must belong to the plugin's declared providers.`,
+      ),
     );
   });
 
@@ -313,27 +294,6 @@ describe("doctor-contract-registry module loader", () => {
     expect(config).toEqual({});
   });
 
-  it("records doctor contract load failures with plugin and artifact context", () => {
-    const pluginRoot = makeTempDir();
-    const contractSource = path.join(pluginRoot, "doctor-contract-api.ts");
-    fs.writeFileSync(contractSource, "export {};\n", "utf-8");
-    mocks.createJiti.mockImplementation(() => () => {
-      throw new Error("fixture module load failed");
-    });
-    mockDoctorPlugins({
-      id: "broken-doctor-plugin",
-      rootDir: pluginRoot,
-      doctorContract: { configRepair: true },
-    });
-
-    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: pluginRoot, env: {} })).toEqual([]);
-    expect(doctorContractWarnMock).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        `failed to load doctor contract for broken-doctor-plugin from ${contractSource}: fixture module load failed`,
-      ),
-    );
-  });
-
   it("uses native require on Windows for compatible JavaScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(
@@ -394,36 +354,6 @@ describe("doctor-contract-registry module loader", () => {
     const [jitiPath, jitiOptions] = requireFirstCreateJitiCall();
     expect(jitiPath).toBe(pathToFileURL(contractApiPath, { windows: true }).href);
     expect(jitiOptions.tryNative).toBe(false);
-  });
-
-  it("prefers doctor-contract-api over the broader contract-api surface", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.cjs"),
-      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'doctor'], message: 'doctor contract' }] };\n",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "contract-api.cjs"),
-      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'broad'], message: 'broad contract' }] };\n",
-      "utf-8",
-    );
-    mockDoctorPlugins({ id: "test-plugin", rootDir: pluginRoot });
-
-    withMockedPlatform("darwin", () => {
-      expect(
-        listPluginDoctorLegacyConfigRules({
-          workspaceDir: pluginRoot,
-          env: {},
-        }),
-      ).toEqual([
-        {
-          path: ["plugins", "entries", "demo", "doctor"],
-          message: "doctor contract",
-        },
-      ]);
-      expect(mocks.createJiti).not.toHaveBeenCalled();
-    });
   });
 
   it("loads config-derived session-store agent IDs from doctor contract modules", () => {

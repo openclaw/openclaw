@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; fresh agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. PostgreSQL agent schemas currently support bootstrap only. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -63,7 +63,8 @@ journal-authority checks; schema, retention, and update behavior are unchanged.
 Once Gateway startup holds exclusive state ownership, it inspects the previous
 Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
-repair admission keeps its private snapshot.
+repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
+inspects the lease through an admitted state reader without a file snapshot.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
@@ -98,6 +99,10 @@ outside the transaction can refresh those facts through the existing owner.
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
+On first Gateway startup, a version-zero database containing only recognized
+native bootstrap tables is completed before runtime history is read. This uses
+the existing schema owner and preserves the native rows; it does not repair
+historical installations during ordinary startup.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format and each target's decision are loaded once
 per physical store. Record and clear operations publish the committed decision
@@ -136,7 +141,7 @@ commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
 
-SQLite format, schema-version, integrity, canonical-index, and table-existence
+SQLite format, schema-version, integrity, required-index, and table-existence
 validation runs once per physical database per process load. A regular
 `<database>.seal` file can carry admitted facts across clean restarts: the owner
 writes it after a successful `TRUNCATE` checkpoint and native close, and unlinks
@@ -187,6 +192,14 @@ The shared-state reader pool keeps its first worker warm for the normal handle
 idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+Durable usage refreshes publish rollups in bounded transactions instead of one
+writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
+prepared payload, or one second of scanning, checked between whole transcripts;
+one large transcript may exceed the byte or time limit. Refresh completion always
+flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
+canceled scan leaves uncommitted derived totals for the next refresh. Persisted
+rollups, partitions, schemas, and report totals keep their existing format.
 
 Transcript history and search lanes likewise retire surplus workers after 30
 seconds idle. Each lane keeps one worker until its existing five-minute idle
@@ -244,8 +257,8 @@ due, invalidating that fact on rollback or maintenance. Audit retention, transcr
 timestamp semantics, schemas, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
-Canonical session validation consumes these definitions without another catalog scan.
-First canonical index admission shares the schema contract reader's batched metadata snapshot
+Stored-session validation consumes these definitions without another catalog scan.
+First required-index admission shares the schema contract reader's batched metadata snapshot
 instead of querying each table and index separately. Shadowed PRAGMA names retain
 native inspection during that validation. Authorization, initial drift detection,
 transactional repair, and integrity checks remain with their existing owners.
@@ -293,12 +306,12 @@ The agent-database execution owner retains up to four idle physical-agent execut
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that
 proof even if Linux reuses its inode. Ordinary reopen still reuses live proof,
-and fresh stores keep their canonical certification. Receipt identifiers survive
+and fresh stores keep their session certification. Receipt identifiers survive
 worker transfers so alias publication revokes superseded proof while preserving
 acknowledged copies. Later revocation still refuses publication. Schemas, stored
 bytes, and update behavior are unchanged.
 
-Retaining an already-open agent handle holds its lifetime without querying SQLite. Writer receipts invalidate its cached row facts; schema facts come from process-wide admission. Canonical readiness invalidates its clean-store decision when the owning writer changes the store.
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Writer receipts invalidate its cached row facts; schema facts come from process-wide admission. Session readiness invalidates its clean-store decision when the owning writer changes the store.
 
 The agent ID and role in `schema_meta` describe the physical store's fixed schema
 owner. Creation and migration validate and publish these facts for every handle
@@ -320,7 +333,7 @@ session metadata stays in the worker. Legacy watch-marker discovery uses an inde
 range. Retention continues as rows age, even without writes; schema, upgrade, and
 retention policies are unchanged.
 
-Session row-facts reads reuse a canonical continuation's existing transaction
+Session row-facts reads reuse an admitted continuation's existing transaction
 instead of nesting a savepoint. Reads without an active transaction still open
 one so entry metadata, board presence, and transcript watermarks share a snapshot.
 Board presence travels in the exact-entry query, including its single-key error
@@ -378,7 +391,7 @@ return the generation minted by their writer. Detached edits still compare their
 prepared payload with the current row before writing. Schemas, stored bytes,
 retention, permissions, and update behavior are unchanged.
 
-Canonical main-key policy, external-supervision ownership, and the machine-owned
+Primary-session key policy, external-supervision ownership, and the machine-owned
 TTS preference path are loaded once for the physical database and shared across
 handles and workers. Their owning writers publish committed replacements;
 unrelated writes do not invalidate these facts. The Gateway owns runtime writes.
@@ -386,7 +399,7 @@ Other processes must use that owner or run while it is stopped, except establish
 updater handoff, restart-sentinel, and update-finalization writers, which retain their
 own lifecycle fences. Ownership claims require exclusive offline custody. Explicit
 ownership inspection and Doctor still read the database, and live lifecycle and lease checks
-remain at effect boundaries. Cached policy facts do not grant canonical admission
+remain at effect boundaries. Cached policy facts do not grant database admission
 or continuation authority. Main-key writer publications carry a host revision, so
 workers can retain an absent publication without polling after unrelated writes.
 Nested workers forward only the host completeness they actually received. The shared

@@ -23,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -168,7 +169,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   it("yields to the event loop while another connection holds the entry write lock", async () => {
     const other = new DatabaseSync(database.path);
     // Bound the defective synchronous path without a timer or a timing assertion.
-    setSqliteBusyTimeout(database.db, 250);
+    setSqliteBusyTimeout(requireNativeSqliteDatabase(database.db), 250);
     let release: Promise<void> | undefined;
     try {
       const result = await patchEntry("ordinary", () => {
@@ -188,7 +189,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     await closeOpenClawAgentDatabasesAsync();
     database = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
-    setSqliteBusyTimeout(database.db, 37);
+    setSqliteBusyTimeout(requireNativeSqliteDatabase(database.db), 37);
     const reader = new DatabaseSync(database.path);
     try {
       reader.exec("BEGIN");
@@ -197,7 +198,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         (writer) => {
           expect(writer.db.isTransaction).toBe(true);
           expect(reader.isTransaction).toBe(true);
-          expect(readSqliteBusyTimeout(writer.db)).toBe(37);
+          expect(readSqliteBusyTimeout(requireNativeSqliteDatabase(writer.db))).toBe(37);
           reader.exec("ROLLBACK");
           return writeSessionEntry(writer, sessionKey, {
             sessionId: "session-1",
@@ -372,7 +373,7 @@ describe("SQLite session entry patch commit revalidation", () => {
           }
         } else {
           database.db.exec("BEGIN");
-          update(database.db);
+          update(requireNativeSqliteDatabase(database.db));
         }
         try {
           expect(readCurrentEntryThroughAdmission(database)).toMatchObject({
@@ -499,7 +500,10 @@ describe("SQLite session entry patch commit revalidation", () => {
           route,
           (entry) => {
             setCanonicalSqliteSessionMainKey(database, "work");
-            setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+            setUnrelatedParent(
+              requireNativeSqliteDatabase(database.db),
+              "agent:main:unrecorded-parent",
+            );
             expect(
               database.db
                 .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
@@ -511,7 +515,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         ),
       ).rejects.toThrow("openclaw doctor --fix");
 
-      setUnrelatedParent(database.db, null);
+      setUnrelatedParent(requireNativeSqliteDatabase(database.db), null);
       expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
     },
   );
@@ -525,13 +529,16 @@ describe("SQLite session entry patch commit revalidation", () => {
       "ordinary",
       (entry) => {
         setCanonicalSqliteSessionMainKey(database, "work");
-        setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+        setUnrelatedParent(
+          requireNativeSqliteDatabase(database.db),
+          "agent:main:unrecorded-parent",
+        );
         return { ...entry, label: "exact replacement" };
       },
       true,
     );
     expect(result?.label).toBe("exact replacement");
-    setUnrelatedParent(database.db, null);
+    setUnrelatedParent(requireNativeSqliteDatabase(database.db), null);
     expect(loadExactSessionEntry(scope)?.entry.label).toBe("exact replacement");
   });
 
@@ -543,7 +550,10 @@ describe("SQLite session entry patch commit revalidation", () => {
     await expect(
       patchEntry("lifecycle", () => {
         setCanonicalSqliteSessionMainKey(database, "work");
-        setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
+        setUnrelatedParent(
+          requireNativeSqliteDatabase(database.db),
+          "agent:main:unrecorded-parent",
+        );
         closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         return null;

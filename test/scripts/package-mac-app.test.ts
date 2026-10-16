@@ -632,8 +632,34 @@ function getSwiftPackageResolutionBlock(): string {
     "build_swift_architecture() {",
     swiftScriptPath,
   );
+  // The inlined block skips the worker's own source of the shared disk image helpers.
+  const diskImage = `source ${JSON.stringify(path.resolve("scripts/lib/mac-disk-image.sh"))}`;
   // The shared EXIT cleanup also needs the packager preamble's unallocated app stage.
-  return `${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
+  return `${diskImage}\n${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
+}
+
+function snapshotImageInfoPlist(imagePath?: string): string {
+  const image = imagePath
+    ? `<dict>
+  <key>image-path</key>
+  <string>${imagePath.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</string>
+  <key>system-entities</key>
+  <array>
+    ${["/dev/disk8", "/dev/disk8s1", "/dev/disk11", "/dev/disk11s1"]
+      .map((device) => `<dict><key>dev-entry</key><string>${device}</string></dict>`)
+      .join("\n    ")}
+  </array>
+</dict>`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>images</key>
+  <array>${image}</array>
+</dict>
+</plist>
+`;
 }
 
 function getCompiledPeekabooHelperBlock(): string {
@@ -1033,22 +1059,19 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
-  it("stamps and validates independent OpenClaw and Peekaboo source revisions", () => {
-    const { result, openClawCommit, peekabooCommit } = runSourceProvenanceStampHarness();
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(`${openClawCommit}\n${peekabooCommit}\n`);
-    expect(result.stderr).toBe("");
-  });
-
   it.each([
+    { key: undefined, diagnostic: "" },
     { key: "OpenClawGitCommit", diagnostic: "Release app OpenClaw source mismatch" },
     { key: "PeekabooSourceCommit", diagnostic: "Release app Peekaboo source mismatch" },
-  ])("fails release validation independently for a wrong $key", ({ key, diagnostic }) => {
-    const { result } = runSourceProvenanceStampHarness(key);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(diagnostic);
+  ])("validates independent source stamps (corrupt key: $key)", ({ key, diagnostic }) => {
+    const { result, openClawCommit, peekabooCommit } = runSourceProvenanceStampHarness(key);
+    expect(result.status, result.stderr).toBe(key ? 1 : 0);
+    if (key) {
+      expect(result.stderr).toContain(diagnostic);
+    } else {
+      expect(result.stdout).toBe(`${openClawCommit}\n${peekabooCommit}\n`);
+      expect(result.stderr).toBe("");
+    }
   });
 
   it("requires the locked Peekaboo pin to match the requested elevation release source", () => {
@@ -1398,23 +1421,17 @@ describe("package-mac-app plist stamping", () => {
     expect(preInstallBlock).toContain("\nrequire_swift_toolchain\n");
   });
 
-  it("fails with an actionable error when Swift tools are too old", () => {
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.0.3",
+  it.each([
+    { selectedDeveloperDir: "command-line-tools", xcodebuildFailure: undefined },
+    {
       selectedDeveloperDir: "xcode",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
-    expect(result.stderr).toContain("Current Swift is 6.0");
-  });
-
-  it("rejects Command Line Tools even when they provide Swift 6.3", () => {
+      xcodebuildFailure: "xcodebuild: error: SDK metadata is unavailable",
+    },
+  ] as const)("rejects unusable Xcode: $selectedDeveloperDir", (options) => {
     const result = runSwiftToolchainHarness({
       swiftVersion: "6.3.1",
-      selectedDeveloperDir: "command-line-tools",
+      ...options,
     });
-
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires a full Xcode developer directory");
     expect(result.stderr).toContain(
@@ -1424,23 +1441,14 @@ describe("package-mac-app plist stamping", () => {
       "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
     );
     expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
-  });
-
-  it("preserves the native Xcode failure before generic selection guidance", () => {
-    const diagnostic = "xcodebuild: error: SDK metadata is unavailable";
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.3.1",
-      selectedDeveloperDir: "xcode",
-      xcodebuildFailure: diagnostic,
-    });
-
-    expect(result.status).toBe(1);
-    const diagnosticIndex = result.stderr.indexOf(diagnostic);
-    const guidanceIndex = result.stderr.indexOf(
-      "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
-    );
-    expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
-    expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
+    if (options.xcodebuildFailure) {
+      const diagnosticIndex = result.stderr.indexOf(options.xcodebuildFailure);
+      const guidanceIndex = result.stderr.indexOf(
+        "ERROR: OpenClaw macOS app packaging requires a full Xcode developer directory",
+      );
+      expect(diagnosticIndex).toBeGreaterThanOrEqual(0);
+      expect(guidanceIndex).toBeGreaterThan(diagnosticIndex);
+    }
   });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
@@ -1647,52 +1655,52 @@ try {
     expect(macosCi).toContain("test/scripts/mac-elevation-artifact.test.ts");
   });
 
-  it("copies complete main and MLX helper SwiftPM bundles into packaged app resources", () => {
-    const { appRoot, result } = runSwiftPMResourceBundleHarness();
+  it.each([undefined, "OpenClawKit_OpenClawKit.bundle"])(
+    "requires complete main and MLX resource bundles (missing: %s)",
+    (missingBundle) => {
+      const { appRoot, result } = runSwiftPMResourceBundleHarness({ missingBundle });
+      if (missingBundle) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
+        expect(result.stderr).toContain(missingBundle);
+        return;
+      }
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    for (const bundle of swiftPMResourceBundles) {
-      expect(
-        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
-      ).toBe(bundle);
-      expect(existsSync(path.join(appRoot, bundle))).toBe(false);
-    }
-    for (const file of mlxTTSResourceFiles) {
-      expect(readFileSync(path.join(appRoot, "Contents", "Resources", file), "utf8")).toBe(file);
-      expect(existsSync(path.join(appRoot, file))).toBe(false);
-    }
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      for (const bundle of swiftPMResourceBundles) {
+        expect(
+          readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
+        ).toBe(bundle);
+        expect(existsSync(path.join(appRoot, bundle))).toBe(false);
+      }
+      for (const file of mlxTTSResourceFiles) {
+        expect(readFileSync(path.join(appRoot, "Contents", "Resources", file), "utf8")).toBe(file);
+        expect(existsSync(path.join(appRoot, file))).toBe(false);
+      }
+    },
+  );
 
-  it("routes dependency resource lookups into signed app resources and restores sources", () => {
-    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness();
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    for (const [file, contents] of fixtures) {
-      expect(readFileSync(file, "utf8")).toBe(contents);
-    }
-    expect(readdirSync(backupRoot)).toEqual([]);
-  });
-
-  it("fails cleanup instead of deleting backups when resource restoration fails", () => {
-    const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(true);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("restore failed\n");
-    const backups = readdirSync(backupRoot).map((file) =>
-      readFileSync(path.join(backupRoot, file), "utf8"),
-    );
-    expect(backups).toHaveLength(fixtures.size);
-    expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
-  });
-
-  it("fails closed when a required SwiftPM resource bundle is missing", () => {
-    const missingBundle = "OpenClawKit_OpenClawKit.bundle";
-    const { result } = runSwiftPMResourceBundleHarness({ missingBundle });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
-    expect(result.stderr).toContain(missingBundle);
-  });
+  it.each([false, true])(
+    "restores resource sources or retains failed backups (%s)",
+    (failRestore) => {
+      const { backupRoot, fixtures, result } = runSwiftPMResourcePatchHarness(failRestore);
+      expect(result.status).toBe(failRestore ? 1 : 0);
+      expect(result.stderr).toBe(failRestore ? "restore failed\n" : "");
+      if (failRestore) {
+        const backups = readdirSync(backupRoot).map((file) =>
+          readFileSync(path.join(backupRoot, file), "utf8"),
+        );
+        expect(backups).toHaveLength(fixtures.size);
+        expect(backups).toEqual(expect.arrayContaining([...fixtures.values()]));
+      } else {
+        for (const [file, contents] of fixtures) {
+          expect(readFileSync(file, "utf8")).toBe(contents);
+        }
+        expect(readdirSync(backupRoot)).toEqual([]);
+      }
+    },
+  );
 
   it("compiles app localizations into signed resources", () => {
     const script = readFileSync(scriptPath, "utf8");
@@ -1809,6 +1817,7 @@ try {
       mkdirSync(path.dirname(unrelated), { recursive: true });
       writeFileSync(path.join(checkout, "source"), "source preserved\n");
       writeFileSync(unrelated, "unrelated snapshot preserved\n");
+      writeFileSync(path.join(root, "empty.plist"), snapshotImageInfoPlist());
       const hdiutil = path.join(root, "hdiutil");
       writeFileSync(
         hdiutil,
@@ -1816,6 +1825,10 @@ try {
         set -euo pipefail
         printf '%s\\n' "$1" >> "$operations"
         printf '%s\\0' "$@" > "$fixture_root/$1.args"
+        if [[ "$1" == info && "$2" == -plist ]]; then
+          cat "$fixture_root/empty.plist"
+          exit 0
+        fi
         if [[ "$1" == create ]]; then
           image="\${@: -1}"
           printf '%s' "\${image%/*}" > "$fixture_root/snapshot-root"
@@ -1881,7 +1894,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       if (operation !== "create") {
         expectedOperations.push("attach");
       }
-      expectedOperations.push("detach", "mount");
+      expectedOperations.push("detach", "mount", "info");
       const retained = mounts !== "empty";
       if (!retained) {
         expectedOperations.push(
@@ -1927,6 +1940,200 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     },
   );
 
+  it("retries a transient Peekaboo snapshot attach after detaching its unmounted devices", () => {
+    const root = tempDirs.make("openclaw-peekaboo-attach-retry-");
+    const buildPath = path.join(root, "build");
+    const checkout = path.join(buildPath, "checkouts/Peekaboo");
+    const mount = path.join(root, "mounted source");
+    const image = path.join(root, "work/snapshot/Peekaboo.dmg");
+    const operations = path.join(root, "operations");
+    const expectedCommit = "b".repeat(40);
+    mkdirSync(checkout, { recursive: true });
+    writeFileSync(path.join(root, "attached.plist"), snapshotImageInfoPlist(image));
+    writeFileSync(path.join(root, "empty.plist"), snapshotImageInfoPlist());
+    const hdiutil = path.join(root, "hdiutil");
+    writeFileSync(
+      hdiutil,
+      `#!/bin/bash
+set -euo pipefail
+case "$1" in
+  create)
+    printf 'create\\n' >> "$operations"
+    : > "\${@: -1}"
+    ;;
+  attach)
+    printf 'attach\\n' >> "$operations"
+    : > "$fixture_root/attached"
+    if [[ ! -e "$fixture_root/attempted" ]]; then
+      : > "$fixture_root/attempted"
+      printf 'hdiutil: attach failed - Resource temporarily unavailable\\n' >&2
+      exit 35
+    fi
+    ;;
+  info)
+    [[ "$2" == -plist ]] || exit 2
+    printf 'info\\n' >> "$operations"
+    if [[ -e "$fixture_root/attached" ]]; then
+      cat "$fixture_root/attached.plist"
+    else
+      cat "$fixture_root/empty.plist"
+    fi
+    ;;
+  detach)
+    [[ "$2" == -quiet ]] || exit 2
+    printf 'detach %s\\n' "$3" >> "$operations"
+    rm "$fixture_root/attached"
+    ;;
+  *) exit 2 ;;
+esac
+`,
+    );
+    chmodSync(hdiutil, 0o755);
+    const sleep = path.join(root, "sleep");
+    writeFileSync(sleep, '#!/bin/bash\nprintf "sleep %s\\n" "$*" >> "$operations"\n');
+    chmodSync(sleep, 0o755);
+
+    const result = runHelper(
+      `
+      set -euo pipefail
+      export fixture_root=${JSON.stringify(root)}
+      export operations=${JSON.stringify(operations)}
+      export PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
+      ROOT_DIR=${JSON.stringify(root)}
+      ${getSwiftPackageResolutionBlock()}
+      PEEKABOO_SNAPSHOT_MOUNT=${JSON.stringify(mount)}
+      BUILD_PATH=${JSON.stringify(buildPath)}
+      trap cleanup_swift_architecture EXIT
+      compiled_peekaboo_commit() {
+        printf 'verify:%s:%s\\n' "$1" "$2" >> "$operations"
+        printf '%s' "$2"
+      }
+      create_verified_peekaboo_snapshot ${JSON.stringify(buildPath)} ${JSON.stringify(expectedCommit)}
+      printf 'snapshot-ready\\n' >> "$operations"
+      `,
+      "/bin/bash",
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("hdiutil: attach failed - Resource temporarily unavailable\n");
+    expect(readFileSync(operations, "utf8").trim().split("\n")).toEqual([
+      `verify:${checkout}:${expectedCommit}`,
+      "create",
+      "attach",
+      "info",
+      "detach /dev/disk8",
+      "info",
+      "sleep 2",
+      "attach",
+      `verify:${mount}:${expectedCommit}`,
+      "snapshot-ready",
+      `detach ${mount}`,
+    ]);
+    expect(existsSync(image)).toBe(false);
+    expect(existsSync(mount)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "cleans up an unmounted Peekaboo image through the standalone entry point (detach fails: %s)",
+    (detachFails) => {
+      const root = tempDirs.make("openclaw-peekaboo-device-cleanup-");
+      const work = path.join(root, "work");
+      const snapshot = path.join(work, "snapshot");
+      const image = path.join(snapshot, "Peekaboo.dmg");
+      const mount = path.join(root, "mounted source");
+      const alias = path.join(root, "work alias");
+      const operations = path.join(root, "operations");
+      const attached = path.join(root, "attached");
+      mkdirSync(snapshot, { recursive: true });
+      mkdirSync(mount);
+      symlinkSync(work, alias, "dir");
+      writeFileSync(image, "snapshot");
+      writeFileSync(attached, "");
+      writeFileSync(
+        path.join(root, "attached.plist"),
+        snapshotImageInfoPlist(path.join(alias, "snapshot/Peekaboo.dmg")),
+      );
+      writeFileSync(path.join(root, "empty.plist"), snapshotImageInfoPlist());
+      const hdiutil = path.join(root, "hdiutil");
+      writeFileSync(
+        hdiutil,
+        `#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$operations"
+if [[ "$1" == info && "$2" == -plist ]]; then
+  if [[ -e "$attached" ]]; then
+    cat "$fixture_root/attached.plist"
+  else
+    cat "$fixture_root/empty.plist"
+  fi
+elif [[ "$1" == detach && "$2" == -quiet ]]; then
+  [[ "$3" == /dev/disk8 ]] || exit 1
+  ${detachFails ? "exit 1" : 'rm "$attached"'}
+else
+  printf 'unexpected: %s\\n' "$*" >> "$operations"
+  exit 2
+fi
+`,
+      );
+      chmodSync(hdiutil, 0o755);
+      const mountCommand = path.join(root, "mount");
+      writeFileSync(
+        mountCommand,
+        `#!/bin/bash
+printf 'mount\\n' >> "$operations"
+printf '/dev/disk99 on /unrelated (apfs, read-only)\\n'
+`,
+      );
+      chmodSync(mountCommand, 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          swiftScriptPath,
+          "cleanup",
+          root,
+          "arm64",
+          "release",
+          "1",
+          "b".repeat(40),
+          "0",
+          work,
+          mount,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${root}:/usr/bin:/bin`,
+            fixture_root: root,
+            operations,
+            attached,
+          },
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(detachFails ? 1 : 0);
+      const loggedOperations = readFileSync(operations, "utf8");
+      expect(loggedOperations.trim().split("\n")).toEqual([
+        `detach -quiet ${mount}`,
+        "mount",
+        "info -plist",
+        "detach -quiet /dev/disk8",
+        "info -plist",
+      ]);
+      expect(loggedOperations).not.toContain("-force");
+      expect(existsSync(snapshot)).toBe(detachFails);
+      expect(existsSync(image)).toBe(detachFails);
+      expect(existsSync(mount)).toBe(detachFails);
+      if (detachFails) {
+        expect(result.stderr).toBe(
+          `ERROR: disk image ${image} is still attached; detach it with: hdiutil detach /dev/disk8\n`,
+        );
+      } else {
+        expect(result.stderr).toBe("");
+      }
+    },
+  );
+
   it("stamps only the clean Peekaboo source that SwiftPM actually compiled", () => {
     const verifier = getCompiledPeekabooHelperBlock();
     expect(verifier).toContain('"core.commitGraph=false"');
@@ -1943,12 +2150,8 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
 
   // Each real Git fixture owns a separate checkout and deadline; do not aggregate
   // independent verification scenarios into one long synchronous test.
-  it.each(["nested-gitlink"] as const)("accepts committed Peekaboo source (%s)", (mutation) => {
-    const result = runRealCompiledPeekabooHarness(mutation);
-    expect(result.status, result.stderr).toBe(0);
-  });
-
   it.each([
+    "nested-gitlink",
     "assume-unchanged",
     "corrupt-object",
     "dirty-gitlink",
@@ -1956,12 +2159,14 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     "gitlink-sibling",
     "ignored",
     "replacement-ref",
-  ] as const)("rejects uncommitted Peekaboo source (%s)", (mutation) => {
+  ] as const)("verifies compiled Peekaboo source (%s)", (mutation) => {
     const result = runRealCompiledPeekabooHarness(mutation);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Compiled Peekaboo checkout does not exactly match its committed source",
-    );
+    expect(result.status, result.stderr).toBe(mutation === "nested-gitlink" ? 0 : 1);
+    if (mutation !== "nested-gitlink") {
+      expect(result.stderr).toContain(
+        "Compiled Peekaboo checkout does not exactly match its committed source",
+      );
+    }
   });
 
   it("restores and rejects a Swift package resolution that changes the lockfile", () => {

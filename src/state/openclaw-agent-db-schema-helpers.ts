@@ -350,9 +350,6 @@ export function finishAgentSchemaMigration(
   requiresMaintenance: boolean,
   assertMigration: () => void,
 ): void {
-  repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
-    verifyPhysicalIntegrity: false,
-  });
   db.exec(`PRAGMA user_version = ${targetVersion};`);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);

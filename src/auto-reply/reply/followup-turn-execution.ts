@@ -2,6 +2,7 @@ import {
   isFreshChannelCronAuthorityTurn,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
@@ -93,7 +94,8 @@ export async function executeFollowupTurn(params: {
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
     deliveryAllowed() &&
-    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
+    (sourceOpts?.progressRequiresReply !== true ||
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -211,6 +213,8 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
+    forceCodeModeTools: turn.queued.forceCodeModeTools,
     awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,
@@ -231,9 +235,11 @@ export async function executeFollowupTurn(params: {
     onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
       sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
       (item) =>
-        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
-        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
-        shouldEmitStructuredProgress(),
+        // Model waits bypass verbosity; preambles still need their explicit draft owner.
+        item.kind === "model-wait"
+          ? progressAllowed()
+          : (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+            shouldEmitStructuredProgress(),
     ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
@@ -348,6 +354,9 @@ export async function executeFollowupTurn(params: {
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
   try {
+    // A session event rejected for stale policy is re-admitted by its owner under the
+    // same durable source id; reject it before admission records that source claim.
+    turn.queued.run.internalEventExecution?.assertCurrent?.();
     const admission = await recovery.admitUserTurn(recorder);
     accepted = true;
     await admitFollowupRunLifecycle(turn.queued);

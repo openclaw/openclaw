@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
@@ -26,12 +27,12 @@ import {
   type SessionCostUsageDeferredMetadata,
 } from "./session-cost-usage-cache.kernel.js";
 import {
-  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
   readSessionCostUsageRollupRows,
+  pruneUsageCostRollupsForTest,
   readSessionCostUsageRollupEntry,
 } from "./session-cost-usage-cache.test-support.js";
 import {
@@ -79,9 +80,7 @@ function writeRollup(
 function countRegisteredAgentDatabases(): number {
   const row = openOpenClawStateDatabase()
     .db.prepare("SELECT count(*) AS count FROM agent_databases")
-    .get() as {
-    count: number;
-  };
+    .get() as { count: number };
   return row.count;
 }
 
@@ -174,12 +173,30 @@ describe("session cost usage SQLite cache", () => {
               blob: row.blob,
             };
           });
+      const write = (
+        encoded: ReturnType<typeof encodeUsageCostRollup>,
+        updatedAt: number,
+        options: Pick<
+          Parameters<typeof owner.writeRollup>[0][number],
+          "partitions" | "removedDates" | "replacePartitions"
+        > = {},
+      ) =>
+        owner.writeRollup([
+          {
+            rollupId: sessionFile,
+            valueJson: utf8Json(encoded.valueJson),
+            blob: encoded.blob,
+            updatedAt,
+            ...options,
+          },
+        ]);
       try {
         const rollup = createSessionUsageRollupData();
         for (const timestamp of [
           Date.UTC(2026, 8, 18),
           Date.UTC(2026, 8, 18, 0, 1),
           Date.UTC(2026, 8, 19),
+          Date.UTC(2026, 9, 1),
         ]) {
           appendSessionUsageRollupContribution(rollup, {
             timestamp,
@@ -195,12 +212,12 @@ describe("session cost usage SQLite cache", () => {
           version: USAGE_COST_ROLLUP_VERSION,
           pricingFingerprint: "first",
           scannedAt: 1,
-          parsedRecords: 3,
-          countedRecords: 3,
+          parsedRecords: 4,
+          countedRecords: 4,
           checkpoint: {
             kind: "jsonl" as const,
-            parsedOffset: 3,
-            observedSize: 3,
+            parsedOffset: 4,
+            observedSize: 4,
             observedMtimeMs: 1,
             device: 1,
             inode: 1,
@@ -209,17 +226,9 @@ describe("session cost usage SQLite cache", () => {
           rollup,
         };
         const first = partitionUsageCostRollup(entry);
-        expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(first.valueJson),
-            blob: first.blob,
-            partitions: first.partitions,
-            updatedAt: 1,
-          }),
-        ).toBe(true);
+        expect(await write(first, 1, { partitions: first.partitions })).toBe(true);
         const days = readPartitions();
-        expect(days.map((day) => day.date)).toEqual(["2026-09-01"]);
+        expect(days.map((day) => day.date)).toEqual(["2026-09-01", "2026-10-01"]);
         const selected = readPartitions("2026-09-01", "2026-09-01");
         expect(selected).toHaveLength(1);
         const day = decodeUsageCostPartition(selected[0]!.valueJson, selected[0]!.blob)!;
@@ -235,17 +244,49 @@ describe("session cost usage SQLite cache", () => {
         db.exec(`CREATE TRIGGER refuse_usage_partition BEFORE UPDATE ON cache_entries
         WHEN NEW.scope = '${USAGE_COST_PARTITION_SCOPE}'
         BEGIN SELECT RAISE(ABORT, 'partition refused'); END;`);
-        await expect(
-          owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(first.valueJson),
-            blob: first.blob,
-            partitions: first.partitions,
-            updatedAt: 2,
-          }),
-        ).rejects.toThrow("partition refused");
+        await expect(write(first, 2, { partitions: first.partitions })).rejects.toThrow(
+          "partition refused",
+        );
         expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(before);
         db.exec("DROP TRIGGER refuse_usage_partition");
+
+        const extendedRollup = structuredClone(rollup);
+        appendSessionUsageRollupContribution(extendedRollup, {
+          timestamp: Date.UTC(2026, 9, 1, 0, 1),
+          role: "assistant",
+          model: "test",
+          provider: "test",
+          toolNames: [],
+          toolResultCounts: { total: 0, errors: 0 },
+          usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
+        });
+        const extended = partitionUsageCostRollup({
+          ...entry,
+          rollup: extendedRollup,
+          scannedAt: 3,
+          parsedRecords: 5,
+          countedRecords: 5,
+          checkpoint: { ...entry.checkpoint, parsedOffset: 5, observedSize: 5 },
+        });
+        expect(
+          await write(extended, 3, {
+            partitions: extended.partitions.filter((partition) => partition.date === "2026-10-01"),
+          }),
+        ).toBe(true);
+        expect(readPartitions("2026-09-01", "2026-09-01")).toEqual(selected);
+        const october = readPartitions("2026-10-01", "2026-10-01");
+        expect(october).toHaveLength(1);
+        expect(
+          Object.values(decodeUsageCostPartition(october[0]!.valueJson, october[0]!.blob)!.buckets),
+        ).toMatchObject([{ totals: { totalTokens: 20, totalCost: 2 } }]);
+        const rows = readSessionCostUsageRollupRows(agentId);
+        expect(rows).toHaveLength(1);
+        expect(readSessionCostUsageRollupEntry(rows[0]!, agentId)).toMatchObject({
+          scannedAt: 3,
+          parsedRecords: 5,
+          countedRecords: 5,
+          checkpoint: { parsedOffset: 5, observedSize: 5 },
+        });
 
         const rewritten = partitionUsageCostRollup({
           ...entry,
@@ -253,61 +294,21 @@ describe("session cost usage SQLite cache", () => {
           rollup: createSessionUsageRollupData(),
         });
         expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(rewritten.valueJson),
-            blob: rewritten.blob,
+          await write(rewritten, 4, {
             partitions: [],
-            removedDates: ["2026-09-01"],
-            updatedAt: 3,
+            removedDates: ["2026-09-01", "2026-10-01"],
           }),
         ).toBe(true);
         expect(readPartitions()).toEqual([]);
         expect(decodeUsageCostRollup(rewritten.valueJson, "first", rewritten.blob)).toBeUndefined();
-        expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(first.valueJson),
-            blob: first.blob,
-            partitions: first.partitions,
-            updatedAt: 4,
-          }),
-        ).toBe(true);
+        expect(await write(first, 5, { partitions: first.partitions })).toBe(true);
         // A downgraded owner ignores projection rows and replaces only the checkpoint.
         const legacy = encodeUsageCostRollup({ ...entry, version: 6 });
-        expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(legacy.valueJson),
-            blob: legacy.blob,
-            updatedAt: 5,
-          }),
-        ).toBe(true);
-        expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(rewritten.valueJson),
-            blob: rewritten.blob,
-            partitions: [],
-            replacePartitions: true,
-            updatedAt: 6,
-          }),
-        ).toBe(true);
+        expect(await write(legacy, 6)).toBe(true);
+        expect(await write(rewritten, 7, { partitions: [], replacePartitions: true })).toBe(true);
         expect(readPartitions()).toEqual([]);
-        expect(
-          await owner.writeRollup({
-            rollupId: sessionFile,
-            valueJson: utf8Json(first.valueJson),
-            blob: first.blob,
-            partitions: first.partitions,
-            updatedAt: 7,
-          }),
-        ).toBe(true);
-        await deleteSessionCostUsageRollupsExcept({
-          agentId,
-          liveKeys: new Set(),
-          rows: readSessionCostUsageRollupRows(agentId),
-        });
+        expect(await write(first, 8, { partitions: first.partitions })).toBe(true);
+        await owner.pruneRows(readSessionCostUsageRollupRows(agentId));
         expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
         expect(readPartitions()).toEqual([]);
       } finally {
@@ -353,10 +354,13 @@ describe("session cost usage SQLite cache", () => {
       const newer = encodeUsageCostRollup({ ...entry, scannedAt: 999 });
       insert.run("session-cost-usage-rollup-v3", "newer", newer.valueJson, newer.blob, 999);
       insert.run("other", "valid\0雪", "unchanged", null, 1);
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      const migrate = () =>
+        runOpenClawAgentWriteTransaction(
+          ({ db: current }) =>
+            migrateSessionCostUsageRollupStorage(requireNativeSqliteDatabase(current)),
+          { agentId },
+        );
+      migrate();
       const rows = db
         .prepare(
           "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
@@ -371,17 +375,16 @@ describe("session cost usage SQLite cache", () => {
       expect(rows[1]).toMatchObject({ value_json: newer.valueJson, updated_at: 999 });
       const migrated = rows[2]!;
       expect(migrated.updated_at).toBe(123);
+      // Version-6 reports move intact but predate the current pricing rules, so readers rebuild them.
+      expect(migrated.value_json).toBe(encodeUsageCostRollup(entry).valueJson);
       expect(
         decodeUsageCostRollup(
           String(migrated.value_json),
           "synthetic",
           migrated.blob as Uint8Array,
         ),
-      ).toEqual(entry);
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      ).toBeUndefined();
+      migrate();
       expect(
         db
           .prepare(
@@ -396,7 +399,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const previousValueJson = JSON.stringify({ history: "雪".repeat(400_000) });
       expect(
         writeRollup(agentId, {
@@ -495,12 +498,14 @@ describe("session cost usage SQLite cache", () => {
         const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
         try {
           expect(await owner.acquire()).toBe(true);
-          return await owner.writeRollup({
-            rollupId: "session.jsonl",
-            valueJson: utf8Json(valueJson),
-            blob: null,
-            updatedAt,
-          });
+          return await owner.writeRollup([
+            {
+              rollupId: "session.jsonl",
+              valueJson: utf8Json(valueJson),
+              blob: null,
+              updatedAt,
+            },
+          ]);
         } finally {
           await owner.release();
         }
@@ -594,7 +599,7 @@ describe("session cost usage SQLite cache", () => {
           valueJson: utf8Json(refreshedValue),
           updatedAt: 2,
         });
-        await deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows });
+        await pruneUsageCostRollupsForTest({ agentId, liveKeys: new Set(), rows });
         expect(refreshed).toBe(true);
 
         expect(readSessionCostUsageRollupRows(agentId)).toEqual([
@@ -608,7 +613,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-prune-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const scope = "session-cost-usage-rollup-v3";
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
@@ -639,7 +644,7 @@ describe("session cost usage SQLite cache", () => {
         /^delete from "cache_entries"/i.test(sql) ? "delete" : null,
       );
 
-      await deleteSessionCostUsageRollupsExcept({
+      await pruneUsageCostRollupsForTest({
         agentId,
         liveKeys: new Set(["live\0雪"]),
         rows: rows.map((row) => ({
@@ -661,7 +666,7 @@ describe("session cost usage SQLite cache", () => {
   });
 
   it.each(["string", "utf8"] as const)(
-    "rolls back all %s stale and legacy cleanup when a later deletion fails",
+    "rolls back all %s stale cleanup when a later deletion fails",
     async (format) => {
       const stateDir = tempDirs.make("openclaw-usage-cache-prune-rollback-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -699,13 +704,15 @@ describe("session cost usage SQLite cache", () => {
 
         await owner.pruneRows(rows);
 
-        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual([]);
+        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(
+          before.filter((row) => row.scope !== "session-cost-usage-rollup-v3"),
+        );
         await owner.release();
       });
     },
   );
 
-  it("reads only v3 rollups and prunes retired usage cache rows by scope", async () => {
+  it("reads and prunes only current rollups without touching retired scopes", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-retired-");
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -731,7 +738,7 @@ describe("session cost usage SQLite cache", () => {
         { key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}', bodyBytes: 0 },
       ]);
 
-      await deleteSessionCostUsageRollupsExcept({
+      await pruneUsageCostRollupsForTest({
         agentId,
         liveKeys: new Set(["current.jsonl"]),
         rows,
@@ -741,7 +748,9 @@ describe("session cost usage SQLite cache", () => {
         database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
       ).toEqual([
         { key: "keep", scope: "other" },
+        { key: "cache", scope: "session-cost-usage" },
         { key: "refresh-lock", scope: "session-cost-usage" },
+        { key: "retired.jsonl", scope: "session-cost-usage-rollup-v1" },
         { key: "current.jsonl", scope: "session-cost-usage-rollup-v3" },
       ]);
     });
@@ -792,14 +801,14 @@ it.each(["stored", "decoded", "corrupt-length"] as const)(
       const lock = prepareSessionCostUsageRefreshLock(agentId);
       try {
         expect(await lock.acquire()).toBe(true);
-        expect(
-          await lock.writeRollup({
+        await lock.writeRollup([
+          {
             rollupId: row.key,
             valueJson: new TextEncoder().encode(encoded.valueJson),
             blob: encoded.blob,
             updatedAt: row.updatedAt,
-          }),
-        ).toBe(true);
+          },
+        ]);
       } finally {
         await lock.release();
       }

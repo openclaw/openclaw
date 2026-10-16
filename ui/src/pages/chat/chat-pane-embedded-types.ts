@@ -1,0 +1,80 @@
+import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
+import type {
+  BrowserTabSelection,
+  BrowserTabTarget,
+} from "../../components/browser/browser-target.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { PresentationValue } from "../../lib/presentation.ts";
+import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
+import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
+import type {
+  ChatSessionCompanionThread,
+  ChatSessionCompanionTurn,
+} from "./chat-session-companion.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
+import type { SidebarSlotId } from "./sidebar-layout-types.ts";
+
+export type SidebarPanelDefinitionParams = {
+  panePresentation?: PresentationValue;
+  state: ChatPageHost;
+  paneId: string;
+  panePresentationId: string;
+  subagentsInputRegion: "page" | "dock";
+  subagentsPresented: PresentationValue;
+  processesPresented?: PresentationValue;
+  subagentsAvailable: boolean;
+  subagentsShowRequest?: () => string | null | undefined;
+  onSubagentSessionSelect: (
+    sessionKey: string,
+    options?: PaneSessionChangeOptions,
+  ) => boolean | void;
+  themeMode: "dark" | "light";
+  agentId: string | null;
+  browserPresented: PresentationValue;
+  browserTabsInHeader: boolean;
+  linkReaders?: readonly ControlUiLinkReaderDescriptor[];
+  linkReaderPresented?: PresentationValue;
+  linkReaderTabsInHeader?: boolean;
+  onCloseLinkReader?: () => void;
+  terminalTabsInHeader: boolean;
+  onCloseTerminal?: () => void;
+  browserRefreshOnPresentation: boolean;
+  preferredBrowserTab?: BrowserTabSelection;
+  sessionBrowserTabs?: BrowserTabTarget[];
+  desktopPresented: PresentationValue;
+  desktopRefreshOnPresentation: boolean;
+  desktopAvailable: boolean;
+  desktopSource: string | null;
+  desktopFocusHref: string;
+  portalPresented?: PresentationValue;
+  onDesktopFocusTargetChange: (
+    target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
+  ) => void;
+  dashboard: SidebarPanelDefinition["content"];
+  workspace: SidebarPanelDefinition["content"];
+  renderDetail: (content: SidebarContent) => SidebarPanelDefinition["content"];
+  digest: SessionObserverDigest | null;
+  activeRunId: string | null;
+  pullRequests: ControlUiSessionPullRequest[];
+  companion: ChatSessionCompanionThread;
+  companionPresented: PresentationValue;
+  companionFocusRequest: (() => boolean) | undefined;
+  onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
+  onCompanionDraftChange: (draft: string) => void;
+  onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
+  connected: boolean;
+  onClearCompanion: () => void;
+  discussion: SessionDiscussionPanelConfig | null;
+  discussionAvailable: boolean;
+  discussionOpenUrl: string | null;
+  discussionSourceGeneration: number;
+  pluginPanels: ControlUiRegistration<ControlUiPanel>[];
+  isPluginPanelPresented: (slot: SidebarSlotId) => PresentationValue;
+};

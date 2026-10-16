@@ -27,6 +27,7 @@ export function DesktopPanelView(props: {
   height: number;
   width: number;
   fullscreen: boolean;
+  sectionRef: (element: HTMLElement) => void;
   renderResizer: () => JSX.Element;
   renderFullscreenControl: () => JSX.Element;
   onClose: () => void;
@@ -35,8 +36,11 @@ export function DesktopPanelView(props: {
   content: Omit<Parameters<typeof DesktopPanelContent>[0], "connection">;
   connection: Omit<Parameters<typeof DesktopConnection>[0], "state">;
 }) {
+  // The section binding belongs to this mounted view and does not change reactively.
+  const sectionRef = untrack(() => props.sectionRef);
   return (
     <section
+      ref={sectionRef}
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
       style={
         props.embedded || props.fullscreen

@@ -149,7 +149,7 @@ it.each(["connect", "setup"] as const)(
       await waitForFast(() => {
         const signIn = page.querySelector(".wizard-step__sign-in");
         expect(signIn).not.toBeNull();
-        expect(signIn?.textContent).toContain("Waiting for sign-in");
+        expect(signIn?.textContent).toContain("Waiting for approval in your browser…");
       });
       expect(page.querySelector(".model-setup-wizard h2")?.textContent?.trim()).toBe(
         operation === "connect" ? "Radius account" : "Setup-only account",
@@ -319,7 +319,7 @@ it.each([
       await startSignIn(page, operation);
       await waitForFast(() =>
         expect(page.querySelector(".wizard-step__sign-in")?.textContent).toContain(
-          "Waiting for sign-in",
+          "Waiting for approval in your browser…",
         ),
       );
       const modal = page.querySelector("openclaw-modal-dialog")!;

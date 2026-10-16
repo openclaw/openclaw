@@ -1,10 +1,11 @@
 import { IDBFactory } from "fake-indexeddb";
+import { createRoot } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
-import { SessionPrefetchController } from "./session-prefetch.ts";
+import { createSessionPrefetch } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
@@ -66,12 +67,10 @@ export function createSessionPrefetchFixture() {
   vi.stubGlobal("indexedDB", new IDBFactory());
   let visibility: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
     window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
   vi.stubGlobal("cancelIdleCallback", (handle: number) => window.clearTimeout(handle));
-  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
   const cache: ChatMessageCache = new Map();
   const store = new SessionSnapshotStore(cache);
   store.connect();
@@ -104,17 +103,19 @@ export function createSessionPrefetchFixture() {
       },
     },
   };
-  const host = Object.assign(document.createElement("div"), {
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
-  });
+  const host = document.createElement("div");
   const shell = document.createElement("openclaw-app-shell");
   shell.append(host);
   document.body.append(shell);
-  const controller = new SessionPrefetchController(host, cache, store, () => context);
-  controller.hostConnected?.();
+  let syncPrefetch: () => void;
+  let unmountPrefetch: () => void;
+  function mountPrefetch(): void {
+    unmountPrefetch = createRoot((dispose) => {
+      syncPrefetch = createSessionPrefetch(host, cache, store, () => context);
+      return dispose;
+    });
+  }
+  mountPrefetch();
 
   function updatePrefetch(update: SessionPrefetchUpdate): void {
     current = update;
@@ -132,12 +133,13 @@ export function createSessionPrefetchFixture() {
         }),
       ),
     );
-    controller.hostUpdated?.();
+    syncPrefetch();
   }
 
   return {
     cache,
-    controller,
+    mountPrefetch,
+    unmountPrefetch: () => unmountPrefetch(),
     store,
     host,
     shell,
@@ -146,17 +148,12 @@ export function createSessionPrefetchFixture() {
       visibility = value;
     },
     dispose: async () => {
-      controller.hostDisconnected?.();
+      unmountPrefetch();
       shell.remove();
       await store.flush();
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
-      if (originalLocks) {
-        Object.defineProperty(navigator, "locks", originalLocks);
-      } else {
-        Reflect.deleteProperty(navigator, "locks");
-      }
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

@@ -12,7 +12,7 @@ type CustomThemeImportViewState = {
   focusToken: number;
 };
 
-export const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
+const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
   url: "",
   busy: false,
   message: null,

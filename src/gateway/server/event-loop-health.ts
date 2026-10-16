@@ -4,7 +4,10 @@ import { isMainThread, Worker } from "node:worker_threads";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
-import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
@@ -291,6 +294,22 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
+    if (
+      attributed.stalls.length > 0 &&
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({
+          type: "gateway.main_thread.stall",
+          stalls: attributed.stalls.map((stall) => ({
+            task: stall.task,
+            durationMs: stall.elapsedMs,
+          })),
+          dropped: attributed.dropped,
+        }),
+      );
+    }
     // Idle windows retain callback attribution and overdue-deadline detection without
     // the native histogram's 20 ms wakeup. Full resolution returns with active work.
     const delayMaxMs = Math.max(
@@ -416,7 +435,7 @@ export function createGatewayEventLoopHealthMonitor(
       id: "event-loop-health",
       delayMs,
       phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
-      // Let the blocking callback's after hook publish its stall before resetting the window.
+      // Let the blocking task scope publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
     sampleDueAt = nowMs() + (job.atMs - scheduler.now());
@@ -426,6 +445,13 @@ export function createGatewayEventLoopHealthMonitor(
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
+  const unsubscribeInterest = onInternalDiagnosticEventInterest("gateway.event_loop.sample", () => {
+    const now = nowMs();
+    const nextSampleAt = Math.max(now, lastWallAt + SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
+    if (histogram && nextSampleAt < sampleDueAt) {
+      samplingJob = scheduleSample(nextSampleAt - now);
+    }
+  });
 
   const reset = () => {
     stalls.reset();
@@ -458,6 +484,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      unsubscribeInterest();
       flightRecorder.stop();
       stalls.stop();
       samplingJob?.cancel();

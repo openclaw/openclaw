@@ -1,14 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { expect, it, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { createProps } from "../chat-thread.test-support.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
-import { renderWorkGroupSummary } from "./chat-message-stream.test-support.ts";
+import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
+import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -18,7 +21,14 @@ import {
   createToolResultMessage,
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
-import { renderToolFixture } from "./chat-tool-render.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+
+type SummaryState = {
+  groups: Parameters<typeof ActivityGroup>[0]["groups"];
+  expanded: boolean;
+  durationMs: number | null;
+};
+const summaryUpdates = new Map<HTMLElement, (state: SummaryState) => void>();
 
 async function renderSummary(
   messages: Record<string, unknown>[],
@@ -36,19 +46,49 @@ async function renderSummary(
       messages.map((message, index) => createMessageEntry(`message-${index}`, message)),
     ),
   ];
-  await renderToolFixture(
-    kind === "activity"
-      ? renderActivityGroup(groups, {
-          showToolCalls: true,
-          showReasoning: true,
-          isToolMessageExpanded: () => expanded,
-        })
-      : renderWorkGroupSummary(
-          { key: "work", durationMs, groups },
-          { expanded, onToggle: () => {} },
-        ),
-    container,
-  );
+  const next = { groups, expanded, durationMs };
+  const update = summaryUpdates.get(container);
+  if (update) {
+    update(next);
+  } else {
+    document.body.append(container);
+    const root = mountSolid(
+      () => {
+        const [state, setState] = createSignal<SummaryState>(next);
+        summaryUpdates.set(container, setState);
+        return kind === "activity"
+          ? createComponent(ActivityGroup, {
+              get groups() {
+                return state().groups;
+              },
+              get options() {
+                return {
+                  showToolCalls: true,
+                  showReasoning: true,
+                  isToolMessageExpanded: () => state().expanded,
+                };
+              },
+              presentation: "standalone",
+            })
+          : createComponent(WorkGroupSummary, {
+              get item() {
+                return { key: "work", durationMs: state().durationMs, groups: state().groups };
+              },
+              get options() {
+                return { expanded: state().expanded, onToggle: () => {} };
+              },
+            });
+      },
+      { container },
+    );
+    onTestFinished(() => {
+      root.unmount();
+      container.remove();
+      summaryUpdates.delete(container);
+    });
+  }
+  flush();
+  await settleToolBridges(container);
   return container.querySelector(".chat-activity-group__summary");
 }
 
@@ -73,21 +113,25 @@ it.each(["activity", "work"] as const)(
       ]),
     ]);
     const onToggle = vi.fn();
-    render(
-      kind === "activity"
-        ? groups.map((group) =>
-            renderMessageGroup(group, {
-              showToolCalls: true,
-              showReasoning: true,
-              isToolMessageExpanded: () => false,
-              onToggleToolMessageExpanded: onToggle,
+    mountSolid(
+      () =>
+        kind === "activity"
+          ? groups.map((group) =>
+              createComponent(MessageGroup, {
+                group,
+                options: {
+                  showToolCalls: true,
+                  showReasoning: true,
+                  isToolMessageExpanded: () => false,
+                  onToggleToolMessageExpanded: onToggle,
+                },
+              }),
+            )
+          : createComponent(WorkGroupSummary, {
+              item: { key: "parallel-work", durationMs: 1000, groups },
+              options: { expanded: false, onToggle },
             }),
-          )
-        : renderWorkGroupSummary(
-            { key: "parallel-work", durationMs: 1000, groups },
-            { expanded: false, onToggle },
-          ),
-      container,
+      { container },
     );
 
     const activity = container.querySelector<HTMLButtonElement>(".chat-activity-group__summary");
@@ -221,29 +265,32 @@ it.each(["blocked", "skipped", undefined] as const)(
 );
 
 it.each([0, 10])("keeps failures visible without a duration (%i calls)", async (total) => {
+  const message = createAssistantMessage(
+    Array.from({ length: total }, (_, index) => [
+      createToolCall(`call-${index}`, "read", { path: `/repo/${index}.ts` }),
+      createToolResultBlock(`call-${index}`, "read", index < 2 ? "Unavailable" : "Loaded", {
+        isError: index < 2,
+      }),
+    ]).flat(),
+  );
   const groups = prepareHistoryGroups([
-    createToolGroup("mixed", [
-      createMessageEntry(
-        "mixed-message",
-        createAssistantMessage(
-          Array.from({ length: total }, (_, index) => [
-            createToolCall(`call-${index}`, "read", { path: `/repo/${index}.ts` }),
-            createToolResultBlock(`call-${index}`, "read", index < 2 ? "Unavailable" : "Loaded", {
-              isError: index < 2,
-            }),
-          ]).flat(),
-        ),
-      ),
-    ]),
+    createToolGroup("mixed", total ? [createMessageEntry("mixed-message", message)] : []),
   ]);
   const container = document.createElement("div");
-  await renderToolFixture(
-    renderWorkGroupSummary(
-      { key: "mixed-work", durationMs: null, groups },
-      { expanded: false, onToggle: () => {} },
-    ),
-    container,
+  document.body.append(container);
+  const root = mountSolid(
+    () =>
+      createComponent(WorkGroupSummary, {
+        item: { key: "mixed-work", durationMs: null, groups },
+        options: { expanded: false, onToggle: () => {} },
+      }),
+    { container },
   );
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  await settleToolBridges(container);
   const summary = container.querySelector(".chat-activity-group__summary");
   const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
   expect(text).toBe(total ? "Worked · 2 failed" : "Worked");
@@ -413,15 +460,20 @@ it.each([
     throw new Error("expected the step's tool group");
   }
   const container = document.createElement("div");
-  const draw = async (expanded: boolean) =>
-    renderToolFixture(
-      renderMessageGroup(group, {
-        showToolCalls: true,
-        showReasoning: false,
-        isToolExpanded: () => expanded,
-      }),
-      container,
-    );
+  document.body.append(container);
+  const root = createMessageGroupHarness(container);
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  const draw = async (expanded: boolean) => {
+    root.render(group, {
+      showToolCalls: true,
+      showReasoning: false,
+      isToolExpanded: () => expanded,
+    });
+    await settleToolBridges(container);
+  };
   await draw(false);
   if (isError) {
     // A step that did not complete keeps the counted row that carries its status.
@@ -441,4 +493,23 @@ it.each([
   expect(container.querySelectorAll(".chat-tool-children .chat-tool-wrapper-details")).toHaveLength(
     1,
   );
+});
+
+it("renders a prepared outcome with no raw tool blocks through transcript grouping", async () => {
+  const message = createAssistantMessage([], { activity: [preparedOutcome("blocked")] });
+  const group = buildChatItems(createProps({ messages: [message] }))[0];
+  if (group?.kind !== "group") {
+    throw new Error("expected the prepared activity group");
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createMessageGroupHarness(container);
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  root.render(group, { showToolCalls: true, showReasoning: false });
+  await settleToolBridges(container);
+  expect(container.textContent).toContain("1 blocked");
+  expect(container.querySelector(".chat-bubble")).toBeNull();
 });

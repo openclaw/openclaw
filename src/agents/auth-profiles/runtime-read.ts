@@ -1,10 +1,8 @@
 /** Runtime auth reads compose worker-prepared facts through the store's captured host scope. */
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
@@ -20,6 +18,7 @@ import {
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
+import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import type {
   AuthProfileReadOwner,
   LoadAuthProfileStoreOptions,
@@ -106,7 +105,7 @@ type RuntimeReadHost = {
 
 type AsyncAuthProfileStoreOptions = Omit<
   LoadAuthProfileStoreOptions,
-  "database" | "onReadOwner" | "syncExternalCli"
+  "database" | "onReadOwner" | "onReadSource" | "syncExternalCli"
 >;
 
 type AuthProfileRowsReader = Pick<
@@ -495,59 +494,39 @@ export function createAuthProfileStoreRuntimeReader({
       const store = inCapturedScope(load);
       return materializePersonalProfile(store);
     };
-    let result: Result<T | AuthProfileStore, unknown>;
     try {
-      result = {
-        ok: true,
-        value: await (consume
-          ? consume({
-              effectiveAgentDir,
-              env,
-              options: capturedOptions,
-              sharedPath,
-              runInCapturedScope: (operation) => {
-                if (!accepting) {
-                  throw new Error("Auth profile read scope is no longer active");
-                }
-                return inCapturedScope(operation);
-              },
-              readStore,
-              assertCurrent,
-              materializePersonalProfile,
-            })
-          : loadPrepared()),
-      };
-    } catch (error) {
-      result = { ok: false, error };
-    } finally {
-      accepting = false;
-    }
-    const cleanup = await Promise.allSettled(
-      [...agentReads.values()].map((reader) => reader.dispose()),
-    );
-    const failures = cleanup.flatMap((entry) =>
-      entry.status === "rejected" ? [entry.reason] : [],
-    );
-    try {
-      if (failures.length > 0) {
-        const error =
-          failures.length === 1
-            ? failures[0]
-            : new AggregateError(failures, "Auth profile reader cleanup failed", {
-                cause: failures[0],
-              });
-        throw result.ok
-          ? error
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(result.error, "Auth profile runtime read failed"),
-              error,
-            );
-      }
-      if (!result.ok) {
-        throw result.error;
-      }
+      const value = await withAuthProfileReaderCleanup(
+        async () => {
+          try {
+            return await (consume
+              ? consume({
+                  effectiveAgentDir,
+                  env,
+                  options: capturedOptions,
+                  sharedPath,
+                  runInCapturedScope: (operation) => {
+                    if (!accepting) {
+                      throw new Error("Auth profile read scope is no longer active");
+                    }
+                    return inCapturedScope(operation);
+                  },
+                  readStore,
+                  assertCurrent,
+                  materializePersonalProfile,
+                })
+              : loadPrepared());
+          } finally {
+            accepting = false;
+          }
+        },
+        agentReads.values(),
+        {
+          read: "Auth profile runtime read failed",
+          cleanup: "Auth profile reader cleanup failed",
+        },
+      );
       assertCurrent();
-      return result.value;
+      return value;
     } finally {
       active = false;
     }
@@ -568,7 +547,7 @@ export function createAuthProfileStoreRuntimeReader({
   /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Supported through 2026-12-31. */
   function loadAuthProfileStoreForRuntime(
     agentDir?: string,
-    options?: LoadAuthProfileStoreOptions,
+    options?: Omit<LoadAuthProfileStoreOptions, "onReadSource">,
     env?: NodeJS.ProcessEnv,
   ): AuthProfileStore {
     warnPluginSdkDeprecation({

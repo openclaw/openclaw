@@ -543,6 +543,9 @@ export function handleAgentEvent(
       return true;
     }
     const item = activityItem;
+    if (item.kind === "tool" && item.phase === "start") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     const toolCallId = item.toolCallId ?? item.itemId;
     const identity = buildToolStreamIdentity(payload.runId, toolCallId);
     let entry = host.toolStreamById.get(identity);

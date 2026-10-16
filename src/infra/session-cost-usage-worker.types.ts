@@ -155,7 +155,7 @@ export type UsageCostWorkerHostEffects = {
   restore: { input: SqliteSessionFileMarker; output: void };
   "prune-row": { input: UsageCostPruneRow; output: void };
   prune: { input: Record<string, never>; output: void };
-  write: { input: UsageCostPreparedRollup; output: boolean };
+  write: { input: UsageCostPreparedRollup[]; output: boolean };
 };
 
 export type UsageCostWorkerHostRequest = {

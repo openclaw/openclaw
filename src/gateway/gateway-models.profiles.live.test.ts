@@ -1673,7 +1673,7 @@ describe("providerScopedModelRegistryProviders", () => {
         useSmall: false,
       }),
     ).toEqual([
-      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "openai/gpt-5.6-luna" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
     ]);
     expect(
@@ -1689,12 +1689,12 @@ describe("providerScopedModelRegistryProviders", () => {
   it("loads explicit gateway model refs through dynamic discovery", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
-        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.2-chat" }],
+        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.6-luna" }],
         providerFilter: new Set(["openrouter"]),
         useExplicit: true,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.2-chat" }]);
+    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.6-luna" }]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -5538,9 +5538,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
     await prepareLiveGatewayWorkspace(workspaceDir);
     // Prefix the random values so provider safety heuristics do not mistake the
-    // harmless readback proof for secret material.
-    const nonceA = `tool-read-alpha-${randomUUID()}`;
-    const nonceB = `tool-read-beta-${randomUUID()}`;
+    // harmless readback proof for secret material. Keep the random part short: the
+    // probe proves the file was read, not 36-character UUID copy fidelity, which
+    // GPT-5.6 variants occasionally garble.
+    const nonceA = `tool-read-alpha-${randomBytes(4).toString("hex")}`;
+    const nonceB = `tool-read-beta-${randomBytes(4).toString("hex")}`;
     // Keep probe values out of the path: weak tool callers may echo the filename
     // instead of reading the file, turning nonceA into a false duplicate answer.
     const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
@@ -5919,7 +5921,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               if (params.extraToolProbes) {
                 phase = "tool-exec";
                 logProgress(`${progressLabel}: tool-exec`);
-                const nonceC = randomUUID();
+                const nonceC = `exec-read-${randomBytes(4).toString("hex")}`;
                 // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
                 // isolated without putting a nonce-shaped UUID in the model-visible path.
                 const toolWritePath = path.join(

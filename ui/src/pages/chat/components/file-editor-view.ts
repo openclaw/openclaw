@@ -105,6 +105,11 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
+  // The detail-panel owner derives a fresh match array for each synchronization.
+  let previousDecorations:
+    | (FileEditorDecorations & { document: EditorState["doc"]; matches: readonly number[] })
+    | undefined;
+
   return {
     destroy: () => {
       if (!destroyed) {
@@ -132,7 +137,7 @@ export async function createFileEditorView(params: {
     // Compare logical lines without treating a read-only mixed-ending preview as an edit.
     contentEquals: (content: string) => view.state.toText(content).eq(view.state.doc),
     setEditable: (nextEditable: boolean) => {
-      if (destroyed) {
+      if (destroyed || nextEditable === isEditable) {
         return;
       }
       // Tracked so a setContent state rebuild keeps the current edit mode.
@@ -156,6 +161,19 @@ export async function createFileEditorView(params: {
       if (destroyed) {
         return;
       }
+      // Panel chrome refreshes must not dispatch unchanged editor effects. A
+      // changed document still needs fresh line anchors even with equal inputs.
+      const previous = previousDecorations;
+      if (
+        previous?.document === view.state.doc &&
+        previous.targetLine === targetLine &&
+        previous.currentMatch === currentMatch &&
+        previous.matches.length === matches.length &&
+        matches.every((line, index) => line === previous.matches[index])
+      ) {
+        return;
+      }
+      previousDecorations = { document: view.state.doc, targetLine, matches, currentMatch };
       const matchingLines = new Set(matches);
       const decorations = [...new Set([...matches, targetLine, currentMatch])]
         .filter(

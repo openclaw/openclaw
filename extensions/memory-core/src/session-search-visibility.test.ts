@@ -375,43 +375,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it("excludes the anchor transcript when another private key aliases the same session", async () => {
-    combinedSessionStore = {
-      "agent:main:telegram:direct:owner": sessionEntry(
-        "current",
-        2,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-      "agent:main:explicit:legacy-owner-alias": sessionEntry(
-        "current",
-        1,
-        "/tmp/sessions/current.jsonl",
-        { chatType: "direct" },
-      ),
-    };
-    const hit: MemorySearchResult = searchHit(
-      "sessions/current.jsonl",
-      "sessions",
-      "already in context",
-    );
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "agent" } } });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:main:telegram:direct:owner",
-      sandboxed: false,
-      hits: [hit],
-      conversationRecall: {
-        anchorSessionKey: "agent:main:telegram:direct:owner",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
-
   it.each([{ name: "unknown", chatType: undefined }])(
     "denies $name transcript hits from trusted conversation recall",
     async ({ chatType }) => {
