@@ -94,7 +94,7 @@ function engineResult(stdout: string) {
 
 async function mountedBridge(
   binds: ReturnType<typeof bind>[],
-  tmpfs: Record<string, string>,
+  tmpfs: Partial<Record<string, string>>,
   table: string[],
   extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
 ) {
