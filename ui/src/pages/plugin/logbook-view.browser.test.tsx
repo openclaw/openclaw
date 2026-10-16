@@ -42,7 +42,7 @@ it.each([
       pendingFrames: 0,
       analysisRunning: false,
       visionModelSource: "missing",
-      today,
+      today: day,
       todayCards: 1,
       timeZone: "UTC",
     };
