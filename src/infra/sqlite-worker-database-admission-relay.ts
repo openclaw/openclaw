@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromise } from "node:util/types";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
@@ -18,7 +19,7 @@ const ADMISSION_PEER_SAFETY_TIMEOUT_MS = 10 * 60_000;
 export const SQLITE_COLD_ADMISSION_PENDING = 4;
 
 type AdmissionWait = { readonly deadlineAtMs?: number; assertActive?: () => void };
-type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope };
+type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
 const admissionWait = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionWait"),
   () => new AsyncLocalStorage<AdmissionWaitScope>(),
@@ -26,12 +27,32 @@ const admissionWait = resolveGlobalSingleton(
 
 /** Callers own the deadline; worker transports carry its remaining absolute budget. */
 export function withSqliteDatabaseAdmissionWait<T>(wait: AdmissionWait, run: () => T): T {
-  return admissionWait.run({ wait, parent: admissionWait.getStore() }, run);
+  const scope = { wait, parent: admissionWait.getStore(), active: true };
+  const close = () => {
+    scope.active = false;
+  };
+  let pending = false;
+  try {
+    const value = admissionWait.run(scope, run);
+    if (isPromise(value)) {
+      pending = true;
+      void value.then(close, close);
+    }
+    return value;
+  } finally {
+    if (!pending) {
+      close();
+    }
+  }
 }
 
 export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
   let deadline: number | undefined;
   for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
+    // Retained worker callbacks keep async ancestry, but never a settled caller's budget.
+    if (!scope.active) {
+      continue;
+    }
     const value = scope.wait.deadlineAtMs;
     if (value !== undefined) {
       deadline = Math.min(deadline ?? Infinity, value);
@@ -43,7 +64,9 @@ export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
 function assertAdmissionWaitActive(): void {
   try {
     for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-      scope.wait.assertActive?.();
+      if (scope.active) {
+        scope.wait.assertActive?.();
+      }
     }
   } catch {
     throw new SqliteWorkerError(
