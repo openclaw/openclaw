@@ -8,13 +8,38 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackMessageEvent } from "../types.js";
 import { buildSlackDebounceKey } from "./message-handler/debounce-key.js";
 import { createInboundSlackTestContext } from "./message-handler/prepare.test-helpers.js";
+
+function makeMessage(
+  ts: string,
+  text: string,
+  overrides: Partial<SlackMessageEvent> = {},
+): SlackMessageEvent {
+  return { type: "message", channel: "C111", user: "U111", ts, text, ...overrides };
+}
+
+function expectPrepared(
+  message: Partial<SlackMessageEvent> | undefined,
+  opts: Record<string, unknown>,
+) {
+  expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      ...(message ? { message: expect.objectContaining(message) } : {}),
+      opts: expect.objectContaining(opts),
+    }),
+  );
+}
+
+function queuedEntries() {
+  return enqueueMock.mock.calls.map(([entry]) => entry);
+}
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 
 let useRealDebouncer = false;
-const enqueueMock = vi.fn(async (_entry: unknown) => {});
+const enqueueMock = vi.fn(async (_entry: Record<string, unknown>) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const onFlushCallbacks: Array<
   (
@@ -54,7 +79,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
       return {
         debounceMs: 10,
         debouncer: {
-          enqueue: (entry: unknown) => enqueueMock(entry),
+          enqueue: (entry: Record<string, unknown>) => enqueueMock(entry),
           flushKey: (key: string) => flushKeyMock(key),
           cancelKey: () => false,
           drain: async () => {},
@@ -84,20 +109,20 @@ vi.mock("./message-handler/pipeline.runtime.js", () => ({
   dispatchPreparedSlackMessage: dispatchPreparedSlackMessageMock,
 }));
 
-function createContext(overrides?: {
+type HandlerOverrides = {
   cfg?: OpenClawConfig;
-  rememberSlackChannelType?: (
-    channel: string | null | undefined,
-    channelType: string | null | undefined,
-  ) => void;
-}) {
+  abortSignal?: AbortSignal;
+  rememberSlackChannelType?: Parameters<
+    typeof createSlackMessageHandler
+  >[0]["ctx"]["rememberSlackChannelType"];
+};
+
+function createContext(overrides?: HandlerOverrides) {
   const ctx = {
     installationIdentity: { kind: "degraded", reason: "auth_test_failed" },
     cfg: overrides?.cfg ?? {},
     accountId: "default",
-    app: {
-      client: {},
-    },
+    app: { client: {} },
     runtime: {},
     rememberSlackChannelType: (
       channel: string | null | undefined,
@@ -108,14 +133,7 @@ function createContext(overrides?: {
   return ctx;
 }
 
-function createHandlerWithTracker(overrides?: {
-  cfg?: OpenClawConfig;
-  abortSignal?: AbortSignal;
-  rememberSlackChannelType?: (
-    channel: string | null | undefined,
-    channelType: string | null | undefined,
-  ) => void;
-}) {
+function createHandlerWithTracker(overrides?: HandlerOverrides) {
   const trackEvent = vi.fn();
   const ctx = createContext(overrides);
   const handler = createSlackMessageHandler({
@@ -151,44 +169,27 @@ describe("createSlackMessageHandler", () => {
     const handler = createSlackMessageHandler({
       ctx: context,
     });
-    let releaseFirstPreparation!: () => void;
-    const firstPreparation = new Promise<void>((resolve) => {
-      releaseFirstPreparation = resolve;
-    });
+    const firstPreparation = createDeferred<void>();
     prepareSlackMessageMock.mockImplementationOnce(async () => {
-      await firstPreparation;
+      await firstPreparation.promise;
       return { ctxPayload: {} };
     });
 
     setRuntimeConfigSnapshot(firstConfig, firstConfig);
-    await handler(
-      {
-        type: "message",
-        channel: "D1",
-        user: "U1",
-        ts: "1709000000.009002",
-        text: "first",
-      } as never,
-      { source: "message" },
-    );
-    const firstEntry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await handler(makeMessage("1709000000.009002", "first", { channel: "D1", user: "U1" }), {
+      source: "message",
+    });
+    const firstEntry = queuedEntries()[0]!;
     const firstFlush = runOnFlush([firstEntry]);
     await vi.waitFor(() => expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1));
 
     setRuntimeConfigSnapshot(secondConfig, secondConfig);
-    await handler(
-      {
-        type: "message",
-        channel: "D2",
-        user: "U2",
-        ts: "1709000000.009003",
-        text: "second",
-      } as never,
-      { source: "message" },
-    );
-    const secondEntry = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    await handler(makeMessage("1709000000.009003", "second", { channel: "D2", user: "U2" }), {
+      source: "message",
+    });
+    const secondEntry = queuedEntries()[1]!;
     await runOnFlush([secondEntry]);
-    releaseFirstPreparation();
+    firstPreparation.resolve();
     await firstFlush;
 
     expect(prepareSlackMessageMock).toHaveBeenNthCalledWith(
@@ -202,76 +203,45 @@ describe("createSlackMessageHandler", () => {
     expect(context.cfg).toBe(startupConfig);
   });
 
-  it("does not track invalid non-message events from the message stream", async () => {
-    const trackEvent = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      trackEvent,
-    });
-
-    await handler(
-      {
-        type: "reaction_added",
-        channel: "D1",
-        ts: "123.456",
-      } as never,
-      { source: "message" },
-    );
-
+  it.each([
+    { type: "reaction_added", channel: "D1", ts: "123.456" },
+    makeMessage("1709000000.000400", "<@U111> joined the channel", {
+      subtype: "channel_join",
+      channel: "C111",
+      user: "U111",
+    }),
+  ])("does not track or enqueue non-user events: $type $subtype", async (message) => {
+    const { handler, trackEvent } = createHandlerWithTracker();
+    await handler(message as never, { source: "message" });
     expect(trackEvent).not.toHaveBeenCalled();
     expect(resolveThreadTsMock).not.toHaveBeenCalled();
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("records explicit channel type before thread resolution", async () => {
-    let settleThreadResolution: (() => void) | undefined;
+    const threadResolution = createDeferred<void>();
     resolveThreadTsMock.mockImplementationOnce(
       async ({ message }: { message: Record<string, unknown> }) => {
-        await new Promise<void>((resolve) => {
-          settleThreadResolution = resolve;
-        });
+        await threadResolution.promise;
         return { ...message };
       },
     );
     const rememberSlackChannelType = vi.fn();
     const { handler } = createHandlerWithTracker({ rememberSlackChannelType });
     const handled = handler(
-      {
-        type: "message",
+      makeMessage("123.456", "human seed", {
         channel: "C0MPDM42",
         channel_type: "mpim",
         user: "U_HUMAN",
-        ts: "123.456",
-        text: "human seed",
-      } as never,
+      }),
       { source: "message" },
     );
 
     expect(rememberSlackChannelType).toHaveBeenCalledWith("C0MPDM42", "mpim");
     expect(enqueueMock).not.toHaveBeenCalled();
-    settleThreadResolution?.();
+    threadResolution.resolve();
     await handled;
     expect(enqueueMock).toHaveBeenCalledOnce();
-  });
-
-  it("drops message subtypes that do not carry user message text", async () => {
-    const { handler, trackEvent } = createHandlerWithTracker();
-
-    await handler(
-      {
-        type: "message",
-        subtype: "channel_join",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000400",
-        text: "<@U111> joined the channel",
-      } as never,
-      { source: "message" },
-    );
-
-    expect(trackEvent).not.toHaveBeenCalled();
-    expect(resolveThreadTsMock).not.toHaveBeenCalled();
-    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("flushes buffered text before a table-bearing message", async () => {
@@ -279,34 +249,13 @@ describe("createSlackMessageHandler", () => {
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
     });
 
+    await handler(makeMessage("1709000000.000100", "first buffered text"), { source: "message" });
     await handler(
-      {
-        type: "message",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000100",
-        text: "first buffered text",
-      } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
-        type: "message",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000200",
-        text: "table follows",
+      makeMessage("1709000000.000200", "table follows", {
         attachments: [
-          {
-            blocks: [
-              {
-                type: "table",
-                rows: [[{ type: "raw_text", text: "kept" }]],
-              },
-            ],
-          },
+          { blocks: [{ type: "table", rows: [[{ type: "raw_text", text: "kept" }]] }] },
         ],
-      } as never,
+      }),
       { source: "message" },
     );
 
@@ -317,34 +266,23 @@ describe("createSlackMessageHandler", () => {
     const handler = createSlackMessageHandler({
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
     });
-    const bufferedMessage = {
-      type: "message" as const,
-      channel: "C111",
-      user: "U111",
-      ts: "1709000000.000300",
-      text: "duplicate buffered text",
-    };
+    const bufferedMessage = makeMessage("1709000000.000300", "duplicate buffered text");
 
     await handler(bufferedMessage as never, { source: "message" });
-    const first = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const first = queuedEntries()[0]!;
     await runOnFlush([first]);
 
     await handler(bufferedMessage as never, { source: "message" });
-    const duplicate = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    const duplicate = queuedEntries()[1]!;
     await runOnFlush([duplicate]);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
     flushKeyMock.mockClear();
 
     await handler(
-      {
-        type: "message",
+      makeMessage("1709000000.000400", "file follows", {
         subtype: "file_share",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000400",
-        text: "file follows",
         files: [{ id: "F1" }],
-      } as never,
+      }),
       { source: "message" },
     );
 
@@ -365,16 +303,11 @@ describe("createSlackMessageHandler", () => {
       onSessionRouted: vi.fn(async () => {}),
     };
     const { handler } = createHandlerWithTracker();
-    const handled = handler(
-      {
-        type: "message",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000550",
-        text: "durable message",
-      } as never,
-      { source: "message", awaitDispatch: true, turnAdoptionLifecycle },
-    );
+    const handled = handler(makeMessage("1709000000.000550", "durable message"), {
+      source: "message",
+      awaitDispatch: true,
+      turnAdoptionLifecycle,
+    });
 
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
     expect(resolveThreadTsMock).toHaveBeenCalledWith({
@@ -382,7 +315,7 @@ describe("createSlackMessageHandler", () => {
       source: "message",
       turnAdoptionLifecycle,
     });
-    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const entry = queuedEntries()[0]!;
     let settled = false;
     void handled.then(() => {
       settled = true;
@@ -417,13 +350,7 @@ describe("createSlackMessageHandler", () => {
     const secondSource = "message";
     const { handler } = createHandlerWithTracker();
     const twinTs = "1709000000.001778";
-    const message = {
-      type: "message" as const,
-      channel: "C111",
-      user: "U111",
-      ts: twinTs,
-      text: "<@UBOT> hello",
-    };
+    const message = makeMessage(twinTs, "<@UBOT> hello");
     const handleTwin = (source: "message" | "app_mention") =>
       handler(message as never, {
         source,
@@ -435,14 +362,12 @@ describe("createSlackMessageHandler", () => {
     const second = handleTwin(secondSource);
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
 
-    await runOnFlush(enqueueMock.mock.calls.map(([entry]) => entry as Record<string, unknown>));
+    await runOnFlush(queuedEntries());
 
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ text: message.text, ts: twinTs }),
-        opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
-      }),
+    expectPrepared(
+      { text: message.text, ts: twinTs },
+      { source: "app_mention", wasMentioned: true },
     );
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
     const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
@@ -457,13 +382,7 @@ describe("createSlackMessageHandler", () => {
       return null;
     });
     const { handler } = createHandlerWithTracker();
-    const message = {
-      type: "message" as const,
-      channel: "C111",
-      user: "U111",
-      ts: "1709000000.001881",
-      text: "<@UBOT> hello",
-    };
+    const message = makeMessage("1709000000.001881", "<@UBOT> hello");
     const asMessage = handler(message as never, {
       source: "message",
       awaitDispatch: true,
@@ -475,15 +394,11 @@ describe("createSlackMessageHandler", () => {
     });
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
 
-    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
+    const entries = queuedEntries();
     await runOnFlush(entries);
     await expect(Promise.all([asMessage, asMention])).resolves.toEqual([undefined, undefined]);
 
-    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
-      }),
-    );
+    expectPrepared(undefined, { source: "app_mention", wasMentioned: true });
     expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
 
@@ -509,16 +424,12 @@ describe("createSlackMessageHandler", () => {
       await expect(Promise.all(handled)).resolves.toEqual([undefined, undefined]);
       expect(enqueueMock).toHaveBeenCalledTimes(2);
 
-      const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<
-        Record<string, unknown>
-      >;
+      const entries = queuedEntries();
       await runOnFlush(entries);
 
-      expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message: expect.objectContaining({ text: "first message\nsecond message" }),
-          opts: expect.objectContaining({ senderAuthentication: authentication }),
-        }),
+      expectPrepared(
+        { text: "first message\nsecond message" },
+        { senderAuthentication: authentication },
       );
       expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -653,7 +564,7 @@ describe("createSlackMessageHandler", () => {
         { source: "message" },
       );
     }
-    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
+    const entries = queuedEntries();
     const flushing = runOnFlush(entries);
     await vi.waitFor(() => expect(claim).toHaveBeenCalledTimes(2));
     vi.useFakeTimers();
@@ -688,14 +599,11 @@ describe("createSlackMessageHandler", () => {
       channels: { slack: { dmPolicy: "allowlist", allowFrom: ["@invalid-name"] } },
     };
     setRuntimeConfigSnapshot(invalid, invalid);
-    const message = {
-      type: "message" as const,
+    const message = makeMessage("300.001", "hello", {
       channel: "D12345678",
       channel_type: "im" as const,
       user: "U12345678",
-      ts: "300.001",
-      text: "hello",
-    };
+    });
     let failure: unknown;
     const rejected = handler(message, { source: "message", awaitDispatch: true }).catch(
       (error: unknown) => {
@@ -721,14 +629,11 @@ describe("createSlackMessageHandler", () => {
   it("isolates unresolved thread replies from top-level debounce keys", () => {
     expect(
       buildSlackDebounceKey(
-        {
-          type: "message",
+        makeMessage("1709000000.000200", "hello", {
           channel: "C123",
           user: "U456",
           parent_user_id: "U789",
-          ts: "1709000000.000200",
-          text: "hello",
-        },
+        }),
         "default",
       ),
     ).toBe("slack:default:C123:maybe-thread:1709000000.000200:U456");

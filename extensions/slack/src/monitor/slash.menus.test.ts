@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { deliverSlackSlashReplies } from "./replies.js";
 import {
   createArgMenusHarness,
   createSlashCommand,
@@ -28,8 +29,30 @@ import {
 } from "./slash.commands.test-harness.js";
 import { firstCallPayload, getSlackSlashMocks } from "./slash.test-harness.js";
 
-const { dispatchMock } = getSlackSlashMocks();
+const slackMocks = getSlackSlashMocks();
+const {
+  dispatchMock,
+  deliverSlackSlashRepliesMock,
+  recordDeliveredCommandExchangeMock,
+  resolveAgentRouteMock,
+  turnPlanMock,
+} = slackMocks;
 const { pluginCommandFixtures, skillCommandFixtures } = getSlackCommandFixtures();
+type SlashReplies = Parameters<typeof deliverSlackSlashReplies>[0];
+type MenuElement = {
+  type?: string;
+  action_id?: string;
+  text?: { text?: string };
+  value?: string;
+  options?: Array<{ value?: string }>;
+  confirm?: { text?: { text?: string } };
+};
+type MenuPayload = {
+  blocks?: Array<{ type: string; elements?: MenuElement[] }>;
+};
+const menuValue = (command = "usage", value = "tokens") =>
+  encodeValue({ command, arg: "mode", value, userId: "U1" });
+
 type DispatchParams = {
   dispatcherOptions: {
     deliver: (payload: { text: string }, info: { kind: "block" | "final" }) => Promise<void>;
@@ -42,6 +65,23 @@ describe("Slack native command argument menus", () => {
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
   const trackEvent = vi.fn();
   const command = (name: string) => requireHandler(harness.commands, `/${name}`, `/${name}`);
+
+  async function selectedDecision(
+    testHarness: ReturnType<typeof createArgMenusHarness>,
+    name: string,
+    text = "",
+  ) {
+    let selected: PluginCommandCatalogDecision | undefined;
+    setAsyncDispatchMock(async ({ replyOptions }) => {
+      selected = replyOptions?.[PLUGIN_COMMAND_DISPATCH] as
+        | PluginCommandCatalogDecision
+        | undefined;
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+    await registerCommands(testHarness.ctx, testHarness.account);
+    await runCommandHandler(requireHandler(testHarness.commands, name, name), { text });
+    return selected;
+  }
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
@@ -59,9 +99,8 @@ describe("Slack native command argument menus", () => {
   it("delivers native /login block replies before the command finishes", async () => {
     const loginFinished = createDeferred<void>();
     const codeDelivered = createDeferred<void>();
-    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
     deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
-      const replies = (params as { replies: Array<{ text?: string }> }).replies;
+      const replies = (params as SlashReplies).replies;
       if (replies.some((reply) => reply.text === "Use code ABCD")) {
         codeDelivered.resolve();
       }
@@ -89,7 +128,6 @@ describe("Slack native command argument menus", () => {
   });
 
   it("batches non-login block streams with the terminal reply", async () => {
-    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
     dispatchMock.mockImplementation(async ({ dispatcherOptions: { deliver } }: DispatchParams) => {
       for (let index = 1; index <= 5; index += 1) {
         await deliver({ text: `progress ${String(index)}` }, { kind: "block" });
@@ -185,18 +223,8 @@ describe("Slack native command argument menus", () => {
     pluginCommandFixtures.specs = [
       { name, description: "Skipped plugin", acceptsArgs: false, execute },
     ];
-    let selectedDispatch: PluginCommandCatalogDecision | undefined;
-    setAsyncDispatchMock(async ({ replyOptions }) => {
-      selectedDispatch = replyOptions?.[PLUGIN_COMMAND_DISPATCH] as
-        | PluginCommandCatalogDecision
-        | undefined;
-      return { counts: { final: 1, tool: 0, block: 0 } };
-    });
     const collisionHarness = createArgMenusHarness();
-    await registerCommands(collisionHarness.ctx, collisionHarness.account);
-    const handler = requireHandler(collisionHarness.commands, `/${name}`, `${name} command`);
-
-    await runCommandHandler(handler, { text: "day" });
+    const selectedDispatch = await selectedDecision(collisionHarness, `/${name}`, "day");
 
     expect(selectedDispatch).toEqual({ kind: "non-plugin" });
     expect(execute).not.toHaveBeenCalled();
@@ -212,24 +240,13 @@ describe("Slack native command argument menus", () => {
     pluginCommandFixtures.specs = [
       { name: pluginName, description: "Colliding plugin", acceptsArgs: false, execute },
     ];
-    let selectedDispatch: PluginCommandCatalogDecision | undefined;
-    setAsyncDispatchMock(async ({ replyOptions }) => {
-      selectedDispatch = replyOptions?.[PLUGIN_COMMAND_DISPATCH] as
-        | PluginCommandCatalogDecision
-        | undefined;
-      return { counts: { final: 1, tool: 0, block: 0 } };
-    });
     const skillHarness = createArgMenusHarness({
       commands: { native: true, nativeSkills: true },
     });
     (skillHarness.account as { config: OpenClawConfig }).config = {
       commands: { native: true, nativeSkills: true },
     };
-    await registerCommands(skillHarness.ctx, skillHarness.account);
-
-    await runCommandHandler(
-      requireHandler(skillHarness.commands, `/${skillName}`, "skill command"),
-    );
+    const selectedDispatch = await selectedDecision(skillHarness, `/${skillName}`);
 
     expect(selectedDispatch).toEqual({ kind: "non-plugin" });
     expect(execute).not.toHaveBeenCalled();
@@ -252,7 +269,7 @@ describe("Slack native command argument menus", () => {
             : undefined,
         );
       onTestFinished(() => reader.mockRestore());
-      getSlackSlashMocks().resolveAgentRouteMock.mockReturnValue({
+      resolveAgentRouteMock.mockReturnValue({
         agentId: "main",
         sessionKey,
         accountId: "acct",
@@ -308,9 +325,7 @@ describe("Slack native command argument menus", () => {
     const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
     const { respond } = await runCommandHandler(handler);
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = firstCallPayload(respond, "response") as {
-      blocks?: Array<{ type: string }>;
-    };
+    const payload = firstCallPayload(respond, "response") as MenuPayload;
     const actionsBlock = findFirstActionsBlock(payload);
     expect(actionsBlock?.elements?.[0]?.type).toBe("static_select");
   });
@@ -324,7 +339,7 @@ describe("Slack native command argument menus", () => {
     const element = actions.elements?.[0];
     expect(element?.type).toBe(type);
     expect(element).toHaveProperty("confirm");
-    expect(getSlackSlashMocks().recordDeliveredCommandExchangeMock).toHaveBeenCalledWith(
+    expect(recordDeliveredCommandExchangeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "session:1",
         commandText: `/${name}`,
@@ -332,25 +347,20 @@ describe("Slack native command argument menus", () => {
         replyId: "argument-menu",
       }),
     );
-    expect(
-      getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
-    ).toContain(firstCallPayload(respond, "menu").text);
-    expect(
-      getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
-    ).not.toContain("openclaw_cmdarg");
+    const recordedText = recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText;
+    expect(recordedText).toContain(firstCallPayload(respond, "menu").text);
+    expect(recordedText).not.toContain("openclaw_cmdarg");
     if (type === "button") {
       expect(element?.action_id).toBe("openclaw_cmdarg_0_0");
       expect(actions.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
       await runArgMenuAction(argMenuHandler, {
         action: {
-          value: encodeValue({ command: name, arg: "mode", value: "compact", userId: "U1" }),
+          value: menuValue(name, "compact"),
         },
       });
       expectSingleDispatchedSlashBody("/tools compact");
     } else {
-      expect(
-        getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
-      ).toContain("tokens");
+      expect(recordedText).toContain("tokens");
       expect(element?.action_id).toBe("openclaw_cmdarg");
     }
   });
@@ -366,19 +376,12 @@ describe("Slack native command argument menus", () => {
       respond,
     });
     expect(respond).toHaveBeenCalledTimes(2);
-    expect(getSlackSlashMocks().recordDeliveredCommandExchangeMock).not.toHaveBeenCalled();
+    expect(recordDeliveredCommandExchangeMock).not.toHaveBeenCalled();
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
     const { respond } = await runCommandHandler(command("reportlong"));
-    const firstElement = expectArgMenuLayout(respond).elements?.[0] as
-      | {
-          type?: string;
-          action_id?: string;
-          options?: Array<{ value?: string }>;
-          confirm?: unknown;
-        }
-      | undefined;
+    const firstElement = expectArgMenuLayout(respond).elements?.[0] as MenuElement | undefined;
     expect(firstElement?.type).toBe("static_select");
     expect(firstElement?.action_id).toBe("openclaw_cmdarg");
     const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
@@ -393,14 +396,14 @@ describe("Slack native command argument menus", () => {
 
   it("truncates button labels when static_select value limit would be exceeded", async () => {
     const firstElement = (await getFirstActionElementFromCommand(command("reportlongbutton"))) as
-      | { type?: string; text?: { text?: string }; value?: string; confirm?: unknown }
+      | MenuElement
       | undefined;
     expect(firstElement?.type).toBe("button");
     expect(firstElement?.text?.text).toHaveLength(75);
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
     expect(firstElement).toHaveProperty("confirm");
-    const recorded = getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
+    const recorded = recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
     expect(recorded?.replyText).toContain(firstElement?.text?.text);
     expect(recorded?.replyText).not.toContain("Long button label ".repeat(8));
   });
@@ -408,9 +411,7 @@ describe("Slack native command argument menus", () => {
   it("caps large button fallback menus to Slack's block limit", async () => {
     const { respond } = await runCommandHandler(command("reporthugebutton"));
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = firstCallPayload(respond, "response") as {
-      blocks?: Array<{ type: string; elements?: unknown[] }>;
-    };
+    const payload = firstCallPayload(respond, "response") as MenuPayload;
     const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
     expect(payload.blocks).toHaveLength(50);
     expect(actionBlocks).toHaveLength(47);
@@ -420,26 +421,21 @@ describe("Slack native command argument menus", () => {
   it("drops fallback buttons whose encoded values exceed Slack's button value limit", async () => {
     const { respond } = await runCommandHandler(command("reporthugevalue"));
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = firstCallPayload(respond, "response") as {
-      blocks?: Array<{
-        type: string;
-        elements?: Array<{ text?: { text?: string }; value?: string }>;
-      }>;
-    };
+    const payload = firstCallPayload(respond, "response") as MenuPayload;
     const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
     expect(actionBlocks).toHaveLength(1);
     expect(actionBlocks[0]?.elements).toHaveLength(1);
     const element = actionBlocks[0]?.elements?.[0];
     expect(element?.text?.text).toBe("Valid");
     expect(element?.value?.length).toBeLessThanOrEqual(2000);
-    const recorded = getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
+    const recorded = recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
     expect(recorded?.replyText).toContain("Valid");
     expect(recorded?.replyText).not.toContain("Overlong");
   });
 
   it("escapes only entities in confirm dialog text", async () => {
     const element = (await getFirstActionElementFromCommand(command("unsafeconfirm"))) as
-      | { confirm?: { text?: { text?: string } } }
+      | MenuElement
       | undefined;
     expect(element?.confirm?.text?.text).toContain(
       "Run */unsafeconfirm* with *mode_*`~&lt;&amp;&gt;* set to this value?",
@@ -448,7 +444,7 @@ describe("Slack native command argument menus", () => {
 
   it("truncates confirm dialog text when long args force button fallback", async () => {
     const element = (await getFirstActionElementFromCommand(command("longconfirm"))) as
-      | { type?: string; confirm?: { text?: { text?: string } } }
+      | MenuElement
       | undefined;
     const confirmText = element?.confirm?.text?.text;
     expect(element?.type).toBe("button");
@@ -473,11 +469,11 @@ describe("Slack native command argument menus", () => {
 
     await runArgMenuAction(enterpriseArgMenuHandler, {
       action: {
-        value: encodeValue({ command: "tools", arg: "mode", value: "compact", userId: "U1" }),
+        value: menuValue("tools", "compact"),
       },
     });
 
-    expect(getSlackSlashMocks().resolveAgentRouteMock).toHaveBeenCalledWith(
+    expect(resolveAgentRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
         teamId: "TGRID1",
         peer: { kind: "direct", id: "team:TGRID1:user:U1" },
@@ -502,7 +498,7 @@ describe("Slack native command argument menus", () => {
         ? (await runCommandHandler(command("agentstatus"))).respond
         : await runArgMenuAction(argMenuHandler, {
             action: {
-              value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+              value: menuValue(),
             },
             message,
             includeRespond: !webApi,
@@ -519,7 +515,7 @@ describe("Slack native command argument menus", () => {
     }
     if (source === "slash") {
       expectSingleDispatchedSlashBody("/status");
-      expect(getSlackSlashMocks().turnPlanMock).toHaveBeenCalledWith(
+      expect(turnPlanMock).toHaveBeenCalledWith(
         expect.objectContaining({ dispatchReplyFromConfig }),
       );
     }
@@ -527,19 +523,8 @@ describe("Slack native command argument menus", () => {
 
   it("keeps Web API action replies ephemeral and table fallback tokens literal", async () => {
     const tableFallback = "Account\tOwner\nprod\t<@U123> & <!channel>";
-    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
     deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
-      const responseBudget = (
-        params as {
-          responseBudget: {
-            respond: (payload: {
-              text: string;
-              mrkdwn?: false;
-              response_type: "in_channel";
-            }) => Promise<unknown>;
-          };
-        }
-      ).responseBudget;
+      const { responseBudget } = params as Required<Pick<SlashReplies, "responseBudget">>;
       await responseBudget.respond({
         text: tableFallback,
         mrkdwn: false,
@@ -553,7 +538,7 @@ describe("Slack native command argument menus", () => {
 
     await runArgMenuAction(argMenuHandler, {
       action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+        value: menuValue(),
       },
       includeRespond: false,
     });
@@ -623,7 +608,7 @@ describe("Slack native command argument menus", () => {
   it("rejects menu clicks from other users", async () => {
     const respond = await runArgMenuAction(argMenuHandler, {
       action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+        value: menuValue(),
       },
       userId: "U2",
       userName: "Eve",
