@@ -106,8 +106,7 @@ export function normalizeConfig({
   for (const model of providerConfig.models ?? []) {
     const cloudModel = resolveOllamaCloudDefaultModel(model.id);
     const remote =
-      isHostedOllamaCloud(model.baseUrl ?? baseUrl) ||
-      normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID;
+      isHostedOllamaCloud(baseUrl) || normalizedProviderId === OLLAMA_CLOUD_PROVIDER_ID;
     if (
       model.maxTokens !== undefined ||
       (model.contextWindow === undefined && !cloudModel) ||

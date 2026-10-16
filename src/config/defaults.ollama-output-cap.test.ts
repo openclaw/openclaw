@@ -57,14 +57,26 @@ describe("Ollama configured output budgets", () => {
     { id: "custom", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
     { id: "minimax-m3", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
     { id: "kimi-k3", baseUrl: "http://127.0.0.1:11434", expected: 8192 },
+    {
+      id: "minimax-m3",
+      baseUrl: "http://127.0.0.1:11434",
+      modelBaseUrl: "https://ollama.com",
+      expected: 8192,
+    },
+    {
+      id: "minimax-m3",
+      baseUrl: "https://ollama.com",
+      modelBaseUrl: "http://127.0.0.1:11434",
+      expected: 262_144,
+    },
     { id: "minimax-m3", baseUrl: "https://ollama.com", expected: 262_144 },
     { id: "kimi-k3:cloud", baseUrl: "http://127.0.0.1:11434", expected: 262_144 },
     { id: "minimax-m3", baseUrl: "http://127.0.0.1:11434", maxTokens: 1024, expected: 1024 },
     { id: "custom", baseUrl: "https://ollama.com", maxTokens: 1024, expected: 1024 },
     { id: "custom", baseUrl: "https://ollama.com", providerMaxTokens: 2048, expected: 2048 },
   ])(
-    "materializes $id at $baseUrl with authored cap $maxTokens",
-    ({ id, baseUrl, maxTokens, providerMaxTokens, expected }) => {
+    "materializes $id at $baseUrl (model URL $modelBaseUrl) with authored cap $maxTokens",
+    ({ id, baseUrl, modelBaseUrl, maxTokens, providerMaxTokens, expected }) => {
       const parsed = validateConfigObjectRaw({
         models: {
           providers: {
@@ -73,7 +85,14 @@ describe("Ollama configured output budgets", () => {
               api: "ollama",
               maxTokens: providerMaxTokens,
               models: [
-                { id, name: id, contextWindow: 262_144, maxTokens, params: { num_predict: -1 } },
+                {
+                  id,
+                  name: id,
+                  baseUrl: modelBaseUrl,
+                  contextWindow: 262_144,
+                  maxTokens,
+                  params: { num_predict: -1 },
+                },
               ],
             },
           },
