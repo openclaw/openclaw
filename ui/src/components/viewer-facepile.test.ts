@@ -26,7 +26,6 @@ import {
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
-import "./viewer-facepile.ts";
 
 afterEach(() => {
   cleanupSolid();

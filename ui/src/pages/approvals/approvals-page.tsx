@@ -316,7 +316,7 @@ export function ApprovalsPage() {
       if (!canPublish()) {
         return;
       }
-      state.grants = Array.isArray(result.grants) ? result.grants : [];
+      state.grants = result.grants;
       state.grantsError = null;
       publish();
     } catch (error) {

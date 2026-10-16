@@ -151,9 +151,9 @@ export function renderSidebarNavLink(params: {
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
       onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload ?? undefined}
+      onBlur={params.onCancelPreload}
       onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload ?? undefined}
+      onPointerLeave={params.onCancelPreload}
       onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
