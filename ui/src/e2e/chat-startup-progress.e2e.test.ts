@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.ts";
 import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
 import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
@@ -9,28 +10,62 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-let proofDir: string;
-beforeEach(() => {
-  if (capture) {
-    proofDir = createControlUiE2eArtifactDir("duplicate-session-naming");
-  }
-});
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const viewport = { width: 1280, height: 900 };
+const sessionKey = "agent:main:main";
+const activeSession = (
+  runId: string,
+  updatedAt = 1,
+): GatewaySessionRow & { updatedAt: number } => ({
+  key: sessionKey,
+  kind: "direct",
+  updatedAt,
+  status: "running",
+  hasActiveRun: true,
+  activeRunIds: [runId],
+});
+const inFlight = (runId: string, phase: string, ts = 1) => ({
+  runId,
+  text: "",
+  events: [{ runId, sessionKey, seq: 2, stream: "run_status", ts, data: { phase } }],
+});
+async function withPage(
+  run: (
+    page: Page,
+    screenshot: (name: string, targets: Locator[]) => Promise<void>,
+  ) => Promise<void>,
+  video = true,
+) {
+  const proofDir = capture
+    ? createControlUiE2eArtifactDir(video ? "duplicate-session-naming" : "cloud-start-status")
+    : undefined;
+  await suite.withPage(
+    {
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      ...(proofDir && video ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+    },
+    async ({ page }) => {
+      await run(page, async (name, targets) => {
+        if (proofDir) {
+          await writeFile(
+            path.join(proofDir, name),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), targets),
+          );
+        }
+      });
+    },
+  );
+}
 
 suite.define(() => {
   it("preserves tool and approval activity received before the send ACK", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-      ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      historyMessages: [],
-      deferredMethods: ["exec.approval.list"],
-    });
-    try {
+    await withPage(async (page, screenshot) => {
+      const gateway = await installMockGateway(page, {
+        historyMessages: [],
+        deferredMethods: ["exec.approval.list"],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await gateway.waitForRequest("exec.approval.list");
@@ -39,13 +74,13 @@ suite.define(() => {
       await composer.fill("Inspect this synthetic workspace");
       await composer.press("Enter");
       const send = await gateway.waitForRequest("chat.send");
-      const { idempotencyKey: runId, sessionKey } = send.params as {
+      const { idempotencyKey: runId, sessionKey: sendSessionKey } = send.params as {
         idempotencyKey: string;
         sessionKey: string;
       };
       await gateway.emitGatewayEvent("agent", {
         runId,
-        sessionKey,
+        sessionKey: sendSessionKey,
         seq: 2,
         ts: Date.now(),
         stream: "tool",
@@ -60,11 +95,11 @@ suite.define(() => {
         id: "synthetic-approval",
         createdAtMs: Date.now(),
         expiresAtMs: Date.now() + 60_000,
-        request: { command: "pwd", agentId: "main", sessionKey, runId },
+        request: { command: "pwd", agentId: "main", sessionKey: sendSessionKey, runId },
       });
       await gateway.emitGatewayEvent("agent", {
         runId,
-        sessionKey,
+        sessionKey: sendSessionKey,
         seq: 3,
         ts: Date.now(),
         stream: "lifecycle",
@@ -81,65 +116,25 @@ suite.define(() => {
       // The initial snapshot predates registration; it must retain the newer live approval.
       await gateway.resolveDeferred("exec.approval.list", []);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
-      if (capture) {
-        await writeFile(
-          path.join(proofDir, "preack-pending.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
-        );
-      }
+      await screenshot("preack-pending.png", [tool, working]);
       await gateway.resolveDeferred("chat.send", { status: "started", runId });
-      if (capture) {
-        await writeFile(
-          path.join(proofDir, "preack-adopted.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [tool, working]),
-        );
-      }
+      await screenshot("preack-adopted.png", [tool, working]);
       await expect.poll(() => tool.count()).toBe(1);
       await expect.poll(() => working.textContent()).toContain("Waiting for approval");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("retains current startup progress through delayed history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-      ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
-    });
-    const page = await context.newPage();
-    const runId = "synthetic-workspace-run";
-    const sessionKey = "agent:main:main";
-    const sessionInfo = {
-      key: sessionKey,
-      kind: "direct",
-      updatedAt: 1,
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: [runId],
-    };
-    const inFlightRun = {
-      runId,
-      text: "",
-      events: [
-        {
-          runId,
-          sessionKey,
-          seq: 2,
-          stream: "run_status",
-          ts: 1,
-          data: { phase: "naming_worktree" },
-        },
-      ],
-    };
-    const gateway = await installMockGateway(page, {
-      sessions: [sessionInfo],
-      sessionInfo,
-      inFlightRun,
-      historyMessages: [],
-    });
-    try {
+    await withPage(async (page, screenshot) => {
+      const runId = "synthetic-workspace-run";
+      const sessionInfo = activeSession(runId);
+      const inFlightRun = inFlight(runId, "naming_worktree");
+      const gateway = await installMockGateway(page, {
+        sessions: [sessionInfo],
+        sessionInfo,
+        inFlightRun,
+        historyMessages: [],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       const working = page.locator('.chat-working-indicator[role="status"]');
@@ -170,12 +165,7 @@ suite.define(() => {
       await expect.poll(() => working.textContent()).toContain("Creating worktree…");
       await gateway.resolveDeferred("chat.history", { messages: [], sessionInfo, inFlightRun });
       // Capture the observed result before asserting so the red run leaves honest visual evidence.
-      if (capture) {
-        await writeFile(
-          path.join(proofDir, "history.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
-        );
-      }
+      await screenshot("history.png", [working]);
       await expect.poll(() => working.textContent()).not.toContain("Naming worktree…");
       await expect.poll(() => working.textContent()).toContain("Creating worktree…");
       await gateway.emitChatFinal({
@@ -184,73 +174,39 @@ suite.define(() => {
         text: "Workspace verification complete.",
       });
       await expect.poll(() => working.count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
   it("shows snapshot, first preparation, and capture in one startup line", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:main";
-    const runId = "synthetic-cloud-start";
-    const startedAt = Date.now();
-    const session: GatewaySessionRow & { updatedAt: number } = {
-      key: sessionKey,
-      sessionId: "synthetic-cloud-session",
-      kind: "direct",
-      updatedAt: startedAt,
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: [runId],
-      placement: {
-        state: "provisioning",
-        environmentId: "worker:synthetic",
-        providerId: "crabbox",
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-      },
-    };
-    const gateway = await installMockGateway(page, {
-      sessions: [session],
-      sessionInfo: session,
-      historyMessages: [],
-      inFlightRun: {
-        runId,
-        startedAt,
-        text: "",
-        events: [
-          {
-            runId,
-            sessionKey,
-            seq: 2,
-            stream: "run_status",
-            ts: startedAt,
-            data: { phase: "provisioning_environment" },
-          },
-        ],
-      },
-    });
-    const artifactDir = capture ? createControlUiE2eArtifactDir("cloud-start-status") : undefined;
-    try {
+    await withPage(async (page, screenshot) => {
+      const runId = "synthetic-cloud-start";
+      const startedAt = Date.now();
+      const session: GatewaySessionRow & { updatedAt: number } = {
+        ...activeSession(runId, startedAt),
+        sessionId: "synthetic-cloud-session",
+        placement: {
+          state: "provisioning",
+          environmentId: "worker:synthetic",
+          providerId: "crabbox",
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        sessions: [session],
+        sessionInfo: session,
+        historyMessages: [],
+        inFlightRun: {
+          ...inFlight(runId, "provisioning_environment", startedAt),
+          startedAt,
+        },
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
-      const screenshot = async (fileName: string) => {
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, fileName),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
-          );
-        }
-      };
-      await screenshot("00-before.png");
+      await screenshot("00-before.png", [working]);
       const states: Array<[WorkerEnvironmentStartStatus, string, string]> = [
         [{ mode: "snapshot" }, "Starting from snapshot…", "01-snapshot.png"],
         [
@@ -271,11 +227,7 @@ suite.define(() => {
         session.updatedAt = now;
         session.snapshotAt = now;
         session.placement = {
-          state: "provisioning",
-          environmentId: "worker:synthetic",
-          providerId: "crabbox",
-          generation: 1,
-          createdAtMs: 1,
+          ...session.placement!,
           updatedAtMs: revision,
           stateChangedAtMs: revision,
           startStatus,
@@ -298,10 +250,8 @@ suite.define(() => {
         await expect.poll(() => working.textContent()).toContain(label);
         expect(await working.count()).toBe(1);
         expect(await working.textContent()).not.toContain("no-snapshot-yet");
-        await screenshot(fileName);
+        await screenshot(fileName, [working]);
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    }, false);
   });
 });
