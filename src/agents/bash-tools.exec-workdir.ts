@@ -70,6 +70,10 @@ function mapContainerWorkdirToHost(params: {
           containerRoot: normalizeContainerPath(mount.containerPath),
         }))
       : []),
+    ...(params.sandbox.bindMounts ?? []).map((mount) => ({
+      hostRoot: path.resolve(mount.hostPath),
+      containerRoot: normalizeContainerPath(mount.containerPath),
+    })),
     ...(params.includePrimaryWorkspace === false
       ? []
       : [
