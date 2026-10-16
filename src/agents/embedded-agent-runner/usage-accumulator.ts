@@ -11,6 +11,8 @@ export type UsageAccumulator = {
   cacheWriteReported?: true;
   cacheWrite1h: number;
   cacheWrite5m: number;
+  cacheWrite1hReported?: true;
+  cacheWrite5mReported?: true;
   reasoningTokens: number;
   total: number;
   usageReport?: NormalizedUsage["usageReport"];
@@ -51,7 +53,7 @@ export const mergeUsageIntoAccumulator = (
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  for (const key of ["cacheRead", "cacheWrite"] as const) {
+  for (const key of ["cacheRead", "cacheWrite", "cacheWrite1h", "cacheWrite5m"] as const) {
     if (usage[key] !== undefined) {
       target[`${key}Reported`] = true;
     }
@@ -126,8 +128,8 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     output: usage.usageReport ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
-    ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
-    ...(usage.cacheWrite5m > 0 ? { cacheWrite5m: usage.cacheWrite5m } : {}),
+    ...(usage.cacheWrite1hReported ? { cacheWrite1h: usage.cacheWrite1h } : {}),
+    ...(usage.cacheWrite5mReported ? { cacheWrite5m: usage.cacheWrite5m } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
     total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),

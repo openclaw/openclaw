@@ -36,8 +36,8 @@ type AnthropicBilledUsage = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  cacheWrite1h: number;
-  cacheWrite5m: number;
+  cacheWrite1h?: number;
+  cacheWrite5m?: number;
 };
 
 const BILLED_USAGE_KEYS = [
@@ -93,8 +93,8 @@ function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | und
     output,
     cacheRead,
     cacheWrite,
-    cacheWrite1h: cacheWrite1h ?? 0,
-    cacheWrite5m: cacheWrite5m ?? 0,
+    cacheWrite1h,
+    cacheWrite5m,
   };
 }
 
@@ -170,8 +170,6 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cacheWrite1h: 0,
-    cacheWrite5m: 0,
   };
   for (const iteration of iterations) {
     const resolved = readAnthropicIterationUsage(iteration);
@@ -180,7 +178,10 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     }
     sawCompaction ||= iteration.type === "compaction";
     for (const key of BILLED_USAGE_KEYS) {
-      billed[key] += resolved[key];
+      const value = resolved[key];
+      if (value !== undefined) {
+        billed[key] = (billed[key] ?? 0) + value;
+      }
     }
   }
   return sawCompaction ? billed : undefined;
@@ -218,8 +219,8 @@ export function applyAnthropicMessageDeltaUsage(
   }
   const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
   const reported = readAnthropicBilledUsage(usage);
-  // Match the SDK accumulator: absent or null cache counters preserve prior values.
-  applyAnthropicBilledUsage(target, billedIterations ?? reported);
+  // Iteration totals replace blended counters; omitted TTL buckets keep top-level reports.
+  applyAnthropicBilledUsage(target, { ...reported, ...billedIterations });
   const iterationUsage = readLastAnthropicIterationUsage(usage);
   if (iterationUsage.state === "valid") {
     target.contextUsage = {

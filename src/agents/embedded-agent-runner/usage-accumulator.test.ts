@@ -207,5 +207,27 @@ describe("usage-accumulator", () => {
         cacheWrite: undefined,
       });
     });
+
+    it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+      "preserves a reported zero %s across attempt and run totals without inventing its sibling",
+      (bucket) => {
+        const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10, [bucket]: 0 });
+        const run = createUsageAccumulator();
+        mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+        mergeUsageIntoAccumulator(run, { input: 50 });
+        const normalized = toNormalizedUsage(run);
+        expect(normalized).toMatchObject({ input: 150, cacheWrite: 10, [bucket]: 0 });
+        const sibling = bucket === "cacheWrite1h" ? "cacheWrite5m" : "cacheWrite1h";
+        expect(normalized).not.toHaveProperty(sibling);
+      },
+    );
+
+    it("keeps both TTL buckets absent when no attempt reports a breakdown", () => {
+      const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10 });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite1h");
+      expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite5m");
+    });
   });
 });
