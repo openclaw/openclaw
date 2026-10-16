@@ -207,54 +207,92 @@ describe("createMattermostDraftStream", () => {
     }
   });
 
-  it("preserves the accepted final when retired preview cleanup fails", async () => {
+  it.each([false, true])(
+    "retries retired preview cleanup at stop while preserving the final (retry fails: %s)",
+    async (retryFails) => {
+      const warn = vi.fn();
+      const deleteAttempts: string[] = [];
+      const { client, stream, posts } = createProviderPostFixture({
+        warn,
+        beforeDelete: async (id) => {
+          deleteAttempts.push(id);
+          if (deleteAttempts.length === 1 || retryFails) {
+            throw new Error("temporary delete failure");
+          }
+        },
+      });
+      const deliverPayload = vi.fn(async () => {
+        throw new Error("the final should edit its preview in place");
+      });
+      try {
+        stream.update("Retired plan");
+        await stream.flush();
+        const retiredId = stream.postId();
+        await stream.deleteCurrentMessage();
+        stream.update("Replacement plan");
+        await stream.flush();
+        const finalId = stream.postId();
+        const result = await deliverMattermostReplyWithDraftPreview({
+          payload: { text: "Final answer" },
+          info: { kind: "final" },
+          kind: "direct",
+          client,
+          previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
+            draft: { ...stream, id: stream.postId },
+          }),
+          resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
+          logVerboseMessage: vi.fn(),
+          deliverPayload,
+        });
+        expect(result.visibleReplySent).toBe(true);
+        expect(result.messageIds).toEqual([finalId]);
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deliverPayload).not.toHaveBeenCalled();
+
+        await stream.stop();
+
+        expect(posts.get(finalId ?? "")).toBe("Final answer");
+        expect(deleteAttempts).not.toContain(finalId);
+        expect(deleteAttempts).toEqual([retiredId, retiredId]);
+        expect(warn).toHaveBeenCalledTimes(retryFails ? 2 : 1);
+        expect(warn).toHaveBeenCalledWith(
+          "mattermost stream preview cleanup failed: temporary delete failure",
+        );
+        expect([...posts.values()]).toEqual(
+          retryFails ? ["Retired plan", "Final answer"] : ["Final answer"],
+        );
+      } finally {
+        await stream.seal();
+      }
+    },
+  );
+
+  it("retains a failed current-post deletion across stop until another clear", async () => {
     const warn = vi.fn();
     const deleteAttempts: string[] = [];
-    const { client, stream, posts } = createProviderPostFixture({
+    const { stream, posts } = createProviderPostFixture({
       warn,
       beforeDelete: async (id) => {
         deleteAttempts.push(id);
-        throw new Error("temporary delete failure");
+        if (deleteAttempts.length === 1) {
+          throw new Error("temporary delete failure");
+        }
       },
     });
-    const deliverPayload = vi.fn(async () => {
-      throw new Error("the final should edit its preview in place");
-    });
     try {
-      stream.update("Retired plan");
+      stream.update("Current preview");
       await stream.flush();
-      const retiredId = stream.postId();
-      await stream.deleteCurrentMessage();
-      stream.update("Replacement plan");
-      await stream.flush();
-      const finalId = stream.postId();
-      const result = await deliverMattermostReplyWithDraftPreview({
-        payload: { text: "Final answer" },
-        info: { kind: "final" },
-        kind: "direct",
-        client,
-        previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
-          draft: { ...stream, id: stream.postId },
-        }),
-        resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
-        logVerboseMessage: vi.fn(),
-        deliverPayload,
-      });
-      expect(result.visibleReplySent).toBe(true);
-      expect(result.messageIds).toEqual([finalId]);
-      expect(posts.get(finalId ?? "")).toBe("Final answer");
-      expect(deliverPayload).not.toHaveBeenCalled();
-
+      const currentId = stream.postId();
+      await stream.clear();
       await stream.stop();
-
-      expect(posts.get(finalId ?? "")).toBe("Final answer");
-      expect(deleteAttempts).not.toContain(finalId);
-      expect(deleteAttempts).toEqual([retiredId]);
+      expect(stream.postId()).toBe(currentId);
+      expect([...posts.values()]).toEqual(["Current preview"]);
+      expect(deleteAttempts).toEqual([currentId]);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(
-        "mattermost stream preview cleanup failed: temporary delete failure",
-      );
-      expect([...posts.values()]).toEqual(["Retired plan", "Final answer"]);
+
+      await stream.clear();
+      expect(posts.size).toBe(0);
+      expect(deleteAttempts).toEqual([currentId, currentId]);
     } finally {
       await stream.seal();
     }

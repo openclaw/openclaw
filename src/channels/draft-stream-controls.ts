@@ -167,31 +167,59 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
   params: FinalizableDraftLifecycleParams<TMessageId, TUpdate>,
 ) {
   const controls = createFinalizableDraftStreamControlsForState<TUpdate>(params);
-  const pending = new Set<TMessageId>();
+  type Retirement = {
+    owner: DeleteFinalizableDraftMessageParams<TMessageId>;
+    attempt?: Promise<boolean>;
+  };
+  const pending = new Map<TMessageId, Retirement>();
   let clearTail = Promise.resolve();
   let generation = 0;
   let discardThroughGeneration = -1;
 
-  const deleteRetired = async (
+  const claim = (
     messageId: TMessageId,
-    owner: DeleteFinalizableDraftMessageParams<TMessageId> = params,
-  ): Promise<void> => {
-    // Preview cleanup is best effort; a failed DELETE may leave a stale preview.
-    pending.delete(messageId);
-    await deleteFinalizableDraftMessage(owner, messageId);
-  };
-  const drainDeletes = async (retainedId?: TMessageId): Promise<void> => {
-    for (const messageId of pending) {
-      if (!Object.is(messageId, retainedId)) {
-        await deleteRetired(messageId);
-      }
+    owner: DeleteFinalizableDraftMessageParams<TMessageId>,
+  ): Retirement => {
+    let retirement = pending.get(messageId);
+    if (!retirement) {
+      retirement = { owner };
+      pending.set(messageId, retirement);
     }
+    return retirement;
+  };
+  const attemptDelete = (messageId: TMessageId, retirement: Retirement): Promise<boolean> => {
+    retirement.attempt ??= Promise.resolve().then(async () => {
+      try {
+        const deleted = await deleteFinalizableDraftMessage(retirement.owner, messageId);
+        if (deleted && pending.get(messageId) === retirement) {
+          pending.delete(messageId);
+        }
+        return deleted;
+      } finally {
+        retirement.attempt = undefined;
+      }
+    });
+    return retirement.attempt;
+  };
+  const drainDeletes = async (retainedId?: TMessageId): Promise<boolean> => {
+    const visited = new Set<TMessageId>();
+    // Map iteration includes IDs retired while awaiting a DELETE. A failed ID
+    // is visited only once; a later drain owns its retry.
+    for (const [messageId, retirement] of pending) {
+      if (visited.has(messageId) || Object.is(messageId, retainedId)) {
+        continue;
+      }
+      visited.add(messageId);
+      await attemptDelete(messageId, retirement);
+    }
+    return pending.size === 0;
   };
   const retire = async (messageId: TMessageId, options?: { defer?: boolean }): Promise<void> => {
-    pending.add(messageId);
+    const retirement = claim(messageId, params);
     if (!options?.defer) {
-      // A stale create can retire inside the send loop; do not join a clear waiting for it.
-      await deleteRetired(messageId);
+      // A stale create can retire itself inside the send loop. Waiting for
+      // clearTail here would deadlock a clear that is joining that send.
+      await attemptDelete(messageId, retirement);
     }
   };
   const serializeCleanup = (operation: () => Promise<void>): Promise<void> => {
@@ -210,14 +238,12 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     return serializeCleanup(async () => {
       await stopForClear();
       const messageId = owner.readMessageId();
-      if (!owner.isValidMessageId(messageId)) {
+      if (owner.isValidMessageId(messageId)) {
+        claim(messageId, owner);
+      } else {
         owner.clearMessageId();
       }
-      await drainDeletes(messageId);
-      if (owner.isValidMessageId(messageId)) {
-        // A failed DELETE leaves a visible message whose receipt must remain available.
-        await deleteRetired(messageId, owner);
-      }
+      await drainDeletes();
     });
   };
   const stop = (): Promise<void> => {

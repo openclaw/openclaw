@@ -63,12 +63,16 @@ export function createDraftStreamLoop<T = string>(params: {
         return;
       }
       pendingValue = emptyValue;
+      let current: Promise<void | boolean> | undefined;
       let sent: void | boolean;
       try {
-        inFlightPromise = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
-          inFlightPromise = undefined;
+        current = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
+          if (inFlightPromise === current) {
+            inFlightPromise = undefined;
+          }
         });
-        sent = await inFlightPromise;
+        inFlightPromise = current;
+        sent = await current;
       } catch (err) {
         retainUnsentValue(value, background);
         throw err;

@@ -176,7 +176,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     });
   };
 
-  const resolveDiffStat = () => transferredDiffStat ?? diffStatTracker.resolve();
+  const resolveDiffStat = () =>
+    transferredDiffStat ? { ...transferredDiffStat } : diffStatTracker.resolve();
 
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot =>
     snapshotProgressDraftState({
@@ -248,7 +249,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     const observed = await settleProgressVisibilityCallbackResult(
       params.update(text, {
         ...options,
-        lines,
+        lines: [...lines],
         snapshot: {
           ...getSnapshot(),
           ...(blocks.some((block) => block.format === "plain") ? { preparedBlocks: blocks } : {}),
@@ -595,7 +596,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
-      planSteps = steps && steps.length > 0 ? steps : undefined;
+      planSteps = steps && steps.length > 0 ? steps.map((step) => ({ ...step })) : undefined;
       planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
       if (!planSteps && !planExplanation) {

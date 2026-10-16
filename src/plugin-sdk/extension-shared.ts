@@ -8,6 +8,16 @@ import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
+type PassiveChannelStatusSnapshot = {
+  configured?: boolean;
+  running?: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: unknown;
+  lastProbeAt?: number | null;
+};
+
 type TrafficStatusSnapshot = {
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
@@ -21,10 +31,36 @@ type RequireOpenAllowFromFn = (params: {
   message: string;
 }) => void;
 
-export {
-  buildBaseChannelStatusSummary as buildPassiveChannelStatusSummary,
-  buildProbeChannelStatusSummary as buildPassiveProbedChannelStatusSummary,
-} from "../channels/status/summary.js";
+/**
+ * Builds the standard passive-channel status object used by plugin status surfaces.
+ * Missing lifecycle fields are normalized to stable defaults so callers can merge
+ * plugin-specific extras without leaking `undefined` into status responses.
+ */
+export function buildPassiveChannelStatusSummary<TExtra extends object>(
+  snapshot: PassiveChannelStatusSnapshot,
+  extra?: TExtra,
+) {
+  return {
+    configured: snapshot.configured ?? false,
+    ...(extra ?? ({} as TExtra)),
+    running: snapshot.running ?? false,
+    lastStartAt: snapshot.lastStartAt ?? null,
+    lastStopAt: snapshot.lastStopAt ?? null,
+    lastError: snapshot.lastError ?? null,
+  };
+}
+
+/** Adds probe state to the standard passive-channel status summary. */
+export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
+  snapshot: PassiveChannelStatusSnapshot,
+  extra?: TExtra,
+) {
+  return {
+    ...buildPassiveChannelStatusSummary(snapshot, extra),
+    probe: snapshot.probe,
+    lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+}
 
 /** Normalizes optional traffic timestamps for channel status payloads. */
 export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | null) {

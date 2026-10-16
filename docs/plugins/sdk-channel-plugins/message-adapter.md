@@ -139,14 +139,13 @@ during a send in the next throttle window. Explicit `flush()` still bypasses
 the delay for attention and finalization. Cancel pending updates and await
 in-flight work before closing or rotating a stream.
 
-Use `createFinalizableDraftLifecycle` for ordered preview cleanup rather than
-maintaining a plugin-local deletion queue. `retire(id)` deletes a detached preview;
+Use `createFinalizableDraftLifecycle` for physical deletion custody rather than
+maintaining a plugin-local retry queue. `retire(id)` claims a detached preview;
 `retire(id, { defer: true })` records it without deleting it immediately.
-`cleanupPending()` deletes deferred IDs without deleting the current preview.
+`cleanupPending()` retries retired IDs without deleting the current preview.
 When transport cleanup policy must change, pass a synchronous `prepareCleanup`
 callback to `cleanupPending`; it runs in order with clears, before deletion.
-Deletion is best effort: a rejected DELETE is reported through the cleanup warning
-and may leave a stale preview. It does not revoke or resend an accepted final reply.
+Rejected deletions remain owned for a later cleanup attempt.
 
 For synchronous turn rotation, `reset()` advances `generation`, reopens delivery,
 and resets the current message and pending updates. Published messages remain the

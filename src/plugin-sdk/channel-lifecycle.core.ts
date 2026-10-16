@@ -86,6 +86,10 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           runStarts.set(runHandle, Date.now());
           runState.onRunStart();
           try {
+            // Deactivation can happen while this key waited behind older work.
+            if (!runState.isActive()) {
+              return;
+            }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
             runStarts.delete(runHandle);

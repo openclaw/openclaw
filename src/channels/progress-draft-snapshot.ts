@@ -4,10 +4,22 @@ import type {
   ChannelProgressDraftCompositorSnapshot,
 } from "./progress-draft-compositor.types.js";
 import {
+  copyProgressDraftLineMetadata,
   resolveChannelProgressDraftConfig,
   resolveChannelProgressDraftLabel,
   type AgentPlanStep,
 } from "./streaming.js";
+
+function copyProgressDraftLine(
+  line: ChannelProgressDraftCompositorLine,
+): ChannelProgressDraftCompositorLine {
+  if (typeof line === "string") {
+    return line;
+  }
+  const copy = { ...line };
+  copyProgressDraftLineMetadata(line, copy);
+  return copy;
+}
 
 export function createProgressDraftSnapshotState(
   params: Pick<ChannelProgressDraftCompositorParams, "entry" | "initialSnapshot">,
@@ -31,9 +43,9 @@ export function createProgressDraftSnapshotState(
         }
       : undefined,
     // Without file identities a transferred total cannot deduplicate later mutations.
-    transferredDiffStat: snapshot?.diffStat,
-    lines: snapshot ? [...snapshot.lines] : [],
-    planSteps: snapshot?.plan,
+    transferredDiffStat: snapshot?.diffStat ? { ...snapshot.diffStat } : undefined,
+    lines: snapshot?.lines.map(copyProgressDraftLine) ?? [],
+    planSteps: snapshot?.plan?.map((step) => ({ ...step })),
     planExplanation: snapshot?.planExplanation ?? "",
     planExplanationFormat: snapshot?.planExplanationFormat,
   };
@@ -62,7 +74,7 @@ export function snapshotProgressDraftState(params: {
     ...(statusHeadline && params.status.format
       ? { statusHeadlineFormat: params.status.format }
       : {}),
-    ...(params.plan ? { plan: params.plan } : {}),
+    ...(params.plan ? { plan: params.plan.map((step) => ({ ...step })) } : {}),
     ...(params.planExplanation ? { planExplanation: params.planExplanation } : {}),
     ...(params.planExplanation && params.planExplanationFormat
       ? { planExplanationFormat: params.planExplanationFormat }

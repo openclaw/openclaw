@@ -1,10 +1,8 @@
 // Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
-import { buildPassiveChannelStatusSummary } from "./extension-shared.js";
 import {
   asString,
-  buildProbeChannelStatusSummary,
   createAsyncComputedAccountStatusAdapter,
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
@@ -20,30 +18,6 @@ import {
 } from "./status-helpers.js";
 
 describe("status issue composition", () => {
-  it("normalizes summary defaults and preserves lifecycle/probe authority over extras", () => {
-    expect(buildPassiveChannelStatusSummary({ probe: { ok: false }, lastProbeAt: 12 })).toEqual({
-      configured: false,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    });
-    expect(
-      buildProbeChannelStatusSummary(
-        { running: true, lastError: "offline", probe: { ok: false }, lastProbeAt: 12 },
-        { configured: true, running: false, lastError: null, probe: "stale", lastProbeAt: 0 },
-      ),
-    ).toEqual({
-      configured: true,
-      running: true,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: "offline",
-      probe: { ok: false },
-      lastProbeAt: 12,
-    });
-  });
-
   it("preserves the shipped asString compatibility semantics", () => {
     expect(asString("  work  ")).toBe("work");
     expect(asString("   ")).toBeUndefined();

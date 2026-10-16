@@ -617,11 +617,12 @@ export async function dispatchWithContext(params: {
 }
 
 export function createReasoningStreamContext(): TelegramMessageContext {
+  const sessionKey = "agent:default:telegram:direct:123";
   loadSessionStore.mockReturnValue({
-    s1: { reasoningLevel: "stream" },
+    [sessionKey]: { reasoningLevel: "stream" },
   });
   return createContext({
-    ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+    ctxPayload: { SessionKey: sessionKey } as unknown as TelegramMessageContext["ctxPayload"],
   });
 }
 
