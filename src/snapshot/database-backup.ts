@@ -198,6 +198,7 @@ type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
 type BackupTask =
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
   | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
+  | { operation: "family"; params: { sourcePath: string; config: OpenClawConfig } }
   | { operation: "fingerprint"; params: { sourcePath: string; config: OpenClawConfig } };
 type BackupReply =
   | PostgresExportEnvelope
@@ -274,6 +275,11 @@ export function preparePostgresRestore({ assertCurrent, ...params }: Restore) {
   );
 }
 
+/** Resolve physical family identity through the same provider admission as capture. */
+export function readPostgresBackupFamily(sourcePath: string, config: OpenClawConfig) {
+  return runBackupTask<string>({ operation: "family", params: { sourcePath, config } }, () => {});
+}
+
 export function fingerprintPostgresBackup(sourcePath: string, config: OpenClawConfig) {
   return runBackupTask<string>(
     { operation: "fingerprint", params: { sourcePath, config } },
@@ -286,13 +292,15 @@ if (parentPort && workerData?.openclawDatabaseBackup === true) {
   serveWorkerTasks<BackupReply>((value, _channel, control) => {
     // SAFETY: The private one-shot host is the sole producer of this structured-clone payload.
     const task = value as BackupTask;
-    if (task.operation === "fingerprint") {
+    if (task.operation === "fingerprint" || task.operation === "family") {
       const anchor = readBackupEngine(task.params.sourcePath);
       if (anchor.engine !== "postgres") {
         throw new Error("PostgreSQL anchor disappeared.");
       }
       return withDatabasePortPostgres(task.params.config, anchor, (client, descriptor) =>
-        fingerprintPostgresDatabase({ client, descriptor, anchor }),
+        task.operation === "family"
+          ? Promise.resolve(descriptor.id)
+          : fingerprintPostgresDatabase({ client, descriptor, anchor }),
       );
     }
     return control.runNativeSection<BackupReply>(() =>

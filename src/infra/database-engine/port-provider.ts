@@ -24,8 +24,13 @@ export const databasePortProviders: readonly DatabasePortProvider[] = [
 export function requireDatabasePortProvider(id: string) {
   const provider = databasePortProviders.find((entry) => entry.id === id);
   if (!provider) {
+    if (id === "agent") {
+      throw new DatabasePortDataError(
+        "PostgreSQL agent capture requires agent-family port and exact-backup support; keep the current version or reverse-port with a compatible binary.",
+      );
+    }
     throw new DatabasePortDataError(
-      `Unknown database family; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
+      `Unknown database family ${id}; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
     );
   }
   return provider;

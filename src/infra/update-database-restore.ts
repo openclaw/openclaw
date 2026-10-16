@@ -197,20 +197,23 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
-          const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
+          const { prepareUpdatePostgresRestore } =
+            await import("./update-database-restore-postgres.js");
           const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
-          const prepared = await preparePostgresRestore({
-            directory: entry.exportDirectory,
-            anchorPath: snapshotPath,
-            config,
-            profile: "exact",
-            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
-            assertCurrent: assertOwned,
-          });
+          const prepared = await prepareUpdatePostgresRestore(
+            {
+              directory: entry.exportDirectory,
+              anchorPath: snapshotPath,
+              config,
+              preserveUpdateHistory: entry.path === sharedPath,
+              expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
+            },
+            assertOwned,
+          );
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
           displaced.push(`PostgreSQL namespace ${entry.namespace}`);
         }
-        if (paths.includes(sharedPath)) {
+        if (paths.includes(sharedPath) && shared?.engine !== "postgres") {
           if (!shared) {
             throw new Error(
               "Database rollback cannot preserve update history without its shared snapshot.",

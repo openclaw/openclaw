@@ -10,6 +10,7 @@ import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 export async function assertUpdateDatabaseEngineContexts(
   contexts: readonly { config: OpenClawConfig; env: NodeJS.ProcessEnv }[],
   targetEngines: unknown,
+  targetPostgresFamilies?: unknown,
 ): Promise<void> {
   const supportsPostgres = Array.isArray(targetEngines) && targetEngines.includes("postgres");
   for (const { config } of contexts) {
@@ -36,25 +37,49 @@ export async function assertUpdateDatabaseEngineContexts(
       );
     }
   }
-  // A capable target cannot strand a PostgreSQL store. Avoid copying live databases
-  // to rediscover their engines at every candidate inspection and activation boundary.
-  if (supportsPostgres) {
-    return;
-  }
   const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-  const { readBackupEngine } = await import("../snapshot/database-backup.js");
+  const { readBackupEngine, readPostgresBackupFamily } =
+    await import("../snapshot/database-backup.js");
   for (const context of contexts) {
     const paths = await discoverBackupDatabasePaths({
       ...context,
       stateDir: resolveStateDir(context.env),
     });
-    const postgres = paths.find((pathname) => readBackupEngine(pathname).engine === "postgres");
-    if (!postgres) {
+    const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
+    const { listDatabaseEngineStores, selectDatabaseEngine } =
+      await import("./database-engine/registry.js");
+    const required = new Set(
+      listDatabaseEngineStores()
+        .filter((store) => selectDatabaseEngine(store, context.config) === "postgres")
+        .map((store) => store.id),
+    );
+    if (postgres.length === 0 && required.size === 0) {
       continue;
     }
-    throw new UpdatePreMutationError(
-      "database-engine-preflight",
-      `Update refused: the target does not support the PostgreSQL store at ${postgres}. Reverse-port to SQLite with the current binary before updating, or stay on the current version. See https://docs.openclaw.ai/reference/database-engines.`,
-    );
+    const refuse = (detail: string): never => {
+      throw new UpdatePreMutationError(
+        "database-engine-preflight",
+        `Update refused: ${detail}. Reverse-port to SQLite with the current binary before updating, or stay on the current version. See https://docs.openclaw.ai/reference/database-engines.`,
+      );
+    };
+    if (!Array.isArray(targetEngines) || !targetEngines.includes("postgres")) {
+      refuse(
+        `the target does not support the PostgreSQL store at ${postgres[0] ?? "the configured PostgreSQL families"}`,
+      );
+    }
+    for (const pathname of postgres) {
+      try {
+        required.add(await readPostgresBackupFamily(pathname, context.config));
+      } catch {
+        refuse(
+          `PostgreSQL family at ${pathname} cannot be captured by this updater; use a version with a port and backup provider for that family`,
+        );
+      }
+    }
+    for (const family of required) {
+      if (!Array.isArray(targetPostgresFamilies) || !targetPostgresFamilies.includes(family)) {
+        refuse(`the target does not declare support for the PostgreSQL ${family} family`);
+      }
+    }
   }
 }

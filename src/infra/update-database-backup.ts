@@ -361,17 +361,6 @@ export async function createUpdateDatabaseBackupInProcess(
           preserveRowIds: true,
           requireNonEmptySource: true,
         });
-    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
-    if (!input.stopped) {
-      const after = await readGeneration(sourcePath);
-      if (after !== undefined && before === after) {
-        sourceGenerations[sourcePath] = after;
-      } else {
-        warnings.push(
-          `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
-        );
-      }
-    }
     const engine = engines.get(sourcePath)!;
     let postgres;
     if (engine.engine === "postgres") {
@@ -384,6 +373,17 @@ export async function createUpdateDatabaseBackupInProcess(
         assertCurrent: () => {},
       });
       postgres = { ...engine, exportDirectory };
+    }
+    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
+    if (!input.stopped) {
+      const after = await readGeneration(sourcePath);
+      if (after !== undefined && before === after) {
+        sourceGenerations[sourcePath] = after;
+      } else {
+        warnings.push(
+          `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+        );
+      }
     }
     databases.push({
       path: sourcePath,
