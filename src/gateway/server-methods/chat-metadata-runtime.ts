@@ -458,7 +458,7 @@ export function createGatewayChatMetadataRuntime(params: {
         source: {
           config: generation.facts.config,
           agentId,
-          authStore: readAuthStore(),
+          authStore: agent.authStore,
           providerPlugins: metadataSnapshot.owners.providers,
         },
         readAuthStore,
