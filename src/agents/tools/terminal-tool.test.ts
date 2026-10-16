@@ -123,6 +123,8 @@ describe("terminal tool", () => {
       "data",
       "cols",
       "rows",
+      "cursor",
+      "maxChars",
     ]);
     expect(schema.properties).not.toHaveProperty("command");
     expect(schema.properties).not.toHaveProperty("cwd");
@@ -224,7 +226,7 @@ describe("terminal tool", () => {
 
     expect(tool.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { sessionId: string; text: string } | { ok: true }",
+      "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { cursor: number; endCursor: number; hasMore: boolean; sessionId: string; startCursor: number; text: string; truncated: boolean } | { ok: true }",
     );
 
     const listed = await tool.execute("list", { action: "list" });
@@ -241,11 +243,16 @@ describe("terminal tool", () => {
 
     backend.emitData("\u001b[31mready\u001b[0m\r\n");
     const read = await tool.execute("read", { action: "read", sessionId: opened.sessionId });
-    expect(read.details).toEqual({
+    expect(read.details).toMatchObject({
       sessionId: opened.sessionId,
       text: expect.stringContaining("ready\n"),
+      startCursor: 0,
+      truncated: false,
+      hasMore: false,
     });
-    expect((read.details as { text: string }).text).not.toContain("\u001b");
+    const readDetails = read.details as { text: string; cursor: number; endCursor: number };
+    expect(readDetails.text).not.toContain("\u001b");
+    expect(readDetails.cursor).toBe(readDetails.endCursor);
     expect(Value.Check(tool.outputSchema!, read.details)).toBe(true);
 
     expect(manager.write("operator", opened.sessionId, "operator command\r")).toBe(true);

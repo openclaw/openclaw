@@ -15,7 +15,11 @@ import type { TerminalBackend } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
-import { TerminalOutputRing } from "./output-ring.js";
+import {
+  TerminalOutputRing,
+  type TerminalOutputPage,
+  type TerminalOutputPageRequest,
+} from "./output-ring.js";
 import { TerminalConnectionIndex } from "./session-connection-index.js";
 import {
   DEFAULT_MAX_DETACHED_SESSIONS,
@@ -449,6 +453,15 @@ export class TerminalSessionManager {
   /** Raw buffer for an agent-owned session, guarded by the caller session key. */
   snapshotAgent(owner: AgentTerminalOwner, sessionId: string): string | undefined {
     return this.ownedSession(owner, sessionId)?.buffer.snapshot();
+  }
+
+  /** Raw output page for an agent-owned session, guarded by the caller session key. */
+  readAgentPage(
+    owner: AgentTerminalOwner,
+    sessionId: string,
+    request: TerminalOutputPageRequest,
+  ): TerminalOutputPage | undefined {
+    return this.ownedSession(owner, sessionId)?.buffer.readPage(request);
   }
 
   listAgent(owner: AgentTerminalOwner): TerminalSessionSummary[] {

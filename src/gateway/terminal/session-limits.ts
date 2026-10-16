@@ -5,6 +5,10 @@ export const DEFAULT_MAX_SESSIONS = 24;
  * in UTF-16 code units. The session cap keeps worst-case memory bounded.
  */
 export const DEFAULT_SCROLLBACK_CHARS = 256 * 1024;
+/** Raw output an agent `terminal read` returns when it asks for no page size. */
+export const TERMINAL_READ_DEFAULT_MAX_CHARS = 32 * 1024;
+/** Largest page an agent may request; a page is raw UTF-16 code units. */
+export const TERMINAL_READ_MAX_PAGE_CHARS = 128 * 1024;
 /**
  * Detached-session cap; the oldest parked shell is killed to keep repeated
  * disconnects from parking the full session cap of headless shells.
