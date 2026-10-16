@@ -25,15 +25,11 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
+import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import {
-  ComposerQueue,
-  ComposerInputScope,
-  ComposerProgress,
-  ComposerGoal,
-} from "./chat-composer-regions.tsx";
+import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
@@ -49,6 +45,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const props = untrack(() => context.props);
 
   const activeSession = createMemo(() => props.selectedSession);
+  const resumeRecovery = createMemo(() => {
+    const recovery = props.goalRecovery;
+    return recovery?.action === "resume" &&
+      !recovery.retired &&
+      recovery.goalId === props.selectedSession?.goal?.id
+      ? recovery
+      : undefined;
+  });
   const composerControls = createMemo(() => props.composerControls ?? undefined);
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
@@ -216,12 +220,40 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
           <ComposerProgress composer={props} shown={context.showComposer} />{" "}
           <ComposerQueue composer={props} showAbortableUi={context.showAbortableUi} />
-          <ComposerGoal
-            composer={props}
-            state={context.state}
-            controller={context.goalComposer}
-            requestUpdate={context.requestUpdate}
-          />
+          {renderChatGoalRecoverySolid(
+            resumeRecovery() ? undefined : props.goalRecovery,
+            props.connected,
+          )}
+          <Show when={props.selectedSession?.goal} keyed>
+            {(goal) => (
+              <div class="agent-chat__goal-float">
+                <ChatGoal
+                  goal={goal}
+                  resumeRecovery={resumeRecovery()}
+                  connected={props.connected}
+                  expanded={context.state.presentation.goalExpandedId === goal.id}
+                  canAct={
+                    props.connected &&
+                    props.canSend &&
+                    !props.submitDisabledReason &&
+                    Boolean(props.currentSessionId) &&
+                    !props.goalRecovery
+                  }
+                  onGoalAction={props.onGoalAction}
+                  onGoalEdit={
+                    props.onGoalSubmit
+                      ? (selected) => context.goalComposer.begin(selected)
+                      : undefined
+                  }
+                  onExpandedChange={(expanded) => {
+                    context.state.updatePresentation((draft) => {
+                      draft.goalExpandedId = expanded ? goal.id : null;
+                    });
+                  }}
+                />
+              </div>
+            )}
+          </Show>
           <Show when={props.composerRecovery}>
             {(recovery) => {
               const Recovery = dynamic(() => recovery().component);
