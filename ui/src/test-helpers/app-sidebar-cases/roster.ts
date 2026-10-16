@@ -341,6 +341,7 @@ describe("AppSidebar agent roster", () => {
         expect(document.activeElement).toBe(agentOptions[0]);
       }
       expect(agentOptions.map((item) => item.getAttribute("data-value"))).toEqual([
+        "pin",
         "main",
         "sessions",
         "collapse-others",
@@ -354,7 +355,7 @@ describe("AppSidebar agent roster", () => {
       retainedAgentOptions.forEach((item, index) => expect(item).toBe(agentOptions[index]));
       expect(
         sidebar.querySelectorAll('.sidebar-agent-roster__menu [role^="menuitem"]'),
-      ).toHaveLength(3);
+      ).toHaveLength(4);
     },
   );
 

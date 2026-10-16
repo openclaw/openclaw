@@ -342,6 +342,13 @@ A newer user message does not replace that preview. Agents without an available
 assistant reply keep a name-only row. The top-level roster does not show the
 session list's empty-filter hint.
 
+Choose **Pin** in an agent's options menu to move it into the icon section above
+the roster. Hover or focus its avatar to read the full name and a short preview
+of its latest assistant reply. Select the avatar to open its main chat, or use
+**All sessions** in its options menu to browse its conversations. **Unpin** returns
+the agent to the roster. Agent pins are saved in this browser profile and shared
+with the agent switcher's pin preference.
+
 Switching to the all-agents roster or another navigation view, or closing
 navigation releases background sidebar activity streams. Open conversation panes
 keep their live messages. The active agent's session list retains critical observer

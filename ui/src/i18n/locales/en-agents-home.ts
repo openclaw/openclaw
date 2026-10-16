@@ -4,6 +4,8 @@ import { en } from "./en.ts";
 const enAgentsHome = {
   agentsHome: {
     manage: "Manage agents",
+    pinnedAgents: "Pinned agents",
+    noAssistantMessage: "No assistant reply yet",
     create: "New agent",
     openChat: "Open chat",
     openMainChat: "Open main chat",
