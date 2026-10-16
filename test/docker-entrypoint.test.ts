@@ -14,7 +14,7 @@ function fixture(command: CommandFixture) {
   const cli = String.raw`#!/usr/bin/env node
 import fs from 'node:fs';
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, repeat:process.env.OPENCLAW_IMAGE_ACTIVATION_REPEAT})+'\n');
+fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, marker:process.env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER})+'\n');
 if (args.includes('doctor')) {
   if (process.env.INTERRUPT_DOCTOR) {
     for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -154,31 +154,36 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
           args: ["doctor", "--fix", "--non-interactive"],
           pid: expect.any(Number),
           parentPid: expect.any(Number),
+          marker: expect.any(String),
         },
         ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
       ]);
     },
   );
 
-  it("tells Doctor to skip the repeated capture only after this container activated", async ({
+  it("gives Doctor one container-local capture marker per activation selection", async ({
     command,
   }) => {
     const f = fixture(command);
-    const doctorRuns = () =>
-      f
-        .read()
-        .filter((row) => row.args.includes("doctor"))
-        .map((row) => row.repeat);
-    // Inherited values never stand in for this container's own activation record.
-    const inherited = { OPENCLAW_IMAGE_ACTIVATION_REPEAT: "1" };
-    expect(
-      (await f.run(["openclaw.mjs", "gateway"], { ...inherited, DOCTOR_EXIT: "78" })).status,
-    ).toBe(78);
+    // An inherited path never replaces the marker this container's activation owns.
+    const inherited = { OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/elsewhere/marker" };
     expect((await f.run(["openclaw.mjs", "gateway"], inherited)).status).toBe(0);
     expect((await f.run(["openclaw.mjs", "gateway"])).status).toBe(0);
-    expect(doctorRuns()).toEqual([undefined, undefined, "1"]);
-    // A different activation selection has not completed in this container.
     expect((await f.run(["openclaw.mjs", "--profile", "demo", "gateway"])).status).toBe(0);
-    expect(doctorRuns()).toEqual([undefined, undefined, "1", undefined]);
+    const rows = f.read();
+    const markers = rows.filter((row) => row.args.includes("doctor")).map((row) => row.marker);
+    expect(markers).toHaveLength(3);
+    for (const marker of markers) {
+      expect(path.dirname(marker)).toBe(f.root);
+    }
+    expect(markers[1]).toBe(markers[0]);
+    expect(markers[2]).not.toBe(markers[0]);
+    // Doctor owns the marker; the activation adapter never creates it.
+    expect(fs.existsSync(markers[0])).toBe(false);
+    expect(rows.filter((row) => !row.args.includes("doctor")).map((row) => row.marker)).toEqual([
+      "/elsewhere/marker",
+      undefined,
+      undefined,
+    ]);
   });
 });

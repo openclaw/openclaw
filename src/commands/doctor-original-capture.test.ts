@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as ancestry from "../infra/restart-stale-pids.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -60,21 +60,47 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
   },
 );
 
-it("skips the full capture when this container already completed image activation", async () => {
+it("records the container capture marker only after a sealed capture, then skips repeats", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const marker = state.path("activation-capture-marker");
+    const env = { ...state.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: marker };
     const log = vi.fn();
-    await preserveDoctorOriginalState({
-      root: process.cwd(),
-      env: { ...state.env, OPENCLAW_IMAGE_ACTIVATION_REPEAT: "1" },
-      runtime: { log, error: vi.fn(), exit: vi.fn() },
-      signal: new AbortController().signal,
-      assertCurrent() {},
-    });
+    const preserve = (root: string | null) =>
+      preserveDoctorOriginalState({
+        root,
+        env,
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      });
 
-    expect(fs.existsSync(resolveUpdateCaptureRoot(state.stateDir))).toBe(false);
+    // A nonfatal capture failure leaves the next start free to capture.
+    await preserve(null);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(log).toHaveBeenLastCalledWith(
+      expect.stringContaining("Original state capture was unavailable"),
+    );
+
+    const manifestPath = state.path("capture", "manifest.json");
+    const capture = vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline").mockResolvedValue({
+      ref: { directory: path.dirname(manifestPath), manifestPath, manifestSha256: "0".repeat(64) },
+      warnings: [],
+      diagnostics: { databaseWarnings: [] },
+    });
+    vi.spyOn(baselineCapture, "retireExpiredStandaloneDoctorCaptures").mockResolvedValue({
+      retired: [],
+      warnings: [],
+    });
+    await preserve(process.cwd());
+    expect(capture).toHaveBeenCalledOnce();
+    expect(fs.lstatSync(marker).isFile()).toBe(true);
+
+    log.mockClear();
+    await preserve(process.cwd());
+    expect(capture).toHaveBeenCalledOnce();
     expect(log.mock.calls).toEqual([
       [
-        "This container already completed image activation; Doctor skipped a repeated full pre-repair capture. Repair-specific backups still apply.",
+        "This container already retained a pre-repair capture; Doctor skipped a repeated full capture. Repair-specific backups still apply.",
       ],
     ]);
   });

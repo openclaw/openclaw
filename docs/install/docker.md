@@ -233,12 +233,13 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
-The first activation in a container retains a full pre-repair copy of local
-state under `<state-dir>.update-captures/`. Later starts of the same container
-(`docker stop`/`docker start`, restart policies, host reboots) still run the
-Doctor repair pass but skip that repeated full copy; repair-specific backups
-still apply. A new image, a recreated container, or a container whose `/tmp` does
-not persist across restarts captures again.
+Activation retains a full pre-repair copy of local state under
+`<state-dir>.update-captures/` the first time Doctor captures in a container.
+Later starts of the same container (`docker stop`/`docker start`, restart
+policies, host reboots) still run the Doctor repair pass but skip that repeated
+full copy; repair-specific backups still apply. If a capture fails, the next
+start tries again. A new image, a recreated container, or a container whose
+`/tmp` does not persist across restarts captures again.
 
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.

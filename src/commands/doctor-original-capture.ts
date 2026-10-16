@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,7 +13,18 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 
-const IMAGE_ACTIVATION_REPEAT_ENV = "OPENCLAW_IMAGE_ACTIVATION_REPEAT";
+// docker-entrypoint.mjs passes a container-local path. Its existence records that
+// this container already sealed a capture, so later starts skip the full copy.
+const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
+
+async function hasImageActivationCapture(marker: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(marker);
+    return stat.isFile() && (process.getuid === undefined || stat.uid === process.getuid());
+  } catch {
+    return false;
+  }
+}
 
 /** Preserve evidence before repair; neither a capture nor its lineage authorizes restoration. */
 export async function preserveDoctorOriginalState(params: {
@@ -67,11 +79,10 @@ export async function preserveDoctorOriginalState(params: {
       );
       return;
     }
-    if (params.env[IMAGE_ACTIVATION_REPEAT_ENV] === "1") {
-      // docker-entrypoint.mjs sets this only after this container's earlier
-      // activation Doctor succeeded; that first run retained the originals.
+    const activationMarker = params.env[IMAGE_ACTIVATION_MARKER_ENV]?.trim() || undefined;
+    if (activationMarker && (await hasImageActivationCapture(activationMarker))) {
       params.runtime.log(
-        "This container already completed image activation; Doctor skipped a repeated full pre-repair capture. Repair-specific backups still apply.",
+        "This container already retained a pre-repair capture; Doctor skipped a repeated full capture. Repair-specific backups still apply.",
       );
       return;
     }
@@ -100,6 +111,15 @@ export async function preserveDoctorOriginalState(params: {
     params.runtime.log(
       `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
     );
+    if (activationMarker) {
+      try {
+        await fs.writeFile(activationMarker, "", { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        params.runtime.log(
+          `Container activation marker unavailable: ${formatErrorMessage(error)}. The next container start takes another full capture.`,
+        );
+      }
+    }
     try {
       const retirement = await retireExpiredStandaloneDoctorCaptures({
         stateDir: resolvePathViaExistingAncestorSync(resolveStateDir(params.env)),
