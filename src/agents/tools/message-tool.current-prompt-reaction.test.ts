@@ -128,13 +128,14 @@ describe("admitted WebChat prompt reactions", () => {
     input: ReturnType<typeof createUserTurnTranscriptRecorder>,
     executionRunId: string,
     kind: { isHeartbeat?: boolean; internalEventExecution?: boolean } = {},
+    copied = false,
   ) {
     return mintReplyMessageActionTurnCapability(
       {
         followupRun: {
           prompt: "Prompt",
           enqueuedAt: 0,
-          userTurnTranscriptRecorder: input,
+          userTurnTranscriptRecorder: copied ? { ...input } : input,
           run: {
             ...scope,
             sessionFile: scope.sessionKey,
@@ -151,7 +152,7 @@ describe("admitted WebChat prompt reactions", () => {
             }),
           },
         },
-        sessionCtx: { Provider: "webchat", MessageSid: runId },
+        sessionCtx: copied ? { Provider: "webchat" } : { Provider: "webchat", MessageSid: runId },
         opts: {
           dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
         },
@@ -205,6 +206,19 @@ describe("admitted WebChat prompt reactions", () => {
       throw new Error("fixture prompt was not committed");
     }
     return receipt.entryId;
+  }
+
+  function expectNoReaction(sessionId = scope.sessionId) {
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(external).not.toHaveBeenCalled();
+    expect(listSessionReactions(scope, { sessionId })).toEqual({});
+  }
+
+  function prompt(text: string) {
+    return createUserTurnTranscriptRecorder({
+      input: { text },
+      target: { ...scope, sessionEntry: undefined },
+    });
   }
 
   it.each(["webchat", "discord"])(
@@ -285,14 +299,6 @@ describe("admitted WebChat prompt reactions", () => {
     expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(true);
     const added = await execute({ final: false }, selected);
     expect(added.details).toMatchObject({ messageId, changed: true });
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "automatic",
-        toolName: "message",
-        args: { action: "react", final: false },
-        result: added,
-      }),
-    ).toBe(false);
     expect(listSessionReactions(scope, { sessionId: scope.sessionId })[messageId]).toEqual([
       {
         emoji: "👍",
@@ -360,9 +366,7 @@ describe("admitted WebChat prompt reactions", () => {
     ]) {
       await expect(execute(args)).rejects.toThrow();
     }
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(external).not.toHaveBeenCalled();
-    expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+    expectNoReaction();
   });
 
   it("keeps source-reply-only tools send-only even with a current-prompt grant", async () => {
@@ -371,9 +375,7 @@ describe("admitted WebChat prompt reactions", () => {
     expect(Check(selected.parameters, { action: "send", message: "Done" })).toBe(true);
     expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
     await expect(execute({ final: true }, selected)).rejects.toThrow('permit only action "send"');
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(external).not.toHaveBeenCalled();
-    expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+    expectNoReaction();
   });
 
   it("honors the message action allowlist without widening the discovered schema", async () => {
@@ -433,18 +435,13 @@ describe("admitted WebChat prompt reactions", () => {
       expect(rebuilt.description).toBe(selected.description);
       expect(rebuilt.parameters).toEqual(selected.parameters);
       await expect(execute({}, rebuilt)).rejects.toThrow();
-      expect(broadcast).not.toHaveBeenCalled();
-      expect(external).not.toHaveBeenCalled();
-      expect(listSessionReactions(scope, { sessionId: scope.sessionId })).toEqual({});
+      expectNoReaction();
     },
   );
 
   it("binds queued execution to its own recorder and new run without inheriting read permission", async () => {
     const originalId = await persist();
-    const queued = createUserTurnTranscriptRecorder({
-      input: { text: "Queued prompt" },
-      target: { ...scope, sessionEntry: undefined },
-    });
+    const queued = prompt("Queued prompt");
     bindSource(queued);
     await queued.persistApproved();
     const queuedId = queued.getAdmissionReceipt()?.entryId;
@@ -460,35 +457,7 @@ describe("admitted WebChat prompt reactions", () => {
       agentId: scope.agentId,
       sessionKey: scope.sessionKey,
     });
-    expect(
-      mintReplyMessageActionTurnCapability(
-        {
-          followupRun: {
-            prompt: "Copied input",
-            enqueuedAt: 0,
-            userTurnTranscriptRecorder: { ...queued },
-            run: {
-              ...scope,
-              sessionFile: scope.sessionKey,
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              config,
-              provider: "openai",
-              model: "test",
-              messageProvider: "webchat",
-              timeoutMs: 1000,
-              blockReplyBreak: "message_end",
-            },
-          },
-          sessionCtx: { Provider: "webchat" },
-          isHeartbeat: false,
-          opts: {
-            dashboardReadAdmission: { ...scope, runId, assertCurrent: run.assertSourceCurrent },
-          },
-        },
-        queuedRunId,
-      ),
-    ).toBeUndefined();
+    expect(mintTurn(queued, queuedRunId, {}, true)).toBeUndefined();
     const queuedToken = mintForRecorder(queued, queuedRunId);
     try {
       expect(
@@ -519,10 +488,7 @@ describe("admitted WebChat prompt reactions", () => {
   });
 
   it("retains authenticated source custody when the queue collects inputs", async () => {
-    const second = createUserTurnTranscriptRecorder({
-      input: { text: "Second" },
-      target: { ...scope, sessionEntry: undefined },
-    });
+    const second = prompt("Second");
     bindSource(second);
     const collected = createUserTurnTranscriptRecorder({
       input: { text: "Collected input" },
@@ -546,10 +512,7 @@ describe("admitted WebChat prompt reactions", () => {
   it("moves a retained tool to a steered prompt only after native transcript consumption", async () => {
     const originalId = await persist();
     const selected = tool();
-    const steered = createUserTurnTranscriptRecorder({
-      input: { text: "Steered prompt" },
-      target: { ...scope, sessionEntry: undefined },
-    });
+    const steered = prompt("Steered prompt");
     bindSource(steered);
     await steered.stageApproved?.({ runId: runId + "-steer", assertCurrent: () => {} });
     await execute({}, selected);

@@ -40,10 +40,11 @@ function mediaConfig(kind: MediaKind, primary: string, timeoutMs?: number): Open
   return { agents: { defaults: { mediaModels: { [kind]: { primary, timeoutMs } } } } };
 }
 
-function detailsOf(result: Awaited<ReturnType<AnyAgentTool["execute"]>>) {
-  expect(result.details).toBeTypeOf("object");
-  return result.details as Record<string, unknown>;
-}
+const imageReference = (value: string) => ({
+  kind: "image" as const,
+  buffer: Buffer.from(value),
+  contentType: "image/png",
+});
 
 export function defineMediaGenerationCancellationTests(
   params: ToolContract & {
@@ -94,11 +95,7 @@ export function defineMediaGenerationCancellationTests(
   it(`stops loading later ${kind} references when the caller aborts a pending reference`, async () => {
     const { primary, generate } = params.setup("reference");
     const reference = createDeferred<Awaited<ReturnType<typeof loadWebMedia>>>();
-    const loadMedia = params.loadMedia().mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("second-image"),
-      contentType: "image/png",
-    });
+    const loadMedia = params.loadMedia().mockResolvedValue(imageReference("second-image"));
     loadMedia.mockImplementationOnce(() => reference.promise);
     tasks.createOperation.mockReturnValue({ taskId: `task-${kind}-references` });
     const scheduleBackgroundWork = vi.fn();
@@ -116,11 +113,7 @@ export function defineMediaGenerationCancellationTests(
     );
     await vi.waitFor(() => expect(loadMedia).toHaveBeenCalledOnce());
     controller.abort(abortReason);
-    reference.resolve({
-      kind: "image",
-      buffer: Buffer.from("first-image"),
-      contentType: "image/png",
-    });
+    reference.resolve(imageReference("first-image"));
 
     await expect(pending).rejects.toBe(abortReason);
     expect(loadMedia).toHaveBeenCalledOnce();
@@ -132,8 +125,7 @@ export function defineMediaGenerationCancellationTests(
     if (params.referenceSignal === "caller") {
       expect(signal).toBe(controller.signal);
     } else {
-      expect(signal?.aborted).toBe(true);
-      expect(signal?.reason).toBe(abortReason);
+      expect(signal).toMatchObject({ aborted: true, reason: abortReason });
     }
   });
 
@@ -153,7 +145,7 @@ export function defineMediaGenerationCancellationTests(
     );
     controller.abort(new Error("requester ended after acceptance"));
 
-    expect(detailsOf(result).status).toBe("started");
+    expect(result.details).toMatchObject({ status: "started" });
     expect(scheduled).toHaveLength(1);
     await scheduled[0]!();
     expect(generate).toHaveBeenCalledOnce();
@@ -224,8 +216,7 @@ export function defineMediaGenerationDuplicateTests(
           type: "text",
           text: expect.stringContaining(`${title} generation task ${taskId} recently succeeded`),
         });
-        expect(detailsOf(result).duplicateGuard).toBe(true);
-        expect(detailsOf(result).active).toBe(false);
+        expect(result.details).toMatchObject({ duplicateGuard: true, active: false });
       }
     });
   }

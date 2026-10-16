@@ -104,86 +104,58 @@ module.exports = {
         database.close();
       },
     });
+    api.${{ image: "registerImageGenerationProvider", music: "registerMusicGenerationProvider", video: "registerVideoGenerationProvider" }[kind]}({
+      id: ${JSON.stringify(id)},
+      defaultModel: "fixture-${kind}",
+      isConfigured() { return read() === 42; },
+      capabilities: ${JSON.stringify({
+        generate: { [{ image: "maxCount", music: "maxTracks", video: "maxVideos" }[kind]]: 2 },
+        [kind === "video" ? "imageToVideo" : "edit"]: {
+          enabled: edit,
+          maxInputImages: edit ? 1 : 0,
+        },
+      })},
 ${
-  kind === "image"
-    ? `
-    api.registerImageGenerationProvider({
-      id: ${JSON.stringify(id)},
-      defaultModel: "fixture-image",
-      isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxCount: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
-      async generateImage(request) {
-        read();
-        connection.generated++;
-        state.generated.resolve();
-        await state.resumeGeneration.promise;
-        read();
-        return {
-          images: Array.from({ length: request.count ?? 1 }, (_, index) => ({
-            buffer: state.png,
-            mimeType: "image/png",
-            fileName: "native-" + index + ".png",
-            get revisedPrompt() {
-              connection.projected++;
-              return "native value " + read();
-            },
-          })),
-        };
-      },
-    });
-`
-    : kind === "music"
-      ? `
-    api.registerMusicGenerationProvider({
-      id: ${JSON.stringify(id)},
-      defaultModel: "fixture-music",
-      isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxTracks: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
-      async generateMusic() {
-        read();
-        connection.generated++;
-        state.generated.resolve();
-        await state.resumeGeneration.promise;
-        read();
-        return {
-          tracks: Array.from({ length: ${trackCount} }, (_, index) => ({
-            buffer: state.audio,
-            mimeType: "audio/mpeg",
-            get fileName() {
-              connection.projected++;
-              return "native-" + index + "-" + read() + ".mp3";
-            },
-          })),
-        };
-      },
-    });
-`
-      : `
-    api.registerVideoGenerationProvider({
-      id: ${JSON.stringify(id)},
-      defaultModel: "fixture-video",
-      isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxVideos: 2 }, imageToVideo: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
-      async resolveModelCapabilities() {
+  kind === "video"
+    ? `      async resolveModelCapabilities() {
         read();
         state.lookupStarted.resolve();
         await state.resumeLookup.promise;
         read();
         return {};
-      },
-      async generateVideo() {
+      },`
+    : ""
+}
+      async ${{ image: "generateImage", music: "generateMusic", video: "generateVideo" }[kind]}(request) {
         read();
         connection.generated++;
         state.generated.resolve();
         await state.resumeGeneration.promise;
         read();
         return {
-          videos: Array.from({ length: ${trackCount} }, (_, index) => ({
-            buffer: state.mp4,
-            mimeType: "video/mp4",
-            fileName: "native-" + index + ".mp4",
+          ${{ image: "images", music: "tracks", video: "videos" }[kind]}: Array.from({ length: ${kind === "image" ? "request.count ?? 1" : trackCount} }, (_, index) => ({
+            buffer: state.${{ image: "png", music: "audio", video: "mp4" }[kind]},
+            mimeType: "${{ image: "image/png", music: "audio/mpeg", video: "video/mp4" }[kind]}",
+${
+  kind === "music"
+    ? `            get fileName() {
+              connection.projected++;
+              return "native-" + index + "-" + read() + ".mp3";
+            },`
+    : `            fileName: "native-" + index + ".${kind === "image" ? "png" : "mp4"}",`
+}
+${
+  kind === "image"
+    ? `            get revisedPrompt() {
+              connection.projected++;
+              return "native value " + read();
+            },`
+    : ""
+}
           })),
-          metadata: {
+${
+  kind === "video"
+    ? `          metadata: {
             supportedDurationSeconds: Object.assign([1], {
               filter(predicate) {
                 connection.projected++;
@@ -191,12 +163,12 @@ ${
                 return Array.prototype.filter.call(this, predicate);
               },
             }),
-          },
+          },`
+    : ""
+}
         };
       },
     });
-`
-}
   },
 };`,
   });
@@ -618,8 +590,7 @@ describe.each(["image", "music", "video"] as const)(
               await first.release();
               await prepared.release();
             }
-            expect(connection.database.isOpen).toBe(true);
-            expect(connection.disposals).toBe(0);
+            expect(connection).toMatchObject({ database: { isOpen: true }, disposals: 0 });
             expect(fixture.connections[1]!.generated).toBe(0);
             resumeSave.resolve();
             if (phase === "rollback") {
@@ -633,8 +604,7 @@ describe.each(["image", "music", "video"] as const)(
               resumeRollback.resolve();
             }
             await completion;
-            expect(connection.database.isOpen).toBe(false);
-            expect(connection.disposals).toBe(1);
+            expect(connection).toMatchObject({ database: { isOpen: false }, disposals: 1 });
             expect(fixture.connections[1]!.database.isOpen).toBe(true);
             if (phase === "rollback") {
               expect(failed).toHaveBeenCalledWith(
