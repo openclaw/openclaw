@@ -155,7 +155,8 @@ describe("monitorDiscordProvider", () => {
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
     }));
-    vi.doMock("../probe.js", () => ({
+    vi.doMock("../probe.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../probe.js")>()),
       fetchDiscordApplicationId: async () => "app-1",
       probeDiscordApplicationId: probeDiscordApplicationIdMock,
       parseApplicationIdFromToken: (token: string) => {
