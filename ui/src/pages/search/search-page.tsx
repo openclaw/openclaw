@@ -41,7 +41,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
@@ -82,7 +81,7 @@ function SettingsSelectRow(props: {
   );
 }
 
-function SearchPageContent() {
+export function SearchPage() {
   const context = useApplication();
   const owner = getOwner();
   const active = () => owner !== null && !isDisposed(owner);
@@ -161,7 +160,7 @@ function SearchPageContent() {
   }
 
   function syncAgent() {
-    const id = context?.settingsAgentSelection.state.selectedId ?? "";
+    const id = context.settingsAgentSelection.state.selectedId ?? "";
     if (id === selectedAgent) {
       return false;
     }
@@ -405,7 +404,7 @@ function SearchPageContent() {
   const disabled = () => !canEdit() || busy() || !configState().configSnapshot;
 
   return (
-    <>
+    <openclaw-search-page>
       <SettingsPageHeader title={t("tabs.search")} subtitle={t("subtitles.search")} />
       <SettingsWorkspace>
         <SettingsPage>
@@ -648,9 +647,14 @@ function SearchPageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-search-page>
   );
 }
-export const SearchPage = defineSolidBridge("openclaw-search-page", SearchPageContent, {
-  properties: {},
-});
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-search-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

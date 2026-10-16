@@ -226,12 +226,13 @@ function PortalContent(props: { controller: PortalsController }) {
     (environment() &&
       environment()!.status !== "starting" &&
       environment()!.status !== "available");
-  const selectedPortal = () =>
+  const selectedPortal = createMemo(() =>
     props.controller.portals.find(
       (portal) =>
         portal.id ===
         (props.controller.presentation().requestedPortalId ?? props.controller.selectedPortalId),
-    );
+    ),
+  );
   return (
     <Show
       when={

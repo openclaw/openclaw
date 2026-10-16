@@ -308,31 +308,27 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
           </div>
         </>
       ) : (
-        <>
-          <div id="plugin-settings-advanced" class="settings-stack">
-            <PluginManager />
-            <SettingsSection
-              title={t("pluginsPage.advanced")}
-              description={t("pluginsPage.advancedDescription")}
-              actions={
-                <>
-                  <button
-                    type="button"
-                    class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                    aria-label={t("common.reload")}
-                    disabled={props.configBusy || props.configSchemaLoading}
-                    onClick={props.onConfigReload}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </>
-              }
-              carapace={true}
-            >
-              <AdvancedSettings {...props} />
-            </SettingsSection>
-          </div>
-        </>
+        <div id="plugin-settings-advanced" class="settings-stack">
+          <PluginManager />
+          <SettingsSection
+            title={t("pluginsPage.advanced")}
+            description={t("pluginsPage.advancedDescription")}
+            actions={
+              <button
+                type="button"
+                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
+                aria-label={t("common.reload")}
+                disabled={props.configBusy || props.configSchemaLoading}
+                onClick={props.onConfigReload}
+              >
+                <Icon name="refresh" />
+              </button>
+            }
+            carapace
+          >
+            <AdvancedSettings {...props} />
+          </SettingsSection>
+        </div>
       )}
     </>
   );
