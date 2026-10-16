@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -9,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.worker.js";
@@ -448,5 +452,114 @@ it("queues a brief approval burst through shared input admission", async () => {
       status: "fulfilled",
       value: { outcome: "found", record: { status: "pending", decision: null } },
     });
+  }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  // Materialize the state file so the competing connection can open it.
+  openOpenClawStateDatabase(databaseOptions);
+  const competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  competitor.exec("PRAGMA busy_timeout = 0");
+  const observed: string[] = [];
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (admit, attachment) =>
+      createAdmission((request, grant) => {
+        try {
+          competitor.exec("BEGIN IMMEDIATE");
+          competitor.exec("ROLLBACK");
+          observed.push(`${request.stage}:free`);
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+          observed.push(`${request.stage}:held`);
+        }
+        admit(request, grant);
+      }, attachment),
+  );
+  try {
+    await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  } finally {
+    competitor.close();
+  }
+  expect(observed).toEqual(["transaction:free", "commit:held"]);
+});
+
+it("commits a competing write while a busy host delays initial approval admission", async () => {
+  const databaseOptions = options();
+  // Materialize the state file so the competing connection can open it.
+  openOpenClawStateDatabase(databaseOptions);
+  const dbPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
+  const HOST_BUSY_MS = 800;
+  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  // The competing writer runs on its own thread so it can write while the host main thread is busy.
+  const competitor = new Worker(
+    `
+    const { parentPort, workerData } = require("node:worker_threads");
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(workerData.path);
+    db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
+    const gate = new Int32Array(workerData.gate);
+    Atomics.wait(gate, 0, 0);
+    const start = Date.now();
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
+      db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
+      db.exec("COMMIT");
+      parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
+    } catch (error) {
+      parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
+    } finally {
+      db.close();
+    }
+  `,
+    {
+      eval: true,
+      workerData: { path: dbPath, busyTimeoutMs: 200, gate: gate.buffer },
+    },
+  );
+  const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((resolve) => {
+    competitor.once("message", resolve);
+  });
+  const trace: string[] = [];
+  let delayedOnce = false;
+  // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering initial
+  // admission, and run the competing write inside that busy window.
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "transaction" && !delayedOnce) {
+      delayedOnce = true;
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0);
+      Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
+      trace.push(`initial approval admission answered after ${HOST_BUSY_MS}ms of host delay`);
+    }
+    admit(request, grant);
+  });
+  try {
+    await store.insertOperatorApproval({ approval: approval("busy-host"), databaseOptions });
+    const outcome = await competing;
+    trace.push(
+      `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
+        (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
+    );
+    const pendingApprovals = await store.listPendingOperatorApprovals({
+      nowMs: 2000,
+      databaseOptions,
+    });
+    trace.push(
+      `approval persisted after admission resumed: ${pendingApprovals.some(
+        (record) => record.id === "busy-host",
+      )}`,
+    );
+    console.log(`[busy-host proof]\n${trace.join("\n")}`);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
+    expect(pendingApprovals.some((record) => record.id === "busy-host")).toBe(true);
+  } finally {
+    await competitor.terminate();
   }
 });
