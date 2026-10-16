@@ -13,6 +13,10 @@ Gateway keep supported stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
 
+For provisioning, first boot, migration, and recovery procedures, see the
+[PostgreSQL operator guide](/gateway/postgresql). It also describes the current
+archive restore and mixed-engine lifecycle limits.
+
 Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
 intent to the macOS app without requiring a running Gateway or PostgreSQL
@@ -228,8 +232,8 @@ all agent databases together, or the named plugin store. Admission and anchors
 remain per physical store. Existing SQLite content refuses a PostgreSQL choice,
 and a PostgreSQL anchor refuses SQLite; never remove an anchor to switch engines.
 Changing a family's engine requires a port (not yet supported for mixed installs)
-and a Gateway restart. The current port command has no per-family scope, and
-agent port providers are not available yet. Keep existing data on its current engine.
+and a Gateway restart. The current port command has no per-family scope.
+Keep existing data on its current engine.
 
 | Configuration                                                          | Runtime support                                                                  |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -413,20 +417,19 @@ openclaw database port --to postgres
 
 Port, backup, restore, and fingerprint operations share one database-family
 provider registry. Each provider resolves its stores and supplies the generated
-schema descriptor and expected PostgreSQL catalog. **Shared state, Workboard,
-Logbook, and Team Reports are registered families.** Matrix account roots are
-state-family resources. Agent support is not enabled by this registry yet. An unrecognized PostgreSQL anchor
+schema descriptor and expected PostgreSQL catalog. **Shared state, agent,
+Workboard, Logbook, and Team Reports are registered families.** Matrix account roots are
+state-family resources. An unrecognized PostgreSQL anchor
 refuses the operation and names the supported families.
 For separately installed plugins such as Team Reports, operations load the
 selected installed plugin's schema and admission API. Keep the matching plugin
 installed for port, backup, and restore. Preflight does not require absent
 optional plugins.
 
-The command inventories existing shared state, Workboard, Logbook, and Team Reports stores,
+The command inventories existing shared state, agent, Workboard, Logbook, and Team Reports stores,
 including disabled plugin stores. A real SQLite-to-PostgreSQL port initializes
 missing shared state before capture so the config writer uses the same selected
-store after the switch. It does not create missing plugin stores or port agent
-databases. A dry run checks read-only
+store after the switch. It does not create missing plugin stores. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings
