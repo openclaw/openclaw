@@ -9,8 +9,6 @@ import type {
 } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
-// These direct-render fixtures exercise Gateway lineage without the app lifecycle.
-// Browser tests cover deferred login loading and recovery.
 import "../components/login-gate.ts";
 import {
   createTestSessionCapability,
@@ -99,7 +97,30 @@ function createGatewayHarness() {
     clients.push(client);
     return client as unknown as GatewayBrowserClient;
   });
-  return { gateway, clients };
+  return {
+    gateway,
+    clients,
+    hello: (index = 0, hello = HELLO) => clients[index]!.opts.onHello?.(hello),
+    close: (index = 0, reason = "login required", willRetry = true) =>
+      clients[index]!.opts.onClose?.({ code: 1006, reason, willRetry }),
+    recover: (scope: string, index = 0) => {
+      Object.assign(clients[index]!, { recoveryScope: scope, recoveryScopeReady: true });
+      clients[index]!.opts.onRecoveryScopeChange?.();
+    },
+    starting: (index = 0) =>
+      clients[index]!.opts.onClose?.({
+        code: 4013,
+        reason: "gateway starting",
+        willRetry: true,
+        error: {
+          code: "UNAVAILABLE",
+          message: "gateway starting; retry shortly",
+          details: { reason: "startup-sidecars" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      }),
+  };
 }
 
 async function settleRootContent(): Promise<void> {
@@ -133,20 +154,8 @@ async function createGatewaySurface(
     dispose();
     container.remove();
   });
-  const draw = settleRootContent;
-  await draw();
-  return { runtime, container, draw };
-}
-
-async function renderGatewaySurface(
-  gateway: ApplicationGateway,
-  documentView?: "desktop" | "terminal",
-): Promise<string> {
-  const surface = await createGatewaySurface(
-    gateway,
-    documentView ? `/focus/${documentView}` : undefined,
-  );
-  return surface.container.innerHTML;
+  await settleRootContent();
+  return { runtime, container, draw: settleRootContent };
 }
 
 afterEach(() => {
@@ -166,12 +175,12 @@ describe("Control UI Gateway target lineage", () => {
   ])(
     "keeps Gateway confirmation actionable at $pathname while $phase",
     async ({ pathname, phase }) => {
-      const { gateway, clients } = createGatewayHarness();
+      const { gateway, hello, close } = createGatewayHarness();
       gateway.start();
       if (phase === "connected") {
-        clients[0]!.opts.onHello?.(HELLO);
+        hello();
       } else if (phase === "stopped") {
-        clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
+        close(0, "login required", false);
       }
       for (const action of ["onConfirm", "onCancel"] as const) {
         const pendingGatewayUrl = "wss://pending-gateway.example";
@@ -212,7 +221,7 @@ describe("Control UI Gateway target lineage", () => {
       vi.stubGlobal("requestIdleCallback", vi.fn());
       vi.stubGlobal("requestAnimationFrame", () => 1);
       vi.stubGlobal("cancelAnimationFrame", () => undefined);
-      const { gateway, clients } = createGatewayHarness();
+      const { gateway, clients, hello: admit, close, recover } = createGatewayHarness();
       const sessionKey = "agent:main:main";
       const agentsList = {
         defaultId: "main",
@@ -228,10 +237,8 @@ describe("Control UI Gateway target lineage", () => {
         },
       };
       gateway.connect({ gatewayUrl: "wss://synthetic-owner.example.test" });
-      clients[0]!.opts.onHello?.(hello);
-      clients[0]!.recoveryScope = "synthetic-recovery-a";
-      clients[0]!.recoveryScopeReady = true;
-      clients[0]!.opts.onRecoveryScopeChange?.();
+      admit(0, hello);
+      recover("synthetic-recovery-a");
       const sessions = createTestSessionCapability(gateway);
       const { pane, state } = createTestChatPane({ client: gateway.snapshot.client!, sessions });
       state.sessionKey = sessionKey;
@@ -277,9 +284,8 @@ describe("Control UI Gateway target lineage", () => {
         const originalTarget = storageTargetForComposer(state);
         const originalBytes = sessionStorage.getItem(originalTarget.key);
         expect(originalBytes).not.toBeNull();
-        // Socket loss invalidates readiness but retains this client's authenticated owner.
         clients[0]!.recoveryScopeReady = false;
-        clients[0]!.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+        close(0, "offline");
         expect(state.connected).toBe(false);
         expect(updateQueuedMessageEdit(state, "Unsaved offline correction")).toBe(true);
         expect(activeQueuedMessageEdit(state)).toBe(captured);
@@ -287,48 +293,39 @@ describe("Control UI Gateway target lineage", () => {
         expect(gateway.snapshot.phase).toBe("reconnecting");
         await drawShell();
         expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
-        // Hello precedes recovery resolution. Neither a replacement transport nor
-        // pending authentication can act on the old owner's retained correction.
-        clients[1]!.opts.onHello?.(hello);
+        // Hello alone cannot authorize access to the old owner's correction.
+        admit(1, hello);
         expect.soft(activeQueuedMessageEdit(state)).toBeNull();
         expect.soft(cancelQueuedMessageEdit(state)).toBe(false);
         expect(beginQueuedMessageEdit(state, captured.id)).toBe("unavailable");
-        clients[1]!.recoveryScope = nextRecovery;
-        clients[1]!.recoveryScopeReady = true;
-        clients[1]!.opts.onRecoveryScopeChange?.();
+        recover(nextRecovery, 1);
         await vi.waitFor(() => expect(state.chatLoading).toBe(false));
         const sameOwner = nextRecovery === "synthetic-recovery-a";
         const active = activeQueuedMessageEdit(state);
-        const composerView = mountSolid(
-          () =>
-            createComponent(
-              ChatComposer,
-              createComposerProps({
-                queue: state.chatQueue,
-                sessionKey,
-                queuedEdit: {
-                  editingId: active?.id ?? null,
-                  editingText: active?.draftText,
-                  source: active?.source,
-                  onCancel: () => cancelQueuedMessageEdit(state),
-                },
-              }),
-            ),
-          { container: composer },
-        );
-        unmountComposer = composerView.unmount;
+        const props = createComposerProps({
+          queue: state.chatQueue,
+          sessionKey,
+          queuedEdit: {
+            editingId: active?.id ?? null,
+            editingText: active?.draftText,
+            source: active?.source,
+            onCancel: () => cancelQueuedMessageEdit(state),
+          },
+        });
+        unmountComposer = mountSolid(() => createComponent(ChatComposer, props), {
+          container: composer,
+        }).unmount;
         flush();
         if (!sameOwner) {
           await handleSendChat(state, captured.draftText, {
             resumeQueuedMessageEditId: captured.id,
             attachmentsOverride: captured.attachments,
           });
-          expect(clients[1]!.request.mock.calls.some(([method]) => method === "chat.send")).toBe(
-            false,
+          expect(clients[1]!.request.mock.calls.map(([method]) => method)).not.toContain(
+            "chat.send",
           );
         }
-        // The new account cannot project the old input, but its owner retains
-        // the exact unsent bytes, including Incognito queued submissions.
+        // Account isolation preserves the original owner's unsent bytes.
         expect(listStoredChatOutboxes(state)).toEqual(sameOwner ? outboxes : []);
         expect(sessionStorage.getItem(originalTarget.key)).toBe(originalBytes);
         expect(listStoredChatOutboxes(originalScope)).toEqual(outboxes);
@@ -336,11 +333,8 @@ describe("Control UI Gateway target lineage", () => {
         expect(pane.state).toBe(state);
         expect(state.client).not.toBe(initialClient);
         expect.soft(Boolean(active)).toBe(sameOwner);
-        expect
-          .soft(
-            composer.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value ?? null,
-          )
-          .toBe(sameOwner ? captured.draftText : null);
+        const editInput = composer.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input");
+        expect.soft(editInput?.value ?? null).toBe(sameOwner ? captured.draftText : null);
         if (sameOwner) {
           const settings = state.settings;
           state.settings = { ...settings, gatewayUrl: "wss://different-owner.example.test" };
@@ -357,9 +351,7 @@ describe("Control UI Gateway target lineage", () => {
         releaseShell();
         releasePane();
         releaseOutbox();
-        // Dispose the Solid owner before resetting the shared composer fixture.
         unmountComposer?.();
-
         pane.disconnectedCallback();
         sessions.dispose();
         gateway.stop();
@@ -369,22 +361,21 @@ describe("Control UI Gateway target lineage", () => {
   );
 
   it("returns to the login gate when a newly selected Gateway's first attempt fails", async () => {
-    const { gateway, clients } = createGatewayHarness();
+    const { gateway, hello, close } = createGatewayHarness();
     gateway.start();
-    clients[0]?.opts.onHello?.(HELLO);
+    hello();
     gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
-    clients[1]?.opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
+    close(1, "remote refused");
 
-    const surface = await renderGatewaySurface(gateway);
-
-    expect(surface).toContain("<openclaw-login-gate");
-    expect(surface).not.toContain("<openclaw-app-shell");
+    const { container } = await createGatewaySurface(gateway);
+    expect(container.innerHTML).toContain("<openclaw-login-gate");
+    expect(container.innerHTML).not.toContain("<openclaw-app-shell");
   });
 
   it("re-scopes credentials when the login draft changes Gateway", async () => {
-    const { gateway, clients } = createGatewayHarness();
+    const { gateway, clients, close } = createGatewayHarness();
     gateway.connect({ token: "old-token", password: "old-password" });
-    clients[0]?.opts.onClose?.({ code: 1006, reason: "login required", willRetry: true });
+    close();
     const { container } = await createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: {
@@ -397,42 +388,26 @@ describe("Control UI Gateway target lineage", () => {
     await settleRootContent();
     loginGate.props.onConnect();
 
-    expect(clients[1]?.opts.token).toBeUndefined();
-    expect(clients[1]?.opts.password).toBeUndefined();
+    expect([clients[1]?.opts.token, clients[1]?.opts.password]).toEqual([undefined, undefined]);
   });
 
   it("shows startup progress after a manual connection attempt", async () => {
-    const { gateway, clients } = createGatewayHarness();
+    const { gateway, hello, close, starting } = createGatewayHarness();
     gateway.start();
-    clients[0]?.opts.onClose?.({
-      code: 1006,
-      reason: "manual connection required",
-      willRetry: true,
-    });
+    close(0, "manual connection required");
     const { container, draw } = await createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: { onConnect: () => void };
     };
 
     loginGate.props.onConnect();
-    clients[1]?.opts.onClose?.({
-      code: 4013,
-      reason: "gateway starting",
-      willRetry: true,
-      error: {
-        code: "UNAVAILABLE",
-        message: "gateway starting; retry shortly",
-        details: { reason: "startup-sidecars" },
-        retryable: true,
-        retryAfterMs: 250,
-      },
-    });
+    starting(1);
     await draw();
 
     expect(container.innerHTML).toContain("Gateway starting…");
     expect(container.innerHTML).not.toContain("<openclaw-login-gate");
 
-    clients[1]?.opts.onHello?.(HELLO);
+    hello(1);
     await draw();
     await vi.dynamicImportSettled();
     await settleRootContent();
@@ -442,25 +417,13 @@ describe("Control UI Gateway target lineage", () => {
   it.each(["desktop", "terminal"] as const)(
     "shows retryable Gateway startup in the standalone %s document",
     async (documentView) => {
-      const { gateway, clients } = createGatewayHarness();
+      const { gateway, starting } = createGatewayHarness();
       gateway.start();
-      clients[0]?.opts.onClose?.({
-        code: 4013,
-        reason: "gateway starting",
-        willRetry: true,
-        error: {
-          code: "UNAVAILABLE",
-          message: "gateway starting; retry shortly",
-          details: { reason: "startup-sidecars" },
-          retryable: true,
-          retryAfterMs: 250,
-        },
-      });
+      starting();
 
-      const surface = await renderGatewaySurface(gateway, documentView);
-
-      expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
-      expect(surface).toContain("Gateway starting…");
+      const { container } = await createGatewaySurface(gateway, `/focus/${documentView}`);
+      expect(container.innerHTML).toContain('class="connect-splash connect-splash--skeleton"');
+      expect(container.innerHTML).toContain("Gateway starting…");
     },
   );
 });

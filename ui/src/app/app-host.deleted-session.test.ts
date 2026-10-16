@@ -1,9 +1,7 @@
-import type { RouteLocation } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import {
   readDurableComposerDraft,
   writeDurableComposerDraft,
@@ -42,25 +40,76 @@ import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext } from "./context.ts";
 
-type DeletedSessionShell = {
+type DeletedSessionShell = Omit<ReturnType<typeof createShellOwner>, "runtime"> & {
   runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  routeState: { routeId?: RouteId; location?: RouteLocation };
-  didConsiderNativeRouteRestore: boolean;
-  recoverNotFoundRoute: () => void;
   shellNavigation: ShellNavigationOwner;
-  observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
-  recoverDeletedActiveSession: () => void;
 };
 
 const mainKey = "agent:main:main";
 const deletedKey = "agent:main:deleted-thread";
 
 const cleanupWarning = "Session deleted; browser draft remains. Clear site data.";
+const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+const recoveryOwner = {
+  gatewayOwner: "ws://gateway.test",
+  recoveryScope: "deleted-session-owner",
+  scopeKey: `chat:v3:${scopeKey}`,
+};
+type RecoveryOwner = typeof recoveryOwner;
+const cleanups: Array<() => unknown> = [];
+
+function attachOwner(shell: DeletedSessionShell, owner = recoveryOwner) {
+  const client = {
+    gatewayUrl: owner.gatewayOwner,
+    recoveryScope: owner.recoveryScope,
+    recoveryScopeReady: true,
+  };
+  const gateway = shell.runtime.context.gateway;
+  gateway.snapshot.client = client as GatewayBrowserClient;
+  gateway.connection.gatewayUrl = owner.gatewayOwner;
+  return client;
+}
+
+function toastHost() {
+  return document.body.appendChild(document.createElement("openclaw-toast-host"));
+}
+
+function expectCleanupWarning(toast: HTMLElement) {
+  expect.soft(toast.textContent).toContain(cleanupWarning);
+  expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
+}
+
+async function persistDraft(owner: RecoveryOwner, text: string, writeId = text) {
+  expect(
+    await writeDurableComposerDraft(
+      owner,
+      { text, attachments: [], revision: 1 },
+      { expectedRevision: 0, writeId },
+    ),
+  ).toMatchObject({ status: "persisted" });
+}
+
+async function expectDraft(owner: RecoveryOwner, status = "found", text?: string) {
+  expect.soft(await readDurableComposerDraft(owner)).toMatchObject({
+    status,
+    ...(text === undefined ? {} : { draft: { text } }),
+  });
+}
+
+function expectTombstone(
+  storage: Storage,
+  target: ReturnType<typeof storageTargetForGateway>,
+  key: string,
+  revision: number,
+) {
+  const tombstone = readStoredOutboxStore(storage, target).sessions[key];
+  expect(tombstone).toEqual({ draftRevision: expect.any(Number), updatedAt: expect.any(Number) });
+  expect(tombstone?.draftRevision).toBeGreaterThan(revision);
+}
 
 function storedDraft(
   gatewayOwner: string,
-  scopeKey: string,
+  key: string,
   draft: string,
   queue = [{ id: "queued", text: "queued", createdAt: 1 }],
 ) {
@@ -68,7 +117,7 @@ function storedDraft(
     version: 4 as const,
     recovery: {},
     gatewayOwner,
-    sessions: { [scopeKey]: { draft, draftRevision: 1, queue, updatedAt: 1 } },
+    sessions: { [key]: { draft, draftRevision: 1, queue, updatedAt: 1 } },
   };
 }
 
@@ -77,16 +126,18 @@ function draftStorage() {
   const indexedDb = new IDBFactory();
   vi.stubGlobal("sessionStorage", storage);
   vi.stubGlobal("indexedDB", indexedDb);
-  return { storage, indexedDb };
+  cleanups.push(() => requestResult(indexedDb.deleteDatabase("openclaw-control-ui")));
+  return storage;
 }
 
-function createSessionRecoveryShell(params: {
-  activeSessionKey: string;
-  agentIds?: string[];
-  sessionKeys: string[];
-  deletedSessionKeys?: string[];
-  sessions?: ApplicationContext["sessions"];
-}) {
+function createSessionRecoveryShell(
+  params: {
+    activeSessionKey?: string;
+    sessionKeys?: string[];
+    deletedSessionKeys?: string[];
+    sessions?: ApplicationContext["sessions"];
+  } = {},
+) {
   const replace = vi.fn();
   const setSessionKey = vi.fn();
   const fixture = createApplicationGateway();
@@ -105,7 +156,7 @@ function createSessionRecoveryShell(params: {
           agentsList: {
             defaultId: "main",
             mainKey: "main",
-            agents: (params.agentIds ?? ["main"]).map((id) => ({ id })),
+            agents: [{ id: "main" }],
           },
         },
       },
@@ -120,20 +171,42 @@ function createSessionRecoveryShell(params: {
             key,
             retireBeforeRevision: Date.now(),
           })),
-          result: { sessions: params.sessionKeys.map((key) => ({ key })) },
+          result: { sessions: (params.sessionKeys ?? [deletedKey]).map((key) => ({ key })) },
         },
       },
       replace,
     } as unknown as ApplicationContext,
   };
-  shell.activeSessionKey = params.activeSessionKey;
+  shell.activeSessionKey = params.activeSessionKey ?? deletedKey;
   shell.routeState = { routeId: "chat" };
+  cleanups.push(() => {
+    clearPaneSessionHandoffs(shell.runtime.context, "retained");
+    shell.runtime.context.chatAttachmentHandoff.dispose();
+  });
   return { replace, setSessionKey, shell, publishGateway: () => fixture.publish(gateway.snapshot) };
 }
 
-afterEach(() => {
-  document.body.replaceChildren();
-  resetAppHostTestGlobals();
+function createDeletionHarness(request: ReturnType<typeof vi.fn>) {
+  const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  const sessions = createTestSessionCapability(harness.gateway);
+  cleanups.push(() => sessions.dispose());
+  const watch = (sessionKeys = [deletedKey, mainKey]) => {
+    const fixture = createSessionRecoveryShell({ sessionKeys, sessions });
+    cleanups.push(sessions.subscribe(() => fixture.shell.recoverDeletedActiveSession()));
+    return { ...fixture, toast: toastHost() };
+  };
+  return { ...harness, sessions, watch };
+}
+
+afterEach(async () => {
+  try {
+    while (cleanups.length) {
+      await cleanups.pop()!();
+    }
+  } finally {
+    document.body.replaceChildren();
+    resetAppHostTestGlobals();
+  }
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
@@ -143,129 +216,105 @@ describe("OpenClaw shell deleted-session recovery", () => {
     "late principal change",
     "stalled readiness",
   ] as const)("keeps draft cleanup scoped through %s", async (transition) => {
-    const { storage, indexedDb } = draftStorage();
-    const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+    const storage = draftStorage();
     const owner = {
       gatewayOwner: "ws://gateway.example.test",
       recoveryScope: "original-principal",
       scopeKey: `chat:v3:${scopeKey}`,
     };
     const target = storageTargetForGateway(owner.gatewayOwner, owner.recoveryScope);
-    const client = {
-      gatewayUrl: owner.gatewayOwner,
-      recoveryScope: owner.recoveryScope,
-      recoveryScopeReady: true,
-    };
     const { shell, publishGateway } = createSessionRecoveryShell({
-      activeSessionKey: deletedKey,
-      sessionKeys: [deletedKey],
       deletedSessionKeys: [deletedKey],
     });
     const context = shell.runtime.context;
-    context.gateway.snapshot.client = client as GatewayBrowserClient;
-    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-    try {
-      expect(
-        await writeDurableComposerDraft(
-          owner,
-          { text: "retire me", attachments: [], revision: 1 },
-          { expectedRevision: 0, writeId: "readiness" },
-        ),
-      ).toMatchObject({ status: "persisted" });
-      writeStoredOutboxStore(
-        storage,
-        target,
-        storedDraft(owner.gatewayOwner, scopeKey, "retire queued draft"),
-      );
-      const stored = storage.getItem(target.key);
-      if (transition === "initial readiness") {
-        client.recoveryScope = "";
-        client.recoveryScopeReady = false;
-      }
-      preparePaneSessionHandoff(context, "retained", deletedKey, {
-        draft: "retire pane draft",
-        attachments: [],
-      });
-      context.chatAttachmentHandoff.prepare({
-        reviewPrivateDraft: reviewPrivateComposerDraft,
-        owner: client as GatewayBrowserClient,
-        paneId: "retained",
-        scopeKey,
-        message: "retire attachment handoff",
-        attachments: [],
-        fallbacks: {},
-      });
-      if (transition === "stalled readiness") {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
-      if (transition !== "late principal change") {
-        client.recoveryScope = "";
-      }
+    const client = attachOwner(shell, owner);
+    const toast = toastHost();
+    await persistDraft(owner, "retire me", "readiness");
+    writeStoredOutboxStore(
+      storage,
+      target,
+      storedDraft(owner.gatewayOwner, scopeKey, "retire queued draft"),
+    );
+    const stored = storage.getItem(target.key);
+    if (transition === "initial readiness") {
+      client.recoveryScope = "";
       client.recoveryScopeReady = false;
-      shell.observeDeletedSessions({
-        ...context.sessions.state,
-        deletedSessions: [
-          { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 },
-        ],
-      });
-      expect.soft(consumePaneSessionHandoff(context, "retained", deletedKey)).toBeNull();
-      expect
-        .soft(
-          context.chatAttachmentHandoff.consume({
-            owner: client as GatewayBrowserClient,
-            paneId: "retained",
-            scopeKey,
-          }),
-        )
-        .toBeNull();
-      if (transition === "stalled readiness") {
-        await vi.dynamicImportSettled();
-        await vi.advanceTimersByTimeAsync(10_000);
-        expect.soft(toast.textContent).toContain(cleanupWarning);
-        expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
-        expect.soft(storage.getItem(target.key)).toBe(stored);
-        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        vi.useRealTimers();
-        client.recoveryScope = owner.recoveryScope;
-        client.recoveryScopeReady = true;
-        publishGateway();
-        await vi.dynamicImportSettled();
-        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        return;
-      }
-      const late = transition === "late readiness" || transition === "late principal change";
-      if (late) {
-        await vi.dynamicImportSettled();
-        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        expect.soft(storage.getItem(target.key)).toBe(stored);
-        expect.soft(toast.textContent).toBe("");
-      }
-      client.recoveryScope =
-        transition === "late principal change" ? "other-principal" : owner.recoveryScope;
+    }
+    preparePaneSessionHandoff(context, "retained", deletedKey, {
+      draft: "retire pane draft",
+      attachments: [],
+    });
+    context.chatAttachmentHandoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
+      owner: client as GatewayBrowserClient,
+      paneId: "retained",
+      scopeKey,
+      message: "retire attachment handoff",
+      attachments: [],
+      fallbacks: {},
+    });
+    if (transition === "stalled readiness") {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
+    if (transition !== "late principal change") {
+      client.recoveryScope = "";
+    }
+    client.recoveryScopeReady = false;
+    shell.observeDeletedSessions({
+      ...context.sessions.state,
+      deletedSessions: [{ key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 }],
+    });
+    expect.soft(consumePaneSessionHandoff(context, "retained", deletedKey)).toBeNull();
+    expect
+      .soft(
+        context.chatAttachmentHandoff.consume({
+          owner: client as GatewayBrowserClient,
+          paneId: "retained",
+          scopeKey,
+        }),
+      )
+      .toBeNull();
+    if (transition === "stalled readiness") {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expectCleanupWarning(toast);
+      expect.soft(storage.getItem(target.key)).toBe(stored);
+      await expectDraft(owner);
+      vi.useRealTimers();
+      client.recoveryScope = owner.recoveryScope;
       client.recoveryScopeReady = true;
       publishGateway();
       await vi.dynamicImportSettled();
+      await expectDraft(owner);
+      return;
+    }
+    const late = transition === "late readiness" || transition === "late principal change";
+    if (late) {
+      await vi.dynamicImportSettled();
+      await expectDraft(owner);
+      expect.soft(storage.getItem(target.key)).toBe(stored);
+      expect.soft(toast.textContent).toBe("");
+    }
+    client.recoveryScope =
+      transition === "late principal change" ? "other-principal" : owner.recoveryScope;
+    client.recoveryScopeReady = true;
+    publishGateway();
+    await vi.dynamicImportSettled();
 
-      if (transition === "late principal change") {
-        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "found" });
-        expect.soft(storage.getItem(target.key)).toBe(stored);
-        expect.soft(toast.textContent).toContain(cleanupWarning);
-      } else {
-        expect.soft(await readDurableComposerDraft(owner)).toMatchObject({ status: "not-found" });
-        expect.soft(toast.textContent).toBe("");
-      }
-    } finally {
-      clearPaneSessionHandoffs(context, "retained");
-      context.chatAttachmentHandoff.dispose();
-      await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
+    if (transition === "late principal change") {
+      await expectDraft(owner);
+      expect.soft(storage.getItem(target.key)).toBe(stored);
+      expect.soft(toast.textContent).toContain(cleanupWarning);
+    } else {
+      await expectDraft(owner, "not-found");
+      expect.soft(toast.textContent).toBe("");
     }
   });
 
   it.each(["gateway switch", "principal change", "disconnect", "credentials change"] as const)(
     "preserves drafts and reports failed cleanup after a %s during import",
     async (change) => {
-      const { storage, indexedDb } = draftStorage();
-      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+      const storage = draftStorage();
       const original = {
         gatewayOwner: "ws://original.test",
         recoveryScope: "original-principal",
@@ -277,78 +326,47 @@ describe("OpenClaw shell deleted-session recovery", () => {
         recoveryScope: "other-principal",
       };
       const { shell } = createSessionRecoveryShell({
-        activeSessionKey: deletedKey,
-        sessionKeys: [deletedKey],
         deletedSessionKeys: [deletedKey],
       });
-      try {
-        for (const owner of [original, other]) {
-          expect(
-            await writeDurableComposerDraft(
-              owner,
-              { text: owner.recoveryScope, attachments: [], revision: 1 },
-              { expectedRevision: 0, writeId: owner.recoveryScope },
-            ),
-          ).toMatchObject({ status: "persisted" });
-          writeStoredOutboxStore(
-            storage,
-            storageTargetForGateway(owner.gatewayOwner, owner.recoveryScope),
-            storedDraft(owner.gatewayOwner, scopeKey, owner.gatewayOwner, [
-              { id: "queued", text: owner.gatewayOwner, createdAt: 1 },
-            ]),
-          );
-        }
-        const originalTarget = storageTargetForGateway(
-          original.gatewayOwner,
-          original.recoveryScope,
+      for (const owner of [original, other]) {
+        await persistDraft(owner, owner.recoveryScope);
+        writeStoredOutboxStore(
+          storage,
+          storageTargetForGateway(owner.gatewayOwner, owner.recoveryScope),
+          storedDraft(owner.gatewayOwner, scopeKey, owner.gatewayOwner),
         );
-        const otherTarget = storageTargetForGateway(other.gatewayOwner, other.recoveryScope);
-        const otherStored = storage.getItem(otherTarget.key);
-        const client = {
-          gatewayUrl: original.gatewayOwner,
-          recoveryScope: original.recoveryScope,
-          recoveryScopeReady: true,
-        };
-        const context = shell.runtime.context;
-        context.gateway.snapshot.client = client as GatewayBrowserClient;
-        context.gateway.connection.gatewayUrl = original.gatewayOwner;
-        const originalStored = storage.getItem(originalTarget.key);
-        const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-
-        shell.observeDeletedSessions(context.sessions.state);
-        if (change === "principal change") {
-          client.recoveryScope = other.recoveryScope;
-        } else if (change === "credentials change") {
-          Object.assign(context.gateway, { connectionRevision: 1 });
-        } else {
-          context.gateway.snapshot.client =
-            change === "disconnect"
-              ? null
-              : ({ ...client, gatewayUrl: other.gatewayOwner } as GatewayBrowserClient);
-        }
-        await vi.dynamicImportSettled();
-
-        expect
-          .soft(await readDurableComposerDraft(original))
-          .toMatchObject({ status: "found", draft: { text: original.recoveryScope } });
-        expect.soft(await readDurableComposerDraft(other)).toMatchObject({
-          status: "found",
-          draft: { text: other.recoveryScope },
-        });
-        expect.soft(storage.getItem(originalTarget.key)).toBe(originalStored);
-        expect.soft(toast.textContent).toContain(cleanupWarning);
-        expect.soft(toast.querySelectorAll(".app-toast")).toHaveLength(1);
-        expect.soft(storage.getItem(otherTarget.key)).toBe(otherStored);
-      } finally {
-        shell.runtime.context.chatAttachmentHandoff.dispose();
-        await requestResult(indexedDb.deleteDatabase("openclaw-control-ui"));
       }
+      const originalTarget = storageTargetForGateway(original.gatewayOwner, original.recoveryScope);
+      const otherTarget = storageTargetForGateway(other.gatewayOwner, other.recoveryScope);
+      const otherStored = storage.getItem(otherTarget.key);
+      const client = attachOwner(shell, original);
+      const context = shell.runtime.context;
+      const originalStored = storage.getItem(originalTarget.key);
+      const toast = toastHost();
+
+      shell.observeDeletedSessions(context.sessions.state);
+      if (change === "principal change") {
+        client.recoveryScope = other.recoveryScope;
+      } else if (change === "credentials change") {
+        Object.assign(context.gateway, { connectionRevision: 1 });
+      } else {
+        context.gateway.snapshot.client =
+          change === "disconnect"
+            ? null
+            : ({ ...client, gatewayUrl: other.gatewayOwner } as GatewayBrowserClient);
+      }
+      await vi.dynamicImportSettled();
+
+      await expectDraft(original, "found", original.recoveryScope);
+      await expectDraft(other, "found", other.recoveryScope);
+      expect.soft(storage.getItem(originalTarget.key)).toBe(originalStored);
+      expectCleanupWarning(toast);
+      expect.soft(storage.getItem(otherTarget.key)).toBe(otherStored);
     },
   );
 
   it("keeps an interrupted first prompt visible after temporary-session cleanup", () => {
     const { shell, replace, setSessionKey } = createSessionRecoveryShell({
-      activeSessionKey: deletedKey,
       sessionKeys: [mainKey],
       deletedSessionKeys: [deletedKey],
     });
@@ -387,130 +405,96 @@ describe("OpenClaw shell deleted-session recovery", () => {
         }
         return sessionsResult([], 1);
       });
-      const { gateway, publish } = createGatewayHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      const { shell, replace } = createSessionRecoveryShell({
-        activeSessionKey: deletedKey,
-        sessionKeys: [deletedKey, mainKey],
-        sessions,
-      });
-      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
-      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      try {
-        const operation =
-          failure === "rejection"
-            ? sessions.delete(deletedKey)
-            : sessions.deleteMany([{ key: deletedKey }, { key: "agent:main:unsent" }]);
-        expect(shell.activeSessionKey).toBe(mainKey);
-        expect(sessions.deletionState(deletedKey)).toBe("pending");
-        expect(sessions.state.deletedSessions).toEqual([]);
-        expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-        shell.activeSessionKey = "agent:main:another-thread";
-        replace.mockClear();
-        if (failure === "rejection") {
-          response.reject(new Error("delete rejected"));
-          await expect(operation).rejects.toThrow("delete rejected");
-        } else {
-          publish(false);
-          publish(
-            true,
-            failure === "different-client batch rejection"
-              ? ({ request } as unknown as GatewayBrowserClient)
-              : gateway.snapshot.client,
-          );
-          if (failure === "different-client batch rejection") {
-            response.reject(new Error("old client rejected deletion"));
-          } else {
-            response.resolve({ deleted: true });
-          }
-          await operation;
-          expect(
-            request.mock.calls.filter(([method]) => method === "sessions.delete"),
-          ).toHaveLength(1);
-        }
-        expect(shell.activeSessionKey).toBe("agent:main:another-thread");
-        expect(replace).not.toHaveBeenCalled();
+      const { gateway, publish, sessions, watch } = createDeletionHarness(request);
+      const { shell, replace, toast } = watch();
+      const operation =
+        failure === "rejection"
+          ? sessions.delete(deletedKey)
+          : sessions.deleteMany([{ key: deletedKey }, { key: "agent:main:unsent" }]);
+      expect(shell.activeSessionKey).toBe(mainKey);
+      expect(sessions.deletionState(deletedKey)).toBe("pending");
+      expect(sessions.state.deletedSessions).toEqual([]);
+      expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
+      shell.activeSessionKey = "agent:main:another-thread";
+      replace.mockClear();
+      if (failure === "rejection") {
+        response.reject(new Error("delete rejected"));
+        await expect(operation).rejects.toThrow("delete rejected");
+      } else {
+        publish(false);
+        publish(
+          true,
+          failure === "different-client batch rejection"
+            ? ({ request } as unknown as GatewayBrowserClient)
+            : gateway.snapshot.client,
+        );
         if (failure === "different-client batch rejection") {
-          expect(toast.textContent).toBe("");
-          expect(sessions.state.error).toBeNull();
+          response.reject(new Error("old client rejected deletion"));
         } else {
-          await vi.waitFor(() =>
-            expect(toast.textContent).toContain(
-              failure === "rejection" ? "delete rejected" : "Gateway connection replaced",
-            ),
-          );
+          response.resolve({ deleted: true });
         }
-      } finally {
-        stop();
-        sessions.dispose();
+        await operation;
+        expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(
+          1,
+        );
+      }
+      expect(shell.activeSessionKey).toBe("agent:main:another-thread");
+      expect(replace).not.toHaveBeenCalled();
+      if (failure === "different-client batch rejection") {
+        expect(toast.textContent).toBe("");
+        expect(sessions.state.error).toBeNull();
+      } else {
+        await vi.waitFor(() =>
+          expect(toast.textContent).toContain(
+            failure === "rejection" ? "delete rejected" : "Gateway connection replaced",
+          ),
+        );
       }
     },
   );
 
-  it.each([true])(
-    "preserves the replacement when confirmation selected its predecessor (previously deleted: %s)",
-    async (previouslyDeleted) => {
-      const response = createDeferred<{ deleted: boolean }>();
-      const replacement = {
-        key: deletedKey,
-        sessionId: "replacement",
-        kind: "direct" as const,
-        updatedAt: 2,
-      };
-      let listed = previouslyDeleted ? { ...replacement, sessionId: "predecessor" } : replacement;
-      const request = vi.fn(async (method: string) =>
-        method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
+  it("preserves the replacement when confirmation selected its deleted predecessor", async () => {
+    const response = createDeferred<{ deleted: boolean }>();
+    const replacement = {
+      key: deletedKey,
+      sessionId: "replacement",
+      kind: "direct" as const,
+      updatedAt: 2,
+    };
+    let listed = { ...replacement, sessionId: "predecessor" };
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
+    );
+    const { emitEvent, sessions, watch } = createDeletionHarness(request);
+    await sessions.refresh({ force: true });
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: deletedKey, sessionId: "predecessor", reason: "delete" },
+    });
+    listed = replacement;
+    await sessions.refresh({ force: true });
+    const { shell, replace, toast } = watch([deletedKey]);
+    const operation = sessions.delete(deletedKey, { expectedSessionId: "predecessor" });
+    try {
+      expect(shell.activeSessionKey).toBe(deletedKey);
+      expect(replace).not.toHaveBeenCalled();
+      expect(sessions.state.result?.sessions).toEqual([replacement]);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.delete",
+        expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
+        expect.any(Object),
       );
-      const { gateway, emitEvent } = createGatewayHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ force: true });
-      if (previouslyDeleted) {
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            sessionKey: deletedKey,
-            sessionId: "predecessor",
-            reason: "delete",
-          },
-        });
-        listed = replacement;
-        await sessions.refresh({ force: true });
-      }
-      const { shell, replace } = createSessionRecoveryShell({
-        activeSessionKey: deletedKey,
-        sessionKeys: [deletedKey],
-        sessions,
-      });
-      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
-      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      const operation = sessions.delete(deletedKey, { expectedSessionId: "predecessor" });
-      try {
-        expect(shell.activeSessionKey).toBe(deletedKey);
-        expect(replace).not.toHaveBeenCalled();
-        expect(sessions.state.result?.sessions).toEqual([replacement]);
-        expect(request).toHaveBeenCalledWith(
-          "sessions.delete",
-          expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
-          expect.any(Object),
-        );
-        response.reject(new Error("Session identity changed"));
-        await expect(operation).rejects.toThrow("Session identity changed");
-        await vi.waitFor(() => expect(toast.textContent).toContain("Session identity changed"));
-        expect(shell.activeSessionKey).toBe(deletedKey);
-        expect(sessions.state.result?.sessions).toEqual([replacement]);
-      } finally {
-        response.resolve({ deleted: false });
-        await operation.catch(() => {});
-        stop();
-        sessions.dispose();
-      }
-    },
-  );
+      response.reject(new Error("Session identity changed"));
+      await expect(operation).rejects.toThrow("Session identity changed");
+      await vi.waitFor(() => expect(toast.textContent).toContain("Session identity changed"));
+      expect(shell.activeSessionKey).toBe(deletedKey);
+      expect(sessions.state.result?.sessions).toEqual([replacement]);
+    } finally {
+      response.resolve({ deleted: false });
+      await operation.catch(() => {});
+    }
+  });
 
   it.each([
     { priorLocalDelete: false, identified: false },
@@ -521,8 +505,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const h = createSessionDeletionHarness();
       const storage = createStorageMock();
       vi.stubGlobal("sessionStorage", storage);
-      const gatewayUrl = "ws://gateway.test";
-      const recoveryScope = "deleted-session-owner";
+      const { gatewayOwner: gatewayUrl, recoveryScope } = recoveryOwner;
       const target = storageTargetForGateway(gatewayUrl, recoveryScope);
       const storageKey = target.key;
       const replacement = { ...h.alpha, sessionId: "generation-b" };
@@ -531,12 +514,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         sessionKeys: [h.alpha.key],
         sessions: h.sessions,
       });
-      shell.runtime.context.gateway.snapshot.client = {
-        gatewayUrl,
-        recoveryScope,
-        recoveryScopeReady: true,
-      } as GatewayBrowserClient;
-      shell.runtime.context.gateway.connection.gatewayUrl = gatewayUrl;
+      attachOwner(shell);
       let stop = () => {};
       try {
         await h.sessions.refresh({ force: true });
@@ -551,11 +529,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         await h.sessions.refresh({ force: true });
         storage.setItem(
           storageKey,
-          JSON.stringify(
-            storedDraft(gatewayUrl, `${h.alpha.key}\u0000agent:main`, "B draft", [
-              { id: "queued-b", text: "B queued", createdAt: 1 },
-            ]),
-          ),
+          JSON.stringify(storedDraft(gatewayUrl, `${h.alpha.key}\u0000agent:main`, "B draft")),
         );
         const draft = storage.getItem(storageKey);
         stop = h.sessions.subscribe((state) => {
@@ -581,15 +555,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
         h.setRows([h.sibling]);
         const currentDelete = { ...payload, sessionId: replacement.sessionId };
         h.emitEvent({ type: "event", event: "sessions.changed", payload: currentDelete });
-        const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
+        const retiredScope = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
         const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;
         await vi.waitFor(() => {
-          const tombstone = readStoredOutboxStore(storage, target).sessions[scopeKey];
-          expect(tombstone).toEqual({
-            draftRevision: expect.any(Number),
-            updatedAt: expect.any(Number),
-          });
-          expect(tombstone?.draftRevision).toBeGreaterThan(retired.retireBeforeRevision);
+          expectTombstone(storage, target, retiredScope, retired.retireBeforeRevision);
         });
         expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
         expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
@@ -603,41 +572,24 @@ describe("OpenClaw shell deleted-session recovery", () => {
   );
 
   it("retires an externally observed batch once and shows one actionable cleanup failure", async () => {
-    const gatewayUrl = "ws://gateway.test";
+    const { gatewayOwner: gatewayUrl, recoveryScope } = recoveryOwner;
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
-    const recoveryScope = "deleted-session-owner";
     const target = storageTargetForGateway(gatewayUrl, recoveryScope);
     const storageKey = target.key;
     storage.setItem(
       storageKey,
       JSON.stringify(storedDraft(gatewayUrl, `${deletedKey}\u0000agent:main`, "retire me")),
     );
-    const shell = createShellOwner() as unknown as DeletedSessionShell;
-    const deletedSessions = [
-      { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() },
-    ];
-    const state = {
-      deletedSessions,
-      result: { sessions: [] },
-    } as unknown as ApplicationContext["sessions"]["state"];
-    shell.runtime = {
-      context: {
-        agents: { state: { agentsList: null } },
-        chatAttachmentHandoff: createChatAttachmentHandoff(createApplicationGateway().gateway),
-        chatSubmissions: createChatSubmissions(),
-        gateway: {
-          connection: { gatewayUrl },
-          connectionRevision: 0,
-          snapshot: {
-            assistantAgentId: "main",
-            client: { gatewayUrl, recoveryScope, recoveryScopeReady: true },
-            hello: null,
-          },
-        },
-      } as unknown as ApplicationContext,
-    };
-    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const { shell } = createSessionRecoveryShell({
+      sessionKeys: [],
+      deletedSessionKeys: [deletedKey],
+    });
+    attachOwner(shell);
+    const state = shell.runtime.context.sessions.state;
+    shell.runtime.context.agents.state.agentsList = null;
+    shell.runtime.context.gateway.snapshot.assistantAgentId = "main";
+    const toast = toastHost();
 
     shell.observeDeletedSessions({
       ...state,
@@ -652,15 +604,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       expect(
         storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`),
       ).toBeNull();
-      const stored = readStoredOutboxStore(storage, target);
-      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
-      expect(stored.sessions[scopeKey]).toEqual({
-        draftRevision: expect.any(Number),
-        updatedAt: expect.any(Number),
-      });
-      expect(stored.sessions[scopeKey]?.draftRevision).toBeGreaterThan(
-        deletedSessions[0]!.retireBeforeRevision,
-      );
+      expectTombstone(storage, target, scopeKey, state.deletedSessions[0]!.retireBeforeRevision);
       expect(toast.textContent).toContain(cleanupWarning);
     });
     expect(toast.querySelectorAll(".app-toast")).toHaveLength(1);
@@ -694,7 +638,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
   it("rejects a late route commit for a session already marked deleted", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const { replace, setSessionKey, shell } = createSessionRecoveryShell({
-      activeSessionKey: deletedKey,
       deletedSessionKeys: [deletedKey],
       sessionKeys: [mainKey],
     });
@@ -715,18 +658,16 @@ describe("OpenClaw shell deleted-session recovery", () => {
 it("projects only the ready recovery owner's attachment failures through the shell scope", () => {
   const storage = createStorageMock();
   vi.stubGlobal("sessionStorage", storage);
-  const { gateway } = createApplicationGateway();
+  const { shell } = createSessionRecoveryShell();
+  const context = shell.runtime.context;
+  const { gateway } = context;
+  context.agents.state.agentsList = null;
   const owner = {
     recoveryScope: "current-principal",
     recoveryScopeReady: false,
   };
   gateway.snapshot.client = owner as GatewayBrowserClient;
   gateway.snapshot.phase = "connected";
-  const context = {
-    gateway,
-    agents: { state: { agentsList: null } },
-  } as unknown as ApplicationContext;
-  const shell = createShellOwner();
   const ownSessionKey = "agent:main:own-attachment";
   const otherSessionKey = "agent:main:other-attachment";
   const admittedHost = {
@@ -740,12 +681,10 @@ it("projects only the ready recovery owner's attachment failures through the she
     gatewayOwner: target.gatewayOwner,
     recovery: {},
     sessions: Object.fromEntries(
-      (
-        [
-          [ownSessionKey, owner.recoveryScope],
-          [otherSessionKey, "another-principal"],
-        ] as const
-      ).map(([sessionKey, recoveryScope]) => [
+      Object.entries({
+        [ownSessionKey]: owner.recoveryScope,
+        [otherSessionKey]: "another-principal",
+      }).map(([sessionKey, recoveryScope]) => [
         storedChatOutboxScopeKey({ sessionKey }),
         {
           updatedAt: 1,

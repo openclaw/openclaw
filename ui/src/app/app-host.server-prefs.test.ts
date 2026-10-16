@@ -33,30 +33,27 @@ type ShellServerPreferencesState = {
   shellGateway: ShellGatewayOwner;
 };
 
+beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
+afterEach(() => {
+  resetServerUiPrefsSync();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("OpenClaw shell locale preferences", () => {
   beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     patchSettings({ gatewayUrl: "ws://locale.test" });
-  });
-
-  afterEach(() => {
-    resetServerUiPrefsSync();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("keeps a retained device-local locale instead of realigning to the rejected server value", async () => {
     const setLocale = vi.spyOn(i18n, "setLocale").mockResolvedValue();
     const useSystemLocale = vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
-    const refreshTheme = vi.fn();
-    const { shell, runtimeConfig } = createPreferenceShell(
-      { locale: "de" },
-      { refresh: refreshTheme },
-    );
+    const refresh = vi.fn();
+    const { shell, runtimeConfig } = createPreferenceShell({ locale: "de" }, { refresh });
 
     await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
-    refreshTheme.mockClear();
+    refresh.mockClear();
     patchSettings({ locale: "fr" });
     await shell.shellGateway.reconcileCommittedServerUiPrefs(runtimeConfig, false, true);
 
@@ -64,7 +61,7 @@ describe("OpenClaw shell locale preferences", () => {
     expect(setLocale).toHaveBeenNthCalledWith(2, "fr");
     expect(useSystemLocale).not.toHaveBeenCalled();
     expect(loadSettings().locale).toBe("fr");
-    expect(refreshTheme).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("publishes authored theme changes when the local mirror needs no patch", async () => {
@@ -89,9 +86,8 @@ describe("OpenClaw shell locale preferences", () => {
   });
 });
 
-// This file already owns an isolated module graph. Each realm starts its request
-// before loading the next realm, so the pending drain retains its own module state.
-async function loadPreferenceRealm() {
+// Reset only between realms: each pending drain keeps its original module state.
+async function loadPreferenceRealm(scope: string) {
   vi.resetModules();
   const prefs = await import("./server-prefs.ts");
   const settings = await import("./settings.ts");
@@ -101,15 +97,27 @@ async function loadPreferenceRealm() {
   return {
     prefs,
     settings,
-    reconcile,
-    intent,
-    writer: (request: Parameters<typeof fixtures.createServerPrefsWriter>[0], scope: string) =>
-      fixtures.createServerPrefsWriter(request, scope, true, { ok: true }, false),
-    refresh: (
+    read: () => settings.loadSettings(scope).sidebarEntries,
+    apply: (config = {}) =>
+      reconcile.applyServerUiPrefs(config, { scope, profileId: "profile-a", onApplied: vi.fn() }),
+    publish: (
       writer: ReturnType<typeof fixtures.createServerPrefsWriter>,
-      scope: string,
-      configObject = {},
-    ) =>
+      sidebarEntries: string[],
+      canWrite = true,
+      afterCommit?: () => void,
+    ) => {
+      const before = settings.loadSettings(scope);
+      const next = settings.patchSettings({ sidebarEntries });
+      prefs.pushServerUiPrefs(writer, intent.changedServerUiPrefs(before, next)!, {
+        profileId: "profile-a",
+        canWrite,
+        afterCommit,
+      });
+      return next.sidebarEntries;
+    },
+    writer: (request: Parameters<typeof fixtures.createServerPrefsWriter>[0]) =>
+      fixtures.createServerPrefsWriter(request, scope, true, { ok: true }, false),
+    refresh: (writer: ReturnType<typeof fixtures.createServerPrefsWriter>, configObject = {}) =>
       reconcile.refreshProfileAppearancePrefs({
         client: writer.state.client!,
         profileId: "profile-a",
@@ -121,27 +129,18 @@ async function loadPreferenceRealm() {
 }
 
 describe("profile preference ACK publication across browser realms", () => {
-  beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
   const publicationCases = ["settled", "published-read", "published-identical", "cancelled"];
   it.each(publicationCases)(
     "keeps B's newer publication when A's older ACK arrives (%s)",
     async (mode) => {
       const cancelled = mode === "cancelled";
-      const empty = cancelled;
       const identical = mode === "published-identical";
       const observed = mode === "published-read" || identical;
       const scope = "ws://ack-publication";
-      const profileId = "profile-a";
       const pinsKey = "ui.railShortcuts";
-      const pendingKey =
-        "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:" + profileId;
-      const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:" + profileId;
-      const config = {};
+      const pendingKey = `openclaw.control.serverPrefs.pending.v1:${scope}:profile:profile-a`;
+      const lastSeenKey = `openclaw.control.serverPrefs.v1:${scope}:profile:profile-a`;
+      const lastSeenPins = () => JSON.parse(localStorage.getItem(lastSeenKey)!).railShortcuts;
       const server: Record<string, unknown> = { [pinsKey]: ["route:usage"] };
       const aCommitted = createDeferred();
       const aReply = createDeferred<unknown>();
@@ -169,87 +168,48 @@ describe("profile preference ACK publication across browser realms", () => {
           }
           return { status: "ok" };
         });
-      const a = await loadPreferenceRealm();
+      const a = await loadPreferenceRealm(scope);
       const aRequest = requestFor(true);
-      const aWriter = a.writer(aRequest, scope);
+      const aWriter = a.writer(aRequest);
       let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
       try {
         a.settings.patchSettings({ gatewayUrl: scope });
-        await a.refresh(aWriter, scope, config);
-        const aAfterCommit = vi.fn(() =>
-          a.reconcile.applyServerUiPrefs(config, { scope, profileId, onApplied: vi.fn() }),
-        );
-        const beforeA = a.settings.loadSettings();
-        const wantedA = a.settings.patchSettings({
-          sidebarEntries: ["route:usage", "route:cron"],
-        });
-        a.prefs.pushServerUiPrefs(aWriter, a.intent.changedServerUiPrefs(beforeA, wantedA)!, {
-          profileId,
-          canWrite: true,
-          afterCommit: aAfterCommit,
-        });
+        await a.refresh(aWriter);
+        const aAfterCommit = vi.fn(() => a.apply());
+        const wantedA = a.publish(aWriter, ["route:usage", "route:cron"], true, aAfterCommit);
         await aCommitted.promise;
-        b = await loadPreferenceRealm();
+        b = await loadPreferenceRealm(scope);
         const bRequest = requestFor(false);
-        const bWriter = b.writer(bRequest, scope);
-        const wantedB = {
-          sidebarEntries: identical ? wantedA.sidebarEntries : empty ? [] : ["route:plugins"],
-        };
+        const bWriter = b.writer(bRequest);
+        const wantedB = identical ? wantedA : cancelled ? [] : ["route:plugins"];
         if (observed && !identical) {
           // A different writer can publish a confirmed read without settling A's outbox.
           await bWriter.state.client!.request("users.prefs.set", {
-            entries: { [pinsKey]: wantedB.sidebarEntries },
+            entries: { [pinsKey]: wantedB },
             expectedEntries: { [pinsKey]: server[pinsKey] },
           });
         }
-        await b.refresh(bWriter, scope, config);
+        await b.refresh(bWriter);
         if (identical) {
-          b.reconcile.applyServerUiPrefs(
-            { ui: { prefs: { locale: "de" } } },
-            {
-              scope,
-              profileId,
-              onApplied: vi.fn(),
-            },
-          );
+          b.apply({ ui: { prefs: { locale: "de" } } });
         }
         if (!observed) {
-          const beforeB = b.settings.loadSettings(scope);
-          const nextB = b.settings.patchSettings(wantedB);
-          b.prefs.pushServerUiPrefs(bWriter, b.intent.changedServerUiPrefs(beforeB, nextB)!, {
-            profileId,
-            canWrite: !cancelled,
-          });
+          b.publish(bWriter, wantedB, !cancelled);
         }
         await vi.dynamicImportSettled();
-        expect(server[pinsKey]).toEqual(
-          cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
-        );
+        const expectedServer = cancelled ? wantedA : wantedB;
+        expect(server[pinsKey]).toEqual(expectedServer);
         expect(localStorage.getItem(pendingKey) === null).toBe(!observed);
         if (observed && !identical) {
-          const confirmed = JSON.parse(localStorage.getItem(lastSeenKey)!);
-          a.reconcile.applyServerUiPrefs(
-            { ui: { prefs: { locale: "de" } } },
-            {
-              scope,
-              profileId,
-              onApplied: vi.fn(),
-            },
-          );
-          expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
-            railShortcuts: confirmed.railShortcuts,
-          });
+          const confirmed = lastSeenPins();
+          a.apply({ ui: { prefs: { locale: "de" } } });
+          expect(lastSeenPins()).toEqual(confirmed);
         }
         const newestLastSeen = localStorage.getItem(lastSeenKey);
-        expect(JSON.parse(newestLastSeen!)).toMatchObject({
-          railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
-        });
+        expect(lastSeenPins()).toEqual(expectedServer);
         aReply.resolve({ status: "ok" });
         await vi.dynamicImportSettled();
-        expect(a.settings.loadSettings(scope)).toMatchObject({
-          sidebarEntries: wantedB.sidebarEntries,
-        });
-        expect(b.settings.loadSettings(scope).sidebarEntries).toEqual(wantedB.sidebarEntries);
+        expect([a.read(), b.read()]).toEqual([wantedB, wantedB]);
         if (identical) {
           expect(aAfterCommit).toHaveBeenCalledOnce();
         } else {
@@ -259,17 +219,15 @@ describe("profile preference ACK publication across browser realms", () => {
           expect(aAfterCommit).not.toHaveBeenCalled();
         }
         // A later reconciliation must not consume a cache rolled backward by that stale receipt.
-        a.reconcile.applyServerUiPrefs({}, { scope, profileId, onApplied: vi.fn() });
-        expect(a.settings.loadSettings(scope).sidebarEntries).toEqual(wantedB.sidebarEntries);
-        expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
-          railShortcuts: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
-        });
-        expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
-          1,
-        );
-        expect(bRequest.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
-          cancelled || identical ? 0 : 1,
-        );
+        a.apply();
+        expect(a.read()).toEqual(wantedB);
+        expect(lastSeenPins()).toEqual(expectedServer);
+        expect(
+          [aRequest, bRequest].map(
+            (request) =>
+              request.mock.calls.filter(([method]) => method === "users.prefs.set").length,
+          ),
+        ).toEqual([1, cancelled || identical ? 0 : 1]);
       } finally {
         aReply.resolve({ status: "ok" });
         a.prefs.resetServerUiPrefsSync();
@@ -279,9 +237,8 @@ describe("profile preference ACK publication across browser realms", () => {
     },
   );
   it("accepts a successful write after an identical read published before the commit", async () => {
-    const a = await loadPreferenceRealm();
     const scope = "ws://ack-before-commit";
-    const profileId = "profile-a";
+    const a = await loadPreferenceRealm(scope);
     const server = { "ui.railShortcuts": ["route:usage"] };
     const dispatched = createDeferred();
     const commit = createDeferred();
@@ -294,37 +251,24 @@ describe("profile preference ACK publication across browser realms", () => {
       Object.assign(server, (params as { entries: Record<string, unknown> }).entries);
       return { status: "ok" };
     });
-    const writer = a.writer(request, scope);
+    const writer = a.writer(request);
     let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
     try {
       a.settings.patchSettings({ gatewayUrl: scope });
-      await a.refresh(writer, scope);
-      const before = a.settings.loadSettings(scope);
-      const desired = a.settings.patchSettings({
-        sidebarEntries: ["route:usage", "route:cron"],
-      });
+      await a.refresh(writer);
       const afterCommit = vi.fn();
-      a.prefs.pushServerUiPrefs(writer, a.intent.changedServerUiPrefs(before, desired)!, {
-        profileId,
-        canWrite: true,
-        afterCommit,
-      });
+      const desired = a.publish(writer, ["route:usage", "route:cron"], true, afterCommit);
       await dispatched.promise;
-      b = await loadPreferenceRealm();
+      b = await loadPreferenceRealm(scope);
       const bRequest = vi.fn(async (): Promise<unknown> => ({
         status: "ok",
         entries: structuredClone(server),
       }));
-      const bWriter = b.writer(bRequest, scope);
-      await b.refresh(bWriter, scope);
+      const bWriter = b.writer(bRequest);
+      await b.refresh(bWriter);
       commit.resolve();
       await vi.dynamicImportSettled();
-      expect(a.settings.loadSettings(scope)).toMatchObject({
-        sidebarEntries: desired.sidebarEntries,
-      });
-      expect(server).toMatchObject({
-        "ui.railShortcuts": desired.sidebarEntries,
-      });
+      expect([a.read(), server["ui.railShortcuts"]]).toEqual([desired, desired]);
       expect(afterCommit).toHaveBeenCalledOnce();
     } finally {
       commit.resolve();
