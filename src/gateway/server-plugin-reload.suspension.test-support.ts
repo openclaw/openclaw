@@ -176,12 +176,10 @@ export async function verifyOneWayDrainRecovery(createRecoveryFixture: RecoveryF
     const failure = await reloading;
     await shuttingDown;
     expect(failure).toMatchObject({ details: { phase: "activate", committed: false } });
-    expectServiceCalls(fixture, {
-      firstStart: 1,
-      siblingStart: 1,
-      siblingStop: 1,
-      candidateStop: 1,
-    });
+    expect(fixture.firstStart).toHaveBeenCalledOnce();
+    expect(fixture.siblingStart).toHaveBeenCalledOnce();
+    expect(fixture.siblingStop).toHaveBeenCalledOnce();
+    expect(fixture.candidateStop).toHaveBeenCalledOnce();
   } finally {
     cleanupReleased.resolve();
     await reloading;
