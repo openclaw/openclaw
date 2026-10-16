@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildChannelJoinIntroPrompt } from "./join-intro-prompt.js";
 
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 describe("buildChannelJoinIntroPrompt", () => {
   it("caps the injected snapshot and drops the oldest messages before newer room evidence", () => {
     const prompt = buildChannelJoinIntroPrompt({
@@ -21,6 +24,41 @@ describe("buildChannelJoinIntroPrompt", () => {
     expect(snapshot).toContain("message-99");
     expect(snapshot).not.toContain("message-00");
     expect(snapshot?.indexOf("message-98")).toBeLessThan(snapshot?.indexOf("message-99") ?? -1);
+  });
+
+  it("does not split a surrogate pair when metadata fills the snapshot budget", () => {
+    const roomNamePrefix = "Room name: ";
+    const prompt = buildChannelJoinIntroPrompt({
+      context: {
+        title: `${"x".repeat(12_000 - roomNamePrefix.length - 1)}🙂tail`,
+      },
+    });
+    const snapshot = prompt.split("\n\nRoom context:\n")[1];
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.length).toBeLessThanOrEqual(12_000);
+    expect(UNPAIRED_SURROGATE_RE.test(snapshot ?? "")).toBe(false);
+    expect(snapshot?.endsWith("x")).toBe(true);
+  });
+
+  it("does not split a surrogate pair when truncating one oversized recent message", () => {
+    const messageHeader = "\nRecent room messages:\n";
+    const senderPrefix = "Participant: ";
+    const prompt = buildChannelJoinIntroPrompt({
+      context: {
+        recentMessages: [
+          {
+            text: `${"x".repeat(12_000 - messageHeader.length - senderPrefix.length - 1)}🙂tail`,
+          },
+        ],
+      },
+    });
+    const snapshot = prompt.split("\n\nRoom context:\n")[1];
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.length).toBeLessThanOrEqual(12_000);
+    expect(UNPAIRED_SURROGATE_RE.test(snapshot ?? "")).toBe(false);
+    expect(snapshot?.endsWith("x")).toBe(true);
   });
 
   it("grounds unreadable room history in visible room facts and asks what the room needs", () => {
