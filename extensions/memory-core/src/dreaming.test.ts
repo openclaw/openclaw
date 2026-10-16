@@ -328,7 +328,7 @@ describe("dreaming service reconciliation", () => {
   it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
-    const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
+    const startupListPromise = new Promise<never>((_resolve, reject) => {
       rejectStartupList = reject;
     });
     let listCalls = 0;
