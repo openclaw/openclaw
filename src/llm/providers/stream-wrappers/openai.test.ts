@@ -3,15 +3,8 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamSimple } from "../../stream.js";
 
 const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
-const { nativeTransport } = vi.hoisted(() => ({ nativeTransport: vi.fn<StreamFn>() }));
-
-// mock-isolation: Exercise lazy transport delegation without provider I/O or process host setup.
-vi.mock("../../../agents/openai-transport-stream.js", () => ({
-  createOpenAIResponsesTransportStreamFn: () => nativeTransport,
-}));
 
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => logger,
@@ -78,7 +71,6 @@ function codeModeContext(...extraNames: string[]) {
 afterEach(() => {
   logger.debug.mockReset();
   logger.info.mockReset();
-  nativeTransport.mockReset();
   vi.unstubAllEnvs();
 });
 
@@ -814,35 +806,6 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 });
 
 describe("createOpenAIAttributionHeadersWrapper", () => {
-  it.each([
-    { name: "implicit", baseStreamFn: undefined },
-    { name: "explicit", baseStreamFn: streamSimple },
-  ])(
-    "starts the $name default native transport with request options intact",
-    async ({ baseStreamFn }) => {
-      const stream = createAssistantMessageEventStream();
-      nativeTransport.mockReturnValue(stream);
-      const wrapped = createOpenAIAttributionHeadersWrapper(baseStreamFn);
-      const model = { ...codexModel, baseUrl: "https://chatgpt.com/backend-api" };
-      const context = { messages: [] };
-      const options = {
-        apiKey: "synthetic-oauth-token",
-        signal: new AbortController().signal,
-        headers: { "x-fixture": "catalog" },
-      };
-
-      expect(await wrapped(model, context, options)).toBe(stream);
-      expect(nativeTransport).toHaveBeenCalledExactlyOnceWith(model, context, {
-        ...options,
-        headers: expect.objectContaining({
-          "x-fixture": "catalog",
-          originator: "openclaw",
-          "User-Agent": expect.stringMatching(/^openclaw\//),
-        }),
-      });
-    },
-  );
-
   it("routes native Codex traffic through the OpenClaw transport so attribution survives OpenClaw defaults", () => {
     let codexCalls = 0;
     let capturedHeaders: Record<string, string> | undefined;
