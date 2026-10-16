@@ -828,13 +828,42 @@ async function command() {
         publish(`cleanup-target-${process.pid}.json`, attempt);
       }
     }
-    const child = launch("child", attempt);
+    const remoteResult =
+      operation === "ls-remote" ? options.lsRemoteResults?.[resultAttempt - 1] : undefined;
+    const operationResults =
+      operation === "clone"
+        ? options.cloneResults
+        : operation === "worktree"
+          ? options.worktreeResults
+          : operation === "rebase"
+            ? options.rebaseResults
+            : operation === "push"
+              ? options.pushResults
+              : operation === "rev-parse" && options.revParseResult !== undefined
+                ? [options.revParseResult]
+                : (localGit || options.pluginRelease || options.releaseAdmission) &&
+                    operation !== "fetch"
+                  ? undefined
+                  : options.fetchResults;
+    const injectedResult =
+      commandResult?.code ?? remoteResult?.code ?? operationResults?.[resultAttempt - 1] ?? 0;
+    // Policy cases keep real Git but need synthetic descendants only at faults.
+    // Explicit lifecycle cases still exercise successful process-tree cleanup.
     if (
-      !(await waitForReady(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), child))
+      (!options.publisher && (!options.performance || options.performance.successfulGitTrees)) ||
+      commandResult ||
+      injectedResult !== 0 ||
+      options.cancelDuringCleanup ||
+      scenario !== "configured"
     ) {
-      throw new Error(
-        `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
-      );
+      const child = launch("child", attempt);
+      if (
+        !(await waitForReady(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), child))
+      ) {
+        throw new Error(
+          `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
+        );
+      }
     }
     if (scenario.startsWith("cancel-") || commandResult?.code === "cancel") {
       const owned = await liveRecords();
@@ -888,32 +917,13 @@ async function command() {
       options.cloneResults ||
       options.worktreeResults
     ) {
-      const remoteResult =
-        operation === "ls-remote" ? options.lsRemoteResults?.[resultAttempt - 1] : undefined;
-      const operationResults =
-        operation === "clone"
-          ? options.cloneResults
-          : operation === "worktree"
-            ? options.worktreeResults
-            : operation === "rebase"
-              ? options.rebaseResults
-              : operation === "push"
-                ? options.pushResults
-                : operation === "rev-parse" && options.revParseResult !== undefined
-                  ? [options.revParseResult]
-                  : (localGit || options.pluginRelease || options.releaseAdmission) &&
-                      operation !== "fetch"
-                    ? undefined
-                    : options.fetchResults;
-      const result =
-        commandResult?.code ?? remoteResult?.code ?? operationResults?.[resultAttempt - 1] ?? 0;
       if (commandResult?.output !== undefined) {
         fs.writeSync(1, commandResult.output);
       }
       if (remoteResult) {
         fs.writeSync(1, remoteResult.output);
       }
-      if (localGit && ["fetch", "push"].includes(operation) && result !== 0) {
+      if (localGit && ["fetch", "push"].includes(operation) && injectedResult !== 0) {
         const lock = path.join(cwd, ".git/shallow.lock");
         fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
         process.on("SIGTERM", () => {});
@@ -928,16 +938,16 @@ async function command() {
         if (pushed.status !== 0)
           throw new Error("Fixture ambiguous push did not reach local remote");
       }
-      if (result === "cleanup-failure") {
+      if (injectedResult === "cleanup-failure") {
         fs.writeFileSync(path.join(root, "bin/ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         process.exit(0);
       }
-      if (result === "cancel") return;
-      if (result === "hang") {
+      if (injectedResult === "cancel") return;
+      if (injectedResult === "hang") {
         stall(attempt);
         return;
       }
-      if (result === 0 && localGit && commandResult?.output === undefined) {
+      if (injectedResult === 0 && localGit && commandResult?.output === undefined) {
         const commandArgs = [...args];
         if (["fetch", "push"].includes(operation)) {
           const index = commandArgs.indexOf("origin");
@@ -975,7 +985,7 @@ async function command() {
         }
         process.exit(result.status ?? 1);
       }
-      if (result === 0 && options.publisher) {
+      if (injectedResult === 0 && options.publisher) {
         const result = spawnSync(
           options.publisher.git,
           ["-C", cwd, ...configuration.flatMap((value) => ["-c", value]), operation, ...args],
@@ -1002,10 +1012,14 @@ async function command() {
         }
         process.exit(result.status ?? 1);
       }
-      if (result === 0 && operation === "rev-parse" && commandResult?.output === undefined) {
+      if (
+        injectedResult === 0 &&
+        operation === "rev-parse" &&
+        commandResult?.output === undefined
+      ) {
         fs.writeSync(1, `${resolveRef(cwd, args[0])}\n`);
       }
-      if (result === 0 && operation === "fetch") {
+      if (injectedResult === 0 && operation === "fetch") {
         for (const refspec of args.slice(args.indexOf("origin") + 1)) {
           const [source, target] = refspec.replace(/^\+/u, "").split(":");
           const revision =
@@ -1013,7 +1027,7 @@ async function command() {
           saveRef(cwd, target ?? "FETCH_HEAD", revision);
         }
       }
-      process.exit(result);
+      process.exit(injectedResult);
     }
     if (scenario === "early-leader-exit") {
       process.exit(0);
@@ -1051,6 +1065,11 @@ async function command() {
       }
     }
     saveRef(cwd, "HEAD", resolveRef(cwd, args.at(-1)));
+    if (cwd === path.join(workspace, ".ci-harness")) {
+      const collector = path.join(cwd, "scripts/ci-collect-checks.sh");
+      fs.mkdirSync(path.dirname(collector), { recursive: true });
+      fs.copyFileSync(new URL("../../../scripts/ci-collect-checks.sh", import.meta.url), collector);
+    }
     if (linux || cwd !== workspace) {
       const action = path.join(cwd, ".github/actions/setup-node-env");
       fs.mkdirSync(action, { recursive: true });

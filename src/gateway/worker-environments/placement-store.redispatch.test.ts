@@ -138,7 +138,8 @@ describe("failed worker placement redispatch", () => {
           recoveryError: "worker stopped",
         });
       }
-      const failed = store.get(SESSION.sessionId);
+      // The legacy-row fixture bypasses owner receipts, so reload its committed SQL state.
+      const { placement: failed } = await store.getWithMoveAsync(SESSION.sessionId);
       if (failed?.state !== "failed") {
         throw new Error("expected failed worker placement");
       }

@@ -246,10 +246,10 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
 
+    const store: Record<string, unknown> = {};
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {};
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
       return result;
     });
 

@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
-  resolveAgentDir,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
@@ -351,7 +350,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
@@ -542,7 +541,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             cwd: effectiveCwd ?? effectiveWorkspace,
           });
     const toolBridge = createCodexDynamicToolBridge({
-      assertCurrent: runtime.nativeExecutionPolicy.assertCurrent,
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredFallbackTools,

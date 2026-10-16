@@ -259,8 +259,8 @@ function defaultResolveSessionTarget(params: {
   request: ExecApprovalRequest;
 }): Promise<ExecApprovalForwardTarget | null> {
   return import("./exec-approval-forwarder.runtime.js").then(
-    ({ resolveExecApprovalSessionTarget }) => {
-      const resolvedTarget = resolveExecApprovalSessionTarget({
+    async ({ resolveExecApprovalSessionTargetAsync }) => {
+      const resolvedTarget = await resolveExecApprovalSessionTargetAsync({
         cfg: params.cfg,
         request: params.request,
         turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),

@@ -5,9 +5,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
@@ -20,6 +22,8 @@ import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js"
 import { installExtractedSkillRoot } from "./archive-install.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { recordSkillSourceInstall, type SkillSourceOrigin } from "./source-install-metadata.js";
+
+const log = createSubsystemLogger("skills");
 
 type Logger = {
   info?: (message: string) => void;
@@ -173,6 +177,12 @@ async function installLocalSkillDir(
       ...(params.git ? { git: params.git } : {}),
     },
   });
+  try {
+    const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+    await refreshSkillsDiscovery({ workspaceDir: params.workspaceDir, config: params.config });
+  } catch (error) {
+    log.warn(`Skill source saved, but discovery refresh failed: ${formatErrorMessage(error)}`);
+  }
 
   return {
     ok: true,

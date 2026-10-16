@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -62,7 +66,10 @@ beforeAll(async () => {
   } = await import("../plugin-sdk/session-transcript-runtime.js"));
 });
 
-afterEach(() => runAttempt.mockReset());
+afterEach(() => {
+  runAttempt.mockReset();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("nested settled-turn finalization ownership", () => {
   it.each(
@@ -81,6 +88,7 @@ describe("nested settled-turn finalization ownership", () => {
       const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
       await Promise.all([fs.mkdir(agentDir, { recursive: true }), fs.mkdir(workspaceDir)]);
       const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+      setRuntimeConfigSnapshot(config);
       const target = {
         agentId: "test",
         sessionId: "child-session",
@@ -256,19 +264,23 @@ describe("nested settled-turn finalization ownership", () => {
           return;
         }
         const result = await child;
-        const expected =
-          finalization === "answer"
-            ? "The write completed."
-            : "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
-        expect(result?.payloads).toEqual([expect.objectContaining({ text: expected })]);
         expect(toolRuns).toBe(1);
         expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
         const transcript = await readMessages(target);
-        expect(transcript).toHaveLength(messages.length + 1);
-        expect(transcript.at(-1)?.message).toMatchObject({
-          role: "assistant",
-          content: [{ type: "text", text: expected }],
-        });
+        if (finalization === "answer") {
+          expect(result?.payloads).toEqual([
+            expect.objectContaining({ text: "The write completed." }),
+          ]);
+          expect(transcript).toHaveLength(messages.length + 1);
+          expect(transcript.at(-1)?.message).toMatchObject({
+            role: "assistant",
+            content: [{ type: "text", text: "The write completed." }],
+          });
+        } else {
+          expect(result?.payloads).toBeUndefined();
+          expect(result?.meta.error).toMatchObject({ kind: "incomplete_turn" });
+          expect(transcript).toHaveLength(messages.length);
+        }
       } finally {
         release();
         await child?.catch(() => undefined);

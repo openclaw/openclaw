@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import { inspectConversationBindingAsync } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
   createTestRegistry,
   setActivePluginRegistry,
@@ -16,13 +16,12 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slackPlugin } from "./channel.js";
 import { slackConversationRouteOwners } from "./conversation-route-owner.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { setSlackRuntime } from "./runtime.js";
 
-const {
-  resolveConversationRouteOwner: inspectSlackConversationRouteOwner,
-  prepareConversationRouteOwners: prepareSlackConversationRouteOwners,
-} = slackConversationRouteOwners;
+const { prepareConversationRouteOwnersAsync: prepareSlackConversationRouteOwners } =
+  slackConversationRouteOwners;
 
 type SlackInstallationStateRegistration = ReturnType<typeof registerSlackInstallationState>;
 
@@ -78,8 +77,10 @@ describe("Slack runtime conversation bindings", () => {
       targetKind: "session",
       conversation: CONVERSATION,
     });
-    service.touch(first.bindingId, 1234);
-    expect(service.resolveByConversation(CONVERSATION)?.metadata?.lastActivityAt).toBe(1234);
+    await service.touchAsync(first.bindingId, 1234);
+    expect((await service.resolveByConversationAsync(CONVERSATION))?.metadata?.lastActivityAt).toBe(
+      1234,
+    );
 
     const reassigned = await service.bind({
       targetSessionKey: "agent:main:second",
@@ -125,12 +126,12 @@ describe("Slack runtime conversation bindings", () => {
       { cfg, accountId: "default", conversation: { kind: "channel" as const, peerId: "C333" } },
     ];
     const expected = ["finance", "ops", "main"].map((agentId) => ({ kind: "agent", agentId }));
-    expect(inputs.map(inspectSlackConversationRouteOwner)).toEqual(expected);
-    expect(
-      prepareSlackConversationRouteOwners(inputs, (refs) =>
-        refs.map(inspectConversationBinding),
-      ).map((resolve) => resolve()),
-    ).toEqual(expected);
+    expect(await Promise.all(inputs.map(inspectSlackConversationRouteOwner))).toEqual(expected);
+    const prepared = await prepareSlackConversationRouteOwners(inputs, async (refs) => {
+      const inspections = await Promise.all(refs.map(inspectConversationBindingAsync));
+      return () => inspections;
+    });
+    expect(prepared.map((resolve) => resolve())).toEqual(expected);
   });
 
   it("does not advertise, select, or mutate bindings for a detected org install", async () => {
@@ -150,10 +151,10 @@ describe("Slack runtime conversation bindings", () => {
       unbindSupported: false,
       placements: [],
     });
-    expect(service.resolveByConversation(CONVERSATION)).toBeNull();
-    expect(service.listBySession(existing.targetSessionKey)).toEqual([]);
+    expect(await service.resolveByConversationAsync(CONVERSATION)).toBeNull();
+    expect(await service.listBySessionAsync(existing.targetSessionKey)).toEqual([]);
 
-    service.touch(existing.bindingId, 9999);
+    await service.touchAsync(existing.bindingId, 9999);
     await expect(
       service.bind({
         targetSessionKey: "agent:main:enterprise",
@@ -166,7 +167,7 @@ describe("Slack runtime conversation bindings", () => {
     ).resolves.toEqual([]);
 
     installationState.update("workspace");
-    expect(service.resolveByConversation(CONVERSATION)).toMatchObject({
+    expect(await service.resolveByConversationAsync(CONVERSATION)).toMatchObject({
       bindingId: existing.bindingId,
       targetSessionKey: existing.targetSessionKey,
       metadata: { lastActivityAt: originalActivityAt },

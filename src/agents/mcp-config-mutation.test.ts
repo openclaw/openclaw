@@ -267,6 +267,7 @@ describe("configured MCP read-only results", () => {
       const listed = await listConfiguredMcpServers();
       expect(listed.ok).toBe(true);
       expect(Object.keys(listed).toSorted()).toEqual([
+        "authoredConfig",
         "baseHash",
         "config",
         "mcpServers",

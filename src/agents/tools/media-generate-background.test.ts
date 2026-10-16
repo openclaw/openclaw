@@ -9,17 +9,18 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Media generation background tests cover detached task creation, progress
 // updates, and completion wake delivery for generated media results.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import {
-  IMAGE_GENERATION_TASK_KIND,
-  MUSIC_GENERATION_TASK_KIND,
-  VIDEO_GENERATION_TASK_KIND,
-} from "../media-generation-task-status.js";
+import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
 import {
   createMediaCompletionFixture,
@@ -63,6 +64,10 @@ const {
   prepareMediaGenerationTask,
 } = await import("./media-generate-background.js");
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 describe("media requester provenance", () => {
   beforeEach(() => {
     resetMediaBackgroundMocks({
@@ -101,11 +106,13 @@ describe("media requester provenance", () => {
         contentText: "generated",
         details: {},
       }));
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
       await prepareMediaGenerationTask({
         generationLabel: "image",
-        cfg: {
-          agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
-        },
+        cfg,
         args: { prompt: "synthetic provenance proof" },
         options: { inputProvenance },
         acquire: async () => undefined,
@@ -166,35 +173,6 @@ describe("image generate background helpers", () => {
       taskExecutorMocks,
       taskDeliveryRuntimeMocks,
       announceDeliveryMocks,
-    });
-  });
-
-  it("creates a running task with queued progress text", async () => {
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-    });
-
-    const handle = await imageGenerationTaskLifecycle.createTaskRun({
-      sessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: {
-        channel: "discord",
-        to: "channel:1",
-      },
-      prompt: "small watercolor robot",
-      providerId: "openai",
-    });
-
-    if (!handle) {
-      throw new Error("Expected image generation task handle");
-    }
-    expect(handle.taskId).toBe("task-123");
-    expect(handle.requesterSessionKey).toBe("agent:main:discord:direct:123");
-    expect(handle.taskLabel).toBe("small watercolor robot");
-    expectQueuedTaskRun({
-      taskExecutorMocks,
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourceId: "image_generate:openai",
-      progressSummary: "Queued image generation",
     });
   });
 
@@ -296,6 +274,7 @@ describe("music generate background helpers", () => {
       taskId: "task-123",
     });
 
+    setRuntimeConfigSnapshot({});
     const handle = await musicGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
@@ -391,37 +370,12 @@ describe("video generate background helpers", () => {
     resetAgentEventsForTest();
   });
 
-  it("creates a running task with queued progress text", async () => {
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-    });
-
-    const handle = await videoGenerationTaskLifecycle.createTaskRun({
-      sessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: {
-        channel: "discord",
-        to: "channel:1",
-      },
-      prompt: "friendly lobster surfing",
-      providerId: "openai",
-    });
-
-    expect(handle?.taskId).toBe("task-123");
-    expect(handle?.requesterSessionKey).toBe("agent:main:discord:direct:123");
-    expect(handle?.taskLabel).toBe("friendly lobster surfing");
-    expectQueuedTaskRun({
-      taskExecutorMocks,
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      sourceId: "video_generate:openai",
-      progressSummary: "Queued video generation",
-    });
-  });
-
   it("keeps the detached video tool run context registered until terminal status", async () => {
     taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
     });
 
+    setRuntimeConfigSnapshot({});
     const handle = await videoGenerationTaskLifecycle.createTaskRun({
       sessionKey: "agent:main:discord:channel:123",
       prompt: "friendly lobster surfing",

@@ -217,7 +217,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: configMocks.loadConfig,
+    readRuntimeConfig: configMocks.loadConfig,
   };
 });
 
@@ -288,6 +288,18 @@ vi.mock("./browser/screenshot-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/screenshot-sharing.js")>()),
   stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
 }));
+
+export function mockSingleBrowserProxyNode() {
+  nodesUtilsMocks.listNodes.mockResolvedValue([
+    {
+      nodeId: "node-1",
+      displayName: "Browser Node",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1"],
+    },
+  ]);
+}
 
 export function resetBrowserToolMocks() {
   vi.clearAllMocks();

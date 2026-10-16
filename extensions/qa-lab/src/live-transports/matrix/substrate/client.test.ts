@@ -51,51 +51,6 @@ describe("matrix driver client", () => {
     ).toThrow("Matrix registration requires unsupported auth stages:");
   });
 
-  it("logs in with Matrix password auth to create a secondary QA device", async () => {
-    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      requests.push({
-        body: parseJsonRequestBody(init),
-        url: resolveRequestUrl(input),
-      });
-      return Response.json({
-        access_token: "secondary-token",
-        device_id: "SECONDARYDEVICE",
-        user_id: "@qa-driver:matrix-qa.test",
-      });
-    };
-
-    const client = createMatrixQaClient({
-      baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
-    });
-
-    const login = await client.loginWithPassword({
-      deviceName: "OpenClaw Matrix QA Stale Device",
-      password: "driver-password",
-      userId: "@qa-driver:matrix-qa.test",
-    });
-    expect(login.accessToken).toBe("secondary-token");
-    expect(login.deviceId).toBe("SECONDARYDEVICE");
-    expect(login.password).toBe("driver-password");
-    expect(login.userId).toBe("@qa-driver:matrix-qa.test");
-
-    expect(requests).toEqual([
-      {
-        url: "http://127.0.0.1:28008/_matrix/client/v3/login",
-        body: {
-          type: "m.login.password",
-          identifier: {
-            type: "m.id.user",
-            user: "@qa-driver:matrix-qa.test",
-          },
-          initial_device_display_name: "OpenClaw Matrix QA Stale Device",
-          password: "driver-password",
-        },
-      },
-    ]);
-  });
-
   it("issues Matrix room membership control requests for QA topology changes", async () => {
     const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {

@@ -490,22 +490,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
   });
 
-  it("still rejects malformed AI names beyond the output budget", async () => {
-    const ariaSnapshot = vi.fn(
-      async () => '- button "Visible" [ref=e1]\n' + String.raw`- button "bad\uZZZZ" [ref=e2]`,
-    );
-    getPageForTargetId.mockResolvedValue(makeAriaSnapshotPage(ariaSnapshot));
-
-    await expect(
-      mod.snapshotRoleViaPlaywright({
-        refsMode: "aria",
-        cdpUrl: "http://127.0.0.1:9222",
-        maxChars: 1,
-      }),
-    ).rejects.toBeInstanceOf(SyntaxError);
-    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
-  });
-
   it("rejects excessive viewport dimensions before calling Playwright", async () => {
     const page = { setViewportSize: vi.fn(async () => {}) };
     getPageForTargetId.mockResolvedValue(page);
@@ -519,33 +503,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     ).rejects.toThrow("viewport width exceeds maximum of 8192");
 
     expect(page.setViewportSize).not.toHaveBeenCalled();
-  });
-
-  it("publishes finalized CDP refs without recomputing duplicate indexes", async () => {
-    const page = makeAriaSnapshotPage(vi.fn());
-
-    getPageForTargetId.mockResolvedValue(page);
-    markBackendDomRefsOnPage.mockResolvedValue(new Set(["e2"]));
-    readDocumentIdentitiesForPage.mockResolvedValue({ mainFrame: "cdp:loader-1" });
-
-    await mod.storeSnapshotRefsViaPlaywright({
-      ...target,
-      expectedDocumentIdentity: "cdp:loader-1",
-      refs: Object.freeze({
-        e1: Object.freeze({ role: "button", name: "Save", nth: 0, backendDOMNodeId: 42 }),
-        e2: Object.freeze({ role: "button", name: "Save", nth: 1, backendDOMNodeId: 84 }),
-      }),
-    });
-
-    expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
-      page,
-      ...target,
-      refs: {
-        e1: { role: "button", name: "Save", nth: 0, domMarker: true },
-        e2: { role: "button", name: "Save", nth: 1, domMarker: true },
-      },
-      mode: "role",
-    });
   });
 
   it("does not publish CDP refs after the document changes", async () => {

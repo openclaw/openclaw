@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -14,6 +18,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import * as workerWriteAdmission from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
@@ -26,7 +31,14 @@ import {
   enqueueContextEngineTurnIntent,
 } from "./context-engine-turn-outbox.kernel.worker.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-context-turn-range-",
+);
 
 async function seedTurnSession(
   target: Parameters<typeof patchSessionEntryCore>[0] & { sessionId: string },
@@ -178,6 +190,7 @@ async function createAcceptedTurnFixture(
 
 describe("accepted context-engine turn finalization", () => {
   it("commits a running turn once after confirming a persisted steer", async () => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "steered-turn",
@@ -355,12 +368,15 @@ describe("accepted context-engine turn finalization", () => {
       prefix: [],
       sessionId: "metadata-turn",
     });
-    const reads = trackSqliteStatementExecutions(database.db, ["freshness", "read"], (sql) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-        ? "freshness"
-        : /^\s*(?:select|with)\b/i.test(sql)
-          ? "read"
-          : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["freshness", "read"],
+      (sql) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
+          ? "freshness"
+          : /^\s*(?:select|with)\b/i.test(sql)
+            ? "read"
+            : null,
     );
     try {
       expect(
@@ -643,8 +659,10 @@ describe("accepted context-engine turn finalization", () => {
       });
       const { commitTurn, lease } = createDurableLease();
       const warn = vi.fn();
-      const hostOutboxSql = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) =>
-        sql.includes("context_engine_turn_outbox") ? "outbox" : null,
+      const hostOutboxSql = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["outbox"],
+        (sql) => (sql.includes("context_engine_turn_outbox") ? "outbox" : null),
       );
       try {
         await finalizeAcceptedContextEngineTurn({ facts, lease, warn });

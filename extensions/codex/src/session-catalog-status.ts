@@ -1,8 +1,4 @@
-import {
-  CodexCatalogLiveField,
-  type CodexCatalogSourcedValue,
-  type CodexCatalogStatus,
-} from "./session-catalog-index-field.js";
+import { CodexCatalogLiveField, type CodexCatalogStatus } from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import type { CodexCatalogSettings } from "./session-catalog-settings.js";
 import { getCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
@@ -21,22 +17,30 @@ export function applyCodexCatalogLiveFields(
   };
 }
 
-const MAX_STATUS_SOURCE_WITNESSES = 64;
-
-/** Equivalent broadcasts retain at most 64 source witnesses for each bounded resident row. */
+/** One latest display observation; native actions verify their own current state. */
 export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogStatus> {
   update(threadId: string, status: CodexCatalogStatus, source: CodexCatalogSource): void {
-    const next = this.next(threadId, status, source);
-    if (next) {
-      this.values.update(threadId, next);
+    if (source.closed) {
+      return;
     }
+    const current = this.values.get(threadId);
+    // A passive reader's notLoaded does not withdraw another client's loaded thread.
+    if (
+      status.status === "notLoaded" &&
+      current &&
+      !current.source.closed &&
+      current.source !== source
+    ) {
+      return;
+    }
+    this.values.update(threadId, { value: status, source });
   }
 
   observe(row: CodexCatalogIndexRow): void {
     const session = row.page.sessions[0];
     const source = getCodexCatalogSource(row);
     if (session && source) {
-      const next = this.next(
+      this.update(
         row.threadId,
         {
           status: session.status,
@@ -44,45 +48,6 @@ export class CodexCatalogStatusIndex extends CodexCatalogLiveField<CodexCatalogS
         },
         source,
       );
-      if (next) {
-        this.values.update(row.threadId, next);
-      }
     }
-  }
-
-  private next(
-    threadId: string,
-    status: CodexCatalogStatus,
-    source: CodexCatalogSource,
-  ): CodexCatalogSourcedValue<CodexCatalogStatus> | undefined {
-    if (source.closed) {
-      return undefined;
-    }
-    const current = this.values.get(threadId);
-    const sources = new Set([...(current?.sources ?? [])].filter((witness) => !witness.closed));
-    if (
-      status.status === "notLoaded" &&
-      current &&
-      current.value.status !== "notLoaded" &&
-      sources.size
-    ) {
-      sources.delete(source);
-      if (sources.size) {
-        return { value: current.value, sources };
-      }
-    }
-    const flags = status.activeFlags ?? [];
-    const previousFlags = current?.value.activeFlags ?? [];
-    if (
-      current?.value.status === status.status &&
-      flags.length === previousFlags.length &&
-      flags.every((flag, index) => flag === previousFlags[index])
-    ) {
-      if (sources.size < MAX_STATUS_SOURCE_WITNESSES) {
-        sources.add(source);
-      }
-      return { value: status, sources };
-    }
-    return { value: status, sources: new Set([source]) };
   }
 }

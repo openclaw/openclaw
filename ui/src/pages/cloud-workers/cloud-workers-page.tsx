@@ -4,13 +4,10 @@ import type { EnvironmentsListResult } from "../../../../packages/gateway-protoc
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   DocsLink,
-  LearnMoreLink,
   SettingsEmpty,
-  SettingsPage,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
@@ -24,7 +21,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -35,26 +31,15 @@ import {
   type CloudWorkerProfileDraft,
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
-import { CloudWorkerPool } from "./cloud-worker-pool.tsx";
-import { CloudWorkerRepositories } from "./cloud-worker-repositories.tsx";
-import { CloudWorkerSnapshots } from "./cloud-worker-snapshots.tsx";
+import { CloudWorkerEnvironments } from "./cloud-worker-environments.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
-function formControlValue(event: Event): string {
-  const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-    ? target.value
-    : "";
-}
 
-function CloudWorkersContent() {
+export function CloudWorkersPage() {
   const context = useApplication();
-  const [tab, setTab] = createSignal<"profiles" | "pool" | "snapshots">("profiles");
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
     draft: createCloudWorkerDraft(),
@@ -77,14 +62,13 @@ function CloudWorkersContent() {
   });
   void context.runtimeConfig.ensureLoaded();
   const catalogKey = createMemo(
-    () => {
-      return [
+    () =>
+      [
         gateway.snapshot?.client,
         gateway.snapshot?.phase,
         gateway.epoch,
         configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const;
-    },
+      ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
   createEffect(catalogKey, (key) => {
@@ -132,17 +116,11 @@ function CloudWorkersContent() {
     });
     return () => controller.abort();
   });
-  function advertisedProfiles() {
-    return catalog().value;
-  }
-
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
 
-  function profiles(): ConfiguredCloudWorkerProfile[] {
-    return readCloudWorkerProfiles(editableConfig());
-  }
+  const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
   function hasManageAccess(): boolean {
     return canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin");
@@ -152,7 +130,7 @@ function CloudWorkersContent() {
     const configState = configProjection.read().state;
     return Boolean(
       hasManageAccess() &&
-      configState?.configSnapshot?.hash &&
+      configState.configSnapshot?.hash &&
       !configState.configLoading &&
       !configState.configSaving &&
       !saveState().busy,
@@ -169,8 +147,6 @@ function CloudWorkersContent() {
     }
     setView((state) => {
       state.editor = profile ? { kind: "edit", profileId: profile.id } : { kind: "add" };
-    });
-    setView((state) => {
       state.draft = createCloudWorkerDraft(profile);
     });
     configSave.update({ error: null, notice: null });
@@ -201,7 +177,9 @@ function CloudWorkersContent() {
     if (!scope || !view.editor || !config || !canManage()) {
       return;
     }
-    const currentProfiles = Object.fromEntries(profiles().map((profile) => [profile.id, true]));
+    const currentProfiles = Object.fromEntries(
+      readCloudWorkerProfiles(config).map((profile) => [profile.id, true]),
+    );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
@@ -281,8 +259,8 @@ function CloudWorkersContent() {
         ? [
             t("cloudWorkersPage.operatingSystemFact", {
               value:
-                advertisedProfiles()
-                  ?.get(profile.id)
+                catalog()
+                  .value?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -300,7 +278,7 @@ function CloudWorkersContent() {
     const statusControl = () =>
       catalog().pending ? (
         <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : advertisedProfiles()?.has(profile.id) ? (
+      ) : catalog().value?.has(profile.id) ? (
         <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
       ) : (
         <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
@@ -308,11 +286,7 @@ function CloudWorkersContent() {
 
     return (
       <SettingsRow
-        title={
-          <>
-            <code>{profile.id}</code>
-          </>
-        }
+        title={<code>{profile.id}</code>}
         description={profileDescription(profile)}
         control={
           <>
@@ -364,21 +338,19 @@ function CloudWorkersContent() {
         title={t(`cloudWorkersPage.fields.${label}`)}
         description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
         control={
-          <>
-            <input
-              class="settings-input mono"
-              aria-label={t(`cloudWorkersPage.fields.${label}`)}
-              placeholder={options.placeholder ?? undefined}
-              type={options.type ?? undefined}
-              min={field === "readyWorkers" ? "0" : undefined}
-              step={field === "readyWorkers" ? "1" : undefined}
-              autocomplete="off"
-              spellcheck="false"
-              value={view.draft[field]}
-              disabled={saveState().busy}
-              onInput={(event: Event) => patchDraft({ [field]: formControlValue(event) })}
-            />
-          </>
+          <input
+            class="settings-input mono"
+            aria-label={t(`cloudWorkersPage.fields.${label}`)}
+            placeholder={options.placeholder}
+            type={options.type}
+            min={field === "readyWorkers" ? "0" : undefined}
+            step={field === "readyWorkers" ? "1" : undefined}
+            autocomplete="off"
+            spellcheck="false"
+            value={view.draft[field]}
+            disabled={saveState().busy}
+            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+          />
         }
       />
     );
@@ -387,7 +359,7 @@ function CloudWorkersContent() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (advertisedProfiles()?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -546,89 +518,57 @@ function CloudWorkersContent() {
   }
 
   return (
-    <>
-      <SettingsPageHeader
-        title={t("tabs.cloudWorkers")}
-        subtitle={
-          <>
-            {t("cloudWorkersPage.intro")} <LearnMoreLink url={CLOUD_WORKERS_DOCS_URL} />
-          </>
-        }
-      />
+    <openclaw-cloud-workers-page>
+      <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
-        <SettingsPage>
-          <SettingsSegmented
-            mode="buttons"
-            value={tab()}
-            ariaLabel={t("cloudWorkersPage.snapshots.viewLabel")}
-            options={[
-              { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
-              { value: "pool", label: t("cloudWorkersPage.pool.tab") },
-              { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
-            ]}
-            onChange={setTab}
-          />
-        </SettingsPage>
-        <Show when={tab() === "profiles"}>
-          <SettingsPage>
-            <Show when={!hasManageAccess()}>
-              <div class="callout warning" role="note">
-                {t("cloudWorkersPage.adminRequired")}
-              </div>
-            </Show>
-            <Show when={catalog().error}>
-              <div class="callout warning" role="status">
-                {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-              </div>
-            </Show>
-            <Show when={saveState().error && !view.editor}>
-              <div class="callout warning" role="alert">
-                {saveState().error}
-              </div>
-            </Show>
-            <Show when={saveState().notice}>
-              <div class="callout" role="status">
-                {saveState().notice}
-              </div>
-            </Show>
-            <SettingsSection
-              title={t("cloudWorkersPage.sectionTitle")}
-              description={t("cloudWorkersPage.sectionDescription")}
-              count={profiles().length}
-              actions={
-                <Show when={canManage()}>
-                  <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
-                    {t("cloudWorkersPage.addProfile")}
-                  </button>
-                </Show>
-              }
-            >
-              <For
-                each={profiles()}
-                fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+        <CloudWorkerEnvironments
+          machines={() => (
+            <>
+              <Show when={!hasManageAccess()}>
+                <div class="callout warning" role="note">
+                  {t("cloudWorkersPage.adminRequired")}
+                </div>
+              </Show>
+              <Show when={catalog().error}>
+                <div class="callout warning" role="status">
+                  {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
+                </div>
+              </Show>
+              <Show when={saveState().error && !view.editor}>
+                <div class="callout warning" role="alert">
+                  {saveState().error}
+                </div>
+              </Show>
+              <Show when={saveState().notice}>
+                <div class="callout" role="status">
+                  {saveState().notice}
+                </div>
+              </Show>
+              <SettingsSection
+                title={t("cloudWorkersPage.environments.machines")}
+                count={profiles().length}
+                actions={
+                  <Show when={canManage()}>
+                    <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
+                      {t("cloudWorkersPage.addProfile")}
+                    </button>
+                  </Show>
+                }
               >
-                {(profile) => renderProfile(profile)}
-              </For>
-            </SettingsSection>
-            <Show when={view.editor}>
-              <Editor />
-            </Show>
-            <CloudWorkerRepositories canManage={canManage()} />
-          </SettingsPage>
-        </Show>
-        <Show when={tab() === "pool"}>
-          <CloudWorkerPool />
-        </Show>
-        <Show when={tab() === "snapshots"}>
-          <CloudWorkerSnapshots />
-        </Show>
+                <For
+                  each={profiles()}
+                  fallback={<SettingsEmpty message={t("cloudWorkersPage.empty")} />}
+                >
+                  {(profile) => renderProfile(profile)}
+                </For>
+              </SettingsSection>
+              <Show when={view.editor}>
+                <Editor />
+              </Show>
+            </>
+          )}
+        />
       </SettingsWorkspace>
-    </>
+    </openclaw-cloud-workers-page>
   );
 }
-
-export const CloudWorkersPage = defineSolidBridge(
-  "openclaw-cloud-workers-page",
-  CloudWorkersContent,
-  { properties: {} },
-);

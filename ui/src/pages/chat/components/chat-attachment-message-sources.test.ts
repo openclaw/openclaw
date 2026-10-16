@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as markdown from "../../../components/markdown.ts";
-import * as chatAvatar from "../chat-avatar.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import {
   createAssistantMessage,
   createAttachmentBlock,
@@ -13,7 +12,7 @@ import {
 } from "./chat-message.test-support.ts";
 
 let view: HTMLDivElement;
-const renderedContainers = new Set<HTMLElement>();
+const views: Array<ReturnType<typeof mountSolid>> = [];
 
 beforeEach(() => {
   view = document.createElement("div");
@@ -22,22 +21,19 @@ beforeEach(() => {
     "",
     `<div class="streaming-markdown">${value}</div>`,
   ]);
-  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(
-    (role) => html`<div class="chat-avatar ${role}"></div>`,
-  );
 });
 
 afterEach(() => {
-  for (const container of renderedContainers) {
-    render(nothing, container);
-    container.remove();
+  for (const mounted of views) {
+    mounted.dispose();
+    mounted.container.remove();
   }
-  renderedContainers.clear();
+  views.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-type RenderOptions = Parameters<typeof renderMessageGroup>[1];
+type RenderOptions = Parameters<typeof MessageGroup>[0]["options"];
 
 function renderGroupedMessage(
   message: unknown,
@@ -45,20 +41,25 @@ function renderGroupedMessage(
   opts: Partial<RenderOptions> = {},
   container: HTMLElement = view,
 ) {
-  renderedContainers.add(container);
   const group = createMessageGroup(message, role, {
     key: `${role}-group`,
     messages: [{ key: `${role}-message`, message }],
   });
-  render(
-    renderMessageGroup(group, {
-      showReasoning: true,
-      showToolCalls: true,
-      assistantName: "OpenClaw",
-      assistantAvatar: null,
-      ...opts,
-    }),
-    container,
+  views.push(
+    mountSolid(
+      MessageGroup,
+      {
+        group,
+        options: {
+          showReasoning: true,
+          showToolCalls: true,
+          assistantName: "OpenClaw",
+          assistantAvatar: null,
+          ...opts,
+        },
+      },
+      container,
+    ),
   );
 }
 

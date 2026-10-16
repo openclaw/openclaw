@@ -3,7 +3,7 @@ import "../commands/agent-command.test-mocks.js";
 import "../commands/agent-command-attempt.test-mocks.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -50,9 +51,14 @@ let cfg: OpenClawConfig;
 let profileId: string;
 let proxyListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
+let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
+  state = await createOpenClawTestState({
+    label: "http-session-sandbox",
+    scenario: "minimal",
+    prepareProfileCatalog: true,
+  });
   cfg = {
     agents: {
       entries: { main: {} },
@@ -92,6 +98,7 @@ beforeAll(async () => {
   profileId = ensureProfileForEmail("sandbox-guest@example.test").id;
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   const overrides = {
@@ -117,6 +124,7 @@ afterAll(async () => {
       await reservation.claim.release();
     }
   }
+  releaseProfileCatalog?.();
   await state?.cleanup();
 });
 
@@ -158,7 +166,7 @@ async function post(params: {
 
 function reportRuntimeIsolation() {
   vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
-    const runtime = resolveSandboxRuntimeStatus({
+    const runtime = await resolveSandboxRuntimeStatusAsync({
       cfg: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -230,7 +238,13 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
       if (!sandbox) {
         executeHostTool();
       }
-      return { payloads: [{ text: "execution started" }], meta: { durationMs: 0 } };
+      return {
+        payloads: [{ text: "execution started" }],
+        meta: {
+          durationMs: 0,
+          terminalReply: { disposition: "visible", text: "execution started" },
+        },
+      };
     });
 
     const response = await post({ endpoint, sessionKey });

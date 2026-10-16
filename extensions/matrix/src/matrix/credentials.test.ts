@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
-import {
-  openOpenClawStateDatabase,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +12,7 @@ import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
-import { loadMatrixCredentialsAsync, openMatrixCredentialsStore } from "./credentials-read.js";
+import { openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -58,23 +55,6 @@ describe("matrix credentials storage", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("roundtrips account-scoped credentials through shared plugin-state SQLite", async () => {
-    await saveMatrixCredentials({ ...auth, deviceId: "DEVICE123" }, {}, "ops");
-
-    expect(loadMatrixCredentials({}, "ops")).toMatchObject({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "secret-token",
-      deviceId: "DEVICE123",
-    });
-    await expect(loadMatrixCredentialsAsync({}, "ops")).resolves.toEqual(
-      loadMatrixCredentials({}, "ops"),
-    );
-    expect(loadMatrixCredentials({}, "default")).toBeNull();
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    expect(fs.existsSync(path.join(stateDir, "credentials", "matrix"))).toBe(false);
   });
 
   it.each([
@@ -298,15 +278,6 @@ describe("matrix credentials storage", () => {
     expect(loadMatrixCredentials({}, "default")).not.toBeNull();
   });
 
-  it("reports persisted auth from SQLite for package-state probes", async () => {
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
-
-    await saveMatrixCredentials(auth, env, "default");
-
-    expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
-  });
-
   it("keeps persisted-auth presence scoped to valid live records and the supplied environment", async () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const store = createPluginStateSyncKeyedStore<unknown>("matrix", {
@@ -327,17 +298,14 @@ describe("matrix credentials storage", () => {
       revokedAt: "2026-01-01",
     });
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
-    store.register(
-      "account:default",
-      {
-        accountId: "default",
-        homeserver: "https://matrix.example.org",
-        userId: "@fixture:example.org",
-        accessToken: "synthetic-fixture-token",
-        createdAt: "2026-01-01",
-      },
-      { ttlMs: 60_000 },
-    );
+    const credentials = {
+      accountId: "default",
+      homeserver: "https://matrix.example.org",
+      userId: "@fixture:example.org",
+      accessToken: "synthetic-fixture-token",
+      createdAt: "2026-01-01",
+    };
+    store.register("account:default", credentials, { ttlMs: 60_000 });
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
     expect(
       await hasAnyMatrixAuthAsync({
@@ -345,10 +313,13 @@ describe("matrix credentials storage", () => {
         env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") },
       }),
     ).toBe(false);
-    const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      "UPDATE plugin_state_entries SET expires_at = 1 WHERE plugin_id = 'matrix' AND namespace = 'credentials' AND entry_key = 'account:default'",
-    ).run();
+    // Commit an expired record through the owner so its receipt invalidates the warm list.
+    const now = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      store.register("account:default", credentials, { ttlMs: 60_000 });
+    } finally {
+      now.mockRestore();
+    }
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
   });
 

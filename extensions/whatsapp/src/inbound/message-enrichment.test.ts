@@ -4,6 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { enrichWhatsAppInboundMessage } from "./message-enrichment.js";
 
 const downloadMediaMessage = vi.hoisted(() => vi.fn());
+const warn = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
+  createSubsystemLogger: () => ({ child: () => ({ warn }) }),
+}));
 
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
@@ -27,13 +33,13 @@ async function enrich(message: WAMessage) {
   return await enrichWhatsAppInboundMessage({
     msg: message,
     sock: { updateMediaMessage: vi.fn(), logger: {} } as never,
-    logVerbose: () => {},
   });
 }
 
 describe("enrichWhatsAppInboundMessage document media kind", () => {
   beforeEach(() => {
     downloadMediaMessage.mockReset();
+    warn.mockReset();
   });
 
   it.each([
@@ -63,4 +69,34 @@ describe("enrichWhatsAppInboundMessage document media kind", () => {
     expect(enriched?.mediaKind).toBe(params.expectedKind);
     expect(enriched?.nativeMedia?.kind).toBe("document");
   });
+
+  it.each([
+    { name: "TypeError", errorClass: "TypeError" },
+    { name: "private-media-download-content", errorClass: "Error" },
+  ])(
+    "keeps attachment failure category $errorClass without logging download content",
+    async ({ name, errorClass }) => {
+      const marker = "private-media-download-content";
+      downloadMediaMessage.mockRejectedValueOnce(Object.assign(new Error(marker), { name }));
+
+      const enriched = await enrich(
+        documentMessage({ mimetype: "application/pdf", fileName: "upload.pdf" }),
+      );
+
+      expect(enriched?.body).toContain("what is this?");
+      expect(enriched?.body).toContain("[whatsapp attachment unavailable]");
+      expect(enriched?.commandBody).toBe("what is this?");
+      expect(enriched?.mediaPath).toBeUndefined();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "WhatsApp inbound media materialization failed",
+        expect.objectContaining({
+          failureStage: "direct",
+          errorClass,
+          mediaKind: "document",
+          messageId: "doc-1",
+        }),
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(marker);
+    },
+  );
 });

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -54,6 +55,7 @@ function historyTarget(state: OpenClawTestState, sessionId: string) {
 describe("session history snapshot reads", () => {
   test("keeps commentary fallback rows reachable across SQLite cursor pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = historyTarget(state, "history-commentary-cursor");
       const messages = [
         userTextMessage("check the workspace", 1),
@@ -131,6 +133,7 @@ describe("session history snapshot reads", () => {
     },
   ])("carries $name from the transcript worker into incremental SSE", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = historyTarget(state, "history-pending-state");
       const entry = { sessionId: target.sessionId, updatedAt: 1 };
       await replaceSessionEntry(target, entry);
@@ -185,6 +188,7 @@ describe("session history snapshot reads", () => {
     "keeps cursor $cursor stable when messages append during its read",
     async ({ cursor, expectedSeq }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = historyTarget(state, "history-cursor-append");
         await replaceTranscriptEvents(target, [
           { type: "session", version: 3, id: target.sessionId },
@@ -314,6 +318,7 @@ describe("session history snapshot reads", () => {
     },
   ])("recovers cursor continuation across $name", async (fixture) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = historyTarget(state, "history-cursor-prefix-change");
       await replaceTranscriptEvents(target, [
         { type: "session", version: 3, id: target.sessionId },
@@ -386,6 +391,7 @@ describe("session history snapshot reads", () => {
     "keeps same-sequence siblings at the head of %s cursor history",
     async (source) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = historyTarget(state, "history-cursor-siblings");
         const messages = [
           userTextMessage("send both here", 1),

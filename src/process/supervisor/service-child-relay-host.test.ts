@@ -178,6 +178,69 @@ it.each(["current", "revoked"] as const)(
   },
 );
 
+it("checks input authority after readiness before writing private stdin", async () => {
+  platformMock = mockProcessPlatform("darwin");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const inputWrites = vi.spyOn(stub.child.stdin!, "write");
+  const preparing = createDeferredCore();
+  const releasePreparation = createDeferredCore();
+  const revoked = new Error("private input authority revoked");
+  let current = true;
+  const prepareInput = vi.fn(async () => {
+    preparing.resolve();
+    await releasePreparation.promise;
+    if (!current) {
+      throw revoked;
+    }
+  });
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    input: "private prompt",
+    prepareInput,
+    oomScoreWrapperSelected: false,
+  });
+  const outcome = starting.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    const start = firstMockArg(stub.sendMock, "service start");
+    if (!isRecord(start) || typeof start.generation !== "string") {
+      throw new Error("Expected an admitted service generation");
+    }
+    expect(prepareInput).not.toHaveBeenCalled();
+    stub.control.push(
+      Buffer.from(
+        encodeServiceChildMessage({
+          type: "ready",
+          commandPid: 1234,
+          anchorPid: 1235,
+          generation: start.generation,
+          sequence: 1,
+        }),
+      ),
+    );
+    await Promise.race([preparing.promise, outcome]);
+    expect(prepareInput).toHaveBeenCalledOnce();
+    expect(inputWrites).not.toHaveBeenCalled();
+    current = false;
+    releasePreparation.resolve();
+    expect(await outcome).toBe(revoked);
+    expect(inputWrites).not.toHaveBeenCalled();
+    expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
+  } finally {
+    releasePreparation.resolve();
+    stub.control.destroy();
+    stub.lineage.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    await outcome;
+  }
+});
+
 it("reports cleanup uncertainty when deferred start delivery fails after abort", async () => {
   platformMock = mockProcessPlatform("darwin");
   const stub = createWritableRelayChild();
@@ -347,6 +410,84 @@ it("publishes root exit before drain, replays it, and acknowledges only the clos
   expect(settled).not.toHaveBeenCalled();
   close();
   await expect(extinction).resolves.toBeUndefined();
+});
+
+it("publishes confirmed cancellation when the root result is missing", async () => {
+  const { adapter, emit, endOutput, close } = await createRelay("darwin");
+  const onExit = vi.fn();
+  adapter.onExit(onExit);
+  adapter.kill("SIGKILL");
+  endOutput();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  close();
+  await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
+  expect(onExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+  const lateExit = vi.fn();
+  adapter.onExit(lateExit);
+  expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+});
+
+it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
+  platformMock = mockProcessPlatform("darwin");
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
+  });
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const write = stub.control.write.bind(stub.control);
+  vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
+    const message: unknown = JSON.parse(chunk.toString());
+    if (isRecord(message) && message.type === "stdin-end") {
+      callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+      return false;
+    }
+    return write(chunk, encoding, callback);
+  });
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-open",
+    terminateOnHostLoss: true,
+    oomScoreWrapperSelected: false,
+  });
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted service generation");
+  }
+  const generation = start.generation;
+  let sequence = 0;
+  const emit = (payload: ServiceChildAnchorPayload) => {
+    stub.control.push(
+      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+    );
+  };
+  emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+  const adapter = await starting;
+  adapter.onExit(() => adapter.stdin!.end());
+  const extinction = adapter.waitForExtinction();
+  void extinction.catch(() => {});
+  try {
+    emit({ type: "root-result", code: 0, signal: null });
+    stub.stdout.end();
+    stub.stderr.end();
+    await nextTurn();
+    emit({ type: "closing", reason: "lineage-closed" });
+    await nextTurn();
+    stub.lineage.end();
+    stub.control.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    await expect(extinction).resolves.toBeUndefined();
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  } finally {
+    stub.control.destroy();
+    stub.lineage.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    adapter.dispose();
+  }
 });
 
 it("keeps an observed Windows root result independent of failed extinction", async () => {
@@ -608,7 +749,6 @@ it.each(["before", "after"])(
       acknowledgements,
       cancellations,
       killSpy,
-      acknowledgeRetirement,
     } = await createRelay("darwin");
     completeRoot();
     await adapter.wait();
@@ -635,23 +775,20 @@ it.each(["before", "after"])(
       closeControl();
       await nextTurn();
     }
-    acknowledgeRetirement();
-    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(cancellations).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    const probesBeforeExit = groupProbe.mock.calls.length;
     groupProbe.mockImplementation(() => {
       throw Object.assign(new Error("synthetic absent group"), { code: "ESRCH" });
     });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(cancellations).toHaveLength(0);
+    expect(finished).not.toHaveBeenCalled();
+    expect(extinct).not.toHaveBeenCalled();
     exitRelay();
     await expect(closing).resolves.toMatchObject({
       reason: "forced-relay-exit",
       signalRequested: "SIGKILL",
       exit: { code: 0, signal: null },
     });
-    expect(groupProbe.mock.calls).toHaveLength(probesBeforeExit + 1);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
     expect(cancellations).toHaveLength(0);
   },

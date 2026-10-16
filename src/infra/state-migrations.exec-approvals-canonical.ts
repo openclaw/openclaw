@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -11,11 +10,12 @@ import { sanitizeOpenClawStateLeaseRows } from "../state/openclaw-state-snapshot
 import { parseLegacyExecApprovals, parsePersistedExecApprovals } from "./exec-approvals-config.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-function readRow(db: DatabaseSync) {
+function readRow(db: EngineConnection) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<Pick<DB, "exec_approvals_config">>(db)

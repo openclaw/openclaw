@@ -23,9 +23,11 @@ type HeapStatistics = Awaited<ReturnType<Worker["getHeapStatistics"]>>;
 export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements RetainedNativeWorker {
   // Match native Worker callbacks even when a different caller services this port.
   private readonly runInContext = AsyncLocalStorage.snapshot();
+  private readonly diagnosticName: string;
   threadId = 0;
   started = false;
   executionStopped = false;
+  private executionExitCode: number | undefined;
   private referenced = true;
   private stopping = false;
   private joined = false;
@@ -58,13 +60,15 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     taskPort?: MessagePort,
   ) {
     super();
+    this.diagnosticName = `worker:${
+      !evalSource && filename instanceof URL ? workerRequestKind(filename) : "other"
+    }`;
     if (taskPort) {
-      const label = `worker:${
-        !evalSource && filename instanceof URL ? workerRequestKind(filename) : "other"
-      }`;
       this.taskPort = new NativeWorkerTaskPort(taskPort, {
         message: (value) =>
-          this.runInContext(() => runWithMainThreadTask(label, () => this.emit("message", value))),
+          this.runInContext(() =>
+            runWithMainThreadTask(this.diagnosticName, () => this.emit("message", value)),
+          ),
         messageerror: (error) => this.runInContext(() => this.emit("messageerror", error)),
         unavailable: () => this.observeTaskPortLoss(),
       });
@@ -86,10 +90,11 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   serviceTaskPort(): void {
-    if (!this.taskPort) {
+    const taskPort = this.taskPort;
+    if (!taskPort) {
       return;
     }
-    this.taskPort.service();
+    runWithMainThreadTask(this.diagnosticName, () => taskPort.service());
     this.observeTaskPortLoss();
   }
 
@@ -137,8 +142,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       closed: () =>
         this.runInContext(() => {
           this.resourceClosed = true;
-          if (this.supervisorJoined) {
-            this.finishJoined(undefined);
+          if (this.supervisorJoined || this.executionStopped) {
+            this.finishJoined(this.executionExitCode);
           }
         }),
       failed: (error) => this.resourceFailed(error),
@@ -363,25 +368,31 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.executionStopped) {
       this.taskPort?.close();
       this.executionStopped = true;
+      this.executionExitCode = code;
       this.emit("execution-exit", code);
+    }
+    if (this.resourceClosed && !this.joined) {
+      this.finishJoined(code);
     }
   }
 
   receive(reply: NativeWorkerReply): void {
-    this.runInContext(() => {
-      if (
-        reply.type === "error" ||
-        reply.type === "messageerror" ||
-        reply.type === "create-error" ||
-        reply.type === "execution-exit" ||
-        reply.type === "stopped" ||
-        reply.type === "stop-error"
-      ) {
-        this.terminalObserved = true;
-        this.taskPort?.drain();
-      }
-      this.receiveOwned(reply);
-    });
+    this.runInContext(() =>
+      runWithMainThreadTask(this.diagnosticName, () => {
+        if (
+          reply.type === "error" ||
+          reply.type === "messageerror" ||
+          reply.type === "create-error" ||
+          reply.type === "execution-exit" ||
+          reply.type === "stopped" ||
+          reply.type === "stop-error"
+        ) {
+          this.terminalObserved = true;
+          this.taskPort?.drain();
+        }
+        this.receiveOwned(reply);
+      }),
+    );
   }
 
   private receiveOwned(reply: NativeWorkerReply): void {

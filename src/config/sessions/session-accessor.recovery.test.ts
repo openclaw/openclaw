@@ -387,6 +387,10 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     let verifiedCommands = 0;
     const runOperation = workerStore.runSqliteWorkerStoreOperation;
     const captures = vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution");
+    const preparations = vi.spyOn(
+      agentExecution,
+      "captureOpenClawAgentDatabasePreparationExecution",
+    );
     const observer = vi
       .spyOn(workerStore, "runSqliteWorkerStoreOperation")
       .mockImplementation(
@@ -433,6 +437,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                     );
                     void closing.catch(() => undefined);
                     captures.mockClear();
+                    preparations.mockClear();
                   }
                   if (dropReceipt) {
                     const receipt = vi
@@ -487,8 +492,10 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       await closing;
       if (retireOwner) {
         expect(captures).not.toHaveBeenCalled();
+        expect(preparations).not.toHaveBeenCalled();
       }
       captures.mockRestore();
+      preparations.mockRestore();
       expect(
         loadSessionEntry({
           agentId: "main",
@@ -526,6 +533,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       expect(verifiedCommands).toBe(2);
     } finally {
       captures.mockRestore();
+      preparations.mockRestore();
       observer.mockRestore();
       for (const restore of restoreFaults) {
         restore();

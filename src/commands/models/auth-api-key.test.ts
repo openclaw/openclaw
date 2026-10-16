@@ -12,14 +12,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import * as authProfiles from "../../agents/auth-profiles.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
+import * as authStoreRuntime from "../../agents/auth-profiles/store-runtime.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
 import {
   getRuntimeConfigWriteApplication,
@@ -30,7 +27,6 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -95,6 +91,100 @@ afterEach(async () => {
 });
 
 describe("shared API-key editing and removal", () => {
+  it.each([false, true])(
+    "checks requester authority after the credential updater returns (revoked=%s)",
+    async (revoke) => {
+      await seedKey("sample:manual", "synthetic-before", "writer");
+      const beforeConfig = fs.readFileSync(configPath(), "utf8");
+      let callbackComplete = false;
+      let revoked = false;
+      const update = authStoreRuntime.updateAuthProfileStoreWithLock;
+      vi.spyOn(authStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
+        update({
+          ...params,
+          updater: (...args) => {
+            const changed = params.updater(...args);
+            callbackComplete = true;
+            revoked = revoke;
+            return changed;
+          },
+        }),
+      );
+      const result = saveModelProviderApiKey({
+        provider: "sample",
+        apiKey: "synthetic-after",
+        profileId: "sample:manual",
+        agentDir: agentDir("writer"),
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("Requester revoked at credential commit");
+          }
+        },
+      });
+      if (revoke) {
+        await expect(result).rejects.toThrow("Requester revoked at credential commit");
+        expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+      } else {
+        await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
+      }
+      expect(callbackComplete).toBe(true);
+      expect(
+        loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
+      ).toMatchObject({
+        key: revoke ? "synthetic-before" : "synthetic-after",
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "checks requester authority after the config transform (revoked=%s)",
+    async (revoke) => {
+      await seedKey("sample:manual", "synthetic-current-key", "writer");
+      const beforeConfig = fs.readFileSync(configPath(), "utf8");
+      const beforeProfiles = loadPersistedAuthProfileStore(agentDir("writer"))?.profiles;
+      let transformed = false;
+      let revoked = false;
+      const updateConfig = configWriter.updateConfig;
+      vi.spyOn(configWriter, "updateConfig").mockImplementation(
+        (mutator, selectModels, beforeCommit, writeOptions) =>
+          updateConfig(
+            async (...args) => {
+              const next = await mutator(...args);
+              transformed = true;
+              revoked = revoke;
+              return next;
+            },
+            selectModels,
+            beforeCommit,
+            writeOptions,
+          ),
+      );
+      const result = saveModelProviderApiKey({
+        provider: "sample",
+        apiKey: "synthetic-current-key",
+        profileId: "sample:manual",
+        agentDir: agentDir("writer"),
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("Requester revoked after config transform");
+          }
+        },
+      });
+      if (revoke) {
+        await expect(result).rejects.toThrow("Requester revoked after config transform");
+        expect(fs.readFileSync(configPath(), "utf8")).toBe(beforeConfig);
+      } else {
+        await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
+        expect((await readConfig()).auth?.profiles?.["sample:manual"]).toMatchObject({
+          provider: "sample",
+          mode: "api_key",
+        });
+      }
+      expect(transformed).toBe(true);
+      expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles).toEqual(beforeProfiles);
+    },
+  );
+
   it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
     let claim: RuntimeConfigWriteApplicationClaim | undefined;
@@ -180,6 +270,20 @@ describe("shared API-key editing and removal", () => {
           order: [profileId, "sample:backup"],
         });
       }
+      const ownerDir = owner ? agentDir(owner) : undefined;
+      const stored = loadPersistedAuthProfileStore(ownerDir)!;
+      const failureState = {
+        lastUsed: 1_700_000_000_000,
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit" as const,
+        errorCount: 3,
+        failureCounts: { rate_limit: 3 },
+      };
+      stored.usageStats = {
+        [profileId]: failureState,
+        ...(owner ? { "sample:backup": failureState } : {}),
+      };
+      authStoreRuntime.saveAuthProfileStore(stored, ownerDir);
       const configuredProfile = {
         provider: "sample",
         mode: "api_key" as const,
@@ -204,7 +308,10 @@ describe("shared API-key editing and removal", () => {
       expect(
         loadPersistedAuthProfileStore(owner ? agentDir(owner) : undefined)?.profiles[profileId],
       ).toMatchObject({ key: "synthetic-new-key", ...metadata });
+      const usageStats = loadPersistedAuthProfileStore(ownerDir)?.usageStats;
+      expect(usageStats?.[profileId]).toEqual({ lastUsed: failureState.lastUsed, errorCount: 0 });
       if (owner) {
+        expect(usageStats?.["sample:backup"]).toEqual(failureState);
         expect(result).toMatchObject({ profileId });
         const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir(owner));
         expect(store.profiles[profileId]).toMatchObject({ key: "synthetic-new-key" });
@@ -352,131 +459,6 @@ describe("shared API-key editing and removal", () => {
           }),
         ).resolves.toMatchObject({ profileId: replacementId });
       }
-    }
-  });
-
-  it("preserves a same-ID reconnect at the conversation cleanup commit", async () => {
-    const profileId = "sample:reconnected";
-    const fallbackProfileId = "sample:deleted-fallback";
-    writeConfig({ agents: { entries: { writer: { model: `sample/astra@${profileId}` } } } });
-    const profile = { agentDir: agentDir("writer"), profileId };
-    await seedKey(profileId, "removed", "writer");
-    await seedKey(fallbackProfileId, "removed-fallback", "writer");
-    const scope = {
-      agentId: "writer",
-      sessionKey: "agent:writer:chat",
-      storePath: resolveDefaultSessionStorePath("writer"),
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "existing-chat",
-      updatedAt: 1,
-      authProfileOverride: profileId,
-      authProfileOverrideSource: "user",
-      modelFallback: {
-        source: "agent-patch",
-        ts: 1,
-        prevModel: "luna",
-        prevProvider: "sample",
-        prevAuthProfileOverride: fallbackProfileId,
-      },
-    });
-    const patch = sessionAccessor.patchSessionEntryTarget;
-    vi.spyOn(sessionAccessor, "patchSessionEntryTarget").mockImplementationOnce(
-      (target, update, options) =>
-        patch(
-          target,
-          async (...args) => {
-            const change = await update(...args);
-            // Reconnect after cleanup has prepared its patch, before the canonical commit.
-            await seedKey(profileId, "reconnected", "writer");
-            return change;
-          },
-          options,
-        ),
-    );
-    await removeModelAuthCredentials({
-      cfg: await readConfig(),
-      agentDir: profile.agentDir,
-      profileIds: [profileId, fallbackProfileId],
-    });
-    expect(loadPersistedAuthProfileStore(profile.agentDir)?.profiles[profileId]).toMatchObject({
-      key: "reconnected",
-    });
-    const retained = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
-    expect(retained).toMatchObject({
-      authProfileOverride: profileId,
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    });
-    expect(retained?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
-  });
-
-  it("preserves queued work for an account reconnected after credential removal", async () => {
-    const profileId = "sample:reconnected";
-    const removedId = "sample:removed";
-    const queueKey = "agent:writer:reconnect";
-    const config: OpenClawConfig = {
-      agents: {
-        entries: {
-          writer: {
-            model: {
-              primary: `sample/astra@${profileId}`,
-              fallbacks: [`sample/luna@${removedId}`],
-            },
-          },
-        },
-      },
-    };
-    writeConfig(config);
-    for (const id of [profileId, removedId]) {
-      await seedKey(id, "removed", "writer");
-    }
-    const queued = (id: string, snapshot: OpenClawConfig) => {
-      const pending = createQueueTestRun({ prompt: id });
-      Object.assign(pending.run, {
-        agentId: "writer",
-        agentDir: agentDir("writer"),
-        config: snapshot,
-        provider: "sample",
-        model: "astra",
-        authProfileId: id,
-        authProfileIdSource: "user",
-      });
-      return pending;
-    };
-    const removedRun = queued(removedId, config);
-    const reconnectedConfig: OpenClawConfig = {
-      agents: { entries: { writer: { model: `sample/astra@${profileId}` } } },
-    };
-    const reconnectedRun = queued(profileId, reconnectedConfig);
-    const remove = authProfiles.removeAuthProfilesAcrossOwnerStores;
-    vi.spyOn(authProfiles, "removeAuthProfilesAcrossOwnerStores").mockImplementationOnce(
-      async (params) => {
-        const result = await remove(params);
-        expect(result).toBe(true);
-        await seedKey(profileId, "reconnected", "writer");
-        writeConfig(reconnectedConfig);
-        enqueueFollowupRun(queueKey, reconnectedRun, { mode: "followup" });
-        return result;
-      },
-    );
-    try {
-      enqueueFollowupRun(queueKey, removedRun, { mode: "followup" });
-      await removeModelAuthCredentials({
-        cfg: config,
-        agentDir: agentDir("writer"),
-        profileIds: [profileId, removedId],
-      });
-      expect(reconnectedRun.run.authProfileId).toBe(profileId);
-      expect(reconnectedRun.run.authProfileIdSource).toBe("user");
-      expect(reconnectedRun.run.config).toBe(reconnectedConfig);
-      expect(removedRun.run.authProfileId).toBeUndefined();
-      expect(removedRun.run.config.agents?.entries?.writer?.model).toEqual({
-        primary: `sample/astra@${profileId}`,
-        fallbacks: ["sample/luna"],
-      });
-    } finally {
-      clearFollowupQueue(queueKey);
     }
   });
 

@@ -60,6 +60,7 @@ export type ProviderEndpointClass =
   | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
+  | "novita-native"
   | "nvidia-native"
   | "openai-public"
   | "openai"
@@ -456,6 +457,21 @@ export function resolveProviderRequestPolicy(
   };
 }
 
+/** Catalog speed policy needs endpoint facts, without constructing request attribution. */
+export function resolveProviderFastModeRequestCapabilities(
+  input: ProviderRequestPolicyInput,
+  endpointClass = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners)
+    .endpointClass,
+) {
+  return {
+    endpointClass,
+    allowsAnthropicServiceTier:
+      normalizeProviderId(input.provider ?? "") === "anthropic" &&
+      normalizeOptionalLowercaseString(input.api) === "anthropic-messages" &&
+      (endpointClass === "default" || endpointClass === "anthropic-public"),
+  };
+}
+
 export function resolveProviderRequestCapabilities(
   input: ProviderRequestCapabilitiesInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -476,6 +492,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "minimax-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
+    endpointClass === "novita-native" ||
     endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
@@ -531,10 +548,7 @@ export function resolveProviderRequestCapabilities(
         api === "openai-responses" ||
         api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
-    allowsAnthropicServiceTier:
-      provider === "anthropic" &&
-      api === "anthropic-messages" &&
-      (endpointClass === "default" || endpointClass === "anthropic-public"),
+    ...resolveProviderFastModeRequestCapabilities(input, endpointClass),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:
@@ -554,55 +568,4 @@ export function resolveProviderRequestCapabilities(
       manifestProviderRequest?.openAICompletions?.supportsStreamingUsage === true,
     compatibilityFamily,
   };
-}
-
-function describeProviderRequestRoutingPolicy(
-  policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "none" {
-  if (!policy.attributionProvider) {
-    return "none";
-  }
-  switch (policy.policy?.verification) {
-    case "vendor-hidden-api-spec":
-      return "hidden";
-    case "vendor-documented":
-      return "documented";
-    default:
-      return "none";
-  }
-}
-
-function describeProviderRequestRouteClass(
-  policy: ProviderRequestPolicyResolution,
-): "default" | "native" | "proxy-like" | "local" | "invalid" {
-  switch (policy.endpointClass) {
-    case "default":
-    case "invalid":
-    case "local":
-      return policy.endpointClass;
-    case "custom":
-    case "openrouter":
-      return "proxy-like";
-    default:
-      return "native";
-  }
-}
-
-export function describeProviderRequestRoutingSummary(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): string {
-  const policy = resolveProviderRequestPolicy(input, env);
-  const api = normalizeOptionalLowercaseString(input.api) ?? "unknown";
-  const provider = policy.provider ?? "unknown";
-  const routeClass = describeProviderRequestRouteClass(policy);
-  const routingPolicy = describeProviderRequestRoutingPolicy(policy);
-
-  return [
-    `provider=${provider}`,
-    `api=${api}`,
-    `endpoint=${policy.endpointClass}`,
-    `route=${routeClass}`,
-    `policy=${routingPolicy}`,
-  ].join(" ");
 }

@@ -307,15 +307,22 @@ describe("agent schema 22 storage cutover", () => {
         try {
           db.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
           seedOpenClawAgentSchemaV22(db);
-          const { event, usage } = seedHistoricalData(db);
+          const { event } = seedHistoricalData(db);
           db.close();
           db = new DatabaseSync(pathname);
           const before = legacySnapshot(db);
-          // These entries have no cold fields: migration only adds their initial revision.
+          // These entries have no cold fields, start time, or optional references.
           const expectedPreserved = {
             ...before.preserved,
+            session_windows: db
+              .prepare(
+                "SELECT *, NULL AS row_transcript_json, NULL AS row_transcript_updated_at FROM session_windows ORDER BY rowid",
+              )
+              .all(),
             session_nodes: db
-              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
+              .prepare(
+                "SELECT *, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references FROM session_nodes ORDER BY rowid",
+              )
               .all(),
           };
           expect(
@@ -443,7 +450,10 @@ describe("agent schema 22 storage cutover", () => {
           if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
             throw new Error("Expected migrated usage envelope/body");
           }
-          expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toEqual(usage);
+          // Version-6 reports predate the current pricing rules, so readers rebuild them.
+          expect(
+            decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob),
+          ).toBeUndefined();
           expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
           expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
           expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });

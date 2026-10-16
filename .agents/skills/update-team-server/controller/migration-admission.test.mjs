@@ -1,221 +1,121 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
 
-const library = new URL("./release-lib.mjs", import.meta.url);
+const library = new URL("./release-lib.mjs", import.meta.url).pathname;
 
-function classifyMigration(from, to, configPath) {
-  return spawnSync(process.execPath, [
-    "--no-warnings",
-    fileURLToPath(library),
-    "migration-kind",
-    JSON.stringify({ sha: "a".repeat(40), schemaVersions: from }),
-    JSON.stringify({ sha: "b".repeat(40), schemaVersions: to }),
-    ...(configPath ? [configPath] : []),
-  ], {
-    encoding: "utf8",
-    env: { OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE },
-    timeout: 10_000,
-  });
+function fixture(t) {
+  const f = makeReleaseFixture(t), candidate = f.addRelease("b".repeat(40));
+  const run = (command, args = [], input) => spawnSync(process.execPath, [library, command, ...args.map(String)],
+    { env: f.env, input, encoding: "utf8", timeout: 10_000 });
+  const ok = result => { assert.ifError(result.error); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
+  for (const [release, agent] of [[f.initial, 25], [candidate, 26]]) {
+    const file = join(release, "package.json");
+    chmodSync(file, 0o644);
+    const pkg = JSON.parse(readFileSync(file));
+    pkg.openclaw.schemaVersions = { state: 20, agent };
+    writeFileSync(file, JSON.stringify(pkg));
+    chmodSync(file, 0o444);
+  }
+  const shared = new DatabaseSync(f.databasePath);
+  shared.exec("PRAGMA user_version=20"); shared.close();
+  const agent = new DatabaseSync(f.agentDatabasePath);
+  agent.exec("PRAGMA user_version=25; UPDATE schema_meta SET schema_version=25"); agent.close();
+  const before = { sha: f.sha, schemaVersions: { state: 20, agent: 25 } };
+  const after = { sha: "b".repeat(40), schemaVersions: { state: 20, agent: 26 } };
+  const backupRoot = join(f.runtime, ".openclaw-update", `update-${after.sha}-11111111-1111-4111-8111-111111111111`, "native");
+  const protectedPaths = JSON.parse(ok(run("fingerprint", [f.config, f.databasePath])));
+  const witness = ok(run("session-preservation-witness", [f.initial, candidate, f.databasePath]));
+  const create = () => run("journal-create", [f.journal, JSON.stringify(before), JSON.stringify(after), "system", 111, 1110,
+    "fixture-instance", JSON.stringify(protectedPaths), before.sha, "absent", "enabled", "active", "disabled", "inactive",
+    "fixture-suspension", Date.now() + 60_000, "READY", "@stdin", "", backupRoot], witness);
+  const read = () => JSON.parse(ok(run("journal-read", [f.journal])));
+  return { ...f, candidate, run, ok, before, after, backupRoot, witness, protectedPaths, create, read };
 }
 
-test("routes state 16 to 17 with agent 19 through native migration admission", () => {
-  const result = classifyMigration({ state: 16, agent: 19 }, { state: 17, agent: 19 });
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "state-16-17");
+test("25 to 26 crosses the ordinary activation boundary and delegates migration support", t => {
+  const f = fixture(t);
+  assert.equal(f.ok(f.run("migration-kind", [JSON.stringify(f.before), JSON.stringify(f.after)])), "native-update");
+  const shared = new DatabaseSync(f.databasePath);
+  shared.exec("CREATE TABLE agent_databases (agent_id TEXT, path TEXT, schema_version INTEGER)");
+  shared.prepare("INSERT INTO agent_databases VALUES (?, ?, 24)").run("controller-test-agent", f.agentDatabasePath);
+  shared.close();
+  // The physical version and owner are authoritative; the registry may lag Doctor's commit.
+  assert.equal(f.ok(f.run("compatibility", [f.initial, f.candidate, f.databasePath])).includes('"agentDatabases":1'), true);
+  assert.equal(f.ok(f.create()), "A_PREPARED");
+  const record = f.read();
+  assert.deepEqual(record.nativeUpdate, { backupRoot: f.backupRoot });
+  assert.equal(record.agentMigration, undefined);
+  assert.equal(f.ok(f.run("journal-original-witness", [f.journal, JSON.stringify(record)])), f.witness);
+  // The controller does not need a release-specific qualification even for later forward versions.
+  const future = { ...f.after, schemaVersions: { state: 25, agent: 42 } };
+  assert.equal(f.ok(f.run("migration-kind", [JSON.stringify(f.before), JSON.stringify(future)])), "native-update");
 });
 
-test("routes only state 19/agent 24 to state 20/agent 24 through native Doctor", t => {
-  const f = makeReleaseFixture(t);
-  const from = { state: 19, agent: 24 }, to = { state: 20, agent: 24 };
-  const result = classifyMigration(from, to);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "state-19-20");
-  for (const [before, after] of [[{ state: 19, agent: 23 }, to], [from, { state: 21, agent: 24 }], [to, from]])
-    assert.notEqual(classifyMigration(before, after).status, 0);
-  writeFileSync(f.configPath, JSON.stringify({ session: { maintenance: { coldStorage: { enabled: true } } } }));
-  assert.match(classifyMigration(from, to, f.configPath).stderr, /cold transcript extraction disabled/);
-});
-
-for (const source of [17, 18]) test(`routes state ${source} to ${source + 1} with unchanged agent 23 through native Doctor`, () => {
-  const result = classifyMigration({ state: source, agent: 23 }, { state: source + 1, agent: 23 });
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), `state-${source}-${source + 1}`);
-});
-
-for (const source of [17, 18]) test(`state ${source + 1} retains the agent 23 cold-history backup boundary`, t => {
-  const fixture = makeReleaseFixture(t);
-  for (const enabled of [true, "false", 1]) {
-    writeFileSync(fixture.configPath, JSON.stringify({ session: { maintenance: { coldStorage: { enabled } } } }));
-    const result = classifyMigration({ state: source, agent: 23 }, { state: source + 1, agent: 23 }, fixture.configPath);
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /cold transcript extraction disabled/);
+test("native restoration rebinds replaced files while retaining the original session witness", t => {
+  const f = fixture(t); f.ok(f.create());
+  const original = f.read(), originalWitness = readFileSync(join(dirname(f.journal), original.originalWitness.name));
+  mkdirSync(dirname(f.backupRoot), { recursive: true, mode: 0o700 });
+  for (const path of [f.config, f.databasePath, f.agentDatabasePath]) {
+    copyFileSync(path, `${path}.restored`); chmodSync(`${path}.restored`, 0o600); renameSync(`${path}.restored`, path);
   }
+  const identity = path => { const info = statSync(path); return { dev: info.dev, ino: info.ino }; };
+  const receipt = { schemaVersion: 1, status: "restored", configPath: f.config,
+    stateDir: dirname(dirname(f.databasePath)), databases: [f.databasePath, f.agentDatabasePath],
+    databaseIdentities: Object.fromEntries([f.databasePath, f.agentDatabasePath].map(path => [path, identity(path)])),
+    configIdentity: { path: f.config, ...identity(f.config) } };
+  const receiptPath = `${f.backupRoot}.receipt.json`;
+  writeFileSync(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
+  const rebound = JSON.parse(f.ok(f.run("journal-native-state", [f.journal, JSON.stringify(original), f.config, f.databasePath])));
+  assert.notEqual(rebound.protectedPaths[1].inode, original.protectedPaths[1].inode);
+  assert.deepEqual(readFileSync(join(dirname(f.journal), original.originalWitness.name)), originalWitness);
+  const projected = f.ok(f.run("journal-original-witness", [f.journal, JSON.stringify(rebound)]));
+  f.ok(f.run("session-preservation-verify", [f.initial, f.initial, f.databasePath], projected));
+  const saved = readFileSync(f.journal);
+  receipt.databaseIdentities[f.databasePath].ino++;
+  writeFileSync(receiptPath, JSON.stringify(receipt));
+  assert.notEqual(f.run("journal-native-state", [f.journal, JSON.stringify(rebound), f.config, f.databasePath]).status, 0);
+  assert.deepEqual(readFileSync(f.journal), saved);
 });
 
-for (const source of [19, 20, 21, 22, 23, 24]) test(`agent ${source}-to-${source + 1} refuses enabled cold extraction before migration activation`, (t) => {
-  const fixture = makeReleaseFixture(t);
-  const state = source === 24 ? 20 : source === 23 ? 19 : 17;
-  const from = { state, agent: source }, to = { state, agent: source + 1 };
-  for (const enabled of [true, "false", 1]) {
-    writeFileSync(fixture.configPath, JSON.stringify({ session: { maintenance: { coldStorage: { enabled } } } }));
-    const result = classifyMigration(from, to, fixture.configPath);
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /cold transcript extraction disabled/);
+
+test("native start permit stays revoked until the selected release matches the completed owner receipt", t => {
+  const f = fixture(t); f.ok(f.create());
+  const record = f.read();
+  const permit = action => f.run("journal-native-permit", [f.journal, JSON.stringify(record), action]);
+  f.ok(permit("revoke"));
+  assert.equal(existsSync(f.permit), false);
+  f.ok(permit("publish")); // No native receipt means no migration effect occurred.
+  f.ok(permit("revoke"));
+  mkdirSync(dirname(f.backupRoot), { recursive: true, mode: 0o700 });
+  const identity = path => { const info = statSync(path); return { dev: info.dev, ino: info.ino }; };
+  const receipt = { schemaVersion: 1, status: "backed-up", configPath: f.config,
+    stateDir: dirname(dirname(f.databasePath)), databases: [f.databasePath],
+    databaseIdentities: { [f.databasePath]: identity(f.databasePath) },
+    configIdentity: { path: f.config, ...identity(f.config) } };
+  const save = () => writeFileSync(`${f.backupRoot}.receipt.json`, JSON.stringify(receipt), { mode: 0o600 });
+  const select = release => { unlinkSync(join(f.serving, "current")); symlinkSync(release, join(f.serving, "current")); };
+  save();
+  assert.notEqual(permit("publish").status, 0);
+  assert.equal(existsSync(f.permit), false);
+  receipt.status = "migrated"; save();
+  assert.notEqual(permit("publish").status, 0, "old reader cannot start after migration");
+  select(f.candidate);
+  f.ok(permit("publish"));
+  f.ok(permit("revoke"));
+  for (const status of ["failed", "restoring-config"]) {
+    receipt.status = status; save();
+    assert.notEqual(permit("publish").status, 0);
+    assert.equal(f.ok(f.run("journal-original-witness", [f.journal, JSON.stringify(record)])), f.witness);
+    assert.equal(existsSync(f.permit), false);
   }
-  writeFileSync(fixture.configPath, JSON.stringify({ session: { maintenance: { coldStorage: { enabled: false } } } }));
-  const result = classifyMigration(from, to, fixture.configPath);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), `agent-${source}-${source + 1}`);
-});
-
-for (const [state, source] of [[17, 19], [17, 20], [17, 21], [17, 22], [19, 23], [20, 24]]) test(`routes only the exact state ${state} and agent ${source} to ${source + 1} edge through agent migration`, () => {
-  const result = classifyMigration({ state, agent: source }, { state, agent: source + 1 });
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), `agent-${source}-${source + 1}`);
-});
-
-for (const schemas of [{ state: 16, agent: 19 }, { state: 17, agent: 21 }, { state: 17, agent: 22 }, { state: 17, agent: 23 }, { state: 18, agent: 23 }, { state: 19, agent: 23 }, { state: 19, agent: 24 }, { state: 20, agent: 24 }, { state: 20, agent: 25 }]) test(`keeps unchanged state ${schemas.state} and agent ${schemas.agent} on ordinary activation`, () => {
-  const result = classifyMigration(schemas, schemas);
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "none");
-});
-
-for (const [name, from, to] of [
-  ["state downgrade", { state: 17, agent: 19 }, { state: 16, agent: 19 }],
-  ["unqualified state jump", { state: 16, agent: 19 }, { state: 18, agent: 19 }],
-  ["unqualified agent change", { state: 16, agent: 19 }, { state: 17, agent: 20 }],
-  ["agent downgrade", { state: 17, agent: 20 }, { state: 17, agent: 19 }],
-  ["unqualified agent jump", { state: 17, agent: 19 }, { state: 17, agent: 21 }],
-  ["agent 21 downgrade", { state: 17, agent: 21 }, { state: 17, agent: 20 }],
-  ["agent 21 with a simultaneous state change", { state: 17, agent: 20 }, { state: 18, agent: 21 }],
-  ["agent 21 from an unqualified shared schema", { state: 16, agent: 20 }, { state: 16, agent: 21 }],
-  ["agent 22 downgrade", { state: 17, agent: 22 }, { state: 17, agent: 21 }],
-  ["agent 22 with a simultaneous state change", { state: 17, agent: 21 }, { state: 18, agent: 22 }],
-  ["agent 22 from an unqualified shared schema", { state: 16, agent: 21 }, { state: 16, agent: 22 }],
-  ["unqualified agent 20-to-22 jump", { state: 17, agent: 20 }, { state: 17, agent: 22 }],
-  ["agent 23 downgrade", { state: 17, agent: 23 }, { state: 17, agent: 22 }],
-  ["agent 23 simultaneous state change", { state: 17, agent: 22 }, { state: 18, agent: 23 }],
-  ["agent 23 unqualified shared schema", { state: 16, agent: 22 }, { state: 16, agent: 23 }],
-  ["unqualified agent 21-to-23 jump", { state: 17, agent: 21 }, { state: 17, agent: 23 }],
-  ["agent 24 downgrade", { state: 19, agent: 24 }, { state: 19, agent: 23 }],
-  ["agent 24 simultaneous state change", { state: 18, agent: 23 }, { state: 19, agent: 24 }],
-  ["agent 24 skipped predecessor", { state: 19, agent: 22 }, { state: 19, agent: 24 }],
-  ["agent 25 unqualified state 19", { state: 19, agent: 24 }, { state: 19, agent: 25 }],
-  ["agent 24 unqualified state 17", { state: 17, agent: 23 }, { state: 17, agent: 24 }],
-  ["agent 25 downgrade", { state: 20, agent: 25 }, { state: 20, agent: 24 }],
-  ["agent 25 simultaneous state change", { state: 19, agent: 24 }, { state: 20, agent: 25 }],
-  ["agent 25 skipped predecessor", { state: 20, agent: 23 }, { state: 20, agent: 25 }],
-  ["agent 25 future target", { state: 20, agent: 24 }, { state: 20, agent: 26 }],
-  ["agent 25 future edge", { state: 20, agent: 25 }, { state: 20, agent: 26 }],
-  ["agent 25 unqualified state 21", { state: 21, agent: 24 }, { state: 21, agent: 25 }],
-  ["state 18 with agent 22", { state: 17, agent: 22 }, { state: 18, agent: 22 }],
-  ["state 18 with future agent", { state: 17, agent: 24 }, { state: 18, agent: 24 }],
-  ["state 18 skipped predecessor", { state: 16, agent: 23 }, { state: 18, agent: 23 }],
-  ["state 18 downgrade", { state: 18, agent: 23 }, { state: 17, agent: 23 }],
-  ["state 19 with agent 22", { state: 18, agent: 22 }, { state: 19, agent: 22 }],
-  ["state 19 with future agent", { state: 18, agent: 24 }, { state: 19, agent: 24 }],
-  ["state 19 with a simultaneous agent change", { state: 18, agent: 22 }, { state: 19, agent: 23 }],
-  ["state 19 skipped predecessor", { state: 17, agent: 23 }, { state: 19, agent: 23 }],
-  ["state 19 downgrade", { state: 19, agent: 23 }, { state: 18, agent: 23 }],
-  ["state 19 future edge", { state: 19, agent: 23 }, { state: 20, agent: 23 }],
-]) {
-  test(`refuses ${name} before migration activation`, () => {
-    const result = classifyMigration(from, to);
-    assert.equal(result.error, undefined);
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /unsupported shared or agent schema crossing/);
-    assert.equal(result.stdout, "");
-  });
-}
-
-for (const [label, from, to, stagePrefix, wrongStage] of [
-  ["state 17", { state: 16, agent: 19 }, { state: 17, agent: 19 }, "state16-17-", "state15-16-"],
-  ["agent 20", { state: 17, agent: 19 }, { state: 17, agent: 20 }, "agent19-20-", "agent18-19-"],
-  ["agent 21", { state: 17, agent: 20 }, { state: 17, agent: 21 }, "agent20-21-", "agent19-20-"],
-  ["agent 22", { state: 17, agent: 21 }, { state: 17, agent: 22 }, "agent21-22-", "agent20-21-"],
-  ["agent 23", { state: 17, agent: 22 }, { state: 17, agent: 23 }, "agent22-23-", "agent21-22-"],
-  ["agent 24", { state: 19, agent: 23 }, { state: 19, agent: 24 }, "agent23-24-", "agent22-23-"],
-  ["agent 25", { state: 20, agent: 24 }, { state: 20, agent: 25 }, "agent24-25-", "agent23-24-"],
-  ["state 18", { state: 17, agent: 23 }, { state: 18, agent: 23 }, "state17-18-", "state16-17-"],
-  ["state 19", { state: 18, agent: 23 }, { state: 19, agent: 23 }, "state18-19-", "state17-18-"],
-]) test(`binds the ${label} journal and refuses unverified start or ordinary recovery`, (t) => {
-  const fixture = makeReleaseFixture(t);
-  const candidateSha = "b".repeat(40);
-  const candidate = fixture.addRelease(candidateSha);
-  const proof = (args, input) => spawnSync(process.execPath,
-    ["--no-warnings", fileURLToPath(library), ...args], {
-      encoding: "utf8", env: fixture.env, cwd: fixture.root, input, timeout: 10_000,
-    });
-  const succeeds = (result) => {
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim();
-  };
-  const jsonProof = (args, input) => JSON.parse(succeeds(proof(args, input)));
-  const releases = [];
-  for (const [directory, sha, schemas] of [
-    [fixture.initial, fixture.sha, from], [candidate, candidateSha, to],
-  ]) {
-    chmodSync(directory, 0o755);
-    const packagePath = join(directory, "package.json");
-    const manifest = JSON.parse(readFileSync(packagePath, "utf8"));
-    manifest.openclaw.schemaVersions = schemas;
-    chmodSync(packagePath, 0o644);
-    writeFileSync(packagePath, JSON.stringify(manifest));
-    succeeds(proof(["manifest", directory, sha, String(process.getuid()), sha]));
-    succeeds(proof(["seal-tree", directory]));
-    releases.push(jsonProof(["validate-release", directory, sha, String(process.getuid()), "sealed"]));
-  }
-  const record = {
-    version: 1,
-    topology: "system",
-    predecessor: releases[0],
-    candidate: releases[1],
-    process: { pid: 111, generation: "1110", instance: "fixture-instance-111" },
-    services: {
-      system: { unitFileState: "enabled", activeState: "active" },
-      user: { unitFileState: "disabled", activeState: "inactive" },
-    },
-    suspension: null,
-    protectedPaths: jsonProof(["fingerprint", fixture.configPath, fixture.databasePath]),
-    pointerTopology: {
-      current: { present: true, sha: fixture.sha },
-      previous: { present: false, sha: null },
-    },
-  };
-  const evidence = jsonProof(["migration-create", fixture.serving, "@stdin"], JSON.stringify(record));
-  assert.ok(evidence.record.agentMigration.stage.startsWith(stagePrefix));
-  assert.equal(evidence.record.agentMigration.phase, "rehearsal");
-  const original = readFileSync(fixture.journal);
-  unlinkSync(fixture.permit);
-  for (const [args, message] of [
-    [["migration-permit-publish", fixture.journal, fixture.serving, JSON.stringify(evidence),
-      fixture.env.OPENCLAW_TEAM_PROC_ROOT], /Gateway permit requires durable verified stores/],
-    [["migration-finish", fixture.journal, fixture.serving, JSON.stringify(evidence)],
-      /migration retirement requires verified stores/],
-    [["recovery-snapshot", fixture.journal, fixture.serving, JSON.stringify(record), "selected"],
-      /migration requires its bound migration helpers/],
-  ]) {
-    const result = proof(args);
-    assert.ifError(result.error);
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, message);
-    assert.equal(existsSync(fixture.permit), false);
-    assert.deepEqual(readFileSync(fixture.journal), original);
-  }
-  const changed = JSON.parse(original);
-  changed.agentMigration.stage = changed.agentMigration.stage.replace(stagePrefix, wrongStage);
-  writeFileSync(fixture.journal, JSON.stringify(changed));
-  const mismatched = proof(["migration-load", fixture.journal, fixture.serving]);
-  assert.equal(mismatched.status, 2);
-  assert.match(mismatched.stderr, /agent migration phase, release edge, or system topology is invalid/);
+  receipt.status = "restored"; save();
+  assert.notEqual(permit("publish").status, 0, "candidate cannot start on restored predecessor stores");
+  select(f.initial);
+  f.ok(permit("publish"));
+  assert.equal(existsSync(f.permit), true);
 });

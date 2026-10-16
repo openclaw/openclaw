@@ -11,6 +11,7 @@ import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import {
   findPendingApproval,
   formatApprovalConfirmation,
+  requiresResendAfterApproval,
   formatApprovalRequest,
   formatBlockedList,
   formatPendingList,
@@ -162,6 +163,8 @@ export function createTlonApprovalRuntime(params: {
       (item) =>
         item.type === approval.type &&
         item.requestingShip === approval.requestingShip &&
+        // A group DM claim must never merge into (or overwrite) a verified 1:1 request.
+        item.clubId === approval.clubId &&
         (approval.type !== "channel" || item.channelNest === approval.channelNest) &&
         (approval.type !== "group" || item.groupFlag === approval.groupFlag),
     );
@@ -170,6 +173,12 @@ export function createTlonApprovalRuntime(params: {
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
+        // The stored message now comes from this request, so its provenance must follow it.
+        if (approval.verifiedDirect === true) {
+          existing.verifiedDirect = true;
+        } else {
+          delete existing.verifiedDirect;
+        }
       }
       runtime.log?.(
         `[tlon] Updated existing approval for ${approval.requestingShip} (${approval.type}) - re-sending notification`,
@@ -221,7 +230,11 @@ export function createTlonApprovalRuntime(params: {
       switch (approval.type) {
         case "dm":
           await addToDmAllowlist(approval.requestingShip);
-          if (approval.originalMessage) {
+          if (requiresResendAfterApproval(approval)) {
+            runtime.log?.(
+              `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown; owner told to request a resend`,
+            );
+          } else if (approval.originalMessage) {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );

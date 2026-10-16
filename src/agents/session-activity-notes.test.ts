@@ -38,14 +38,14 @@ describe("session activity assistant buffering", () => {
   });
 
   it.each(["NO_REPLY"])(
-    "does not record the internal acknowledgement %s as assistant activity",
+    "records prepared literal text %s as assistant activity",
     (acknowledgement) => {
       const state = createSessionActivityNoteState();
       noteSessionActivityEvent(state, assistantEvent(1_000, acknowledgement, acknowledgement));
 
       flushSessionActivityAssistantNote(state);
 
-      expect(state.notes).toEqual([]);
+      expect(state.notes.at(-1)?.text).toBe(`Assistant: ${acknowledgement}`);
     },
   );
 

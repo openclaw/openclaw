@@ -61,7 +61,7 @@ it.each([false, true])(
         authorizationOwner === "harness" ? "self" : "openclaw",
     });
     expect(
-      resolveIsolatedCompletionRuntime({
+      await resolveIsolatedCompletionRuntime({
         ...isolatedRequest(),
         preparedAuth: {
           snapshot,

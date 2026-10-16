@@ -35,7 +35,10 @@ vi.mock("./abort-cutoff.js", () => ({
 
 vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  prepareSessionRunTargetAbort: () => () => abortSessionRunTargetWithOutcomeMock(),
+  prepareSessionRunTargetAbort: () =>
+    Object.assign(() => ({ ...abortSessionRunTargetWithOutcomeMock(), retirement: undefined }), {
+      requestRunIds: new Set<string>(),
+    }),
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
 }));
 

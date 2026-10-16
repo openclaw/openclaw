@@ -91,22 +91,39 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     }
   });
 
-  it.each([220, 280])("creates private paths with a %i-character parent", (parentLength) => {
-    const root = tempDirs.make("openclaw-sqlite-private-long-");
-    const parent = path.join(root, "p".repeat(parentLength - root.length - 1));
-    fsSync.mkdirSync(parent, { recursive: true });
-    const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
-    expect(fsSync.statSync(directory).isDirectory()).toBe(true);
-    const filename = path.join(parent, "private.sqlite");
-    expect(filename.length).toBe(parentLength + 15);
+  it("publishes a short private file that can be reopened normally", () => {
+    const root = tempDirs.make("openclaw-private-short-");
+    const filename = path.join(root, "private.sqlite");
     const file = createPrivateWindowsFile(filename);
     try {
-      fsSync.writeSync(file.fd, "long");
+      fsSync.writeSync(file.fd, "short");
     } finally {
       file.close();
     }
-    expect(fsSync.readFileSync(filename, "utf8")).toBe("long");
+    expect(fsSync.readFileSync(filename, "utf8")).toBe("short");
+    expect(fsSync.statSync(filename).nlink).toBe(1);
+    expect(fsSync.readdirSync(root)).toEqual(["private.sqlite"]);
   });
+
+  it.each([201, 202, 220, 280])(
+    "creates private paths with a %i-character parent",
+    (parentLength) => {
+      const root = tempDirs.make("openclaw-sqlite-private-long-");
+      const parent = path.join(root, "p".repeat(parentLength - root.length - 1));
+      fsSync.mkdirSync(parent, { recursive: true });
+      const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
+      expect(fsSync.statSync(directory).isDirectory()).toBe(true);
+      const filename = path.join(parent, "private.sqlite");
+      expect(filename.length).toBe(parentLength + 15);
+      const file = createPrivateWindowsFile(filename);
+      try {
+        fsSync.writeSync(file.fd, "long");
+      } finally {
+        file.close();
+      }
+      expect(fsSync.readFileSync(filename, "utf8")).toBe("long");
+    },
+  );
 
   it("protects a new file before its published-name descriptor opens and preserves an existing winner", () => {
     const directory = tempDirs.make("openclaw-private-file-");
@@ -167,7 +184,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     const open = fsSync.openSync;
     let replaced = false;
     vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
-      if (!replaced && String(pathname) === path.toNamespacedPath(file)) {
+      if (!replaced && path.resolve(String(pathname)) === path.resolve(file)) {
         replaced = true;
         fsSync.renameSync(file, retained);
         fsSync.writeFileSync(file, "successor");

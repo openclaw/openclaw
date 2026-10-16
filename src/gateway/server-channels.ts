@@ -538,6 +538,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
+        const setRestartState = (restartPending: boolean, reconnectAttempts = 0) =>
+          setRuntime(channelId, id, { restartPending, reconnectAttempts });
         const explicitlyDisabled = isChannelAccountExplicitlyDisabled({
           cfg,
           channel: channelId,
@@ -580,7 +582,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.lifetimes.get(id)?.capabilityLease.revoke();
             store.lifetimes.delete(id);
             store.tasks.delete(id);
-            setRuntime(channelId, id, { restartPending: false, reconnectAttempts: 0 });
+            setRestartState(false);
           }
           const existingStart = store.starting.get(id);
           if (!existingStart) {
@@ -834,6 +836,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (startCancelled()) {
                 return;
               }
+              log.info(
+                `[${id}] starting account (reason: ${optsValue.reason ?? (optsValue.manual ? "manual" : "requested")})`,
+              );
               const runStartAccount = async () => {
                 const startedAt = Date.now();
                 try {
@@ -928,32 +933,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 // Leaving recovery state behind would restart a channel that needs user action.
                 clearRecoveryState(rKey);
                 restarts.delete(rKey);
-                setRuntime(channelId, id, {
-                  restartPending: false,
-                  reconnectAttempts: 0,
-                });
+                setRestartState(false);
                 log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
                 return;
               }
               if (recoveryStopTimedOut.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {
-                  setRuntime(channelId, id, {
-                    restartPending: false,
-                    reconnectAttempts: 0,
-                  });
+                  setRestartState(false);
                   releaseTask();
                   return;
                 }
                 restarts.delete(rKey);
                 log.info?.(`[${id}] restarting after timed-out channel stop completed`);
-                setRuntime(channelId, id, {
-                  restartPending: true,
-                  reconnectAttempts: 0,
-                });
+                setRestartState(true);
                 releaseTask();
                 try {
                   await startChannelInternal(channelId, id, {
+                    reason: "stop-recovery",
                     preserveManualStop: true,
                   });
                 } catch {
@@ -974,20 +971,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               restarts.set(rKey, restart);
               const retry = restart.next(abort.signal);
               if (!retry) {
-                setRuntime(channelId, id, {
-                  restartPending: false,
-                  reconnectAttempts: restart.attempts,
-                });
+                setRestartState(false, restart.attempts);
                 log.error?.(`[${id}] giving up after ${MAX_RESTARTS} restart attempts`);
                 return;
               }
               log.info?.(
                 `[${id}] auto-restart attempt ${restart.attempts}/${MAX_RESTARTS} in ${Math.round(retry.delayMs / 1000)}s`,
               );
-              setRuntime(channelId, id, {
-                restartPending: true,
-                reconnectAttempts: restart.attempts,
-              });
+              setRestartState(true, restart.attempts);
               pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
@@ -996,6 +987,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 releaseTask();
                 await startChannelInternal(channelId, id, {
+                  reason: "auto-restart",
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
@@ -1134,25 +1126,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const runStopAttempt = async (): Promise<ChannelAccountStopOutcome> => {
           const lifetime = store.lifetimes.get(id);
           const abort = lifetime?.abort;
+          const retainedCleanup = store.stops.get(id)?.cleanup;
+          const explicitlyDisabled = isChannelAccountExplicitlyDisabled({
+            cfg,
+            channel: channelId,
+            accountId: id,
+          });
           const canHandoff =
             optsLocal.routeHandoff &&
             configuredAccountIds.includes(id) &&
-            !isChannelAccountExplicitlyDisabled({ cfg, channel: channelId, accountId: id }) &&
+            !explicitlyDisabled &&
             !manuallyStopped.has(rKey);
           if (!canHandoff) {
             releaseRouteHandoff(store, id);
           }
           const task = store.tasks.get(id);
-          // Idle accounts have no captured teardown; managed getters need cleanup admission.
+          // Disabled idle accounts need no credentials; admitted lifetimes retain their teardown.
           const fallbackStop =
-            !lifetime && plugin
+            !lifetime && !explicitlyDisabled && plugin
               ? runPluginCleanup(plugin, () => {
                   const gateway = plugin.gateway;
                   const stopAccount = gateway?.stopAccount;
                   return gateway && stopAccount ? { gateway, stopAccount } : undefined;
                 })
               : undefined;
-          if (!abort && !task && !lifetime?.teardown && !fallbackStop) {
+          if (!abort && !task && !lifetime?.teardown && !fallbackStop && !retainedCleanup) {
             stopState.settled = true;
             return { status: "fulfilled" };
           }
@@ -1174,7 +1172,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // Running and failed-stop accounts belong to their admitted plugin and config,
           // even after publication removes the account or replaces its registration.
           const teardown = lifetime?.teardown;
-          if (teardown || (fallbackStop && plugin)) {
+          if (teardown || (fallbackStop && plugin) || retainedCleanup) {
             // Teardown can outlive the start task. Its own lease permits route and status
             // writes only until this stop attempt completes or times out.
             const stopLease = createPluginRuntimeCapabilityLease("channel account stop");
@@ -1183,7 +1181,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               // stop-driven flow (health monitor sweeps, thaw recovery, reload).
               // Ordinary recovery retains the timed-out owner; explicit handoff
               // retires its slots after revoking OpenClaw runtime authority.
-              const retainedCleanup = store.stops.get(id)?.cleanup;
               let stopAccountStarted = retainedCleanup !== undefined;
               const stopAccountAttempt =
                 retainedCleanup ??
@@ -1367,6 +1364,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             try {
               await measureStartup(`channels.${plugin.id}.start`, () =>
                 startChannelInternal(plugin.id, undefined, {
+                  reason: "startup",
                   ...startOptions,
                   ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
                 }),
@@ -1393,7 +1391,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     signal: opts.scheduler.signal,
     isClosing: opts.isClosing,
     // Resuming deferred autostart preserves explicit operator stops.
-    startChannels: () => startChannelsWithOptions({ preserveManualStop: true }),
+    startChannels: () =>
+      startChannelsWithOptions({ reason: "autostart-recovery", preserveManualStop: true }),
   });
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

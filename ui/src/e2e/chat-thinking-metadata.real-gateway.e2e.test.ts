@@ -248,8 +248,18 @@ suite.define(() => {
           }
         },
       );
+    } catch (error) {
+      observations.gatewayPatchErrors = instance
+        .logs()
+        .split("\n")
+        .filter((line) => line.includes(`sessions.patch: target failed for ${key}:`));
+      throw error;
     } finally {
-      const serialized = JSON.stringify({ commands, frames, observations }, null, 2)
+      const serialized = JSON.stringify(
+        { commands, frames, observations, gatewayLog: instance.logs() },
+        null,
+        2,
+      )
         .replaceAll(instance.gatewayToken, "[synthetic token]")
         .replaceAll(instance.hookToken, "[synthetic token]")
         .replaceAll(instance.homeDir, "[fixture home]")

@@ -12,8 +12,9 @@ import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mount(request: Parameters<typeof createTestGatewayClient>[0]) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
@@ -128,6 +129,8 @@ it.each([
       expect(sidebar.sessionData.sessionsLoading).toBe(false);
       expect(keys()).toEqual(initialRows.map((row) => row.key));
     });
+    // Finish the initial filter request before opening the held successor read.
+    await sidebar.sessionData.refreshSidebarSessions();
 
     hold = true;
     refresh = sidebar.sessionData.refreshSidebarSessions();
@@ -224,7 +227,7 @@ it.each([
       ]);
       query.resolve(filtered);
       await refresh;
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(keys()).toEqual([parentKey, key]);
       expect(text()).toContain(newer ? "Newer query child" : "Current child");
       expect(sidebar.querySelector(`[data-session-key="${otherKey}"]`)).toBeNull();
@@ -234,7 +237,7 @@ it.each([
     hold = false;
     query.resolve(filtered);
     await refresh;
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(selected()?.textContent).toContain("Current child");
 
     await waitForFast(() => expect(childReads).toBe(1));
@@ -250,7 +253,7 @@ it.each([
       },
     ]);
     await sidebar.sessionData.refreshSidebarSessions();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(selected()?.textContent).toContain("Latest filtered child");
     if (mode === "deletion") {
       harness.publishEvent("sessions.changed", {
@@ -259,7 +262,7 @@ it.each([
         agentId: "main",
         reason: "delete",
       });
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(selected()).toBeNull();
     }
     const before = sessions.state.result;
@@ -271,7 +274,7 @@ it.each([
       expect(sidebar.sessionData.loadingChildSessionKeys.has(parentKey)).toBe(false),
     );
 
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     if (metadata) {
       const current = canonical();
       const expected = presentation("Latest filtered child");
@@ -310,7 +313,7 @@ it.each([
 
     filtered = result([parent]);
     await sidebar.sessionData.refreshSidebarSessions();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(keys()).toEqual([parentKey]);
     expect(text()).toContain("Latest filtered child");
     expect(sidebar.findSidebarSessionByKey(key)).toMatchObject({
@@ -427,7 +430,7 @@ it("retains an untimed selected descriptor after cached ancestry completes", asy
     expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([parentKey]);
     rootRead.resolve({ session: ancestor });
     await lineage;
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect
       .soft(sessions.state.result?.sessions.find((row) => row.key === key)?.label)
       .toBe(current.label);
@@ -440,6 +443,6 @@ it("retains an untimed selected descriptor after cached ancestry completes", asy
     rootRead.resolve({ session: ancestor });
     childRead.resolve(result([current]));
     await Promise.all([lineage, children]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
   }
 });

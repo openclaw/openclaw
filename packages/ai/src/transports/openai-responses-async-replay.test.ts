@@ -31,6 +31,97 @@ const model: Model = {
 it.each([
   ["provider", convertProviderResponsesMessages],
   ["transport", convertResponsesMessages],
+] as const)("%s preserves tool-result caption positions and text bytes", (_name, convert) => {
+  const image = (data: string) => ({ type: "image" as const, mimeType: "image/png", data });
+  const text = (value: string) => ({ type: "text" as const, text: value });
+  const wireImage = (data: string) => ({
+    type: "input_image",
+    detail: "auto",
+    image_url: `data:image/png;base64,${data}`,
+  });
+  const wireText = (value: string) => ({ type: "input_text", text: value });
+  const cases: { content: ToolResultMessage["content"]; output: unknown }[] = [
+    {
+      content: [
+        text("Before:"),
+        image("aW1n"),
+        image("aW1nMg=="),
+        text("After:"),
+        image("aW1nMw=="),
+      ],
+      output: [
+        wireText("Before:"),
+        wireImage("aW1n"),
+        wireImage("aW1nMg=="),
+        wireText("\nAfter:"),
+        wireImage("aW1nMw=="),
+      ],
+    },
+    {
+      content: [
+        text("Before:"),
+        image("aW1n"),
+        text("After:"),
+        image("aW1nMg=="),
+        image("aW1nMw=="),
+      ],
+      output: [
+        wireText("Before:"),
+        wireImage("aW1n"),
+        wireText("\nAfter:"),
+        wireImage("aW1nMg=="),
+        wireImage("aW1nMw=="),
+      ],
+    },
+    {
+      content: [text("Captured screen"), image("aW1n")],
+      output: [wireText("Captured screen"), wireImage("aW1n")],
+    },
+    { content: [image("aW1n"), text("Caption")], output: [wireImage("aW1n"), wireText("Caption")] },
+    {
+      content: [
+        text("Before:"),
+        text("First screen"),
+        image("aW1n"),
+        text("After:"),
+        text("Second screen"),
+      ],
+      output: [
+        wireText("Before:\nFirst screen"),
+        wireImage("aW1n"),
+        wireText("\nAfter:\nSecond screen"),
+      ],
+    },
+    { content: [image("aW1n")], output: [wireImage("aW1n")] },
+    {
+      content: [image("aW1n"), image("aW1nMg==")],
+      output: [wireImage("aW1n"), wireImage("aW1nMg==")],
+    },
+    { content: [text("  first\n"), text(""), text("second  ")], output: "  first\n\nsecond  " },
+  ];
+  const imageModel: Model = { ...model, input: ["text", "image"] };
+  for (const { content, output } of cases) {
+    const result: ToolResultMessage = {
+      ...makeTextToolResult("call_compare|fc_compare", "compare", "", false, 2),
+      content,
+    };
+    const assistant: AssistantMessage = {
+      ...createOpenAIResponsesAssistantOutput(imageModel),
+      content: [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
+      stopReason: "toolUse",
+    };
+    const replay = convert(imageModel, { messages: [assistant, result] }, new Set(["openai"]));
+    expect(replay.find((item) => item.type === "function_call_output")).toEqual({
+      type: "function_call_output",
+      call_id: "call_compare",
+      output,
+    });
+  }
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
 ] as const)(
   "%s keeps retained runtime carriers with their own users when steering is appended",
   (_name, convert) => {

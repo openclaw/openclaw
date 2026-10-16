@@ -1,12 +1,19 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
@@ -26,7 +33,6 @@ import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-p
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
@@ -52,6 +58,7 @@ vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => 
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.restoreAllMocks();
   steeringMocks.lease.mockReset().mockResolvedValue(undefined);
 });
@@ -59,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   announceTesting.setDepsForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 async function assembleWithCapturedHookCtx(
@@ -75,8 +83,20 @@ async function assembleWithCapturedHookCtx(
     requiresToolAuthority?: true;
   } = {},
 ) {
-  const { session, sessionManager, modelRegistry } = await createTestSession();
-  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
+  const config = attemptOverrides?.config ?? {};
+  setRuntimeConfigSnapshot(config);
+  const { session, sessionManager, modelRegistry } = await createTestSession({
+    customTools: [
+      {
+        name: "read",
+        label: "Read",
+        description: "Read a fixture file",
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
+      },
+    ],
+  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
@@ -86,7 +106,7 @@ async function assembleWithCapturedHookCtx(
     authStorage: modelRegistry.authStorage,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry,
-    config: {},
+    config,
     model: testModel,
     modelId: testModel.id,
     provider: testModel.provider,
@@ -136,6 +156,7 @@ async function assembleWithCapturedHookCtx(
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
     runAbortSignal: new AbortController().signal,
+    hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -147,6 +168,7 @@ async function assembleWithCapturedHookCtx(
 
 describe("prompt-build hook context input provenance", () => {
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
     const applyPolicy = vi.fn((names: string[] | undefined) => {
       order.push("policy");
@@ -172,6 +194,7 @@ describe("prompt-build hook context input provenance", () => {
       },
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
@@ -219,12 +242,14 @@ describe("prompt-build hook context input provenance", () => {
 });
 
 it("injects complete lifecycle results into requester prompts and acknowledges one whole item", async () => {
+  setRuntimeConfigSnapshot({});
   const requesterSessionKey = "agent:main:steering-requester";
   const answers = [`${"<result>".repeat(2_100)}required first tail`, "later child result"];
   const children: SubagentRunRecord[] = answers.map((_answer, index) =>
     createSubagentRunRecord({
       runId: `child-run-${index}`,
       childSessionKey: `agent:main:subagent:steering-${index}`,
+      childSessionIdentity: { sessionId: `child-session-${index}` },
       requesterSessionKey,
       requesterDisplayKey: "main",
       task: "Return the complete findings",
@@ -294,7 +319,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       triggerCleanup: false,
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: answer }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: answer }).terminalReply,
     });
     await mutateSubagentRuns(
       [child.runId],
@@ -319,7 +344,11 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   if (!first || !second) {
     throw new Error("expected two completed children for requester queue delivery");
   }
-  expect(runs.get(first.runId)?.completion?.resultText).toHaveLength(4_096);
+  const boundedReply = runs.get(first.runId)?.completion?.terminalReply;
+  if (boundedReply?.disposition !== "visible") {
+    throw new Error("expected visible terminal evidence");
+  }
+  expect(boundedReply.text).toHaveLength(4_096);
   const storedCompletion = structuredClone(runs.get(first.runId)?.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {

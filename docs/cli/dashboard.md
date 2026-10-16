@@ -51,7 +51,8 @@ The response includes the backward-compatible shared-auth `url`, plus `browserUr
 `browserBootstrapExpiresAtMs`, `httpUrl`, `wsUrl`, `port`, and `tokenIncluded`. Browser integrations
 should open `browserUrl`; native RPC clients that need the shared Gateway credential can continue to
 use `url`. If the Gateway is not ready or a browser handoff cannot be issued, the command returns
-`{"ok":false,"reason":"..."}` and exits non-zero. SecretRef-managed shared tokens are never included
+`{"ok":false,"error":{"type":"cli_error","message":"..."},"reason":"..."}` and exits non-zero.
+The dashboard-specific `reason` remains beside the shared error envelope. SecretRef-managed shared tokens are never included
 in `url`.
 
 For terminal HTTP failures, an unreadable repair diagnostic leaves the observed HTTP status

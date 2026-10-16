@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
@@ -16,7 +16,7 @@ export function invalidUserModelAccounts(): Error {
 }
 
 export function readUserModelAccountRecord(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   name: UserModelAccountRecordName,
 ): string | undefined {
@@ -49,7 +49,7 @@ export function userModelAccountRecordValue(row: {
 
 /** Read only selected records through their current one-hop owners, preserving selection order. */
 export function readSelectedUserModelAccountRecords(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds: readonly string[],
 ) {
   const selected = [...new Set(profileIds)].flatMap((id) => {

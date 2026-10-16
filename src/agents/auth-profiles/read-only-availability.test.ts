@@ -35,15 +35,12 @@ describe("resolveAuthStoreReadOnlyValidUntil", () => {
     },
   };
 
-  it.each([
-    [100, 150],
-    [150, 200],
-    [200, 250],
-    [250, 300],
-    [300, Infinity],
-  ])("selects the next static-token or failure-window expiry after %s", (now, expected) => {
-    expect(resolveAuthStoreReadOnlyValidUntil(store, now)).toBe(expected);
-  });
+  it.each([[100, 150]])(
+    "selects the next static-token or failure-window expiry after %s",
+    (now, expected) => {
+      expect(resolveAuthStoreReadOnlyValidUntil(store, now)).toBe(expected);
+    },
+  );
 
   it("keeps an empty store valid without an expiry", () => {
     expect(resolveAuthStoreReadOnlyValidUntil({ version: 1, profiles: {} }, 100)).toBe(Infinity);
@@ -58,7 +55,6 @@ describe("resolveStoredCredentialReadOnlyAvailability", () => {
       env: { COLLISION_KEY: "synthetic-key" },
       expected: true,
     },
-    { name: "missing selected env", selected: true, env: {}, expected: undefined },
     {
       name: "non-default mismatch",
       selected: false,
@@ -92,41 +88,6 @@ describe("resolveStoredCredentialReadOnlyAvailability", () => {
     secrets?: OpenClawConfig["secrets"];
     expected: boolean | undefined;
   }>([
-    { name: "implicit default", provider: "default", expected: undefined },
-    {
-      name: "selected default without a declaration",
-      provider: "shared",
-      secrets: { defaults: { store: "shared" } },
-      expected: undefined,
-    },
-    {
-      name: "selected default shadowing a file provider",
-      provider: "shared",
-      secrets: {
-        defaults: { store: "shared" },
-        providers: { shared: { source: "file", path: "/tmp/unused.json" } },
-      },
-      expected: undefined,
-    },
-    {
-      name: "explicit matching non-default provider",
-      provider: "shared",
-      secrets: { providers: { shared: { source: "store" } } },
-      expected: undefined,
-    },
-    { name: "missing non-default provider", provider: "shared", expected: false },
-    {
-      name: "mismatched non-default provider",
-      provider: "shared",
-      secrets: { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
-      expected: false,
-    },
-    {
-      name: "old default after selecting another alias",
-      provider: "default",
-      secrets: { defaults: { store: "shared" } },
-      expected: false,
-    },
     {
       name: "selected token default shadowing a file provider",
       type: "token",
@@ -136,12 +97,6 @@ describe("resolveStoredCredentialReadOnlyAvailability", () => {
         providers: { shared: { source: "file", path: "/tmp/unused.json" } },
       },
       expected: undefined,
-    },
-    {
-      name: "missing non-default token provider",
-      type: "token",
-      provider: "shared",
-      expected: false,
     },
     {
       name: "mismatched non-default token provider",

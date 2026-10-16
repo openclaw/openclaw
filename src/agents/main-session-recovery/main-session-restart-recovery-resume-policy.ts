@@ -4,19 +4,44 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
-  readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../run-termination.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
+
+export function requiresDelegatedRecoverySource(
+  entry: SessionEntry,
+  source: InputProvenance["kind"] | "completion" | "harness_completion" | undefined,
+): boolean {
+  // Steering is context, not a new admission. A non-browser operator can have
+  // internal ingress too; its durable source goes through the Gateway's exact
+  // claim and current-policy restoration before any recovery turn executes.
+  if (
+    entry.restartRecoveryDeliverySourceRunId &&
+    (entry.restartRecoveryOperatorSource ||
+      entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "channel")
+  ) {
+    return false;
+  }
+  return (
+    source === "inter_session" ||
+    (entry.restartRecoverySourceIngress === "internal" &&
+      (source === undefined || source === "internal_system" || source === "harness_completion"))
+  );
+}
 
 function readDeliveredTerminalSourceReplyToolCallId(
   messages: readonly unknown[],

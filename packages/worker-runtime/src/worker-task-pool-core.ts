@@ -12,7 +12,11 @@ import {
 } from "./worker-task-capacity.js";
 import { captureWorkerTaskContext } from "./worker-task-context.js";
 import { WorkerTaskError, workerTaskTimeoutError } from "./worker-task-error.js";
-import { serviceNativeWorkerPass, type WorkerTaskHost } from "./worker-task-host.js";
+import {
+  serviceNativeWorkerPass,
+  type WorkerTaskHost,
+  type WorkerRetirementReason,
+} from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import { createWorkerTaskPoolBootstrap } from "./worker-task-pool-bootstrap.js";
 import {
@@ -197,7 +201,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private enqueue(
     input: WorkerTaskInput<Input>,
     options: OwnedWorkerTaskOptions<Input>,
-    owned = false,
+    owned: boolean,
     inputBytes = options.inputBytes ?? 0,
   ): Task<Input, Output> {
     // A Promise executor would let the task's timer/abort closures retain input too.
@@ -285,6 +289,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       (slot) => this.ownedSettlement.retire(slot),
       key,
       this.ownerOptions,
+      this.host.observeResourceReply,
     );
   }
 
@@ -300,6 +305,7 @@ export class WorkerTaskPoolCore<Input, Output> {
 
   close(
     error: Error = new WorkerTaskError("worker task pool closed", "unavailable"),
+    reason: WorkerRetirementReason = "closed",
   ): Promise<void> {
     this.closedError ??= error;
     channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
@@ -309,7 +315,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     for (const slot of this.slots) {
       if (slot.worker) {
-        this.host.workerRetiring(slot.worker, "closed");
+        this.host.workerRetiring(slot.worker, reason);
       }
       if (slot.task && !slot.task.owner) {
         this.finish(slot.task, this.closedError, undefined, true);
@@ -322,7 +328,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     const owned = tasks.map((task) => joinOwnedWorkerTask(task, this.ownedSettlement, true));
     // A failed owned stop must be observed before that task permits its next retry.
     const unowned = [...this.slots].filter((slot) => !ownedSlots.has(slot));
-    const closures = [...owned, ...unowned.map((slot) => this.retirement.retire(slot))];
+    const closures = [...owned, ...unowned.map((slot) => this.retirement.retire(slot, reason))];
     return this.host.pools.close(this, closures, () =>
       joinWorkerTaskPreparationCleanups(this.completion, this.retirement.joinArtifacts()),
     );
@@ -437,7 +443,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       host: this.host,
       bootstrapError: this.bootstrap.error,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message) => new WorkerTaskError(message, "unavailable"),
+      unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;

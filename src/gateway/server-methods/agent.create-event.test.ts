@@ -5,6 +5,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -134,8 +136,8 @@ describe("agent handler session create events", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["immediate", "deferred workspace"] as const)(
-    "retains runtime custody and emits session creation with %s preparation",
+  it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
+    "settles runtime custody with %s preparation",
     async (preparation) => {
       const caseId = preparation.replaceAll(" ", "-");
       const sessionKey = `agent:main:subagent:create-test-${caseId}`;
@@ -144,8 +146,16 @@ describe("agent handler session create events", () => {
         preparation === "deferred workspace",
       );
       vi.spyOn(sessionProject, "prepareSessionWorkspaceForRun").mockResolvedValue(undefined);
+      if (preparation === "superseded catalog") {
+        vi.mocked(acquireAgentRunPreparedModelRuntime).mockRejectedValueOnce(
+          new PreparedModelRuntimePublicationSupersededError(
+            "Accepted model catalog changed during runtime preparation",
+          ),
+        );
+      }
       const broadcastToConnIds = vi.fn();
       const respond = vi.fn();
+      const chatAbortControllers = new Map();
       let execution: Promise<unknown> | undefined;
 
       await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
@@ -162,7 +172,7 @@ describe("agent handler session create events", () => {
             dedupe: new Map(),
             deps: {} as never,
             logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
-            chatAbortControllers: new Map(),
+            chatAbortControllers,
             addChatRun: vi.fn(),
             registerToolEventRecipient: vi.fn(),
             getRuntimeConfig: configMocks.getRuntimeConfig,
@@ -178,6 +188,21 @@ describe("agent handler session create events", () => {
       const responseCall = firstMockCall(respond) as
         | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
         | undefined;
+      if (preparation === "superseded catalog") {
+        expect(responseCall?.[0]).toBe(false);
+        expect(responseCall?.[2]).toMatchObject({
+          code: "UNAVAILABLE",
+          message: "Model runtime changed before this turn started. Retry the request.",
+          retryable: true,
+          retryAfterMs: 0,
+        });
+        expect(execution).toBeUndefined();
+        expect(agentIngressMocks.agentCommandFromIngress).not.toHaveBeenCalled();
+        expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
+        expect(preparedRuntimeMocks.releaseSelected).not.toHaveBeenCalled();
+        expect(chatAbortControllers.size).toBe(0);
+        return;
+      }
       expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
       expect(responseCall?.[1]?.status).toBe("accepted");
       expect(responseCall?.[1]?.runId).toBe(runId);

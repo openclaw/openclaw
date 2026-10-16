@@ -3,7 +3,9 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -14,7 +16,7 @@ import {
   consumeExpectedSessionWorkAdmission,
   type ExpectedExistingSessionConstraint,
 } from "../server-methods/agent-expected-session.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import {
   buildAbortedAgentPayload,
@@ -29,7 +31,6 @@ import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 export function createAgentAdmissionController(params: {
   assertAdmissionCurrent?: () => void;
   runId: string;
-  lifecycleGeneration: string;
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
@@ -40,6 +41,8 @@ export function createAgentAdmissionController(params: {
   getRequestedSessionKey: () => string | undefined;
   getResolvedSessionKey: () => string | undefined;
   getResolvedSessionId: () => string | undefined;
+  getSessionEntry: () => SessionEntry | undefined;
+  setSessionEntry: (entry: SessionEntry | undefined) => void;
   getResolvedSessionAgentId: () => string | undefined;
   getAgentId: () => string | undefined;
   getSessionPersisted: () => boolean;
@@ -51,7 +54,6 @@ export function createAgentAdmissionController(params: {
   let postAdmissionAbort: ReturnType<typeof readGatewayDedupeEntry>;
   let postAdmissionTimeout: ReturnType<typeof buildAbortedAgentPayload> | undefined;
   let postAdmissionSuperseded = false;
-  let lifecycleRotated = false;
 
   const admissionAgentId = () => {
     const resolvedSessionKey = params.getResolvedSessionKey();
@@ -114,31 +116,11 @@ export function createAgentAdmissionController(params: {
         return undefined;
       }
     }
-    if (params.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      if (commitOutcome) {
-        lifecycleRotated = params.dedupeLifecycle.abortForLifecycleRotation({
-          sessionKey: resolvedSessionKey,
-          agentId: admissionAgentId(),
-        });
-      }
-      return undefined;
-    }
     if (!resolvedSessionKey) {
       return undefined;
     }
-    const admissionAgent = admissionAgentId();
-    let latestEntry = loadSessionEntry(resolvedSessionKey, {
-      agentId: admissionAgent,
-      clone: false,
-      projection: "list",
-    }).entry;
-    if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
-      latestEntry = loadSessionEntry(requestedSessionKey, {
-        agentId: admissionAgent,
-        clone: false,
-        projection: "list",
-      }).entry;
-    }
+    // The work lease owns lifecycle interruption; committed request writes update this entry.
+    const latestEntry = params.getSessionEntry();
     assertExpectedExistingSession({
       constraint: params.expectedSession,
       entry: latestEntry,
@@ -191,6 +173,7 @@ export function createAgentAdmissionController(params: {
         runId: params.runId,
         stopReason,
       });
+      return { runId: params.runId };
     }
     return undefined;
   };
@@ -199,17 +182,36 @@ export function createAgentAdmissionController(params: {
     if (admission) {
       return;
     }
+    const isSettling = () => admittedRunAbort?.entry?.terminalOutcomeObserved === true;
+    const getAbortReason = () => admittedRunAbort?.controller.signal.reason;
+    const sessionKey = params.getResolvedSessionKey();
     admission =
       consumeExpectedSessionWorkAdmission({
         constraint: params.expectedSession,
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         onInterrupt: interrupt,
+        isSettling,
+        getAbortReason,
       }) ??
       (await beginSessionWorkAdmission({
+        agentId: params.getResolvedSessionAgentId() ?? params.getAgentId(),
         scope,
-        isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
+        run: {
+          runId: params.runId,
+          sessionKey: params.getResolvedSessionKey(),
+          sessionId: params.getResolvedSessionId(),
+          agentId: admissionAgentId(),
+        },
+        isSettling,
+        getAbortReason,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        storeWriterIdentities:
+          sessionKey &&
+          parseAgentSessionKey(sessionKey) &&
+          normalizeStoreSessionKey(sessionKey) === sessionKey
+            ? [sessionKey]
+            : undefined,
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {
           assertAllowed(false);
@@ -219,6 +221,18 @@ export function createAgentAdmissionController(params: {
         },
         onInterrupt: interrupt,
       }));
+    if (sessionKey) {
+      // A queued lifecycle mutation may finish before this lease is acquired.
+      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.context.getRuntimeConfig(),
+        key: sessionKey,
+        agentId: admissionAgentId(),
+        excludeInternalEffects: true,
+        assertActive: params.assertAdmissionCurrent,
+      });
+      params.setSessionEntry(loaded.entry);
+      assertAllowed();
+    }
   };
 
   const respondToOutcome = () => {
@@ -237,10 +251,6 @@ export function createAgentAdmissionController(params: {
       );
       return true;
     }
-    if (lifecycleRotated) {
-      admission?.release();
-      return true;
-    }
     return false;
   };
 
@@ -250,14 +260,14 @@ export function createAgentAdmissionController(params: {
     acquire,
     respondToOutcome,
     hasOutcome: () =>
-      Boolean(
-        postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded || lifecycleRotated,
-      ),
+      Boolean(postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded),
     getAdmission: () => admission,
     getAdmittedRunAbort: () => admittedRunAbort,
     setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => {
       admittedRunAbort = value;
     },
-    release: () => admission?.release(),
+    release: () => {
+      admission?.release();
+    },
   };
 }

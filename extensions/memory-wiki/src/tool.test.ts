@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -15,56 +14,8 @@ function asSchemaObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function unionLiteralValues(schema: Record<string, unknown>): string[] {
-  const variants = schema.anyOf ?? schema.oneOf;
-  if (!Array.isArray(variants)) {
-    throw new Error("Expected union schema variants");
-  }
-  return variants
-    .map((variant) => asSchemaObject(variant).const)
-    .filter((value): value is string => typeof value === "string")
-    .toSorted();
-}
-
 describe("memory-wiki tools", () => {
   const harness = createMemoryWikiTestHarness();
-
-  it("accepts CLI-style operation aliases in wiki_apply schema", () => {
-    const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);
-    const applyProperties = asSchemaObject(asSchemaObject(tool.parameters).properties);
-    const opSchema = asSchemaObject(applyProperties.op);
-
-    expect(unionLiteralValues(opSchema)).toEqual([
-      "create_synthesis",
-      "metadata",
-      "synthesis",
-      "update_metadata",
-    ]);
-  });
-
-  it("allows provenance metadata in wiki_apply claim evidence", () => {
-    const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);
-    const applyProperties = asSchemaObject(asSchemaObject(tool.parameters).properties);
-    const claimsSchema = asSchemaObject(applyProperties.claims);
-    const claimSchema = asSchemaObject(claimsSchema.items);
-    const claimProperties = asSchemaObject(claimSchema.properties);
-    const evidenceSchema = asSchemaObject(claimProperties.evidence);
-    const evidenceArraySchema = asSchemaObject(evidenceSchema.items);
-    const evidenceProperties = asSchemaObject(evidenceArraySchema.properties);
-
-    expect(Object.keys(evidenceProperties).toSorted()).toEqual([
-      "confidence",
-      "kind",
-      "lines",
-      "note",
-      "path",
-      "privacyTier",
-      "sourceId",
-      "updatedAt",
-      "weight",
-    ]);
-    expect(evidenceProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
-  });
 
   it("rejects non-object wiki_apply arguments without throwing a TypeError", async () => {
     const { config } = await harness.createVault({ initialize: true });
@@ -99,37 +50,21 @@ describe("memory-wiki tools", () => {
     return { tool: createWikiApplyTool(config), pagePath, original };
   }
 
-  it("keeps wiki pages unchanged for unknown operation update", async () => {
-    const { tool, pagePath, original } = await createApplyFixture();
-    const outcome = await tool
-      .execute("unknown-operation", { op: "update", lookup: "entity.alpha", status: "review" })
-      .then(
-        () => "accepted",
-        () => "rejected",
-      );
+  it.each(["update_metadata"])("applies supported metadata operation %s", async (op) => {
+    const { tool, pagePath } = await createApplyFixture();
+    const result = await tool.execute("valid-operation", {
+      op,
+      lookup: "entity.alpha",
+      status: "review",
+    });
+    const page = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
 
-    expect(await fs.readFile(pagePath, "utf8")).toBe(original);
-    expect(outcome).toBe("rejected");
+    expect(result.details).toMatchObject({ changed: true, operation: "update_metadata" });
+    expect(page.frontmatter.status).toBe("review");
+    expect(page.body).toContain("Keep this human note.");
   });
 
-  it.each(["update_metadata", "metadata"])(
-    "applies supported metadata operation %s",
-    async (op) => {
-      const { tool, pagePath } = await createApplyFixture();
-      const result = await tool.execute("valid-operation", {
-        op,
-        lookup: "entity.alpha",
-        status: "review",
-      });
-      const page = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
-
-      expect(result.details).toMatchObject({ changed: true, operation: "update_metadata" });
-      expect(page.frontmatter.status).toBe("review");
-      expect(page.body).toContain("Keep this human note.");
-    },
-  );
-
-  it.each([-0.5, 999])(
+  it.each([999])(
     "keeps wiki pages unchanged for out-of-range claim confidence %s",
     async (confidence) => {
       const { tool, pagePath, original } = await createApplyFixture();

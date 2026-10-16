@@ -157,7 +157,7 @@ it("restores cold Talk history through its existing owner before bounded hydrati
     await replaceSessionEntry(fixture.scope, { sessionId: fixture.scope.sessionId, updatedAt: 1 });
     expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
     const items = await readTalkRealtimeInitialItems(
-      { ...fixture.scope, canonicalKey: fixture.scope.sessionKey },
+      { ...fixture.scope, canonicalKey: fixture.scope.sessionKey, assertCurrent: vi.fn() },
       () => undefined,
     );
     expect(items).toEqual(expected);
@@ -198,13 +198,14 @@ it("rejects Talk history when its live authority is revoked during real hydratio
         };
       });
     let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Synthetic Talk authority revoked");
+      }
+    };
     const pending = readTalkRealtimeInitialItems(
-      { ...scope, canonicalKey: scope.sessionKey },
-      () => {
-        if (!current) {
-          throw new Error("Synthetic Talk authority revoked");
-        }
-      },
+      { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
+      assertCurrent,
     );
     const rejected = expect(pending).rejects.toThrow("Synthetic Talk authority revoked");
     try {

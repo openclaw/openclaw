@@ -77,13 +77,14 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
+import { readModelCatalogWarnings } from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
-import { isRich } from "./list.format.js";
+import { groupByProvider, isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
-import type { ProviderAuthOverview } from "./list.types.js";
+import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -92,11 +93,6 @@ import {
   formatMs,
   resolveModelsTargetAgent,
 } from "./shared.js";
-
-function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
-  return override ? resolveUserPath(override, env) : undefined;
-}
 
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
@@ -129,38 +125,6 @@ function resolveStatusProviderUseIncompatibility(usage: StatusProviderUse) {
   const routeResolution = usage.evaluation.routeResolution;
   return routeResolution?.kind === "incompatible" ? routeResolution : usage.runtimeIncompatibility;
 }
-
-function groupByProvider<T extends { provider: string }>(entries: readonly T[]): Map<string, T[]> {
-  const groups = new Map<string, T[]>();
-  for (const entry of entries) {
-    const group = groups.get(entry.provider) ?? [];
-    group.push(entry);
-    groups.set(entry.provider, group);
-  }
-  return groups;
-}
-
-type StatusRuntimeAuthStatus = "usable" | "missing" | "indeterminate";
-
-type StatusRuntimeAuthRouteBase = {
-  provider: string;
-  runtime: string;
-  authProvider: string;
-  effective: ProviderAuthOverview["effective"];
-};
-
-type StatusRuntimeAuthRoute =
-  | (StatusRuntimeAuthRouteBase & {
-      status: StatusRuntimeAuthStatus;
-    })
-  | (StatusRuntimeAuthRouteBase & {
-      status: "unavailable";
-      authStatus: StatusRuntimeAuthStatus;
-      runtimeStatus: "unavailable";
-      runtimeReason: Extract<AgentHarnessRuntimeAvailability, { status: "unavailable" }>["reason"];
-      runtimeDetail: string;
-      runtimePluginIds: string[];
-    });
 
 type StatusModelRouteIssue = {
   provider: string;
@@ -260,9 +224,14 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
+  for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
+    runtime.error(`${warning.message} ${warning.fixHint}`);
+  }
   const explicitAgentId = opts.agent?.trim();
+  const envAgentDir =
+    process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
   const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
-    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
@@ -349,12 +318,10 @@ export async function modelsStatusCommand(
       // resolved ref so a broken utility credential is inspectable here.
       const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
       const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
-      // resolveUtilityModelRefForAgent never falls back to the primary model: an
-      // unset setting yields the provider-declared default or undefined, so a
-      // non-null auto result really is a provider default (unlike the runtime's
-      // simple-completion selection, which does fall back to the primary).
+      const utilityFallbacks = utilitySetting.kind === "disabled" ? [] : utilitySetting.fallbacks;
       const utilityModelSource =
-        utilitySetting.kind === "explicit"
+        utilitySetting.kind === "explicit" ||
+        utilityFallbacks.some((ref) => ref.trim() === utilityModelRef)
           ? "config"
           : utilitySetting.kind === "disabled"
             ? "disabled"
@@ -427,7 +394,7 @@ export async function modelsStatusCommand(
         [[defaultLabel, ...fallbacks], "text", true],
         [[imageModel, ...imageFallbacks], "image", false],
         // Utility completions use their own text route without the primary's runtime fallback.
-        [[utilityModelRef], "text", false],
+        [[utilityModelRef, ...utilityFallbacks], "text", false],
         [configuredAllowRefs, undefined, false],
       ] as const) {
         for (const raw of refs) {
@@ -804,8 +771,6 @@ export async function modelsStatusCommand(
       const authProfileHealthById = new Map(
         authHealth.profiles.map((profile) => [profile.profileId, profile]),
       );
-      const resolveProviderAuthHealthId = (provider: string): string =>
-        resolveProviderIdForAuth(provider, envLookupParams);
       const resolveRuntimeAuthRouteEffective = (
         provider: string,
         evaluation?: ModelAuthAvailabilityEvaluation,
@@ -824,13 +789,16 @@ export async function modelsStatusCommand(
           };
         }
         const candidates = Array.from(
-          new Set([normalizeProviderId(provider), resolveProviderAuthHealthId(provider)]),
+          new Set([
+            normalizeProviderId(provider),
+            resolveProviderIdForAuth(provider, envLookupParams),
+          ]),
         );
         const profileId = evaluation.selectedProfileId;
         if (profileId) {
           const credentialProvider = store.profiles[profileId]?.provider ?? provider;
           const source = providerAuthMap.get(
-            resolveProviderAuthHealthId(credentialProvider),
+            resolveProviderIdForAuth(credentialProvider, envLookupParams),
           )?.effective;
           return source && source.kind !== "missing"
             ? source
@@ -1130,6 +1098,7 @@ export async function modelsStatusCommand(
           imageModel: imageModel || null,
           imageFallbacks,
           utilityModel: { ref: utilityModelDisplayRef, source: utilityModelSource },
+          utilityFallbacks,
           ...(agentId
             ? {
                 modelConfig: {
@@ -1227,6 +1196,7 @@ export async function modelsStatusCommand(
             : "-",
         utilityModelDisplayRef ? theme.success : theme.muted,
       );
+      logList("Utility fallbacks", utilityFallbacks, theme.warn);
       logField(
         "Image model",
         imageModel || "-",

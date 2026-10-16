@@ -1,11 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -32,22 +31,18 @@ export function PluginsHubHeader(props: PluginsHubHeaderProps) {
           </div>
         </div>
         <div class="hub-page-header__tabs">
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "plugins",
-                active: props.active,
-                tabs: [
-                  { value: "plugins", label: t("tabs.plugins") },
-                  { value: "skills", label: t("tabs.skills") },
-                  { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-                ],
-                ariaLabel: t("pluginsPage.hubTablistLabel"),
-                panelId: PLUGINS_HUB_PANEL_ID,
-                className: "plugins-tabs",
-                onSelect: props.onSelect,
-              })
-            }
+          <HubTabs
+            id="plugins"
+            active={props.active}
+            tabs={[
+              { value: "plugins", label: t("tabs.plugins") },
+              { value: "skills", label: t("tabs.skills") },
+              { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+            ]}
+            ariaLabel={t("pluginsPage.hubTablistLabel")}
+            panelId={PLUGINS_HUB_PANEL_ID}
+            class="plugins-tabs"
+            onSelect={props.onSelect}
           />
         </div>
         <div class="hub-page-header__actions">

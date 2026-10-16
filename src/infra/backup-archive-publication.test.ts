@@ -6,6 +6,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
@@ -50,6 +51,18 @@ async function prepareArchive(
 }
 
 describe("backup archive publication", () => {
+  it("retires its prepared archive when cancellation precedes publication", async () => {
+    const { outputDir, plan } = await createPublication("backup-cancel-publication-");
+    const prepared = await prepareArchive(plan);
+    await expect(
+      withCommandProcessScope(async (stop) => {
+        stop();
+        await publishPreparedBackupArchive({ plan, prepared });
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(fs.readdir(outputDir)).resolves.toEqual([]);
+  });
+
   it("publishes beneath a parent whose file ID exceeds Number's exact range", async () => {
     const outputDir = tempDirs.make("openclaw-backup-large-parent-id-");
     const outputPath = path.join(outputDir, "backup.tar.gz");

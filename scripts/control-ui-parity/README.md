@@ -46,7 +46,7 @@ and fixture randomness are fixed. No real Gateway or credentials are used.
 route ID and its redirects, loading/error fixtures, Workboard, Chat content,
 collapsed/expanded tool results, SVG/HTML previews, and session diffs,
 menus and submenus, a New Group modal, a long model list, selected/disabled
-controls, rich hovercards, and overflowing reader tabs. Twelve profiles cover
+controls, sidebar session menus and hovercards, rich hovercards, and overflowing reader tabs. Twelve profiles cover
 desktop/mobile, light/dark, RTL, enlarged text, forced colors, and reduced motion.
 This is a coverage matrix, not a full Cartesian product of accessibility settings.
 

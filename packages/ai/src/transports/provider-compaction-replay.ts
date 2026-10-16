@@ -16,6 +16,7 @@ import {
 export {
   isCompactionReplayCheckpoint,
   stripCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
 export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
@@ -150,6 +151,7 @@ function estimateResponsesContent(
 function estimateResponsesInput(
   input: readonly unknown[],
   estimate: ReplayPressureEstimator,
+  compactionOutputTokens?: number,
 ): number {
   return input.reduce<number>((tokens, entry) => {
     if (!isRecord(entry)) {
@@ -157,7 +159,11 @@ function estimateResponsesInput(
     }
     if (entry.type === "compaction" && typeof entry.encrypted_content === "string") {
       const { encrypted_content, ...metadata } = entry;
-      return tokens + estimate.text(encrypted_content) + estimate.json(metadata);
+      return (
+        tokens +
+        (compactionOutputTokens ?? estimate.text(encrypted_content)) +
+        estimate.json(metadata)
+      );
     }
     if (entry.type === "message") {
       const { content, ...metadata } = entry;
@@ -205,7 +211,7 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     checkpoint.family === "anthropic"
       ? estimate.text(checkpoint.summary)
       : checkpoint.mode === "complete-window"
-        ? estimateResponsesInput(checkpoint.output, estimate)
+        ? estimateResponsesInput(checkpoint.output, estimate, checkpoint.outputTokens)
         : estimate.text(checkpoint.item.encrypted_content);
   const measuredBoundary =
     checkpoint.family === "responses"
@@ -240,15 +246,6 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     ],
     prefixTokens,
   };
-}
-
-/** Strip prefix-bound checkpoint state from an in-place message rewrite. */
-export function stripCompactionReplayCheckpointInPlace(message: {
-  providerReplay?: unknown;
-}): void {
-  if (isCompactionReplayCheckpoint(message.providerReplay)) {
-    delete message.providerReplay;
-  }
 }
 
 /** Preserve the covered prefix and reindex checkpoints after known content removals. */

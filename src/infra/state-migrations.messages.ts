@@ -153,6 +153,8 @@ export class DoctorStateMigrationRefusalError extends Error {
           ? "Doctor stopped because an agent database ownership mismatch remains. Independent state repairs were run; repairs requiring the refused database were skipped. Resolve the reported ownership mismatch before retrying."
           : "Doctor stopped because a state migration refused to continue. Resolve the reported migration failure before retrying. Later repairs were not run.",
         ...failureFacts.map(formatUpdateFailureFact),
+        // Actionable commands must survive the persisted failure facts' length limit.
+        ...mergeNotices(refused).map((notice) => formatStartupMigrationDetails([notice])),
       ].join("\n"),
     );
     this.name = "DoctorStateMigrationRefusalError";

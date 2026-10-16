@@ -10,12 +10,6 @@ const CHAT_MEDIA_PLAYBACK_MAX_WAIT_MS = 120_000;
 
 type ChatMediaPlaybackReadiness = "ready" | "unavailable" | "aborted";
 
-function playbackAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException("playback preparation aborted", "AbortError");
-}
-
 export function appendChatMediaPlaybackParam(source: string): string {
   const trimmed = source.trim();
   if (!trimmed) {
@@ -64,7 +58,10 @@ async function fetchPlaybackHead(params: {
     {
       signal: params.signal,
       onAbort: (signal) => {
-        const error = playbackAbortError(signal);
+        const error =
+          signal.reason instanceof Error
+            ? signal.reason
+            : new DOMException("playback preparation aborted", "AbortError");
         controller.abort(error);
         throw error;
       },

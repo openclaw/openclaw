@@ -31,7 +31,7 @@ export function createMediaRequesterReadMock(
   return {
     withSessionEntryReadOnlyInWorker: async (_scope, assertCurrent, consume) => {
       assertCurrent();
-      return consume({ ok: true, value: readEntry() }, { kind: "native", assertCurrent });
+      return consume({ ok: true, value: readEntry() }, { kind: "file", assertCurrent });
     },
   };
 }
@@ -145,13 +145,13 @@ export function defineMediaGenerationCancellationTests(
     const tool = createTool(primary, {
       agentSessionKey,
       scheduleBackgroundWork: (work) => scheduled.push(work),
-      onAsyncTaskStarted: () => controller.abort(new Error("requester ended after acceptance")),
     });
     const result = await tool.execute(
       `call-${kind}-accepted`,
       { prompt: `an accepted ${kind}` },
       controller.signal,
     );
+    controller.abort(new Error("requester ended after acceptance"));
 
     expect(detailsOf(result).status).toBe("started");
     expect(scheduled).toHaveLength(1);

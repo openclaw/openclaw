@@ -9,7 +9,6 @@ import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-st
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReader from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import type { OpenClawStateReadReply } from "../../state/openclaw-state-read.types.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
@@ -66,7 +65,10 @@ describe("openclaw.changes.list", () => {
     async (outcome) => {
       await withTestDir({ prefix: "openclaw-system-changes-delayed-" }, async (stateDir) => {
         vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        const read = createDeferredCore<OpenClawStateReadReply | undefined>();
+        const read =
+          createDeferredCore<
+            Awaited<ReturnType<typeof stateReader.executeExistingOpenClawStateRead>>
+          >();
         vi.spyOn(stateReader, "executeExistingOpenClawStateRead")
           .mockReturnValueOnce(read.promise)
           .mockResolvedValue({

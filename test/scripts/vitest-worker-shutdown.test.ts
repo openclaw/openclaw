@@ -91,12 +91,9 @@ it
   "$route wrapper joins $phase work before honoring $shutdownSignal",
   ({ route, phase, shutdownSignal }, { workerArtifacts, signal, onTestFinished }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
+      // Canceling the sole CI compiler still rejects disposal; settled signals retain their status.
       const expectedExitCode =
-        route.startsWith("ci") && phase !== "deletion"
-          ? 1
-          : shutdownSignal === "SIGINT"
-            ? 130
-            : 143;
+        route === "ci" && phase === "compilation" ? 1 : shutdownSignal === "SIGINT" ? 130 : 143;
       const root = workerArtifacts.fixtureDirectory();
       const input = writeFixture(root, "input", "owned verification input");
       const released = path.join(root, "release");
@@ -569,7 +566,7 @@ it("rejects a live borrower when its owner closes during verification", ({
           throw new Error("Borrower exited before verification was held");
         }),
       ]);
-      expect(controlled.read()).toMatchObject([{ directory, inputs: 2, outputs: 2 }]);
+      expect(controlled.read()).toMatchObject([{ directory, inputs: 3, outputs: 3 }]);
       let disposed = false;
       const disposal = workerArtifacts.fixtureLifetime.track(
         owner.dispose().then(() => {

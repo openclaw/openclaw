@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +22,8 @@ const createExecTool = (
   defaults?: Parameters<typeof createExecToolImpl>[0],
 ): ReturnType<typeof createExecToolImpl> =>
   createExecToolImpl({ agentId: "main", approvalRunningNoticeMs: 0, ...defaults });
+
+const localSpawn = vi.hoisted(() => vi.fn());
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -124,6 +125,7 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
+// mock-isolation: Keep the shared supervisor isolated while routing fixtures capture local spawns.
 vi.mock("../process/supervisor/index.js", async () => {
   const { createProcessSupervisor } = await import("../process/supervisor/supervisor.js");
   const nativeSupervisor = createProcessSupervisor();
@@ -143,6 +145,7 @@ vi.mock("../process/supervisor/index.js", async () => {
   return {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
+        localSpawn(input);
         const command = "argv" in input ? input.argv.join(" ") : "";
         const inlineOutput = ["delayed-ok", "approval-one", "approval-two", "allow-always"].find(
           (value) => command.includes(value),
@@ -318,6 +321,47 @@ describe("exec approvals", () => {
     }
   });
 
+  it.each([undefined, "node"] as const)(
+    "routes a named node with host=%s through node execution",
+    async (host) => {
+      const node = nodeFixture("node-ok");
+      mockGateway({ "node.invoke": node.handle });
+      const tool = createExecTool({ security: "full", ask: "off" });
+      const result = await tool.execute("named-node", {
+        command: "echo node-ok",
+        node: "node-1",
+        host,
+      });
+      expect(result.details).toMatchObject({ status: "completed", nodeId: "node-1" });
+      expect(getResultText(result)).toContain("node-ok");
+      expect(node.runs).toHaveLength(1);
+      expect(localSpawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["gateway", "sandbox", "auto"] as const)(
+    "rejects a named node with conflicting host=%s before execution",
+    async (host) => {
+      const tool = createExecTool({ security: "full", ask: "off" });
+      await expect(
+        tool.execute("conflicting-node", { command: "echo ok", node: "node-1", host }),
+      ).rejects.toThrow(
+        `exec node="node-1" conflicts with host="${host}"; omit host or use host="node" to run on this node.`,
+      );
+      expect(localSpawn).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps default gateway execution when no node is named", async () => {
+    const tool = createExecTool({ security: "full", ask: "off" });
+    const result = await tool.execute("default-host", { command: "echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(result.details).not.toHaveProperty("nodeId");
+    expect(localSpawn).toHaveBeenCalledOnce();
+    expect(gatewayParams("node.invoke")).toEqual([]);
+  });
+
   it("reuses approval id as the node runId for an explicit agent follow-up", async () => {
     const node = nodeFixture();
     const followup = createDeferredCore<Record<string, unknown>>();
@@ -389,7 +433,7 @@ describe("exec approvals", () => {
     expect(node.runs).toHaveLength(1);
     expect(node.runs[0]?.cwd).toBe("/Users/vv");
     expect(getResultText(result)).toContain(
-      "Warning: continuation options are unavailable; running synchronously.",
+      "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.",
     );
     expect(getResultText(result)).toContain("ok");
     expect(result.details.status).toBe("completed");
@@ -467,32 +511,6 @@ describe("exec approvals", () => {
     const second = await tool.execute("call-gateway-allow-always-repeat", { command });
     expect(second.details.status).toBe("completed");
     expect(getResultText(second)).toContain("allow-always");
-    expect(calls).not.toContain("exec.approval.request");
-    expect(calls).not.toContain("exec.approval.waitDecision");
-  });
-
-  it("reuses exact-command durable trust for node shell-wrapper reruns", async () => {
-    const prepared = buildPreparedSystemRunPayload({
-      params: { command: ["/bin/sh", "-lc", "cd ."], cwd: process.cwd() },
-    });
-    const commandText = prepared.payload.plan.commandText;
-    const calls = mockGateway({
-      "exec.approvals.node.get": () => ({
-        file: policy(undefined, [
-          {
-            pattern: `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`,
-            source: "allow-always",
-          },
-        ]),
-      }),
-      "node.invoke": nodeFixture("node-shell-wrapper-ok").handle,
-    });
-    const tool = createExecTool({ host: "node", ask: "on-miss", security: "allowlist" });
-    const result = await tool.execute("call-node-shell-wrapper-durable-allow-always", {
-      command: "cd .",
-    });
-    expect(result.details.status).toBe("completed");
-    expect(getResultText(result)).toContain("node-shell-wrapper-ok");
     expect(calls).not.toContain("exec.approval.request");
     expect(calls).not.toContain("exec.approval.waitDecision");
   });

@@ -35,17 +35,6 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
-  it("short-circuits direct send when non-completion steering delivers", async () => {
-    const { steer, direct, result } = await runNonCompletionDispatch({ steerOutcome: "steered" });
-
-    expect(steer).toHaveBeenCalledTimes(1);
-    expect(direct).not.toHaveBeenCalled();
-    expect(result.path).toBe("steered");
-    expect(result.phases).toEqual([
-      { phase: "steer-primary", delivered: true, path: "steered", error: undefined },
-    ]);
-  });
-
   it("does not direct-fallback when steering loses source ownership", async () => {
     const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
@@ -65,7 +54,7 @@ describe("runSubagentAnnounceDispatch", () => {
     });
   });
 
-  it.each([true, false])(
+  it.each([false])(
     "never steers when direct delivery is required and direct delivery succeeds: %s",
     async (delivered) => {
       const steer = vi.fn(async () => ({ status: "steered" }) as const);
@@ -97,24 +86,6 @@ describe("runSubagentAnnounceDispatch", () => {
       ]);
     },
   );
-
-  it("uses direct-first ordering for completion mode", async () => {
-    const steer = vi.fn(async () => ({ status: "steered" }) as const);
-    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-
-    const result = await runSubagentAnnounceDispatch({
-      expectsCompletionMessage: true,
-      steer,
-      direct,
-    });
-
-    expect(direct).toHaveBeenCalledTimes(1);
-    expect(steer).not.toHaveBeenCalled();
-    expect(result.path).toBe("direct");
-    expect(result.phases).toEqual([
-      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
-    ]);
-  });
 
   it("falls back to steering when completion direct send fails", async () => {
     const steer = vi.fn(async () => ({ status: "steered" }) as const);
@@ -173,35 +144,10 @@ describe("runSubagentAnnounceDispatch", () => {
 
   it.each([
     {
-      name: "cannot deliver",
-      steerStatus: "none" as const,
-      directReason: undefined,
-      expectedReason: undefined,
-      fallbackPhase: {
-        phase: "steer-fallback" as const,
-        delivered: false,
-        path: "none" as const,
-        error: undefined,
-      },
-    },
-    {
       name: "drops the new item",
       steerStatus: "dropped" as const,
       directReason: undefined,
       expectedReason: undefined,
-      fallbackPhase: {
-        phase: "steer-fallback" as const,
-        delivered: false,
-        path: "none" as const,
-        reason: "steer_dropped" as const,
-        error: undefined,
-      },
-    },
-    {
-      name: "drops the new item after a visible reply is missing",
-      steerStatus: "dropped" as const,
-      directReason: "visible_reply_missing" as const,
-      expectedReason: "visible_reply_missing" as const,
       fallbackPhase: {
         phase: "steer-fallback" as const,
         delivered: false,

@@ -35,7 +35,7 @@ export function collectPluginConfigAssignments(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
-  if (!isRecord(entries)) {
+  if (!isRecord(entries) || Object.keys(entries).length === 0) {
     return;
   }
 

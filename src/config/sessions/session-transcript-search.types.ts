@@ -17,7 +17,6 @@ export type SessionTranscriptSearchResult = {
 
 export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResult, "indexing"> & {
   found: boolean;
-  revision?: string;
 };
 
 export type SessionTranscriptSearchParams = {

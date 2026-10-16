@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -27,7 +28,7 @@ import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
   withoutPluginInstallRecords,
@@ -65,17 +66,6 @@ function createPluginCandidate(stateDir: string, pluginId: string): PluginCandid
   );
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -102,7 +92,6 @@ describe("plugin index install records store", () => {
       const scanSpy = vi.spyOn(fs, "readdirSync");
       for (const read of [
         inspectPersistedInstalledPluginIndexInstallRecordsSync,
-        readPersistedInstalledPluginIndexInstallRecords,
         loadInstalledPluginIndexInstallRecordsSync,
       ]) {
         readSpy.mockImplementationOnce(() => {
@@ -115,10 +104,14 @@ describe("plugin index install records store", () => {
           )
           .rejects.toBe(error);
       }
-      const asyncReadSpy = vi
-        .spyOn(metadataWorker, "readPluginMetadataStateRow")
-        .mockRejectedValueOnce(error);
-      await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).rejects.toBe(error);
+      const asyncReadSpy = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+      for (const read of [
+        readPersistedInstalledPluginIndexInstallRecordsAsync,
+        loadInstalledPluginIndexInstallRecords,
+      ]) {
+        asyncReadSpy.mockRejectedValueOnce(error);
+        await expect(read({ stateDir })).rejects.toBe(error);
+      }
       expect(scanSpy).not.toHaveBeenCalled();
       asyncReadSpy.mockRestore();
       readSpy.mockRestore();
@@ -166,7 +159,7 @@ describe("plugin index install records store", () => {
     expect(persisted.plugins).toHaveLength(1);
     expect(persisted.plugins?.[0]?.pluginId).toBe("twitch");
     expect(persisted.plugins?.[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toEqual({
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir })).toEqual({
       twitch: {
         source: "npm",
         spec: "@openclaw/plugin-twitch@1.0.0",
@@ -481,7 +474,7 @@ describe("plugin index install records store", () => {
   it("returns empty records when the persisted plugin index is missing", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
 
-    expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).toBeNull();
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir })).toBeNull();
     const records = await loadInstalledPluginIndexInstallRecords({ stateDir });
     expect(Object.keys(records)).toEqual([]);
     expect(Object.getPrototypeOf(records)).toBeNull();

@@ -1,4 +1,4 @@
-// sessions_history tool tests cover recall redaction and input validation for
+// sessions_history tool tests cover recall fidelity and input validation for
 // session transcript history returned to models.
 import fs from "node:fs";
 import os from "node:os";
@@ -71,7 +71,7 @@ function createHistoryToolWithMessage(content: unknown, sessionLinkBase?: string
   });
 }
 
-describe("sessions_history redaction", () => {
+describe("sessions_history", () => {
   beforeAll(async () => {
     previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-history-redact-"));
@@ -198,25 +198,23 @@ describe("sessions_history redaction", () => {
     expect(requests.map((request) => request.method)).toEqual(["sessions.resolve", "chat.history"]);
   });
 
-  it("redacts recalled session text even when log redaction is disabled", async () => {
-    // Recalled transcript content is model-visible, so it is always redacted
-    // even when normal logging redaction is configured off.
+  it("preserves recalled session text independently of log redaction", async () => {
     useLoggingConfig("redaction-off.json", { redactSensitive: "off" });
     const tool = createHistoryToolWithMessage("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789");
 
     const result = await tool.execute("call-1", { sessionKey: "main" });
     const serialized = JSON.stringify(result.details);
 
-    expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(serialized).toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
     expect(result.details).toMatchObject({
-      contentRedacted: true,
+      contentRedacted: false,
       contentTruncated: false,
       truncated: false,
     });
   });
 
-  it("keeps accepted inputs separate, redacted, bounded, and addressable by their own cursor", async () => {
+  it("keeps accepted inputs separate, bounded, and addressable by their own cursor", async () => {
     useLoggingConfig("pending-redaction-off.json", { redactSensitive: "off" });
     const requests: CallGatewayRequest[] = [];
     const items = Array.from({ length: 20 }, (_, index) => ({
@@ -255,12 +253,12 @@ describe("sessions_history redaction", () => {
     expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
     expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
     expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
-    expect(details.contentRedacted).toBe(true);
+    expect(details.contentRedacted).toBe(false);
     expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
   });
 
-  it("applies custom redaction patterns to recalled session text", async () => {
+  it("does not apply log redaction patterns to recalled session text", async () => {
     useLoggingConfig("custom-patterns.json", {
       redactSensitive: "off",
       redactPatterns: [String.raw`\binternal-ticket-[A-Za-z0-9]+\b`],
@@ -270,9 +268,9 @@ describe("sessions_history redaction", () => {
     const result = await tool.execute("call-1", { sessionKey: "main" });
     const serialized = JSON.stringify(result.details);
 
-    expect(serialized).not.toContain("internal-ticket-AbC12345");
+    expect(serialized).toContain("internal-ticket-AbC12345");
     expect(serialized).toContain("intern");
-    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(false);
   });
 
   it.each([0])("rejects invalid limit value %s", async (limit) => {

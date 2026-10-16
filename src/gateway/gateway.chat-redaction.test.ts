@@ -36,10 +36,9 @@ function userText(messages: TextMessage[]): string {
 const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";
 const secret = "Ab9Q".repeat(10);
 const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";
-const masked = "Ab9QAb…Ab9Q";
 const slashSecret = "Aa0/".repeat(10);
 
-describe("registered Control UI chat redaction", () => {
+describe("registered Control UI chat text fidelity", () => {
   const requests: string[] = [];
   const providerErrors: unknown[] = [];
   const provider = createServer((request, response) => {
@@ -147,11 +146,7 @@ describe("registered Control UI chat redaction", () => {
     expect(completed.status).toBe("ok");
   }
 
-  async function expectStoredAndSent(
-    message: string,
-    expected: string,
-    hiddenValues: readonly string[] = [],
-  ): Promise<void> {
+  async function expectStoredAndSent(message: string): Promise<void> {
     const sessionKey = `agent:main:redaction-${randomUUID()}`;
     // The first turn creates the session; the regression affects subsequent admission.
     await send(sessionKey, "Initialize this fixture conversation.");
@@ -160,16 +155,12 @@ describe("registered Control UI chat redaction", () => {
     const history = await gateway.client.request<{ messages: TextMessage[] }>("chat.history", {
       sessionKey,
     });
-    expect.soft(userText(history.messages), "chat.history").toContain(expected);
+    expect.soft(userText(history.messages), "chat.history").toContain(message);
     expect(providerErrors).toEqual([]);
     const turnRequests = requests.slice(requestStart);
     expect(turnRequests).toHaveLength(1);
     const body = JSON.parse(turnRequests[0]!) as { input: TextMessage[] };
-    expect.soft(userText(body.input), "recorded model input").toContain(expected);
-    for (const value of hiddenValues) {
-      expect.soft(userText(history.messages), "chat.history").not.toContain(value);
-      expect.soft(userText(body.input), "recorded model input").not.toContain(value);
-    }
+    expect.soft(userText(body.input), "recorded model input").toContain(message);
   }
 
   it.each([
@@ -180,84 +171,39 @@ describe("registered Control UI chat redaction", () => {
   ])(
     "chat.send preserves %s in chat.history and recorded model input",
     async (url) => {
-      await expectStoredAndSent(url, url);
+      await expectStoredAndSent(url);
     },
     90_000,
   );
 
   it.each([
-    ["bare credential", secret, masked],
-    [
-      "unknown URL query",
-      `https://example.test/?foo=.${secret}`,
-      `https://example.test/?foo=.${masked}`,
-    ],
+    ["bare credential", secret],
+    ["unknown URL query", `https://example.test/?foo=.${secret}`],
     [
       "URL in parenthesized query value",
       `https://example.test/?next=(https://example.test/path-${secret})`,
-      `https://example.test/?next=(https://example.test/path-${masked})`,
     ],
-    [
-      "userinfo before punctuation",
-      `https://name-${secret})@example.test`,
-      `https://name-${masked})@example.test`,
-    ],
-    [
-      "s3 numeric slash password",
-      `s3://user:${numericSlashSecret}@bucket`,
-      "s3://user:1234/A…QAb9@bucket",
-    ],
-    ["s3 slash-prefixed key", `s3://user:1234/${secret}@bucket`, `s3://user:1234/${masked}@bucket`],
-    ["slash credential after URL", `${publicUrl} ${slashSecret}`, `${publicUrl} Aa0/Aa…Aa0/`],
-    [
-      "credential query",
-      `https://example.test/?SecretAccessKey=${secret}`,
-      `https://example.test/?SecretAccessKey=${masked}`,
-    ],
-    [
-      "credential field",
-      `{"awsSecretAccessKey":"${secret}"}`,
-      `{"awsSecretAccessKey":"${masked}"}`,
-    ],
-    [
-      "credential after Markdown link",
-      `[docs](${publicUrl})${secret}`,
-      `[docs](${publicUrl})${masked}`,
-    ],
+    ["userinfo before punctuation", `https://name-${secret})@example.test`],
+    ["s3 numeric slash password", `s3://user:${numericSlashSecret}@bucket`],
+    ["s3 slash-prefixed key", `s3://user:1234/${secret}@bucket`],
+    ["slash credential after URL", `${publicUrl} ${slashSecret}`],
+    ["credential query", `https://example.test/?SecretAccessKey=${secret}`],
+    ["credential field", `{"awsSecretAccessKey":"${secret}"}`],
+    ["credential after Markdown link", `[docs](${publicUrl})${secret}`],
   ])(
-    "chat.send masks the %s in chat.history and recorded model input",
-    async (_label, input, expected) => {
-      await expectStoredAndSent(input, expected, [secret, slashSecret, numericSlashSecret]);
+    "chat.send preserves the %s in chat.history and recorded model input",
+    async (_label, input) => {
+      await expectStoredAndSent(input);
     },
     90_000,
   );
 
-  it("exec.approval.request preserves URLs and masks credentials in the exec.approval.get display", async () => {
-    const urls = [
-      publicUrl,
-      `https://example.test/${secret}`,
-      `https://example.test/path-${secret}`,
-      `https://${secret}.example.test`,
-      "https://x.com/@user/status/2097727549400871286",
-      `https://x.com/@user/status/${secret}`,
-      `data:application/octet-stream;base64,AAAA/${secret}@`,
-      `https://example.test:8080/path-${secret}`,
-    ];
-    // A separate spliced token forces the approval sanitizer's bitmap-union display.
+  it("exec.approval.request preserves command bytes in the exec.approval.get display", async () => {
     const command = [
       "printf '%s'",
-      ...urls.map((url) => JSON.stringify(url)),
+      JSON.stringify("API_TOKEN = computeToken()"),
       JSON.stringify(`${publicUrl} ${secret}`),
-      JSON.stringify(`.${secret}`),
-      JSON.stringify(`s3://user:${secret}@bucket`),
-      JSON.stringify(`s3://user:1234/${secret}@bucket`),
-      ...["#", "?foo=.", "[", "(", "{"].map((prefix) =>
-        JSON.stringify(`https://example.test/${prefix}${secret}`),
-      ),
-      ...[")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"].map((punctuation) =>
-        JSON.stringify(`https://name-${secret}${punctuation}@example.test`),
-      ),
-      JSON.stringify("sk-abc123\u200B456789012345678"),
+      JSON.stringify(`s3://user:${numericSlashSecret}@bucket`),
     ].join(" ");
     const accepted = await gateway.client.request<{ status: string; id: string }>(
       "exec.approval.request",
@@ -275,35 +221,15 @@ describe("registered Control UI chat redaction", () => {
       const display = await gateway.client.request<{ commandText: string }>("exec.approval.get", {
         id: accepted.id,
       });
-      for (const url of urls) {
-        expect(display.commandText).toContain(url);
-      }
-      expect(display.commandText).toContain(`"${publicUrl} ***"`);
-      expect(display.commandText).toContain('".***"');
-      expect(display.commandText).toContain('"s3://user:***@bucket"');
-      expect(display.commandText).toContain('"s3://user:1234/***@bucket"');
-      expect(display.commandText).not.toContain("sk-abc123");
-      for (const prefix of ["#", "?foo=.", "[", "(", "{"]) {
-        expect(display.commandText).toContain(`"https://example.test/${prefix}***"`);
-      }
-      for (const punctuation of [")", "]", "}", "|", "\x60", "\x27", '"', "<", ">"]) {
-        expect(display.commandText).toContain(
-          JSON.stringify(`https://name-***${punctuation}@example.test`),
-        );
-      }
-      expect(display.commandText).not.toContain("456789012345678");
+      expect(display.commandText).toBe(command);
     } finally {
       await gateway.client.request("exec.approval.resolve", { id: accepted.id, decision: "deny" });
     }
   });
 
-  it("chat.send masks a registered URL value in chat.history and recorded model input", async () => {
+  it("chat.send preserves a registered URL value in chat.history and recorded model input", async () => {
     const registered = "synthetic-registered-value";
     registerSecretValueForRedaction(registered);
-    await expectStoredAndSent(
-      `https://example.test/${registered}`,
-      "https://example.test/synthe…alue",
-      [registered],
-    );
+    await expectStoredAndSent(`https://example.test/${registered}`);
   }, 90_000);
 });

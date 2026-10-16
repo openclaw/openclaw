@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -35,6 +36,7 @@ export function client(profileId: string, displayName = profileId, admin = false
 }
 
 export function context(config: OpenClawConfig = {}): GatewayRequestContext {
+  setRuntimeConfigSnapshot(config);
   return {
     getRuntimeConfig: () => config,
     broadcast: vi.fn(),
@@ -46,6 +48,7 @@ let reactionProjection: Promise<SessionRowProjection> | undefined;
 
 export async function withReactionState(consume: () => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await consume();
     } finally {

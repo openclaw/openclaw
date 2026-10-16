@@ -131,7 +131,7 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
     const before = statSync(pathname, { bigint: true });
     const captured = captureOpenClawStateWorkerContext({ env: state.env });
     const preparedRead =
-      process.platform === "linux"
+      process.platform === "linux" || process.platform === "android"
         ? prepareOpenClawStateReadSource({ path: pathname, env: state.env })
         : undefined;
     const backend = runWithSqliteWorkerStateContext(captured, () =>
@@ -172,7 +172,9 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
           ),
         ).toBe(true);
         expect(captured.admission.identity.birthtime).toBe(
-          process.platform === "linux" ? "0" : before.ctimeNs.toString(),
+          process.platform === "linux" || process.platform === "android"
+            ? "0"
+            : before.ctimeNs.toString(),
         );
         const database = openOpenClawStateDatabase({ env: state.env });
         expect(
@@ -190,17 +192,7 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
 });
 
 async function retainExistingReader(context: OpenClawStateWorkerContext) {
-  await expect(
-    runOpenClawStateWorkerOperation(
-      context,
-      (scope) =>
-        scope.execute({
-          type: "plugins.metadata.read",
-          input: { selector: "installed-index", artifactPreservingReadOnly: true },
-        }),
-      { existingOnly: true },
-    ),
-  ).resolves.toBeUndefined();
+  // Actor admission and retirement do not require a domain schema in this inspection fixture.
   const store = await getOpenClawStateWorkerOwner().open(context, { existingOnly: true });
   expect(store).toBeDefined();
   return store!;

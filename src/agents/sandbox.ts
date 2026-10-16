@@ -10,7 +10,11 @@ export {
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
 } from "./sandbox/constants.js";
-export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+export {
+  ensureSandboxWorkspaceForSession,
+  prepareSandboxWorkspaceForSession,
+  resolveSandboxContext,
+} from "./sandbox/context.js";
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -28,7 +32,11 @@ export {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "./sandbox/manage.js";
-export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+export {
+  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
+  resolvePreparedSandboxRuntimeStatus,
+} from "./sandbox/runtime-status.js";
 
 export { isToolAllowed } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";

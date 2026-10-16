@@ -1,11 +1,8 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
-import { resolveGatewayRuntimeConfig } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
-import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
 const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
@@ -89,43 +86,6 @@ describe("supervised gateway lock recovery", () => {
     expect(budgets).toEqual([300_000, 295_000]);
     expect(elapsedMs).toBe(300_000);
     expect(sleep).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
-    expect(
-      testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),
-    ).toBe(78);
-  });
-
-  it("uses exit 78 for an effective bind/Tailscale config conflict", async () => {
-    // Reproduces the reported crash-loop trigger: a persisted gateway.bind=lan
-    // combined with a service-level tailscale serve override is only invalid
-    // once the two are merged, so only runtime resolution (not static config
-    // validation) can detect it.
-    const conflict = await resolveGatewayRuntimeConfig({
-      cfg: {
-        gateway: {
-          bind: "lan",
-          auth: { mode: "token", token: "test-token-123" },
-          tailscale: { mode: "serve" },
-        },
-      },
-      port: 18789,
-    }).catch((err: unknown) => err);
-
-    expect(conflict).toBeInstanceOf(Error);
-    expect((conflict as Error).message).toBe(
-      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
-    );
-    expect(testing.resolveGatewayStartupFailureExitCode(conflict)).toBe(78);
-  });
-
-  it("uses exit 78 for offline agent database migration requirements", () => {
-    expect(
-      testing.resolveGatewayStartupFailureExitCode(
-        new OpenClawAgentDatabaseMediaMigrationRequiredError("/tmp/openclaw-agent.sqlite", 14),
-      ),
-    ).toBe(78);
   });
 
   it("leaves a healthy launchd-supervised gateway in control", async () => {

@@ -108,11 +108,6 @@ function createStandardMediaPlugins(
   ];
 }
 
-function createImageAndPdfPlugins(): [PluginManifestRecord, PluginManifestRecord] {
-  const plugins = createStandardMediaPlugins("anthropic");
-  return [plugins[0], plugins[3]];
-}
-
 function installSnapshot(
   config: OpenClawConfig,
   plugins: PluginManifestRecord[],
@@ -385,7 +380,10 @@ describe("optional media tool factory planning", () => {
 
   it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, createImageAndPdfPlugins());
+    const workspaceDir = process.cwd();
+    vi.stubEnv("ANTHROPIC_API_KEY", "unrelated-fixture-key");
+    // No automatic PDF model exists in this workspace; only the active model can qualify.
+    installSnapshot(config, createStandardMediaPlugins("openrouter"), workspaceDir);
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
     for (const modelHasVision of [true, false]) {
@@ -393,6 +391,7 @@ describe("optional media tool factory planning", () => {
       const tools = createOpenClawTools({
         config,
         agentDir: "/tmp/openclaw-agent-main",
+        workspaceDir,
         authProfileStore: createAuthStore(["openrouter"]),
         modelProvider: "openrouter",
         modelId: "deepseek/deepseek-v4.1-flash",

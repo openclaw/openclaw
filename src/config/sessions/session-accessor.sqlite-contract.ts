@@ -121,6 +121,7 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
+  highWaterBytes?: number;
   trigger: "initial" | "after-eviction" | "final";
   checkpointCalls?: number;
   checkpointIncomplete?: number;

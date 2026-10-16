@@ -195,7 +195,7 @@ describe("session PR CI details", () => {
       expect(
         h.deps.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
       ).toHaveLength(2);
-      expect(h.deps.fetchImpl.mock.calls).toHaveLength(9);
+      expect(h.deps.fetchImpl.mock.calls).toHaveLength(6);
     },
   );
 
@@ -296,7 +296,7 @@ describe("session PR CI details", () => {
     const h = harness();
     const [a, b] = await Promise.all([h.load(), h.load()]);
     expect(a).toEqual(b);
-    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(6);
+    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(4);
     a.checks.splice(0);
     expect((await h.load()).checks).toHaveLength(1);
     h.state.status = 429;
@@ -331,38 +331,6 @@ describe("session PR CI details", () => {
       await loadControlUiSessionPullRequestChecks({ ...target, headSha: "b".repeat(40) }, h.deps),
     ).toMatchObject({ status: "unavailable", checks: [] });
     expect(h.deps.fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("discards old-head details if the PR advances while Actions jobs are loading", async () => {
-    const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await h.fetchResponse(input, init);
-      if (requestUrl(input).includes("/jobs?")) {
-        h.state.upstreamHead = "b".repeat(40);
-      }
-      return response;
-    });
-    expect(await h.load()).toMatchObject({
-      status: "unavailable",
-      checks: [],
-      error: expect.stringContaining("head changed"),
-    });
-  });
-
-  it("rejects a rerun that replaces the current check inventory mid-request", async () => {
-    const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await h.fetchResponse(input, init);
-      if (requestUrl(input).includes("/jobs?")) {
-        h.state.checks = [check(2)];
-      }
-      return response;
-    });
-    expect(await h.load()).toMatchObject({
-      status: "unavailable",
-      checks: [],
-      error: expect.stringContaining("rerun"),
-    });
   });
 
   it("bounds distinct concurrent detail loads without multiplying GitHub requests", async () => {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import {
   link,
   mkdir,
@@ -20,6 +21,11 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerReply,
@@ -29,10 +35,12 @@ import {
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
+  runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -153,9 +161,7 @@ describe("SQLite worker store", () => {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(
-          values.map(() => ["databaseAdmissions", "id", "ok", "value"]),
-        );
+        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "transactionCount", "value"]));
         requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
@@ -391,6 +397,20 @@ describe("SQLite worker store", () => {
         }
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        try {
+          expect(await append(firstAlias, "warm alias write")).toEqual({
+            ...originalReceipt,
+            writes: 2,
+          });
+          expect(await read(original)).toEqual(["original data", "warm alias write"]);
+          // No database path resolution belongs on an already-open worker operation.
+          expect(
+            realpath.mock.calls.filter(([pathname]) => pathname === file || pathname === aliasPath),
+          ).toEqual([]);
+        } finally {
+          realpath.mockRestore();
+        }
         await unlink(aliasPath);
         if (kind === "hardlink") {
           await writeFile(aliasPath, "");
@@ -420,10 +440,11 @@ describe("SQLite worker store", () => {
         expect(replacementReceipt.writes).toBe(1);
         expect(await append(original, "original still usable")).toEqual({
           ...originalReceipt,
-          writes: 4,
+          writes: 5,
         });
         expect(await read(original)).toEqual([
           "original data",
+          "warm alias write",
           "ahead of alias write",
           "last alias write",
           "original still usable",
@@ -872,4 +893,47 @@ describe("SQLite worker store", () => {
     expect(await append(recovered, "explicit recovery")).toMatchObject({ writes: 1 });
     expect(await read(recovered)).toEqual(["committed", "explicit recovery"]);
   });
+
+  it.each(["native", "schema-maintenance"] as const)(
+    "invalidates saved authority receipts when a %s writer dies inside native COMMIT",
+    async (mode) => {
+      const file = databasePath();
+      const store = await open(file);
+      const sibling = openNodeSqliteDatabase(file);
+      try {
+        const receipt = readSqliteDatabaseWriteTokenForPath(file);
+        const scoped = readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority");
+        expect(receipt).toBeDefined();
+        expect(scoped).toBeDefined();
+        await expect(
+          runSqliteWorkerStoreOperation(
+            store,
+            (scope) =>
+              scope.execute({
+                type: "commitWithoutReceipt",
+                input: { value: "revoked", mode },
+              }),
+            undefined,
+            undefined,
+            () => ({
+              admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+                if (mode === "native") {
+                  throw new Error("Native writes do not request separate domain admission");
+                }
+                grant();
+              }),
+              nativeLocations: [file],
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "outcome-unknown" });
+        expect(readSqliteDatabaseWriteTokenForPath(file)).not.toBe(receipt);
+        expect(readSqliteDatabaseScopedWriteTokenForPath(file, "fixture:authority")).not.toBe(
+          scoped,
+        );
+        expect(await read(await open(file))).toEqual(["revoked"]);
+      } finally {
+        sibling.close();
+      }
+    },
+  );
 });

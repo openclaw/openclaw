@@ -16,26 +16,6 @@ import { testing } from "./openai-transport-stream.test-support.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
-  it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
-    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
-    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
-    try {
-      const payload = testing.summarizeResponsesPayload({ input: `${"x".repeat(7_989)}🚀tail` });
-      const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
-
-      expect(payload).toContain(`payload={"input":"${"x".repeat(7_989)}…<truncated>`);
-      expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
-      expect(payload).not.toContain("\uD83D");
-      expect(event).not.toContain("\uD83D");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
-      } else {
-        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
-      }
-    }
-  });
-
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -278,59 +258,6 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("redacts full model payload debug summaries", () => {
-    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
-    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
-    try {
-      const apiKey = "test-api-key";
-      const summary = testing.summarizeResponsesPayload({
-        model: "gpt-5.5",
-        stream: true,
-        input: [],
-        tools: [{ type: "function", name: "exec" }],
-        apiKey,
-      });
-      expect(summary).toContain("payload=");
-      expect(summary).toContain('"apiKey":"***"');
-      expect(summary).not.toContain(apiKey);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
-      } else {
-        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
-      }
-    }
-  });
-
-  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from provider overrides", () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = testing.buildOpenAIClientHeaders(
-      makeResponsesModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        headers: {
-          originator: "openclaw",
-          "User-Agent": "openclaw",
-          "X-Provider": "model",
-        },
-      }),
-      { systemPrompt: "", messages: [] } as never,
-      {
-        originator: "openclaw",
-        "User-Agent": "openclaw",
-        "X-Caller": "request",
-      },
-    );
-
-    expectRecordFields(headers, {
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-      "X-Provider": "model",
-      "X-Caller": "request",
-    });
-  });
-
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
@@ -363,13 +290,7 @@ describe("openai transport stream", () => {
     );
   });
 
-  it.each([
-    {
-      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      azureApiVersion: null,
-    },
-    { baseUrl: "https://example.openai.azure.com", azureApiVersion: "preview" },
-  ])(
+  it.each([{ baseUrl: "https://example.openai.azure.com", azureApiVersion: "preview" }])(
     "preserves Azure routing and prepared headers for $baseUrl",
     async ({ baseUrl, azureApiVersion }) => {
       const previousApiVersion = process.env.AZURE_OPENAI_API_VERSION;

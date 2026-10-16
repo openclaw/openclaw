@@ -12,14 +12,16 @@ import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
-  buildToolPluginManifest,
-  buildToolPluginPackageManifest,
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
   runPluginsValidateCommand,
-  validateToolPluginProject,
 } from "./plugins-authoring-command.js";
+import {
+  buildToolPluginManifest,
+  buildToolPluginPackageManifest,
+  validateToolPluginProject,
+} from "./plugins-authoring-metadata.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -222,6 +224,79 @@ describe("plugin authoring commands", () => {
       log.mockRestore();
       error.mockRestore();
     }
+  });
+
+  it("reports and retires a preceding host browser declaration through explicit authoring", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-browser-authoring-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-browser-authoring",
+      pluginId: "browser-authoring",
+      toolName: "browser_authoring_echo",
+    });
+    const packagePath = path.join(rootDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageJson.openclaw.controlUi = "./browser.ts";
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      path.resolve("node_modules/esbuild"),
+      path.join(rootDir, "node_modules/esbuild"),
+      "dir",
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
+    fs.writeFileSync(
+      generatedPath,
+      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
+    );
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`runtime exit ${code}`);
+    });
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true }),
+      ).rejects.toThrow("runtime exit 1");
+      expect(fs.existsSync(generatedPath)).toBe(true);
+      await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+      expect(fs.existsSync(generatedPath)).toBe(false);
+      const authoredPath = path.join(rootDir, "openclaw.plugin.json");
+      const authoredBeforeFailure = fs.readFileSync(authoredPath, "utf8");
+      const previousEntry = JSON.parse(authoredBeforeFailure).controlUi.entry;
+      const previousAssets = fs.readFileSync(path.join(rootDir, previousEntry));
+      fs.mkdirSync(generatedPath);
+      fs.writeFileSync(path.join(generatedPath, "unowned.txt"), "preserve");
+      fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "next";');
+      await expect(runPluginsBuildCommand({ root: rootDir, entry: entryPath })).rejects.toThrow();
+      expect(fs.readFileSync(authoredPath, "utf8")).toBe(authoredBeforeFailure);
+      expect(fs.readFileSync(path.join(rootDir, previousEntry))).toEqual(previousAssets);
+      expect(fs.readFileSync(path.join(generatedPath, "unowned.txt"), "utf8")).toBe("preserve");
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("preserves shared output when authoring a backend without browser source", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-backend-authoring-");
+    const outside = tempDirs.make("openclaw-plugin-shared-output-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-backend-authoring",
+      pluginId: "backend-authoring",
+      toolName: "backend_authoring_echo",
+    });
+    const outsideManifest = path.join(outside, "openclaw.plugin.json");
+    fs.writeFileSync(outsideManifest, '{"id":"other-project"}');
+    fs.symlinkSync(
+      outside,
+      path.join(rootDir, "dist"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    expect(fs.readFileSync(outsideManifest, "utf8")).toBe('{"id":"other-project"}');
   });
 
   it("keeps validation errors on stderr and sanitizes JSON paths", async () => {

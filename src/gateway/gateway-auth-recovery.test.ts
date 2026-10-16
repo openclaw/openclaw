@@ -56,7 +56,9 @@ describe("Gateway profile failure recovery", () => {
         auth: "qa-auth-profile-key",
         recovered: "qa-recovered-profile-key",
       };
-      const profileIds = { rate: "mock-openai:rate", auth: "mock-openai:auth" };
+      // The shared auth credential must not become a fallback for the rate-limit proof.
+      const rateProviderId = "mock-openai-rate";
+      const profileIds = { rate: `${rateProviderId}:rate`, auth: "mock-openai:manual" };
       const requests = { rate: 0, auth: 0, recovered: 0 };
       let phase: keyof typeof requests = "rate";
       let unexpectedCredential = false;
@@ -116,6 +118,7 @@ describe("Gateway profile failure recovery", () => {
               `http://127.0.0.1:${address.port}/v1`,
               "gpt-5.6-luna",
             );
+            const rateModelRef = `${rateProviderId}/${provider.modelId}`;
             instance = await createOpenClawTestInstance({
               name: "auth-recovery",
               cwd: repoRoot,
@@ -148,6 +151,10 @@ describe("Gateway profile failure recovery", () => {
                   heartbeat: { every: "0m" },
                   model: { primary: provider.modelRef, fallbacks: [] },
                   models: {
+                    [rateModelRef]: {
+                      agentRuntime: { id: "openclaw" },
+                      params: { transport: "sse", openaiWsWarmup: false },
+                    },
                     [provider.modelRef]: {
                       agentRuntime: { id: "openclaw" },
                       params: { transport: "sse", openaiWsWarmup: false },
@@ -156,7 +163,7 @@ describe("Gateway profile failure recovery", () => {
                 },
                 entries: {
                   rate: {
-                    model: { primary: `${provider.modelRef}@${profileIds.rate}`, fallbacks: [] },
+                    model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] },
                   },
                   auth: {
                     model: { primary: `${provider.modelRef}@${profileIds.auth}`, fallbacks: [] },
@@ -165,13 +172,18 @@ describe("Gateway profile failure recovery", () => {
               },
               auth: {
                 profiles: {
-                  [profileIds.rate]: { provider: provider.providerId, mode: "api_key" },
+                  [profileIds.rate]: { provider: rateProviderId, mode: "api_key" },
                   [profileIds.auth]: { provider: provider.providerId, mode: "api_key" },
                 },
               },
               models: {
                 mode: "replace",
                 providers: {
+                  [rateProviderId]: {
+                    ...provider.config,
+                    apiKey: undefined,
+                    request: { allowPrivateNetwork: true },
+                  },
                   [provider.providerId]: {
                     ...provider.config,
                     apiKey: undefined,
@@ -196,12 +208,13 @@ describe("Gateway profile failure recovery", () => {
                   profiles: {
                     [profileIds[agentId]]: {
                       type: "api_key",
-                      provider: provider.providerId,
+                      provider: agentId === "rate" ? rateProviderId : provider.providerId,
                       key: credentials[agentId],
                     },
                   },
                 },
-                agentId,
+                // Models saves connection credentials in the shared owner; rate health stays agent-local.
+                agentId === "auth" ? "main" : agentId,
               );
               signal.throwIfAborted();
             }
@@ -267,9 +280,9 @@ describe("Gateway profile failure recovery", () => {
               expect(terminal.status).toBe("error");
               expect(requests[agentId]).toBeGreaterThan(0);
               expect(unexpectedCredential).toBe(false);
-              return loadPersistedAuthProfileStore(gateway.state.agentDir(agentId))?.usageStats?.[
-                profileIds[agentId]
-              ];
+              return loadPersistedAuthProfileStore(
+                gateway.state.agentDir(agentId === "auth" ? "main" : agentId),
+              )?.usageStats?.[profileIds[agentId]];
             };
             const rateStats = await failTurn("rate");
             signal.throwIfAborted();
@@ -282,21 +295,18 @@ describe("Gateway profile failure recovery", () => {
             expect(["auth", "auth_permanent"]).toContain(
               authStats?.cooldownReason ?? authStats?.disabledReason,
             );
-            proofStep = "replace-credential";
-            await gateway.state.writeAuthProfiles(
-              {
-                version: 1,
-                profiles: {
-                  [profileIds.auth]: {
-                    type: "api_key",
-                    provider: provider.providerId,
-                    key: credentials.recovered,
-                  },
-                },
-              },
-              "auth",
+            proofStep = "models.authSetApiKey";
+            const saved = await activeClient.request<{
+              provider: string;
+              profileId: string;
+              warning?: string;
+            }>(
+              "models.authSetApiKey",
+              { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
+              { timeoutMs: 30_000, signal },
             );
             signal.throwIfAborted();
+            expect(saved).toEqual({ provider: provider.providerId, profileId: profileIds.auth });
             proofStep = "models.authRefresh";
             const refreshed = await activeClient.request<{ refreshed: boolean }>(
               "models.authRefresh",
@@ -355,6 +365,7 @@ describe("Gateway profile failure recovery", () => {
                 requests,
                 rateCooldownRecorded: true,
                 authFailureRecorded: true,
+                credentialSaveAcknowledged: true,
                 authRefreshAcknowledged: true,
                 recoveredModelAvailable: true,
                 responseTextVerified: true,

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   installMockGateway,
   type MockGatewayRequest,
@@ -64,7 +64,7 @@ async function waitForConfigPatch(
 }
 
 suite.define(() => {
-  it("adds advanced profiles and repository defaults while refreshing live availability", async () => {
+  it("adds and edits advanced machine profiles while refreshing live availability", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -83,11 +83,12 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/cloud-workers`))?.status()).toBe(
         200,
       );
-      const docsLink = page.getByRole("link", { name: "Learn more", exact: true });
+      const docsLink = page.getByRole("link", { name: "Docs", exact: true });
       await docsLink.waitFor();
       expect(await docsLink.getAttribute("href")).toBe(
         "https://docs.openclaw.ai/gateway/cloud-workers",
       );
+      await page.locator(".cloud-environments__advanced > summary").click();
       await gateway.waitForRequest("environments.list");
       const socketCount = await gateway.getSocketCount();
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
@@ -181,9 +182,7 @@ suite.define(() => {
       });
 
       await page.getByText("Advertised", { exact: true }).waitFor();
-      await page
-        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
-        .waitFor();
+      await page.getByText("Profile saved.", { exact: true }).waitFor();
       expect(await gateway.getSocketCount()).toBe(socketCount);
 
       await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).click();
@@ -230,12 +229,10 @@ suite.define(() => {
       // its background config.get cannot consume the notification refresh gate.
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as
-              | (HTMLElement & { runtime?: { context: ApplicationContext } })
-              | null;
-            return app?.runtime?.context.runtimeConfig.state.configSnapshot?.appliedConfigHash;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+          ),
         )
         .toBe("cloud-workers-2");
       const configGetCount = (await gateway.getRequests("config.get")).length;
@@ -399,41 +396,6 @@ suite.define(() => {
         .click();
       await expect.poll(() => machineClass.inputValue()).toBe("custom");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.getByRole("button", { name: "Add repository", exact: true }).click();
-      const repository = page.getByLabel("Repository identity", { exact: true });
-      const defaultProfile = page.getByLabel("Default profile", { exact: true });
-      await repository.fill("GitHub.com/Acme/App.git");
-      await defaultProfile.selectOption("build-fleet");
-      await waitForSettledFormControls(page, [
-        { locator: repository, value: "GitHub.com/Acme/App.git" },
-        { locator: defaultProfile, value: "build-fleet" },
-      ]);
-      await gateway.deferNext("config.patch");
-      const repositoryRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save repository", exact: true }).click();
-      expect(await waitForConfigPatch(gateway, repositoryRequestCount)).toEqual({
-        cloudWorkers: { projectProfiles: { "github.com/acme/app": "build-fleet" } },
-      });
-      const repositoryConfig = {
-        cloudWorkers: {
-          profiles: { "build-fleet": editedFleet, pending },
-          projectProfiles: { "github.com/acme/app": "build-fleet" },
-        },
-      };
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(repositoryConfig, "cloud-workers-5"),
-      );
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-5",
-        config: repositoryConfig,
-      });
-      await page.getByText("github.com/acme/app", { exact: true }).waitFor();
-      await page
-        .locator("openclaw-cloud-worker-repositories")
-        .getByText("Saved. Changes apply without restarting the Gateway.", { exact: true })
-        .waitFor();
     } finally {
       await context.close();
     }
@@ -456,6 +418,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       await page.getByRole("button", { name: "Add profile" }).click();
       const editor = page.locator(".settings-section", {
         has: page.getByRole("heading", { name: "Add profile", exact: true }),
@@ -544,9 +507,7 @@ suite.define(() => {
         hash: "cloud-workers-reconnect-3",
         config: { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
       });
-      await page
-        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
-        .waitFor();
+      await page.getByText("Profile saved.", { exact: true }).waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
     } finally {
       await context.close();
@@ -639,6 +600,7 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+        await page.locator(".cloud-environments__advanced > summary").click();
         const pendingRow = page.locator(".settings-row").filter({
           has: page.locator("code", { hasText: /^pending$/ }),
         });
@@ -715,6 +677,7 @@ suite.define(() => {
           .toEqual(savedConfig);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
         await page.goBack();
+        await page.locator(".cloud-environments__advanced > summary").click();
         await pendingRow.getByText(description, { exact: false }).waitFor();
 
         await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
@@ -765,6 +728,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
@@ -817,6 +781,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
@@ -824,21 +789,10 @@ suite.define(() => {
       const confirmation = await waitForConfirmModal(page);
       const socketCount = await gateway.getSocketCount();
       const configGetCount = (await gateway.getRequests("config.get")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
+      const originalGateway = await evaluateControlUiContext(page, (application) => {
+        const activeGateway = application.gateway;
+        const client = activeGateway.snapshot.client;
+        if (!client) {
           throw new Error("Expected a connected Gateway client before confirmation");
         }
         const identity = {
@@ -854,32 +808,20 @@ suite.define(() => {
         .toBeGreaterThan(configGetCount);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  gateway: {
-                    connection: { gatewayUrl: string };
-                    snapshot: { client: { instanceId: string } | null; phase: string };
-                  };
-                };
-              };
-            };
-            const activeGateway = app.runtime?.context.gateway;
+          evaluateControlUiContext(page, (application) => {
+            const activeGateway = application.gateway;
             return {
-              clientInstanceId: activeGateway?.snapshot.client?.instanceId,
-              gatewayUrl: activeGateway?.connection.gatewayUrl,
-              phase: activeGateway?.snapshot.phase,
+              clientInstanceId: activeGateway.snapshot.client?.instanceId,
+              gatewayUrl: activeGateway.connection.gatewayUrl,
+              phase: activeGateway.snapshot.phase,
             };
           }),
         )
         .toMatchObject({ gatewayUrl: originalGateway.gatewayUrl, phase: "connected" });
-      const replacementClientInstanceId = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { client: { instanceId: string } } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.client.instanceId;
-      });
+      const replacementClientInstanceId = await evaluateControlUiContext(
+        page,
+        (application) => application.gateway.snapshot.client?.instanceId,
+      );
       expect(replacementClientInstanceId).not.toBe(originalGateway.clientInstanceId);
       await expect
         .poll(() =>
@@ -921,6 +863,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       const pendingRow = page.locator(".settings-row").filter({
         has: page.locator("code", { hasText: /^pending$/ }),
       });
@@ -959,6 +902,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       await page
         .getByText("Administrator access is required to manage cloud worker profiles.", {
           exact: true,

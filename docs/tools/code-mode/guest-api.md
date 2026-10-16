@@ -83,7 +83,7 @@ executor and remain bounded by the Code Mode execution and continuation limits.
 applies to interactive Code Mode and headless automation scripts.
 
 Every effective non-MCP tool is also installed as an async global function.
-The model-visible `exec` description includes a small set of final callable names
+The run's Code Mode prompt includes a small set of final callable names
 selected by fixed rules, along with compact input hints and trusted declared output hints.
 Descriptions remain deferred so adversarial catalog prose cannot steer the
 model. When that index omits a tool, call `catalog.search(...)`; its results are
@@ -218,7 +218,9 @@ command defines its own payload; check the result before composing it. `nodes.ge
 name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
 Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
 approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
-`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`listDir(path)` only when the node advertises `fs.listDir`, and that listing
+omits files: use the normal shell `exec` tool with a node host for complete
+directory contents. It does not include
 `exec`: the generic nodes surface reserves `system.run` for the normal shell
 `exec` tool with a node host.
 
@@ -293,7 +295,7 @@ an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 For text file pages, `read(...)` returns file text in `content`; filename-resolution
 and pagination notices stay in the human-readable tool display, not the structured
-file data. Existing file redaction still applies. Check `kind` before parsing:
+file data. File text, including `.env` content, is not secret-masked. Check `kind` before parsing:
 `"truncated"` means more data is available at `continuation`. Read that next page
 with the same path and the returned `offset`, optional `cursor`, and optional
 `limit`. Join line continuations with `"\n"`; append cursor continuations directly.

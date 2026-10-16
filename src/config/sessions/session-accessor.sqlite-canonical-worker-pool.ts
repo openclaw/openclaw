@@ -3,6 +3,7 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { observeWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -123,6 +124,7 @@ export async function startCanonicalValidationTask(
   let active = true;
   let custodyReleased = false;
   channel.on("message", (message: SqliteCanonicalValidationTaskMessage) => {
+    observeWorkerMessage(message, "from_worker", "sqlite_reply");
     if (message.type === "ready") {
       ready.resolve(message);
     }

@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
@@ -131,7 +132,9 @@ export async function connectGatewayClient(params: {
       onHelloOk: params.onHelloOk,
     },
     {
-      timeoutMs: params.timeoutMs ?? 10_000,
+      // The Gateway answers or closes an unfinished handshake at its preauth deadline.
+      // Wait past that verdict instead of racing it with a shorter fixture timer.
+      timeoutMs: params.timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
       timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,

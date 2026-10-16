@@ -5,6 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import {
+  emitDiagnosticEvent,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "../plugin-sdk/diagnostic-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginCache,
@@ -13,6 +19,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
@@ -138,6 +145,59 @@ async function loadReplacement(root: string) {
   return { registry, cache, reference };
 }
 
+async function reloadDiagnosticSubscribers(root: string) {
+  const { loadOpenClawPlugins } = await import("./loader.js");
+  const retired: WeakRef<object>[] = [];
+  let current: Awaited<ReturnType<typeof load>> | undefined;
+  async function load() {
+    const cache = createPluginCache();
+    const registry = withPluginCache(cache, () =>
+      loadOpenClawPlugins({
+        config: {
+          plugins: {
+            allow: ["retention-fixture"],
+            load: { paths: [root] },
+            slots: { memory: "none" },
+          },
+        },
+        pluginSdkResolution: "src",
+        activate: false,
+        cache: false,
+      }),
+    );
+    assert.deepEqual(
+      registry.plugins.map((record) => record.status),
+      ["loaded"],
+      JSON.stringify(registry.diagnostics),
+    );
+    const tool = registry.tools[0]?.factory({ config: {} });
+    assert.ok(tool && !Array.isArray(tool));
+    const result = await tool.execute("inspect", {});
+    assert.ok(result.details && typeof result.details === "object");
+    const instance = getPluginInstance(registry.plugins[0]!);
+    assert.ok(instance);
+    return { cache, registry, evidence: result.details, instance };
+  }
+  for (let generation = 0; generation < 4; generation++) {
+    if (current) {
+      retired.push(new WeakRef(current.evidence), new WeakRef(current.instance));
+      await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
+      await retirePluginCache(current.cache);
+      assert.equal(
+        hasInternalDiagnosticEventListeners(),
+        false,
+        "Retired listeners must be removed",
+      );
+    }
+    current = await load();
+    assert.equal(hasInternalDiagnosticEventListeners(), true);
+    emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
+    assert.deepEqual(current.evidence, { events: 2 });
+  }
+  assert.ok(current);
+  return { current, retired };
+}
+
 async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bundled-mjs") {
   const extension = kind === "bundled-mjs" ? "mjs" : "cjs";
   const source = path.join(root, `index.${extension}`);
@@ -173,6 +233,69 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
 }
 
 switch (process.argv[2]) {
+  case "diagnostics": {
+    // openclaw-temp-dir: allow -- standalone GC child joins registry cleanup below.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "diagnostic-retention-")));
+    const sdkKey = Symbol.for("openclaw.test.diagnostic-retention-sdk");
+    // The compiled GC child supplies its real SDK exports without resolving source .ts modules.
+    Reflect.set(globalThis, sdkKey, { onDiagnosticEvent, onInternalDiagnosticEvent });
+    try {
+      fs.writeFileSync(
+        path.join(root, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "retention-fixture",
+          configSchema: { type: "object" },
+          contracts: { tools: ["retention_fixture"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(root, "index.cjs"),
+        `
+        const { onDiagnosticEvent, onInternalDiagnosticEvent } = globalThis[Symbol.for("openclaw.test.diagnostic-retention-sdk")];
+        const evidence = { events: 0 };
+        onDiagnosticEvent(() => evidence.events++);
+        module.exports = { id: "retention-fixture", register(api) {
+          onInternalDiagnosticEvent(() => evidence.events++);
+          api.registerTool({ name: "retention_fixture", label: "Fixture", description: "Inspect evidence",
+            parameters: { type: "object", properties: {} },
+            execute: async () => ({ content: [], details: evidence }) });
+        } };
+      `,
+      );
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        },
+        () =>
+          inspectAfterFrameRelease(
+            () => reloadDiagnosticSubscribers(root),
+            async ({ current, retired }) => {
+              try {
+                await collect();
+                assert.equal(
+                  retired.filter((reference) => reference.deref() !== undefined).length,
+                  0,
+                  "Old evidence and plugin instances must collect",
+                );
+                emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
+                assert.deepEqual(current.evidence, { events: 4 });
+              } finally {
+                await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
+                await retirePluginCache(current.cache);
+              }
+              assert.equal(hasInternalDiagnosticEventListeners(), false);
+            },
+          ),
+      );
+    } finally {
+      Reflect.deleteProperty(globalThis, sdkKey);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    break;
+  }
   case "recovery-source":
   case "recovery-bundled-cjs":
   case "recovery-bundled-mjs": {
@@ -313,27 +436,28 @@ switch (process.argv[2]) {
     break;
   }
   case "cache": {
-    const { cache, signal, reference } = await retireCapturedCallback();
-    await collect();
-    assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
-    assert.equal(getPluginCacheRetirementSignal(cache), signal);
-    assert.equal(signal.aborted, true);
-    const reason: unknown = signal.reason;
-    const defaultReason: unknown = AbortSignal.abort().reason;
-    assert.ok(reason instanceof DOMException);
-    assert.ok(defaultReason instanceof DOMException);
-    assert.equal(reason.name, defaultReason.name);
-    assert.equal(reason.code, defaultReason.code);
-    assert.equal(reason.message, defaultReason.message);
-    assert.equal(typeof reason.stack, "string");
-    assert.throws(
-      () => signal.throwIfAborted(),
-      (error) => error === reason,
-    );
-    assert.deepEqual(await retirePluginCache(cache), emptyResult);
-    const other = createPluginCache();
-    await retirePluginCache(other);
-    assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    await inspectAfterFrameRelease(retireCapturedCallback, async ({ cache, signal, reference }) => {
+      await collect();
+      assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
+      assert.equal(getPluginCacheRetirementSignal(cache), signal);
+      assert.equal(signal.aborted, true);
+      const reason: unknown = signal.reason;
+      const defaultReason: unknown = AbortSignal.abort().reason;
+      assert.ok(reason instanceof DOMException);
+      assert.ok(defaultReason instanceof DOMException);
+      assert.equal(reason.name, defaultReason.name);
+      assert.equal(reason.code, defaultReason.code);
+      assert.equal(reason.message, defaultReason.message);
+      assert.equal(typeof reason.stack, "string");
+      assert.throws(
+        () => signal.throwIfAborted(),
+        (error) => error === reason,
+      );
+      assert.deepEqual(await retirePluginCache(cache), emptyResult);
+      const other = createPluginCache();
+      await retirePluginCache(other);
+      assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    });
     break;
   }
   default:

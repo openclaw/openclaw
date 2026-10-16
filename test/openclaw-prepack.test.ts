@@ -48,6 +48,7 @@ if (!rootPnpmEnvironment) {
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/lib/build-smoke-env.mts",
   "scripts/lib/bundled-plugin-build-entries.mjs",
   "scripts/lib/bundled-plugin-paths.mjs",
   "scripts/lib/optional-bundled-clusters.mjs",

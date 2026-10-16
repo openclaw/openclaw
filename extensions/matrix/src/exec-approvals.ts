@@ -1,13 +1,13 @@
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
-  createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   getExecApprovalReplyMetadata,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
+import { doesApprovalRequestSelectChannelAccountAsync } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -65,7 +65,7 @@ async function matchesMatrixRequestAccount(params: {
 }): Promise<boolean> {
   const accountId = params.accountId ?? resolveDefaultMatrixAccountId(params.cfg);
   const account = await resolveMatrixAccountAsync({ ...params, accountId });
-  return doesApprovalRequestSelectChannelAccount({
+  return doesApprovalRequestSelectChannelAccountAsync({
     ...params,
     channel: "matrix",
     defaultAccountId: resolveDefaultMatrixAccountId(params.cfg),
@@ -119,7 +119,7 @@ function isMatrixExecApprovalTargetRecipient(params: {
   });
 }
 
-const matrixExecApprovalProfile = createChannelExecApprovalProfile({
+const matrixExecApprovalProfile = createChannelExecApprovalProfileAsync({
   resolveConfig: resolveMatrixExecApprovalConfig,
   resolveApprovers: getMatrixExecApprovalApprovers,
   normalizeSenderId: normalizeMatrixApproverId,

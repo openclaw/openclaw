@@ -75,7 +75,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       : { text, markdownSource: { text, tableMode: params.tableMode } };
 
   const createLaneStream = (laneName: LaneName) =>
-    (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+    createTelegramDraftStream({
       api: params.bot.api,
       chatId: params.context.chatId,
       maxChars: draftMaxChars,
@@ -113,10 +113,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           accountId: params.context.route.accountId,
           agentId: params.opts.ownerAgentId,
         });
-        await (
-          params.telegramDeps.recordOutboundMessageForPromptContext ??
-          recordOutboundMessageForPromptContext
-        )({
+        await recordOutboundMessageForPromptContext({
           cfg: params.cfg,
           ownerAgentId: params.opts.ownerAgentId,
           account: {
@@ -132,7 +129,6 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           successfulSendThread: params.context.threadSpec,
         });
       },
-      log: logVerbose,
       // Draft delivery failures must stay operator-visible: verbose-only
       // logging hid preview send/edit/cleanup errors, so a dead progress
       // stream looked like the bot silently ignoring the user.

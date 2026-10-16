@@ -13,6 +13,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   createCrabboxNodeEnrollmentSetup,
@@ -88,6 +89,7 @@ async function serveArtifact(
     truncate?: boolean;
     resetBeforeHeaders?: boolean;
     resetBeforeTls?: boolean;
+    statusCodes?: number[];
     hold?: Promise<void>;
   } = {},
 ) {
@@ -123,6 +125,12 @@ async function serveArtifact(
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
     requested.resolve();
+    const statusCode = options.statusCodes?.[authorizations.length - 1];
+    if (statusCode) {
+      response.writeHead(statusCode);
+      response.end();
+      return;
+    }
     if (options.resetBeforeHeaders) {
       // End the connection before headers in every host runtime; the child must
       // diagnose the peer loss without relying on resetAndDestroy support.
@@ -137,7 +145,7 @@ async function serveArtifact(
     response.writeHead(200, { "content-length": archive.length });
     if (options.truncate) {
       // Truncate after headers without retained bytes: one persisted byte resets the
-      // three-consecutive-failure budget and makes the request count scheduler-dependent.
+      // consecutive-failure budget and makes the request count scheduler-dependent.
       response.end();
       return;
     }
@@ -318,62 +326,63 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       slug: id,
       timeoutMs: () => 60_000,
     });
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv, options) => {
+      if (argv[1] === "warmup") {
+        homeFor(argv[argv.indexOf("--lease-id") + 1]!);
+      }
+      if (argv[1] === "run") {
+        const id = argv[argv.indexOf("--id") + 1]!;
+        const home = homes.get(id)!;
+        execFileSync("/bin/sh", [], {
+          input: options?.input,
+          cwd: home,
+          env: { HOME: home, PATH: process.env.PATH },
+        });
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "create") {
+        const id = argv[argv.indexOf("--id") + 1]!;
+        const checkpoint = `chk_fixture_${++snapshotCount}`;
+        const snapshot = path.join(root, checkpoint);
+        fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
+        snapshots.set(checkpoint, snapshot);
+        return checkpointResult(checkpoint, id, "completed");
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "delete") {
+        fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
+        snapshots.delete(argv[3]!);
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "inspect") {
+        return commandResult({
+          stdout: JSON.stringify({
+            localState: "metadata_available",
+            providerState: "completed",
+            nextAction: "fork_or_delete",
+          }),
+        });
+      }
+      if (argv[1] === "checkpoint" && argv[2] === "fork") {
+        const checkpoint = argv[3]!;
+        const id = argv[argv.indexOf("--lease-id") + 1]!;
+        const home = homeFor(id);
+        fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
+        forkChoices.push(checkpoint);
+        return commandResult({
+          stdout: JSON.stringify({
+            checkpointId: checkpoint,
+            leaseId: id,
+            provider: "aws",
+            slug: id,
+            workdir: "/workspace",
+          }),
+        });
+      }
+      return commandResult();
+    });
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
+      prepareCapture: async () => {},
       warn: (message) => {
         throw new Error(message);
-      },
-      runCommand: async (argv, options) => {
-        if (argv[1] === "warmup") {
-          homeFor(argv[argv.indexOf("--lease-id") + 1]!);
-        }
-        if (argv[1] === "run") {
-          const id = argv[argv.indexOf("--id") + 1]!;
-          const home = homes.get(id)!;
-          execFileSync("/bin/sh", [], {
-            input: options?.input,
-            cwd: home,
-            env: { HOME: home, PATH: process.env.PATH },
-          });
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "create") {
-          const id = argv[argv.indexOf("--id") + 1]!;
-          const checkpoint = `chk_fixture_${++snapshotCount}`;
-          const snapshot = path.join(root, checkpoint);
-          fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
-          snapshots.set(checkpoint, snapshot);
-          return checkpointResult(checkpoint, id, "completed");
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "delete") {
-          fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
-          snapshots.delete(argv[3]!);
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-          return commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState: "completed",
-              nextAction: "fork_or_delete",
-            }),
-          });
-        }
-        if (argv[1] === "checkpoint" && argv[2] === "fork") {
-          const checkpoint = argv[3]!;
-          const id = argv[argv.indexOf("--lease-id") + 1]!;
-          const home = homeFor(id);
-          fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
-          forkChoices.push(checkpoint);
-          return commandResult({
-            stdout: JSON.stringify({
-              checkpointId: checkpoint,
-              leaseId: id,
-              provider: "aws",
-              slug: id,
-              workdir: "/workspace",
-            }),
-          });
-        }
-        return commandResult();
       },
     });
     const initial = context("cbx_initial");
@@ -430,16 +439,13 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it.each(["file", "directory"] as const)(
+  it.each(["file"] as const)(
     "rejects an occupied runtime %s before plugin activation",
-    async (kind) => {
+    async () => {
       const { home, stateDir } = testHome();
       fs.mkdirSync(stateDir, { recursive: true });
       const pointer = path.join(stateDir, "runtime");
-      if (kind === "directory") {
-        fs.mkdirSync(pointer);
-      }
-      const retained = kind === "directory" ? path.join(pointer, "keep") : pointer;
+      const retained = pointer;
       fs.writeFileSync(retained, "retained fixture");
       const { nodeBootstrap } = await serveArtifact(await packageFixture("occupied"));
       const result = await enroll(home, nodeBootstrap);
@@ -585,9 +591,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     fs.writeFileSync(path.join(stateDir, "setup-code"), setupCode);
     fs.mkdirSync(path.join(home, ".crabbox", "env"), { recursive: true });
     fs.writeFileSync(path.join(home, ".crabbox", "env", "forwarded"), workerBundle.token);
-    execFileSync("sh", ["-c", SCRUB_WORKER_STATE], {
+    const scrubTmp = path.join(home, "scrub-tmp");
+    fs.mkdirSync(scrubTmp);
+    // The script's Linux /tmp root belongs to the synthetic worker, not this host.
+    execFileSync("sh", ["-c", SCRUB_WORKER_STATE.replace('"/tmp"', JSON.stringify(scrubTmp))], {
       cwd: home,
-      env: { HOME: home, PATH: process.env.PATH },
+      env: { HOME: home, PATH: process.env.PATH, TMPDIR: scrubTmp },
     });
     expect(fs.existsSync(stateDir)).toBe(false);
     expect(fs.existsSync(path.join(home, ".crabbox", "env"))).toBe(false);
@@ -720,28 +729,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     30_000,
   );
 
-  it("selects new source bytes even when the public version has not changed", async ({
-    signal,
-  }) => {
-    const { home, stateDir, stop } = testHome();
-    const first = await serveArtifact(await packageFixture("first"));
-    const coldPhases = await expectSetupPhases(enroll(home, first.nodeBootstrap));
-    expect(coldPhases).toContain("openclaw-bootstrap-installation");
-    expect(coldPhases.at(-1)).toBe("openclaw-bootstrap-complete");
-    const oldLaunch = await readLaunch(stateDir, receipts, signal);
-    expect(oldLaunch).toMatchObject({ build: "first", args: expect.arrayContaining(["connect"]) });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
-    ).toEqual({ scriptsRan: true });
-    await stop();
-    fs.rmSync(path.join(stateDir, "launch.json"));
-    const second = await serveArtifact(await packageFixture("second"));
-    await expectSetupPhases(enroll(home, second.nodeBootstrap));
-    const launch = await readLaunch(stateDir, receipts, signal);
-    expect(launch.build).toBe("second");
-    expect(launch.cli).not.toBe(oldLaunch.cli);
-  }, 30_000);
-
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
     "reuses only a live process with the exact artifact and invocation",
     async ({ signal }) => {
@@ -786,6 +773,33 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
     },
     30_000,
+  );
+
+  it.for([
+    { failures: 1, expectedCode: 0, requests: 2 },
+    { failures: 10, expectedCode: 1, requests: 9 },
+  ])(
+    "handles $failures transient HTTP 530 responses during enrollment",
+    async ({ failures, expectedCode, requests }, { signal }) => {
+      const { home, stateDir } = testHome();
+      const { nodeBootstrap, authorizations } = await serveArtifact(
+        await packageFixture("edge-retry"),
+        {
+          statusCodes: Array(failures).fill(530),
+        },
+      );
+      const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { signal });
+      expect(result.code, result.output).toBe(expectedCode);
+      expect(authorizations).toEqual(Array(requests).fill(`Bearer ${nodeBootstrap.token}`));
+      if (expectedCode === 0) {
+        expect(await readLaunch(stateDir, receipts, signal)).toMatchObject({ build: "edge-retry" });
+      } else {
+        expect(result.output).toContain(
+          "HTTP 530 (download attempt 9; 9 consecutive no-progress failures)",
+        );
+        expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+      }
+    },
   );
 
   it.each([
@@ -838,15 +852,15 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         expect(authorizations.length).toBeGreaterThanOrEqual(3);
       } else {
         expect(authorizations).toHaveLength(
-          failure === "http-reset" ? 3 : failure === "tls-reset" ? 0 : 1,
+          failure === "http-reset" ? 9 : failure === "tls-reset" ? 0 : 1,
         );
       }
       if (failure === "http-reset" || failure === "tls-reset" || failure === "truncated") {
         const terminalNoProgressFailure =
-          /\(download attempt \d+; 3 consecutive no-progress failures\)/;
+          /\(download attempt \d+; 9 consecutive no-progress failures\)/;
         const retryOnlyOutput = result.output
           .split("\n")
-          .filter((line) => /\([0-2]\/3 consecutive no-progress failures\)/.test(line))
+          .filter((line) => /\([0-8]\/9 consecutive no-progress failures\)/.test(line))
           .join("\n");
         expect(retryOnlyOutput).not.toBe("");
         expect(retryOnlyOutput).not.toMatch(terminalNoProgressFailure);

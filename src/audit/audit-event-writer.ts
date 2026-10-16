@@ -2,7 +2,6 @@
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { AuditEventInput } from "./audit-event-types.js";
@@ -76,27 +75,28 @@ export function createAuditEventWriter(options: {
   const reportContention = (message: string) => {
     options.onContention?.(formatAuditWriterError(message));
   };
-  const execute = async (
-    command: SqliteWorkerCommand<AuditWriterOperations>,
-  ): Promise<AuditWriterResult> => {
+  const execute = async <Key extends keyof AuditWriterOperations>(command: {
+    type: Key;
+    input: AuditWriterOperations[Key]["input"];
+  }): Promise<AuditWriterOperations[Key]["output"] | undefined> => {
     const context = captureOpenClawStateWorkerContext(database);
     const { runOpenClawStateWorkerOperation } =
       await import("../state/openclaw-state-worker-store.js");
     if (shutdownExpired) {
-      return { status: "settled" };
+      return undefined;
     }
-    // Existing state opens lazily inside the zero-busy-timeout audit command.
-    const result = await runOpenClawStateWorkerOperation<AuditWriterResult>(
+    // Existing state opens lazily inside the audit command.
+    const result = await runOpenClawStateWorkerOperation<
+      AuditWriterOperations[Key]["output"] | undefined
+    >(context, (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)), {
+      existingOnly: true,
+    });
+    if (result !== undefined || shutdownExpired) {
+      return result;
+    }
+    return runOpenClawStateWorkerOperation<AuditWriterOperations[Key]["output"] | undefined>(
       context,
-      (scope) =>
-        shutdownExpired ? Promise.resolve({ status: "settled" } as const) : scope.execute(command),
-      { existingOnly: true },
-    );
-    return (
-      result ??
-      runOpenClawStateWorkerOperation<AuditWriterResult>(context, (scope) =>
-        shutdownExpired ? Promise.resolve({ status: "settled" } as const) : scope.execute(command),
-      )
+      (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)),
     );
   };
   const observeLockContention = () => {
@@ -109,12 +109,10 @@ export function createAuditEventWriter(options: {
   };
   const reportMaintenance = async (): Promise<AuditMaintenanceAttempt> => {
     let more = false;
-    for (const family of ["events", "identity", "decisions", "progress"] as const) {
-      if (shutdownExpired) {
-        break;
-      }
-      try {
-        const result = await execute({ type: "audit.writer.prune", input: family });
+    try {
+      // A submitted pass settles all remaining bounded families even after the shutdown deadline.
+      const results = await execute({ type: "audit.writer.prune", input: undefined });
+      for (const result of results ?? []) {
         if (result.status === "retry") {
           observeLockContention();
           return "retry";
@@ -123,15 +121,18 @@ export function createAuditEventWriter(options: {
           fail(result.error);
         }
         more = (result.deleted ?? 0) > 0 || more;
-      } catch (error) {
-        fail(error);
       }
+    } catch (error) {
+      // A rejected transport can follow committed families; never replay an unknown pass.
+      fail(error);
     }
     return more ? "more" : "settled";
   };
   const processRequest = async (request: AuditWriterRequest): Promise<AuditWriterResult> => {
     try {
-      return await execute({ type: "audit.writer.process", input: request });
+      return (
+        (await execute({ type: "audit.writer.process", input: request })) ?? { status: "settled" }
+      );
     } catch (error) {
       // Rejected transport/settlement can follow a commit; never replay that request.
       return { status: "settled", error: formatAuditWriterRequestError(request, error) };

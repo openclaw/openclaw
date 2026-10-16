@@ -376,6 +376,15 @@ it("rejects a clean exit before a response and recovers capacity", async () => {
   expect(workers).toHaveLength(2);
 });
 
+it("rejects active and queued callers after worker exit and OOM without unhandled rejections", async () => {
+  // CI's process-wide V8 heap setting overrides Worker resourceLimits.
+  await exec(
+    process.execPath,
+    resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.failure)),
+    { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 20_000 },
+  );
+});
+
 it("closes a generation before a rejected result can dispatch its successor", async () => {
   const reason = new Error("generation superseded");
   const pool = createPool({

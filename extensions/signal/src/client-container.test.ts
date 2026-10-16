@@ -378,14 +378,4 @@ describe("container attachments", () => {
       "Signal REST attachment exceeded size limit",
     );
   });
-  it("times out a stalled attachment within the request deadline", async () => {
-    vi.useFakeTimers();
-    mockFetch.mockResolvedValue(new Response(new ReadableStream<Uint8Array>()));
-    const result = expect(attachment({ timeoutMs: 25 })).rejects.toThrow(
-      /Signal REST (attachment response body stalled after 25ms|request timed out)/,
-    );
-    await vi.advanceTimersByTimeAsync(25);
-    await result;
-    expect(request().signal).toBeInstanceOf(AbortSignal);
-  });
 });

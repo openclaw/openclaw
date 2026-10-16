@@ -49,6 +49,7 @@ const summariesSchema = z.strictObject({
   agentId: nonempty.optional(),
 });
 const scheduleSchema = z.strictObject({
+  enabled: z.boolean().default(true),
   closedDayUtc: z
     .string()
     .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)

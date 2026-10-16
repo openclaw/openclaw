@@ -110,7 +110,9 @@ export function resolveAnthropicTransportOptions(
 /** Keep both entry points on one thinking mode while retaining their output-budget policies. */
 export function applyAnthropicThinkingOptions(
   model: Model<"anthropic-messages">,
-  resolved: AnthropicOptions & { maxTokens: number },
+  resolved: Pick<AnthropicOptions, "thinkingEnabled" | "thinkingBudgetTokens" | "effort"> & {
+    maxTokens: number;
+  },
   options: Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> | undefined,
   profile: "provider" | "transport",
 ): SimpleStreamOptions["reasoning"] {
@@ -123,11 +125,7 @@ export function applyAnthropicThinkingOptions(
     resolved.thinkingEnabled = false;
     return reasoning;
   }
-  if (
-    !reasoning ||
-    supportsClaudeAdaptiveThinking(model) ||
-    (!managed && defaultsClaudeAdaptiveThinking(model))
-  ) {
+  if (!reasoning || supportsClaudeAdaptiveThinking(model)) {
     resolved.thinkingEnabled = Boolean(reasoning) || defaultsClaudeAdaptiveThinking(model);
     if (resolved.thinkingEnabled) {
       resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);

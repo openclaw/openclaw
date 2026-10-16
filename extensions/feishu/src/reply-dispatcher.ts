@@ -25,7 +25,7 @@ import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from 
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
-import { resolveFeishuIdentityEmoji } from "./identity-header.js";
+import { resolveCardHeader, resolveCardNote } from "./identity-header.js";
 import {
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
@@ -55,7 +55,6 @@ import {
   sendCardFeishu,
   sendMessageFeishu,
   sendStructuredCardFeishu,
-  type CardHeaderConfig,
 } from "./send.js";
 import {
   FeishuStreamingFinalizationError,
@@ -107,38 +106,6 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   // Defensive normalization: some payloads use seconds, others milliseconds.
   // Values below 1e12 are treated as epoch-seconds.
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
-}
-
-function resolveCardHeader(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-): CardHeaderConfig | undefined {
-  const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
-  const emoji = resolveFeishuIdentityEmoji(identity?.emoji);
-  const title = (emoji ? `${emoji} ${name}` : name).trim();
-  if (!title) {
-    return undefined;
-  }
-  return {
-    title,
-    template: identity?.theme ?? "blue",
-  };
-}
-
-function resolveCardNote(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-  prefixCtx: { model?: string; provider?: string },
-): string {
-  const name = identity?.name?.trim() || agentId;
-  const parts: string[] = [`Agent: ${name}`];
-  if (prefixCtx.model) {
-    parts.push(`Model: ${prefixCtx.model}`);
-  }
-  if (prefixCtx.provider) {
-    parts.push(`Provider: ${prefixCtx.provider}`);
-  }
-  return parts.join(" | ");
 }
 
 type CreateFeishuReplyDispatcherParams = {
@@ -297,6 +264,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let reasoningText = "";
   let statusLine = "";
+  let modelWaitLine = "";
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
   // Partial previews are replaceable; only committed final text may precede an error notice.
@@ -346,7 +314,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const content = [thinking ? formatReasoningPrefix(thinking) : "", answer]
       .filter(Boolean)
       .join("\n\n---\n\n");
-    return [content, statusLine].filter(Boolean).join("\n\n");
+    return [content, modelWaitLine || statusLine].filter(Boolean).join("\n\n");
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
@@ -466,6 +434,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     lastPartial = "";
     reasoningText = "";
     statusLine = "";
+    modelWaitLine = "";
     snapshotBaseText = "";
     lastSnapshotTextLength = 0;
     hasStreamingFinalText = false;
@@ -512,12 +481,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           closed = error.result;
           finalizationError = error;
         }
-        result = createFeishuReplyDeliveryResult({
-          results: [closed],
-          visibleReplySent: closed.visibleReplySent,
-          content: closed.content,
-          kind: "card",
-        });
+        result = {
+          ...createFeishuReplyDeliveryResult({
+            results: [closed],
+            visibleReplySent: closed.visibleReplySent,
+            content: closed.content,
+            kind: "card",
+          }),
+          ...(closed.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
+        };
         if (result.visibleReplySent) {
           visibleReplySent = true;
         }
@@ -803,22 +775,46 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return true;
   };
 
+  const streamingRecoveries = new WeakMap<
+    FeishuReplyDeliveryResult,
+    Map<string, Promise<FeishuReplyDeliveryResult>>
+  >();
+
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
     infoKind?: string,
   ): Promise<FeishuReplyDeliveryResult | undefined> => {
-    if (result?.visibleReplySent === true || !content?.trim()) {
+    // A visible card whose final write was rejected only shows a stale preview; the
+    // completed answer still has to reach the chat through a static card/message.
+    if (
+      (result?.visibleReplySent === true && result.finalTextAccepted !== false) ||
+      !content?.trim()
+    ) {
       return result;
     }
-    const delivered = await sendChunkedTextReply({
+    let recoveries = result && streamingRecoveries.get(result);
+    const pending = recoveries?.get(content);
+    if (pending) {
+      return pending;
+    }
+    const recovery = sendChunkedTextReply({
       text: content,
       useCard: withinCardTableLimit(content),
       infoKind,
       preparedPostText: true,
+    }).then((delivered) => {
+      lastStreamingSettlement = { disposition: "closed", result: delivered, content };
+      return delivered;
     });
-    lastStreamingSettlement = { disposition: "closed", result: delivered, content };
-    return delivered;
+    if (result) {
+      if (!recoveries) {
+        recoveries = new Map();
+        streamingRecoveries.set(result, recoveries);
+      }
+      recoveries.set(content, recovery);
+    }
+    return recovery;
   };
 
   function queueIdleSideEffects(): Promise<void> {
@@ -1406,6 +1402,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             ) {
               return false;
             }
+            if (payload.kind === "model-wait") {
+              if (payload.phase === "end" && !modelWaitLine) {
+                return false;
+              }
+              modelWaitLine = payload.phase === "end" ? "" : (payload.progressText ?? "");
+              if (!modelWaitLine && !buildCombinedStreamText(reasoningText, streamText)) {
+                return discardStreamingPreview().then(() => false);
+              }
+              return updateStreamingStatusLine(statusLine, payload.phase !== "end");
+            }
             const { kind: itemKind, ...item } = payload;
             const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
               event: "item",
@@ -1419,7 +1425,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
-        ? () => updateStreamingStatusLine("", false)
+        ? () => {
+            modelWaitLine = "";
+            return updateStreamingStatusLine("", false);
+          }
         : undefined,
       onCompactionStart: previewStreamingEnabled
         ? () => updateStreamingStatusLine("📦 **Compacting context...**")

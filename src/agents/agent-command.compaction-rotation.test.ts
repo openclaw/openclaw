@@ -5,10 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -44,16 +45,17 @@ const {
 registerAgentCommandCompactionTestHooks();
 
 const actorDirs = useAutoCleanupTempDirTracker(afterAll);
-const actorAuthority = { assertCurrent() {} };
-let commandActor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+const actorAuthority = { assertCurrent() {}, authorize() {} };
+let commandActor: ReturnType<typeof memorySessionActorOwners.get>;
 beforeAll(async () => {
-  commandActor = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: actorDirs.make("agent-command-actor-") },
-    actorAuthority,
-  );
+  const env = { OPENCLAW_STATE_DIR: actorDirs.make("agent-command-actor-") };
+  commandActor = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  });
 });
 afterAll(async () => {
-  await commandActor?.close();
+  memorySessionActorOwners.closeDatabase(commandActor);
 });
 
 function discordTurn(sessionId: string, sessionKey: string) {
@@ -118,16 +120,25 @@ describe("agentCommand compaction transcript rotation", () => {
     const sessionId = "actor-command";
     const sessionKey = `agent:main:dashboard:incognito-${sessionId}`;
     const target = { agentId: "main", sessionId, sessionKey, storePath: commandActor.path };
-    await commandActor.sessions.create(actorAuthority, {
-      sessionKey,
-      entry: {
-        sessionId,
-        incognito: true,
-        lifecycleRevision: "initial",
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
+    const actor = await commandActor.acquire(
+      { database: commandActor.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: {
+            sessionId,
+            incognito: true,
+            lifecycleRevision: "initial",
+            updatedAt: Date.now(),
+            sessionStartedAt: Date.now(),
+          },
+        },
       },
-    });
+      actorAuthority,
+    );
     state.cfg = { ...cfg, session: { ...cfg.session, store: commandActor.path } };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "command user recorder");
@@ -135,31 +146,40 @@ describe("agentCommand compaction transcript rotation", () => {
       return makeResult({ sessionId, text: "actor command answer", runner: "cli" });
     });
     try {
-      await withIncognitoSessionActor(commandActor, async () => {
-        const result = await agentCommand(discordTurn(sessionId, sessionKey));
-        expect(result).toMatchObject({ deliverySucceeded: true });
-        const events = await loadTranscriptEvents(target);
-        expect(events).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({ role: "user" }),
-            }),
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({ role: "assistant" }),
-            }),
-          ]),
-        );
-        expect(JSON.stringify(events)).toContain("room message");
-        expect(JSON.stringify(events)).toContain("actor command answer");
-        expect(state.deliveryFreshEntries.at(-1)).toMatchObject({ sessionId, incognito: true });
-        const stored = (await commandActor.sessions.read(actorAuthority, { sessionKey })).entry;
-        expect(stored?.sessionId).toBe(sessionId);
-        expect(stored?.pendingFinalDelivery).toBeUndefined();
-      });
+      await runWithSessionActorStorage(
+        {
+          actor,
+          authority: actorAuthority,
+          agentId: commandActor.agentId,
+          path: commandActor.path,
+        },
+        async () => {
+          const result = await agentCommand(discordTurn(sessionId, sessionKey));
+          expect(result).toMatchObject({ deliverySucceeded: true });
+          const events = await loadTranscriptEvents(target);
+          expect(events).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ role: "user" }),
+              }),
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({ role: "assistant" }),
+              }),
+            ]),
+          );
+          expect(JSON.stringify(events)).toContain("room message");
+          expect(JSON.stringify(events)).toContain("actor command answer");
+          expect(state.deliveryFreshEntries.at(-1)).toMatchObject({ sessionId, incognito: true });
+          const stored = commandActor.readSession(sessionKey, actorAuthority)?.entry;
+          expect(stored?.sessionId).toBe(sessionId);
+          expect(stored?.pendingFinalDelivery).toBeUndefined();
+        },
+      );
     } finally {
       state.cfg = cfg;
+      await actor.release();
     }
   });
 
@@ -514,23 +534,6 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("does not publish a hidden model-run session as a compaction successor", async () => {
-    const onSessionIdChanged = vi.fn();
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) =>
-      makeResult({ sessionId: params.sessionId, text: "hidden answer", runner: "embedded" }),
-    );
-
-    await agentCommand({
-      message: "hidden probe",
-      sessionId: "public-model-run-session",
-      modelRun: true,
-      sessionEffects: "internal",
-      onSessionIdChanged,
-    });
-
-    expect(onSessionIdChanged).not.toHaveBeenCalled();
-  });
-
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -724,18 +727,19 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    ["empty payloads", "empty", []],
-    ["a silent NO_REPLY payload", "silent", [{ text: "NO_REPLY" }]],
+    ["empty payloads", "empty"],
+    ["an intentional silent final", "silent"],
   ] as const)(
-    "keeps compaction failure fatal for %s without manufacturing delivery state",
-    async (_label, sessionSuffix, payloads) => {
+    "preserves compaction failure after %s without manufacturing delivery state",
+    async (_label, sessionSuffix) => {
       const sessionId = `no-reply-compaction-failure-${sessionSuffix}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       state.runAgentAttemptMock.mockResolvedValueOnce({
-        payloads: [...payloads],
+        payloads: [],
         meta: {
           durationMs: 1,
           stopReason: "end_turn",
+          terminalReply: { disposition: sessionSuffix },
           executionTrace: {
             runner: "cli",
             fallbackUsed: false,
@@ -751,12 +755,11 @@ describe("agentCommand compaction transcript rotation", () => {
       });
       state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
 
-      await expect(
-        agentCommand({
-          ...discordTurn(sessionId, sessionKey),
-          message: "prompt with no assistant reply",
-        }),
-      ).rejects.toThrow("Summarization failed: Connection error");
+      const command = agentCommand({
+        ...discordTurn(sessionId, sessionKey),
+        message: "prompt with no assistant reply",
+      });
+      await expect(command).rejects.toThrow("Summarization failed: Connection error");
 
       expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();

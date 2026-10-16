@@ -61,6 +61,8 @@ media captions are sent as text/card chunks before the attachment.
 
 Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text.
 
+If Card Kit rejects the completed answer after accepting a streaming preview, OpenClaw sends the complete answer as a separate static reply instead of leaving only the preview.
+
 ```json5
 {
   channels: {

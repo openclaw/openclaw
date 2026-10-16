@@ -1,5 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -109,6 +111,7 @@ export function hasKeyInEnv(entry: Pick<PluginWebSearchProviderEntry, "envVars">
 
 function providerIsReady(
   config: OpenClawConfig,
+  authStore: AuthProfileStore,
   entry: Pick<
     PluginWebSearchProviderEntry,
     "id" | "authProviderId" | "envVars" | "requiresCredential"
@@ -121,7 +124,7 @@ function providerIsReady(
     entry.authProviderId &&
     hasAuthProfileForProvider({
       provider: entry.authProviderId,
-      agentDir: resolveDefaultAgentDir(config),
+      authStore,
     })
   ) {
     return true;
@@ -360,6 +363,9 @@ export async function runSearchSetupFlow(
   prompter: WizardPrompter,
   opts?: SetupSearchOptions,
 ): Promise<SearchSetupResult> {
+  const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+    resolveDefaultAgentDir(config),
+  );
   const availableProviderOptions = resolveSearchProviderOptions(config);
   const codexRecommended =
     defaultModelUsesCodexRuntime(config) &&
@@ -418,6 +424,7 @@ export async function runSearchSetupFlow(
     const autoDetectedId = resolveWebSearchProviderId({
       config,
       search: searchForAutoDetect,
+      authStore,
       providers: [...providerOptions],
     });
     const autoDetected = providerOptions.find((entry) => entry.id === autoDetectedId);
@@ -425,7 +432,7 @@ export async function runSearchSetupFlow(
       return autoDetected.id;
     }
     const detected = providerOptions.find(
-      (entry) => entry.requiresCredential !== false && providerIsReady(config, entry),
+      (entry) => entry.requiresCredential !== false && providerIsReady(config, authStore, entry),
     );
     if (detected) {
       return detected.id;
@@ -437,7 +444,7 @@ export async function runSearchSetupFlow(
     const credentialHint =
       entry.requiresCredential === false
         ? t("wizard.search.keyFree")
-        : providerIsReady(config, entry)
+        : providerIsReady(config, authStore, entry)
           ? t("wizard.search.configured")
           : entry.credentialLabel
             ? // Some providers need a non-key credential (e.g. SearXNG's base
@@ -513,16 +520,15 @@ export async function runSearchSetupFlow(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
-  const agentDir = resolveDefaultAgentDir(config);
   const authProviderId = entry.authProviderId;
   const providerAuthProfileAvailable = authProviderId
-    ? hasAuthProfileForProvider({ provider: authProviderId, agentDir })
+    ? hasAuthProfileForProvider({ provider: authProviderId, authStore })
     : false;
   const oauthAuthProfileAvailable =
     authProviderId && providerAuthProfileAvailable
       ? hasAuthProfileForProvider({
           provider: authProviderId,
-          agentDir,
+          authStore,
           type: "oauth",
         })
       : false;

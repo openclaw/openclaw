@@ -79,7 +79,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeGitWorktreeOperation }) => executeGitWorktreeOperation(command),
               );
             case "repository.identities":
-              return import("../agents/worktrees/service-preparation.js").then(
+              return import("../agents/worktrees/repository-paths.js").then(
                 async ({ resolveRepositoryIdentity }) =>
                   (
                     await runTasksWithConcurrency({
@@ -103,6 +103,11 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
                 ({ readCheckoutGitContext }) =>
                   readCheckoutGitContext(command.input.root, command.input.githubHost),
+              );
+            case "pull-request.branch-comparison":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readPullRequestBranchComparison }) =>
+                  readPullRequestBranchComparison(command.input),
               );
             case "pull-request.branch-facts":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(

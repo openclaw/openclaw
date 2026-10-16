@@ -241,6 +241,7 @@ async function discoverForSetup(
       baseUrl: provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
       apiKey,
       headers,
+      allowPrivateNetwork: provider?.request?.allowPrivateNetwork,
       signal: ctx.signal,
       useRuntimeDefaults: false,
     });
@@ -372,6 +373,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     baseUrl: endpoint.inferenceBaseUrl,
     apiKey,
     headers,
+    allowPrivateNetwork: existing?.request?.allowPrivateNetwork,
     signal: ctx.signal,
     useRuntimeDefaults: false,
   });
@@ -450,6 +452,7 @@ async function validateNonInteractiveDiscovery(
     baseUrl,
     apiKey,
     headers,
+    allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
     useRuntimeDefaults: false,
   });
   if (discovery.kind !== "success") {

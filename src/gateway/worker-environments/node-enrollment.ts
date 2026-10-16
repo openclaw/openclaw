@@ -29,6 +29,7 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -201,6 +202,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       ...grantArtifact(prepared, prepared.artifact, enrollmentSignal, isAuthorized, transferBytes),
       openclawVersion: prepared.artifact.openclawVersion,
       enabledPluginIds: prepared.artifact.enabledPluginIds,
+      linuxToolchainSetup: DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
     },
     signal: enrollmentSignal,
   });

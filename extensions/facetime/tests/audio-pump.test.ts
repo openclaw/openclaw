@@ -120,10 +120,7 @@ describe("FaceTime native audio bridge", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(pump.playedAudioFrames()).toBe(2_400);
     expect(pump.queuedAudioFrames()).toBe(0);
-    expect(onPlaybackDrained).toHaveBeenCalledWith({
-      generation: 1,
-      playedFrames: 2_400,
-    });
+    expect(onPlaybackDrained).toHaveBeenCalledExactlyOnceWith();
     expect(pump.getPlaybackState()).toEqual([]);
   });
 

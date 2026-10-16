@@ -83,6 +83,7 @@ describe("Codex catalog refresh deadline", () => {
       accountType: "chatgpt",
     });
     expect(transport.request.mock.calls.map(([method]) => method)).toEqual([
+      "account/read",
       "model/list",
       "account/read",
     ]);
@@ -113,7 +114,10 @@ describe("Codex catalog refresh deadline", () => {
     expect(
       owner.read({ ...params, provider: "openai", modelId: model.id }, configured),
     ).toBeUndefined();
-    expect(transport.request.mock.calls.map(([method]) => method)).toEqual(["model/list"]);
+    expect(transport.request.mock.calls.map(([method]) => method)).toEqual([
+      "account/read",
+      "model/list",
+    ]);
     expect(transport.release).toHaveBeenCalledOnce();
   });
 });

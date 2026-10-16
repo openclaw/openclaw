@@ -37,9 +37,13 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
+  OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
+import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+} from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -191,13 +195,26 @@ function resolveCodexForwardCompatModel(
     if (!catalogModel || catalogModel.contextWindow === undefined) {
       return undefined;
     }
+    const registeredModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
     return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
       input: catalogModel.input.filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
-      ...ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId),
+      ...registeredModel,
+      // Startup borrows Platform manifest rows; their API budget is not a subscription limit.
+      // Same-route registry rows retain authored and account-reported budgets, including 272k.
+      ...(lower === OPENAI_GPT_61_SOL_MODEL_ID
+        ? {
+            contextTokens:
+              registeredModel &&
+              (registeredModel.api === "openai-chatgpt-responses" ||
+                isOpenAICodexBaseUrl(registeredModel.baseUrl))
+                ? (registeredModel.contextTokens ?? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS)
+                : OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+          }
+        : {}),
       id: trimmedModelId,
       provider: PROVIDER_ID,
       api: "openai-chatgpt-responses",
@@ -320,9 +337,9 @@ function withDefaultCodexContextMetadata(params: {
     return undefined;
   }
   const contextTokens =
-    typeof params.model.contextTokens === "number"
+    params.model.contextTokens !== undefined
       ? params.model.contextTokens
-      : typeof params.model.contextWindow === "number" && params.model.contextWindow > 0
+      : params.model.contextWindow !== undefined && params.model.contextWindow > 0
         ? Math.min(params.contextTokens, params.model.contextWindow)
         : params.contextTokens;
   const input = params.model.input?.includes("image")

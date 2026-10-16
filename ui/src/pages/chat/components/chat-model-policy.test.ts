@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
-import { renderChatModelControls } from "./chat-model-controls.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ChatModelControls } from "./chat-model-controls.tsx";
 
 const models = ["primary", "fallback", "custom"].map((id) => ({
   id,
@@ -24,29 +25,30 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
   const selectedSession = { ...sessions.sessions[0]!, modelOverrideSource: "user" as const };
   const onModelSelect = vi.fn(async () => undefined);
   const before = JSON.stringify(selectedSession);
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelCatalog: catalog.models,
-      modelCatalogState: {
-        hasSnapshot: !retired,
-        status: retired ? "loading" : "ready",
-        retired,
-        modelSelectionPolicy: catalog.modelSelectionPolicy,
-      },
-      modelSwitching: false,
-      sending: false,
-      sessionKey: "main",
-      selectedSession,
-      sessionsResult: sessions,
-      stream: null,
-      onModelSelect,
-      onModelSetup: vi.fn(),
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(ChatModelControls, {
+        activeRunId: null,
+        connected: true,
+        gatewayAvailable: true,
+        loading: false,
+        modelCatalog: catalog.models,
+        modelCatalogState: {
+          hasSnapshot: !retired,
+          status: retired ? "loading" : "ready",
+          retired,
+          modelSelectionPolicy: catalog.modelSelectionPolicy,
+        },
+        modelSwitching: false,
+        sending: false,
+        sessionKey: "main",
+        selectedSession,
+        sessionsResult: sessions,
+        stream: null,
+        onModelSelect,
+        onModelSetup: vi.fn(),
+      }),
+    { container },
   );
   expect(JSON.stringify(selectedSession)).toBe(before);
   return { container, onModelSelect };

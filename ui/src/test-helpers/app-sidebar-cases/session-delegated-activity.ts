@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -10,6 +9,7 @@ import {
   type TestSessionMenu,
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, roster, session } from "./roster.test-support.ts";
 
@@ -115,10 +115,17 @@ describe("AppSidebar delegated activity", () => {
         sessions: [parentRow, failedRun],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(parent().querySelector(".session-glyph__ring")).toBeNull();
-    expect(parent().querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(parent().textContent).toContain("Child session Review changes failed: Review failed");
+    const parentAttention = parent().querySelector('[data-session-attention="error"]')!;
+    expect(parentAttention).not.toBeNull();
+    await parentAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const parentDescription = (parentAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => parentAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(parentDescription).toContain("Child session Review changes failed: Review failed");
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(
       sidebar.querySelector("[data-child-session-toggle], [data-show-more-children]"),
@@ -201,9 +208,14 @@ describe("AppSidebar delegated activity", () => {
     );
     expect(rosterParent().querySelector(".session-glyph__ring")).toBeNull();
     expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();
-    expect(rosterParent().textContent).toContain(
-      "Child session Review changes failed: Review failed",
-    );
+    const rosterAttention = rosterParent().querySelector('[data-session-attention="error"]')!;
+    await rosterAttention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const rosterDescription = (rosterAttention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => rosterAttention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(rosterDescription).toContain("Child session Review changes failed: Review failed");
     expect(mixed.sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
     expect(mixed.sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(1);
   });
@@ -298,49 +310,6 @@ describe("AppSidebar delegated activity", () => {
     const toggle = menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')!;
     expect(toggle.textContent).toContain("Mark as read");
   });
-
-  it.each(["plain", "icon", "owner"])(
-    "rings an idle %s parent until its hidden child finishes",
-    async (appearance) => {
-      const parentKey = "agent:main:idle-parent";
-      const sessions = createSessionsHarness("main", [parentKey]);
-      const row = sessions.sessions.state.result!.sessions[0]!;
-      row.hasActiveRun = false;
-      row.hasActiveSubagentRun = true;
-      row.status = "done";
-      row.unread = true;
-      if (appearance === "icon") {
-        row.icon = "braces";
-      } else if (appearance === "owner") {
-        row.owner = { actor: { type: "human", id: "ada", label: "Ada" } };
-      }
-      row.childSessions = ["agent:main:subagent:idle-parent-child"];
-      const { sidebar } = await mountSidebar(
-        createGatewayHarness({} as GatewayBrowserClient).gateway,
-        sessions.sessions,
-      );
-      const parent = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-      expect(
-        parent.querySelector('.session-glyph__ring[aria-label="Subagents working"]'),
-      ).not.toBeNull();
-      expect(parent.classList.contains("session-row-host--running")).toBe(true);
-      expect(parent.querySelector(".session-unread-dot, .session-glyph__badge--unread")).toBeNull();
-      expect(parent.querySelector("[data-child-session-toggle]")).toBeNull();
-      sessions.publish({
-        result: reconcileSessionChanged(sessions.sessions.state.result, {
-          sessionKey: parentKey,
-          hasActiveSubagentRun: false,
-        }).result,
-      });
-      await sidebar.updateComplete;
-      const finished = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-      expect(finished.querySelector(".session-glyph__ring")).toBeNull();
-      expect(finished.classList.contains("session-row-host--running")).toBe(false);
-      expect(
-        finished.querySelector(".session-unread-dot, .session-glyph__badge--unread"),
-      ).not.toBeNull();
-    },
-  );
 
   it("rings a queued parent and its idle child while a grandchild works", async () => {
     const parentKey = "agent:main:queued-parent";

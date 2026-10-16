@@ -3,7 +3,6 @@ import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -15,7 +14,7 @@ import {
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
@@ -29,8 +28,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-const project = (data: CodexThread[]) =>
-  projectCodexCatalogPage({ data }, { sanitize: sanitizeTerminalText });
+const project = (data: CodexThread[]) => projectCodexCatalogPage({ data });
 
 function catalog(
   root: string,

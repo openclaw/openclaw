@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   SKILL_LIBRARY_MAX_SELECTIONS,
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -26,7 +26,7 @@ import {
 } from "./store.js";
 
 function seed(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   preparedActor?: ReturnType<typeof resolveSkillLibraryActor>,
 ): SkillLibrarySelection[] {
@@ -55,7 +55,7 @@ function seed(
 }
 
 function change(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   current: readonly SkillLibrarySelection[],
   params: SkillsLibraryActivateParams,
@@ -91,7 +91,10 @@ function change(
 }
 
 export const skillLibraryReadOperations = {
-  "skillLibrary.read": (input: SkillLibraryReadInput, db: DatabaseSync): SkillLibraryReadOutput => {
+  "skillLibrary.read": (
+    input: SkillLibraryReadInput,
+    db: EngineConnection,
+  ): SkillLibraryReadOutput => {
     if (
       input.kind === "seed" &&
       (!input.authority.profileId ||

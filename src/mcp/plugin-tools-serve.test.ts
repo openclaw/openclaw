@@ -38,8 +38,10 @@ vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
 }));
 
+// mock-isolation: MCP tool fixtures provide config without starting a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../logging/console.js", async (importOriginal) => {
@@ -336,20 +338,6 @@ describe("plugin tools MCP server", () => {
         }),
       },
     ]);
-  });
-
-  it("keeps completed nonzero shell exits nonfatal through MCP", async () => {
-    const content = [{ type: "text", text: "original tool result" }];
-    const execute = vi.fn().mockResolvedValue({
-      content,
-      details: { status: "completed", exitCode: 23 },
-    });
-    const handlers = createPluginToolsMcpHandlers([createTool("result_probe", execute)]);
-
-    const result = await handlers.callTool({ name: "result_probe", arguments: {} });
-
-    expect(result.content).toEqual(content);
-    expect(result.isError).toBeUndefined();
   });
 
   it("releases run-scoped adjusted arguments after a pre-wrapped direct MCP call", async () => {

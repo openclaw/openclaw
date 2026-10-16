@@ -37,8 +37,6 @@ const AUTH_TAG_BYTES: usize = 32;
 const FIXED_HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2 + 4;
 const PAYLOAD_LENGTH_OFFSET: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2;
 const MIN_FRAME_BYTES: u32 = 65;
-#[cfg(test)]
-const LENGTH_PREFIX_BYTES: usize = 4;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1210,13 +1208,9 @@ mod tests {
         let mut another_supervisor = channel(SidecarPeerRole::Supervisor, 7);
         let outgoing = another_supervisor.seal(&json!({"type":"probe"})).unwrap();
         assert!(matches!(
-            supervisor_open(&outgoing),
+            channel(SidecarPeerRole::Supervisor, 7).open::<Value>(&outgoing),
             Err(SidecarFrameError::WrongDirection)
         ));
-    }
-
-    fn supervisor_open(frame: &[u8]) -> Result<Value, SidecarFrameError> {
-        channel(SidecarPeerRole::Supervisor, 7).open(frame)
     }
 
     #[tokio::test]
@@ -1266,8 +1260,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_prefix_constant_matches_wire_contract() {
-        assert_eq!(LENGTH_PREFIX_BYTES, std::mem::size_of::<u32>());
+    fn minimum_frame_size_matches_wire_contract() {
         assert_eq!(
             MIN_FRAME_BYTES as usize,
             FIXED_HEADER_BYTES + AUTH_TAG_BYTES + 2

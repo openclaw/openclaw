@@ -1,13 +1,14 @@
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
-import { dockPanelStyles } from "./dock-panel-styles.ts";
-import { icons } from "./icons.ts";
-import { linkReaderContentStyles } from "./link-reader-content.styles.ts";
+import { iconData, type IconName } from "./icon-data.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
-import { linkReaderPanelStyles } from "./link-reader-panel.styles.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
-import { panelTabStripStyles } from "./panel-tab-strip.ts";
+import { createIconElement } from "./markdown-icon.ts";
+import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
+import dockPanelStyles from "./dock-panel.css?inline";
+import linkReaderContentStyles from "./link-reader-content.css?inline";
+import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
 export const linkReaderPanelLayout = createDockPanelLayout({
   storageKey: "openclaw.link-reader.panel.v1",
@@ -20,14 +21,18 @@ export const linkReaderPanelLayout = createDockPanelLayout({
 });
 
 export const linkReaderViewStyles = [
-  panelTabStripStyles,
+  panelTabStripCss,
   dockPanelStyles,
   linkReaderPanelStyles,
   linkReaderContentStyles,
 ];
 
-export function readerIcon(name: string | undefined) {
-  return Object.entries(icons).find(([key]) => key === name)?.[1] ?? icons.link;
+export function readerIcon(name: string | undefined, ownerDocument: Document) {
+  const icon =
+    name && Object.hasOwn(iconData, name)
+      ? (name as IconName) // SAFETY: The own-key guard admits only names in the built-in catalog.
+      : "link";
+  return createIconElement(icon, ownerDocument);
 }
 
 type PanelView =

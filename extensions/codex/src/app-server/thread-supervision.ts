@@ -72,7 +72,7 @@ type PendingSupervisionMaterializationParams = Omit<
   normalizeBindingModelProvider: (
     authProfileId: string | undefined,
     modelProvider: string | undefined,
-  ) => string | undefined;
+  ) => Promise<string | undefined>;
   bindingPatch: Partial<Omit<CodexAppServerThreadBinding, "threadId" | "pendingSupervisionBranch">>;
 };
 
@@ -98,7 +98,7 @@ export async function materializePendingSupervisionBranch(
           throw new CodexAppServerUnsafeSubscriptionError(
             kind === "probe"
               ? "Codex model test fork may have materialized without a response"
-              : "Canonical Codex branch may have started without a response",
+              : "Supervised Codex branch may have started without a response",
             { cause: error },
           );
         }
@@ -242,7 +242,7 @@ export async function materializePendingSupervisionBranch(
     }
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
-    const startParams = buildThreadStartParams(nativeAttempt, {
+    const startParams = await buildThreadStartParams(nativeAttempt, {
       ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -259,7 +259,7 @@ export async function materializePendingSupervisionBranch(
       threadId: readSupervisionResponseThreadId(rawStartResponse),
       sourceThreadId: pending.sourceThreadId,
       otherThreadId: probeThreadId,
-      role: "canonical branch",
+      role: "supervised branch",
     });
     await trackPendingSupervisionArtifacts([finalThreadId]);
     params.throwIfAborted();
@@ -313,7 +313,7 @@ export async function materializePendingSupervisionBranch(
     }
 
     const historyCoveredThrough = new Date().toISOString();
-    const bindingModelProvider = params.normalizeBindingModelProvider(
+    const bindingModelProvider = await params.normalizeBindingModelProvider(
       params.attempt.authProfileId,
       nativeModelProvider,
     );
@@ -342,7 +342,7 @@ export async function materializePendingSupervisionBranch(
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(
-          `Canonical Codex branch binding could not be verified: ${finalThreadId}`,
+          `Supervised Codex branch binding could not be verified: ${finalThreadId}`,
           { cause: new AggregateError([error, readError]) },
         );
       }
@@ -361,7 +361,7 @@ export async function materializePendingSupervisionBranch(
         if (!matchesPendingSupervisionState(current, pending)) {
           provisionalCleanupSafe = false;
           throw new CodexAppServerUnsafeSubscriptionError(
-            `Canonical Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
+            `Supervised Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
             { cause: error },
           );
         }

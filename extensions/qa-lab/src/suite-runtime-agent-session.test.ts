@@ -1,8 +1,14 @@
 // Qa Lab tests cover suite runtime agent session plugin behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
@@ -22,6 +28,8 @@ import {
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
+const execFileAsync = promisify(execFile);
+
 const { cleanup, makeTempDir } = createTempDirHarness({
   beforeCleanup: closeQaRuntimeStores,
 });
@@ -29,6 +37,7 @@ const { cleanup, makeTempDir } = createTempDirHarness({
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
+  clearRuntimeConfigSnapshot();
 });
 
 afterAll(cleanup);
@@ -43,6 +52,7 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     gatewayCall.mockReset();
   });
 
@@ -195,6 +205,56 @@ describe("qa suite runtime agent session helpers", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reads fresh session metadata after a separate process writes", async () => {
+    const tempRoot = await makeTempDir("qa-session-external-write-");
+    const sessionKey = "agent:qa:external-write";
+    const runtime = { gateway: { tempRoot } };
+    await seedQaSessionEntries(runtime, [
+      {
+        agentId: "qa",
+        sessionKey,
+        entry: { sessionId: "external-write", updatedAt: 100, label: "before" },
+      },
+    ]);
+    // QA reads a Gateway-owned database without retaining an in-process writer.
+    await closeQaRuntimeStores(tempRoot);
+    await expect(readRawQaSessionStore(runtime)).resolves.toMatchObject({
+      [sessionKey]: { label: "before" },
+    });
+
+    // Repeated external writes exercise readers that have already cached earlier metadata.
+    for (const label of ["first", "second", "third", "fourth"]) {
+      await execFileAsync(process.execPath, [
+        "--input-type=module",
+        "-e",
+        `
+          import { DatabaseSync } from "node:sqlite";
+          const database = new DatabaseSync(process.argv[1]);
+          try {
+            const row = database.prepare(
+              "SELECT entry_json FROM session_nodes WHERE session_key = ?"
+            ).get(process.argv[2]);
+            const entry = JSON.parse(row.entry_json);
+            entry.label = process.argv[3];
+            const result = database.prepare(
+              "UPDATE session_nodes SET entry_json = ? WHERE session_key = ?"
+            ).run(JSON.stringify(entry), process.argv[2]);
+            if (result.changes !== 1) throw new Error("Expected one seeded session");
+          } finally {
+            database.close();
+          }
+        `,
+        path.join(tempRoot, "state", "agents", "qa", "agent", "openclaw-agent.sqlite"),
+        sessionKey,
+        label,
+      ]);
+
+      await expect(readRawQaSessionStore(runtime)).resolves.toMatchObject({
+        [sessionKey]: { label },
+      });
+    }
+  });
+
   it("seeds multi-agent session entries through the canonical accessor", async () => {
     const tempRoot = await makeTempDir("qa-session-entry-seed-");
     const parentSessionKey = "agent:qa:main";
@@ -259,6 +319,28 @@ describe("qa suite runtime agent session helpers", () => {
         parentSessionKey,
       },
     });
+
+    await seedQaSessionEntries({ gateway: { tempRoot } } as never, [
+      {
+        agentId: "qa",
+        sessionKey: parentSessionKey,
+        entry: {
+          sessionId: "session-main",
+          updatedAt: 400,
+          label: "Updated after the first read",
+          compactionCount: 1,
+        },
+      },
+    ]);
+    const refreshed = await readRawQaSessionStore({ gateway: { tempRoot } }, { agentId: "qa" });
+    expect(refreshed[parentSessionKey]).toMatchObject({
+      sessionId: "session-main",
+      updatedAt: 400,
+      label: "Updated after the first read",
+      compactionCount: 1,
+    });
+    expect(refreshed["agent:qa:subagent:child"]?.sessionId).toBe("session-child");
+    expect(refreshed["agent:claude:acp:child"]).toBeUndefined();
   });
 
   it("reports bounded persisted compaction summaries", async () => {

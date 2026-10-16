@@ -49,8 +49,12 @@ function checkRegistryCoverage(inventory: UpdateCompatibilityInventory, output: 
     throw new Error("npm returned invalid OpenClaw dist-tags; expected latest and beta versions");
   }
   const taggedVersions: string[] = [];
-  for (const tag of ["latest", "beta"]) {
+  // Extended-stable installs follow their own selector once a monthly line has published.
+  for (const tag of ["latest", "beta", "extended-stable"]) {
     const version: unknown = Reflect.get(tags, tag);
+    if (tag === "extended-stable" && version === undefined) {
+      continue;
+    }
     if (typeof version !== "string" || parseReleaseVersion(version)?.version !== version) {
       throw new Error(`npm OpenClaw dist-tag ${tag} is missing or invalid`);
     }

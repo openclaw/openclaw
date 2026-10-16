@@ -30,6 +30,9 @@ export function matchesAgentDatabaseReadCandidatePath(
   candidate: AgentDatabaseReadCandidate,
   pathname: string,
 ): boolean {
+  if (candidate.path === pathname) {
+    return true;
+  }
   const capturedPath = path.resolve(candidate.path);
   const resolvedPath = path.resolve(pathname);
   if (capturedPath === resolvedPath) {
@@ -58,10 +61,6 @@ export function registerAgentDatabaseReaderCloser(closer: AgentDatabaseReaderClo
 /** A deleted agent's database stays closed in this isolate until the roster admits the agent again. */
 export function isDeletedAgentDatabasePath(pathname: string): boolean {
   return readers.deleted.has(path.resolve(pathname));
-}
-
-export function hasDeletedAgentDatabases(): boolean {
-  return readers.deleted.size > 0;
 }
 
 /** Task admission carries the parent owner's current fences into every worker generation. */

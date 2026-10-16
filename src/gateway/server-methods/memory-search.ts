@@ -8,7 +8,10 @@ import type {
   MemorySearchManager,
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
-import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
+import {
+  readMemorySearchManagerStatus,
+  resolveMemorySearchStaleness,
+} from "../../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import {
   getActiveMemorySearchManagerCore,
@@ -240,9 +243,9 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
       captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
     }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
-    readRebuildWarning = captureMemoryRebuildNotice(manager.status());
+    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
     const results = await manager.search(searchQuery, searchOptions);
-    const status = manager.status();
+    const status = await readMemorySearchManagerStatus(manager);
     const staleness = resolveMemorySearchStaleness(status, agentId);
     const warning = [staleness?.warning, readRebuildWarning()]
       .filter((message): message is string => typeof message === "string")

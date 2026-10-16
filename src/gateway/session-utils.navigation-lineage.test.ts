@@ -7,6 +7,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -25,6 +29,7 @@ describe("session list navigation lineage", () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
     await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
   });
   beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
@@ -40,6 +45,7 @@ describe("session list navigation lineage", () => {
     "keeps persistent dashboard navigation beyond run retention (%s)",
     async (kind) => {
       const storePath = path.join(tempDirs.make("session-navigation-retention-"), "sessions.json");
+      setRuntimeConfigSnapshot(cfg);
       const now = Date.UTC(2026, 8, 26, 12);
       const old = now - 2 * 60 * 60_000;
       const parentKey = "agent:main:dashboard:parent";

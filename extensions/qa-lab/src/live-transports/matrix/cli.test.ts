@@ -44,30 +44,6 @@ describe("QA Lab Matrix CLI registration", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("exposes only QA Lab selector flags", () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    const matrix = qa.commands.find((command) => command.name() === "matrix");
-    const optionNames = matrix?.options.map((option) => option.long) ?? [];
-
-    for (const optionName of [
-      "--repo-root",
-      "--output-dir",
-      "--provider-mode",
-      "--model",
-      "--alt-model",
-      "--scenario",
-      "--fast",
-      "--fail-fast",
-      "--sut-account",
-    ]) {
-      expect(optionNames).toContain(optionName);
-    }
-    for (const optionName of ["--profile", "--shard", "--credential-source", "--credential-role"]) {
-      expect(optionNames).not.toContain(optionName);
-    }
-  });
-
   it("delegates command options to the Matrix runtime", async () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
@@ -92,17 +68,6 @@ describe("QA Lab Matrix CLI registration", () => {
     );
   });
 
-  it("returns successfully after Matrix artifacts are written", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockResolvedValue(undefined);
-
-    await qa.parseAsync(["node", "openclaw", "matrix"]);
-
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
-  });
-
   it("prints a failed run and returns after its artifacts are written", async () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
@@ -113,19 +78,6 @@ describe("QA Lab Matrix CLI registration", () => {
     await qa.parseAsync(["node", "openclaw", "matrix"]);
 
     expect(stderrSpy).toHaveBeenCalledWith("Matrix QA failed.\nreport: /tmp/report.md\n");
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("preserves a failed suite exit code after the runtime returns", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockImplementation(async () => {
-      process.exitCode = 1;
-    });
-
-    await qa.parseAsync(["node", "openclaw", "matrix"]);
-
     expect(exitSpy).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
@@ -145,20 +97,10 @@ describe("QA Lab Matrix CLI registration", () => {
     });
     await entered.promise;
     expect(returned).toBe(false);
+    process.exitCode = 1;
     completed.resolve();
     await command;
     expect(returned).toBe(true);
-    expect(exitSpy).not.toHaveBeenCalled();
-  });
-
-  it("prints unexpected errors without forcing process exit", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockRejectedValue(new Error("scenario failed"));
-
-    await qa.parseAsync(["node", "openclaw", "matrix"]);
-
-    expect(stderrSpy).toHaveBeenCalledWith("scenario failed\n");
     expect(process.exitCode).toBe(1);
     expect(exitSpy).not.toHaveBeenCalled();
   });

@@ -26,28 +26,28 @@ export async function bindThreadForSubagentSpawn(params: {
       error: string;
     }
 > {
-  const prepared = await prepareSpawnThreadBinding({
-    cfg: params.cfg,
-    kind: "subagent",
-    mode: params.mode,
-    bindingService: {
-      ...getSessionBindingService(),
-      listBySession: listSessionBindingsBySessionAsync,
-    },
-    requesterSessionKey: params.requesterSessionKey,
-    channel: params.requester.channel,
-    accountId: params.requester.accountId,
-    to: params.requester.to,
-    threadId: params.requester.threadId,
-  });
-  if (!prepared.ok) {
-    return {
-      status: "error",
-      error: prepared.error,
-    };
-  }
-
   try {
+    const prepared = await prepareSpawnThreadBinding({
+      cfg: params.cfg,
+      kind: "subagent",
+      mode: params.mode,
+      bindingService: {
+        ...getSessionBindingService(),
+        listBySession: listSessionBindingsBySessionAsync,
+      },
+      requesterSessionKey: params.requesterSessionKey,
+      channel: params.requester.channel,
+      accountId: params.requester.accountId,
+      to: params.requester.to,
+      threadId: params.requester.threadId,
+    });
+    if (!prepared.ok) {
+      return {
+        status: "error",
+        error: prepared.error,
+      };
+    }
+
     params.assertActive?.();
     const binding = await getSessionBindingService().bind(
       buildSpawnThreadBinding({

@@ -129,6 +129,39 @@ it.each(["deferred outcome", "rejection"] as const)(
   },
 );
 
+it.each(["policy rejection", "owner closure"] as const)(
+  "refuses a native allow after awaited %s",
+  async (failure) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let active = true;
+    const relay = registerNativeHookRelay({
+      ...relayParams("async-execution-policy"),
+      runBeforeToolCall: async () => ({ blocked: false, params: { command: "echo synthetic" } }),
+      assertActiveAsync: async () => {
+        entered.resolve();
+        await release.promise;
+        if (failure === "policy rejection") {
+          throw new Error("execution policy changed");
+        }
+      },
+      assertActive: () => {
+        if (!active) {
+          throw new Error("run closed");
+        }
+      },
+    });
+    const pending = invokeNativeHookRelay(policyInvocation(relay));
+    await entered.promise;
+    active = failure !== "owner closure";
+    const rejected = expect(pending).rejects.toThrow(
+      failure === "policy rejection" ? "execution policy changed" : "run closed",
+    );
+    release.resolve();
+    await rejected;
+  },
+);
+
 it("keeps deferred approvals with their exact relay across tuple collisions", async () => {
   const toolIds = ["b:c", "c"];
   const callbacks = [vi.fn(), vi.fn()];
@@ -651,15 +684,15 @@ it("does not start transport when locator lookup consumes the caller deadline", 
     await relay.ready;
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const read = clientStore.readNativeHookRelayClientBridgeRecord;
-    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(
-      async (params) => {
-        const record = await read(params);
-        entered.resolve();
-        await resume.promise;
-        return record;
-      },
-    );
+    // Start the measured lookup after the runtime's real locator reader is ready.
+    const record = await clientStore.readNativeHookRelayClientBridgeRecord({
+      relayId: relay.relayId,
+    });
+    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      return record;
+    });
     const startedAt = performance.now();
     const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({

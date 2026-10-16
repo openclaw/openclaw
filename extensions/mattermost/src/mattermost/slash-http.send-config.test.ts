@@ -4,9 +4,11 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type * as MattermostRuntime from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
 type BuildPreparedModelsProviderData =
@@ -75,6 +77,12 @@ const mockState = vi.hoisted(() => ({
   renderMattermostModelSummaryView: vi.fn(),
   renderMattermostModelsPickerView: vi.fn(),
   renderMattermostProviderPickerView: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: mockState.recordDeliveredCommandExchange,
 }));
 
 vi.mock("./runtime-api.js", () => {
@@ -102,7 +110,8 @@ vi.mock("./runtime-api.js", () => {
   };
 });
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof MattermostRuntime>()),
   getMattermostRuntime: () => ({
     channel: {
       commands: {
@@ -120,7 +129,7 @@ vi.mock("../runtime.js", () => ({
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           agentId: "agent-1",
-          sessionKey: "mattermost:session:1",
+          sessionKey: "agent:agent-1:mattermost:session:1",
           accountId: "default",
         })),
       },
@@ -294,6 +303,16 @@ describe("slash-http cfg threading", () => {
         ],
       });
       const response = createResponse();
+      const deliveredText = `${text}\nPlatform-rendered note.`;
+      mockState.sendMessageMattermost.mockResolvedValueOnce({
+        messageId: "post-1",
+        channelId: "chan-1",
+        content: deliveredText,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "mattermost", messageId: "post-1" }],
+          kind: "text",
+        }),
+      });
 
       await handler(createRequest(), response.res);
 
@@ -305,6 +324,13 @@ describe("slash-http cfg threading", () => {
         expect.objectContaining({
           cfg,
           accountId: "default",
+        }),
+      );
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandText: "models",
+          replyText: deliveredText,
+          commandId: expect.stringMatching(/^mattermost:default:chan-1:/),
         }),
       );
     },
@@ -361,8 +387,9 @@ describe("slash-http cfg threading", () => {
         agentRuntimeOverride: "openclaw",
       };
       await upsertSessionEntry({
+        agentId: "agent-1",
         storePath,
-        sessionKey: "mattermost:session:1",
+        sessionKey: "agent:agent-1:mattermost:session:1",
         entry: sessionEntry,
       });
       mockState.resolveCommandText.mockReturnValueOnce(testCase.commandText);
@@ -393,8 +420,9 @@ describe("slash-http cfg threading", () => {
       const response = createResponse();
 
       await upsertSessionEntry({
+        agentId: "agent-1",
         storePath,
-        sessionKey: "mattermost:session:1",
+        sessionKey: "agent:agent-1:mattermost:session:1",
         entry: { ...sessionEntry, authProfileOverride: "openai:current", updatedAt: 2 },
       });
 
@@ -431,6 +459,15 @@ describe("slash-http cfg threading", () => {
       );
       const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
       expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          sessionKey: "agent:agent-1:mattermost:session:1",
+          expectedSessionId: sessionEntry.sessionId,
+          commandText: testCase.commandText,
+          replyText: expect.stringContaining(testCase.text),
+        }),
+      );
     },
   );
 

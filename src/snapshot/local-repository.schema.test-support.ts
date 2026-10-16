@@ -1,3 +1,4 @@
+import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -29,6 +30,7 @@ export function createGlobalDatabase(databasePath: string): void {
         `,
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
         `
@@ -37,12 +39,16 @@ export function createGlobalDatabase(databasePath: string): void {
             id,
             status,
             entry_json,
+            retention_id_prefix,
+            retention_max_age_ms,
+            retention_max_entries,
             enqueued_at,
             updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
+          ) VALUES ('delivery', 'queued', 'pending', ?,
+            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
         `,
       )
-      .run('{"payload":"do-not-restore"}');
+      .run(deriveDeliveryQueueRetentionColumns("queued", entryJson), entryJson);
   });
 }
 

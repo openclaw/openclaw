@@ -76,6 +76,46 @@ describe("wrapToolWithAbortSignal", () => {
     await aborted;
   });
 
+  it.each(["direct", "prepared"] as const)(
+    "only preserves an explicit plugin reload handoff through %s execution",
+    async (mode) => {
+      for (const action of ["reloadAndResume", "reload", "list"]) {
+        const runAbort = new AbortController();
+        const result = emptyResult();
+        const execute = async () => {
+          runAbort.abort(handoffReason);
+          return result;
+        };
+        const source = tool(execute, "plugins");
+        if (mode === "prepared") {
+          attachInternalToolExecutionPreparer(source, async ({ args }) => ({
+            kind: "ready",
+            args,
+            execute,
+            dispose: () => undefined,
+          }));
+        }
+        const wrapped = wrapToolWithAbortSignal(source, runAbort.signal);
+        let execution: Promise<unknown>;
+        if (mode === "prepared") {
+          const prepare = expectDefined(getInternalToolExecutionPreparer(wrapped), "preparer");
+          const prepared = await prepare({ toolCallId: "reload", args: { action } });
+          if (prepared.kind !== "ready") {
+            throw new Error("expected ready tool execution");
+          }
+          execution = prepared.execute().finally(prepared.dispose);
+        } else {
+          execution = wrapped.execute("reload", { action });
+        }
+        if (action === "reloadAndResume") {
+          await expect(execution).resolves.toBe(result);
+        } else {
+          await expect(execution).rejects.toMatchObject(abortError);
+        }
+      }
+    },
+  );
+
   it("preserves the handoff when distinct run and per-call signals both yield", async () => {
     const runAbort = new AbortController();
     const callAbort = new AbortController();

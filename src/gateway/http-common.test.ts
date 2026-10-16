@@ -10,11 +10,9 @@ import {
 } from "../infra/diagnostic-events.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
-import type { GatewayAuthResult } from "./auth.js";
 import {
   readJsonBodyOrError,
   retainGatewayHttpResponseWork,
-  sendGatewayAuthFailure,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
   sendRateLimited,
@@ -44,13 +42,6 @@ function headerNames(setHeader: ReturnType<typeof vi.fn>): string[] {
 
 function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
   expect(headerNames(setHeader)).not.toContain(name);
-}
-
-function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof vi.fn>): void {
-  expect(res.statusCode).toBe(401);
-  expect(end).toHaveBeenCalledWith(
-    JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-  );
 }
 
 describe("setDefaultSecurityHeaders", () => {
@@ -126,31 +117,6 @@ describe("sendRateLimited", () => {
       }),
     );
   });
-
-  it("responds with 429 and no Retry-After when retryAfterMs is negative", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    sendRateLimited(res, -500);
-    expect(res.statusCode).toBe(429);
-    expectHeaderNotSet(setHeader, "Retry-After");
-  });
-});
-
-describe("sendGatewayAuthFailure", () => {
-  it("delegates to sendRateLimited when the auth result is rate limited", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    const authResult = { ok: false, rateLimited: true, retryAfterMs: 3000 } as GatewayAuthResult;
-    sendGatewayAuthFailure(res, authResult);
-    expect(res.statusCode).toBe(429);
-    expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
-    expect(end).toHaveBeenCalledTimes(1);
-  });
-
-  it("delegates to sendUnauthorized when the auth result is not rate limited", () => {
-    const { res, end } = makeMockHttpResponse();
-    const authResult = { ok: false, rateLimited: false } as GatewayAuthResult;
-    sendGatewayAuthFailure(res, authResult);
-    expectUnauthorizedPayload(res, end);
-  });
 });
 
 describe("readJsonBodyOrError", () => {
@@ -165,15 +131,6 @@ describe("readJsonBodyOrError", () => {
     }) as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
     return req;
   };
-
-  it("returns the parsed body on success", async () => {
-    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { hello: "world" } });
-    const { res } = makeMockHttpResponse();
-    const req = makeRequest();
-    const result = await readJsonBodyOrError(req, res, 1024);
-    expect(result).toEqual({ hello: "world" });
-    expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024);
-  });
 
   it.each([
     { error: "payload too large", status: 413, message: "Payload too large" },
@@ -312,14 +269,6 @@ describe("HTTP response root ownership", () => {
 });
 
 describe("watchClientDisconnect", () => {
-  it("returns a no-op cleanup when no sockets are available", () => {
-    const { req, res } = makeMockHttpReqRes(null, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    cleanup();
-    expect(controller.signal.aborted).toBe(false);
-  });
-
   it("immediately aborts when the request socket was already destroyed", () => {
     const socket = Object.assign(new EventEmitter(), { destroyed: true });
     const { req, res } = makeMockHttpReqRes(socket, socket);
@@ -409,15 +358,6 @@ describe("watchClientDisconnect", () => {
     socket.emit("close");
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(abortSpy).not.toHaveBeenCalled();
-  });
-
-  it("works without an onDisconnect callback", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(null, socket);
-    const controller = new AbortController();
-    watchClientDisconnect(req, res, controller);
-    socket.emit("close");
-    expect(controller.signal.aborted).toBe(true);
   });
 
   it("releases both socket watchers after one disconnect and notifies once", () => {

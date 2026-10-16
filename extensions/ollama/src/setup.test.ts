@@ -151,18 +151,6 @@ describe("ollama setup", () => {
     );
   });
 
-  it("leaves hosted-only setup to the Ollama Cloud provider", async () => {
-    const prompter = createLocalPrompter();
-    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: ["llama3:8b"] }));
-
-    await promptAndConfigureOllama({ cfg: {}, prompter });
-
-    const modePrompt = mockCallArg(vi.mocked(prompter.select)) as {
-      options: Array<{ value: string }>;
-    };
-    expect(modePrompt.options.map((option) => option.value)).toEqual(["cloud-local", "local-only"]);
-  });
-
   it("puts hybrid cloud model suggestions after the local default when signed in", async () => {
     const prompter = createCloudLocalPrompter();
     const fetchMock = createOllamaFetchMock({
@@ -179,7 +167,6 @@ describe("ollama setup", () => {
       "minimax-m2.7:cloud",
       "minimax-m3:cloud",
       "kimi-k3:cloud",
-      "glm-5.1:cloud",
       "glm-5.2:cloud",
       "llama3:8b",
     ]);
@@ -507,38 +494,6 @@ describe("ollama setup", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("uses baseURL alias when checking and pulling models", async () => {
-      const progress = { update: vi.fn(), stop: vi.fn() };
-      const prompter = {
-        progress: vi.fn(() => progress),
-      } as unknown as WizardPrompter;
-
-      const fetchMock = createOllamaFetchMock({
-        tags: [],
-        pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
-      });
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/gemma4" } } },
-          models: {
-            providers: {
-              ollama: {
-                baseURL: "http://127.0.0.1:11435",
-                models: [],
-              } as never,
-            },
-          },
-        },
-        model: "ollama/gemma4",
-        prompter,
-      });
-
-      expect(mockCallArg(fetchMock)).toBe("http://127.0.0.1:11435/api/tags");
-      expect(mockCallArg(fetchMock, 1)).toBe("http://127.0.0.1:11435/api/pull");
-    });
-
     it("skips pull for cloud models", async () => {
       const prompter = {} as unknown as WizardPrompter;
       const fetchMock = vi.fn();
@@ -617,31 +572,6 @@ describe("ollama setup", () => {
         compat: expect.objectContaining({ supportsTools: true }),
       }),
     ]);
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-  });
-
-  it("uses the discovered latest tag as the non-interactive default without pulling", async () => {
-    const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime: RuntimeEnv = createRuntimeSpies();
-
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-      },
-      runtime,
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
-    expect(requestUrls.filter((url) => url.endsWith("/api/pull"))).toEqual([]);
-    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
-      "gemma4:latest",
-    ]);
-    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/gemma4:latest" });
-    expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
-    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 

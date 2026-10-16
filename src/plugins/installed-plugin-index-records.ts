@@ -13,7 +13,7 @@ export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "./installed-plugin-index-record-reader.js";
 
 /** Config path for legacy plugin install records kept for migration/doctor flows. */

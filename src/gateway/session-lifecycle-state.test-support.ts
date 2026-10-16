@@ -1,10 +1,12 @@
 import type { Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
+import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 export type UpdateSessionEntry =
-  typeof import("../config/sessions/session-accessor.js").patchSessionEntryTarget;
+  typeof import("../config/sessions/session-accessor.sqlite-entry.js").applySessionEntryTargetOperation;
 export type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 
 /** Records prepared work before the persistence owner invokes its callback. */
@@ -55,12 +57,20 @@ export async function persistLifecycleThroughMockedStore(
   mocks.updateSessionEntry
     .mockReset()
     .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
-      const [, update] = args;
-      const patch = await update(structuredClone(currentEntry), {
-        existingEntry: structuredClone(currentEntry),
+      const [, operation, options] = args;
+      let effects: SessionLifecyclePatchEffects | undefined;
+      const next = projectSessionEntryPatch({
+        existing: currentEntry,
+        writeBase: currentEntry,
+        sessionKey: params.sessionKey,
+        operation,
+        onLifecycleProjection: (value) => {
+          effects = value;
+        },
       });
-      if (patch) {
-        currentEntry = { ...currentEntry, ...patch };
+      if (next) {
+        currentEntry = next;
+        options?.onCommitted?.(currentEntry, undefined, effects);
       }
       return currentEntry;
     });

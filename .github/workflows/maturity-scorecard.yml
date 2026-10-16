@@ -90,7 +90,9 @@ env:
 jobs:
   validate_selected_ref:
     name: Validate selected ref
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       publication_base: ${{ steps.validate.outputs.publication_base }}
       publication_head: ${{ steps.validate.outputs.publication_head }}
@@ -141,7 +143,7 @@ jobs:
             }
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -340,7 +342,7 @@ jobs:
     name: Verify generated PR App permissions
     needs: validate_selected_ref
     if: ${{ inputs.publish_pull_request }}
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout trusted workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,7 +399,7 @@ jobs:
         needs.validate_selected_ref.result == 'success' &&
         (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') &&
         (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     permissions:
       actions: read
@@ -711,7 +713,7 @@ jobs:
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -722,7 +724,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload maturity docs artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/maturity-docs/
@@ -744,7 +746,7 @@ jobs:
         needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
         needs.validate_selected_ref.outputs.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
         needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     permissions:
       actions: read
       contents: read
@@ -781,7 +783,7 @@ jobs:
           echo "path=$STAGING_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Download generated PR files
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.staging.outputs.path }}
@@ -890,7 +892,7 @@ jobs:
         needs.publish.result == 'success' &&
         (needs.publish_generated_pr.result == 'success' ||
           needs.publish_generated_pr.result == 'skipped') }}
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     steps:
       - name: Fail incomplete maturity evidence
         env:

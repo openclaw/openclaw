@@ -2,6 +2,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import { failedDeliveryQueueHealthAdmission } from "./delivery-queue-cache.js";
 import {
   bindDeliveryQueueEntry,
   deliveryQueueEntriesQuery,
@@ -24,6 +25,7 @@ import {
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type DeliveryQueueStoredStatus = DeliveryQueueDatabase["delivery_queue_entries"]["status"];
@@ -380,9 +382,11 @@ export function countFailedDeliveryQueueEntriesInDatabase(database: OpenClawStat
       .groupBy("queue_name")
       .orderBy("queue_name", "asc"),
   ).rows;
-  return rows.map(({ oldestFailedAt, ...row }) =>
+  const health = rows.map(({ oldestFailedAt, ...row }) =>
     oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
   );
+  publishSqliteDatabaseAdmission(database.db, failedDeliveryQueueHealthAdmission, health);
+  return health;
 }
 
 export function countPendingDeliveryQueueEntriesInDatabase(

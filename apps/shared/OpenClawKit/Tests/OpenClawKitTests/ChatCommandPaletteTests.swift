@@ -95,7 +95,7 @@ struct ChatCommandPaletteTests {
         #expect(result.first?.unread == true)
     }
 
-    @Test func `late responses cannot repaint A changed query or agent even when the query repeats`() {
+    @Test func `search results belong to the current query and agent`() {
         let first = ChatCommandPaletteSearch.Request(
             query: "release", target: .init(sessionKey: "global", agentID: "research"))
         let second = ChatCommandPaletteSearch.Request(
@@ -103,25 +103,19 @@ struct ChatCommandPaletteTests {
         let otherAgent = ChatCommandPaletteSearch.Request(
             query: first.query, target: .init(sessionKey: "global", agentID: "writing"))
         var search = ChatCommandPaletteSearch()
-        let oldGeneration = search.begin(first)
-        let intermediate = search.begin(second)
-        let latest = search.begin(first)
-        let oldRows = [self.entry("old", title: "Old result")]
-        search.complete(oldRows, generation: oldGeneration)
-        search.complete(oldRows, generation: intermediate)
+        search.begin(first)
         #expect(search.rows(for: first).isEmpty)
         #expect(search.isLoading)
         let rows = [self.entry("new", title: "Current result")]
-        search.complete(rows, generation: latest)
+        search.complete(rows)
         #expect(search.rows(for: first).map(\.key) == ["new"])
         #expect(!search.isLoading)
         #expect(search.rows(for: second).isEmpty)
         #expect(search.rows(for: otherAgent).isEmpty)
-        _ = search.begin(otherAgent)
-        search.complete(oldRows, generation: latest)
+        search.begin(otherAgent)
         #expect(search.rows(for: otherAgent).isEmpty)
         let empty = ChatCommandPaletteSearch.Request(query: "", target: first.target)
-        _ = search.begin(empty)
+        search.begin(empty)
         #expect(!search.isLoading)
         #expect(search.rows(for: empty).isEmpty)
     }

@@ -11,6 +11,7 @@ import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import { getHeader } from "./http-header-value.js";
 import {
   prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
@@ -41,7 +42,8 @@ export type GatewayAuthResult = {
     | "tailscale"
     | "device-token"
     | "bootstrap-token"
-    | "trusted-proxy";
+    | "trusted-proxy"
+    | "remote-ingress";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
   tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
@@ -346,6 +348,13 @@ async function authorizeGatewayConnect(
     isRedactedSecretValue(auth[auth.mode])
   ) {
     return { ok: false, reason: `${auth.mode}_redacted_config` };
+  }
+  const remoteForwarded =
+    params.ingressAttribution?.kind === "remote-forwarded" ||
+    (params.req && readGatewayIngressTransport(params.req)?.kind === "remote-forwarded");
+  if (remoteForwarded) {
+    // Device credentials are verified by the HTTP/WS device owner, never as shared auth.
+    return { ok: false, reason: "remote_control_ui_device_auth_required" };
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {

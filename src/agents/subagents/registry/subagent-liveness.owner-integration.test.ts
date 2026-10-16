@@ -2,11 +2,12 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** Registry projections must agree with admitted execution and queue owners. */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildSubagentsStatusLine } from "../../../auto-reply/reply/commands-status-subagents.js";
 import { resolveSubagentEntryForToken } from "../../../auto-reply/reply/commands-subagents/shared.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { projectGatewaySessionRunState } from "../../../gateway/session-utils-display.js";
 import {
   claimAgentRunContext,
@@ -28,6 +29,7 @@ import {
 import { resolveSpawnAdmission } from "../../spawn-plan.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   activateSwarmRun,
   isSwarmRunWaitingForCapacity,
@@ -60,6 +62,9 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
@@ -80,6 +85,8 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   await registerSubagentRun({
     runId: id,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
     requesterSessionKey: parent,
     requesterAgentId: "main",
     requesterDisplayKey: parent,
@@ -118,15 +125,17 @@ it("admits new work at the child cap when finished descendants have suspended de
     });
   }
   const admission = () =>
-    resolveSpawnAdmission({
-      cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
-      requesterSessionKey: parent,
-      requesterAgentId: "main",
-      targetAgentId: "main",
-      configuredAgentIds: ["main"],
-    });
+    withPreparedSessionCapabilityRead(() =>
+      resolveSpawnAdmission({
+        cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 5 } } } },
+        requesterSessionKey: parent,
+        requesterAgentId: "main",
+        targetAgentId: "main",
+        configuredAgentIds: ["main"],
+      }),
+    );
 
-  expect(admission().ok).toBe(true);
+  expect((await admission()).ok).toBe(true);
   expect(countActiveRunsForSession(parent)).toBe(0);
   expect(subagentRuns.size).toBe(10);
 
@@ -140,7 +149,7 @@ it("admits new work at the child cap when finished descendants have suspended de
       execution: { status: "running", startedAt: now },
     });
   }
-  expect(admission()).toMatchObject({
+  expect(await admission()).toMatchObject({
     ok: false,
     governingCap: "subagents.maxChildrenPerAgent",
   });
@@ -190,13 +199,17 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(getAgentRunContext(entry.runId)).toBeDefined();
     expect
       .soft(
-        resolveSpawnAdmission({
-          cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 1 } } } },
-          requesterSessionKey: parent,
-          requesterAgentId: "main",
-          targetAgentId: "main",
-          configuredAgentIds: ["main"],
-        }).ok,
+        (
+          await withPreparedSessionCapabilityRead(() =>
+            resolveSpawnAdmission({
+              cfg: { agents: { defaults: { subagents: { maxChildrenPerAgent: 1 } } } },
+              requesterSessionKey: parent,
+              requesterAgentId: "main",
+              targetAgentId: "main",
+              configuredAgentIds: ["main"],
+            }),
+          )
+        ).ok,
       )
       .toBe(false);
     expect.soft(countActiveRunsForSession(parent)).toBe(1);

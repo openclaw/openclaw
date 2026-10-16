@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { collectDoctorPreviewNotes } from "./preview-warnings.js";
 import * as staleOAuthProfileShadows from "./stale-oauth-profile-shadows.js";
 
-const staleOAuthShadowState = vi.hoisted(() => ({ warnings: [] as string[] }));
+const staleOAuthShadowState = vi.hoisted(() => ({
+  warnings: [] as string[],
+  scanWarnings: [] as string[],
+}));
 const staleAuthOrderState = vi.hoisted(() => ({ warnings: [] as string[] }));
 
 vi.mock("./channel-plugin-blockers.js", () => ({
@@ -51,9 +54,15 @@ vi.mock("./bundled-plugin-load-paths.js", () => ({
     ),
 }));
 
+// mock-isolation: Script warning output without reading host auth stores.
 vi.mock("./stale-oauth-profile-shadows.js", () => ({
-  scanStaleOAuthProfileShadows: () =>
-    staleOAuthShadowState.warnings.map((warning, index) => ({ profileId: String(index), warning })),
+  scanStaleOAuthProfileShadows: () => ({
+    hits: staleOAuthShadowState.warnings.map((warning, index) => ({
+      profileId: String(index),
+      warning,
+    })),
+    warnings: staleOAuthShadowState.scanWarnings,
+  }),
   collectStaleOAuthProfileShadowWarnings: ({ hits }: { hits: Array<{ warning: string }> }) =>
     hits.map((hit) => hit.warning),
 }));
@@ -71,42 +80,55 @@ describe("doctor preview scan notes", () => {
     {
       name: "groups multiline warnings into one note",
       shadows: ["shadow one", "shadow two"],
+      scanWarnings: [],
       lines: ["shadow one", "shadow two"],
       expectedNotes: ["shadow one\nshadow two"],
     },
     {
       name: "skips formatting empty scan hits",
       shadows: [],
+      scanWarnings: [],
       lines: ["must not render"],
       expectedNotes: [],
     },
-  ])("$name without changing family order or config", async ({ shadows, lines, expectedNotes }) => {
-    staleOAuthShadowState.warnings = shadows;
-    staleAuthOrderState.warnings = ["auth-order warning"];
-    const collect = vi
-      .spyOn(staleOAuthProfileShadows, "collectStaleOAuthProfileShadowWarnings")
-      .mockReturnValue(lines);
-    const cfg: OpenClawConfig = {
-      plugins: { load: { paths: ["legacy-one", "legacy-two"] } },
-    };
-    const original = structuredClone(cfg);
+    {
+      name: "surfaces unreadable-store warnings without shadow hits",
+      shadows: [],
+      scanWarnings: ["Cannot read legacy auth profile store /tmp/agent/auth-profiles.json"],
+      lines: [],
+      expectedNotes: ["Cannot read legacy auth profile store /tmp/agent/auth-profiles.json"],
+    },
+  ])(
+    "$name without changing family order or config",
+    async ({ shadows, scanWarnings, lines, expectedNotes }) => {
+      staleOAuthShadowState.warnings = shadows;
+      staleOAuthShadowState.scanWarnings = scanWarnings;
+      staleAuthOrderState.warnings = ["auth-order warning"];
+      const collect = vi
+        .spyOn(staleOAuthProfileShadows, "collectStaleOAuthProfileShadowWarnings")
+        .mockReturnValue(lines);
+      const cfg: OpenClawConfig = {
+        plugins: { load: { paths: ["legacy-one", "legacy-two"] } },
+      };
+      const original = structuredClone(cfg);
 
-    const result = await collectDoctorPreviewNotes({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix",
-      env: {},
-    });
+      const result = await collectDoctorPreviewNotes({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      });
 
-    expect(result).toEqual({
-      infoNotes: [],
-      warningNotes: [
-        'plugins.load.paths: legacy bundled plugin path "legacy-one". Run "openclaw doctor --fix".\n' +
-          'plugins.load.paths: legacy bundled plugin path "legacy-two". Run "openclaw doctor --fix".',
-        ...expectedNotes,
-        "auth-order warning",
-      ],
-    });
-    expect(collect).toHaveBeenCalledTimes(shadows.length > 0 ? 1 : 0);
-    expect(cfg).toEqual(original);
-  });
+      expect(result).toEqual({
+        infoNotes: [],
+        warningNotes: [
+          'plugins.load.paths: legacy bundled plugin path "legacy-one". Run "openclaw doctor --fix".\n' +
+            'plugins.load.paths: legacy bundled plugin path "legacy-two". Run "openclaw doctor --fix".',
+          ...expectedNotes,
+          "auth-order warning",
+        ],
+      });
+      expect(collect).toHaveBeenCalledTimes(shadows.length > 0 ? 1 : 0);
+      expect(cfg).toEqual(original);
+    },
+  );
 });

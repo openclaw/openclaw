@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { resolveExistingSessionKeyForRequest } from "../../agents/command/session.js";
+import {
+  resolveExistingSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
+} from "../../agents/command/session.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -87,16 +90,21 @@ export async function prepareAgentRequestRouting(params: {
     }
     agentId = requestedSessionAgent.agentId;
   }
-  let sessionIdTarget: ReturnType<typeof resolveExistingSessionKeyForRequest> | undefined;
+  let sessionIdTarget: Awaited<ReturnType<typeof resolveExistingSessionKeyForRequest>> | undefined;
   if (requestedSessionId && !requestedSessionKeyRaw) {
     try {
-      sessionIdTarget = resolveExistingSessionKeyForRequest({
+      params.reserveDedupe(undefined, agentId);
+      const resolveSessionId = params.request.createSessionIfMissing
+        ? resolveSessionKeyForRequestCore
+        : resolveExistingSessionKeyForRequest;
+      sessionIdTarget = await resolveSessionId({
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
   }
@@ -147,6 +155,7 @@ export async function prepareAgentRequestRouting(params: {
     requestedSessionKey,
   });
   if (expectedSessionTargetError) {
+    params.clearDedupe();
     return rejectInvalidRequest(expectedSessionTargetError);
   }
   let loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> | undefined;

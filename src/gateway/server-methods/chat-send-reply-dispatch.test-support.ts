@@ -1,8 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
-import { getRuntimeConfig } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.entry.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptMessageSync,
   publishTranscriptUpdate,
   replaceSessionEntry,
@@ -17,20 +18,48 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import * as sessionStoreReaders from "../session-utils-store-worker.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
+
+function createReplyDispatchSession(clientRunId: string) {
+  return {
+    agentId: "main",
+    backingSessionId: undefined,
+    cfg: {},
+    clientRunId,
+    sessionKey: "agent:main:main",
+    sessionLoadOptions: { agentId: "main" },
+  };
+}
+
+export function createReplyDispatch(
+  clientRunId: string,
+  overrides: Partial<Parameters<typeof createChatSendReplyDispatch>[0]> = {},
+) {
+  return createChatSendReplyDispatch({
+    getRuntimeConfig,
+    accountId: undefined,
+    isAgentRunStarted: () => true,
+    isRunCurrent: () => true,
+    logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
+    session: createReplyDispatchSession(clientRunId),
+    userTurnRecorder: { markBlocked: vi.fn(), getAdmissionReceipt: () => undefined },
+    ...overrides,
+  });
+}
 
 export async function createReplyTranscriptFixture(
   sessionKey = "agent:main:receipt",
   retainSource = false,
 ) {
+  await captureRuntimeConfigAsyncReader()();
   const runId = "receipt-run";
   const scope = {
     agentId: "main",
     sessionId: "receipt-session",
     sessionKey,
-    storePath: loadSessionEntry(sessionKey, { agentId: "main" }).storePath,
+    storePath: (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
   };
   const sessionEntry = {
     sessionId: scope.sessionId,
@@ -51,7 +80,15 @@ export async function createReplyTranscriptFixture(
     return persisted;
   };
   const append = async (messageId: string, message: Record<string, unknown>, parentId?: string) => {
-    const persisted = appendSync(messageId, message, parentId);
+    const persisted = attachSessionTranscriptRunId(message, runId);
+    const result = await appendTranscriptMessage(scope, {
+      eventId: messageId,
+      message: persisted,
+      ...(parentId ? { parentId } : {}),
+    });
+    if (!result.messageId) {
+      throw new Error("Expected committed receipt fixture message");
+    }
     // Tool-bearing assistant updates intentionally have no top-level runId.
     await publishTranscriptUpdate(scope, { message: persisted, messageId });
   };
@@ -94,7 +131,7 @@ export async function createReplyTranscriptFixture(
     : undefined;
   const qualified =
     loaded &&
-    prepareQualifiedSessionEntryTarget(
+    (await prepareQualifiedSessionEntryTarget(
       {
         ...loaded,
         requestedKey: sessionKey,
@@ -102,7 +139,7 @@ export async function createReplyTranscriptFixture(
         readSource: loaded.capturedReadSource,
       },
       loaded.capturedReadSources,
-    );
+    ));
   let current = true;
   const abortController = new AbortController();
   const dispatch = createChatSendReplyDispatch({
@@ -126,8 +163,7 @@ export async function createReplyTranscriptFixture(
       cfg: loaded?.cfg ?? {},
       ...(qualified
         ? {
-            sessionTarget: qualified.target,
-            assertSessionTargetCurrent: qualified.assertCurrent,
+            sessionTarget: qualified,
             capturedReadSources: loaded?.capturedReadSources,
           }
         : {}),
@@ -145,7 +181,9 @@ export async function createReplyTranscriptFixture(
     rewriteSync,
     dispatch,
     abortController,
-    release: () => qualified?.release(),
+    release: () => {
+      current = false;
+    },
     retire: () => {
       current = false;
     },

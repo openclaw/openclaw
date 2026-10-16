@@ -164,6 +164,39 @@ const matrixSyncCacheMigration: PluginDoctorStateMigration = {
 };
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "matrix-crypto-unsafe-state",
+    label: "Matrix crypto unsafe final state",
+    async detectLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
+      return roots.length > 0
+        ? {
+            preview: roots.map(
+              (root) =>
+                `Matrix crypto store is blocked after unsafe final save: ${root}. Run openclaw matrix doctor inspect; recovery is never automatic.`,
+            ),
+          }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir, {
+        openKeyedStoreV2: params.context.openPluginStateKeyedStore,
+      });
+      return {
+        changes: [],
+        warnings: roots.map(
+          (root) =>
+            `Matrix crypto store remains blocked: ${root}. Inspect with openclaw matrix doctor inspect; explicit recovery may roll back keys.`,
+        ),
+      };
+    },
+  },
   matrixAccountStateSchemaMigration,
   {
     id: "matrix-credentials-json-to-plugin-state",
@@ -225,23 +258,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Matrix credentials for account ${source.accountId}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeMatrixStoredCredentials(
-          await store.lookup(key),
-          source.accountId,
-        );
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Matrix credentials for account ${source.accountId}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
         await archiveSource();
@@ -252,18 +277,27 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
+    sqliteOnly: { family: "state" },
     async detectLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
-      if (
-        params.config.channels?.matrix === undefined &&
-        sources.status === "complete" &&
-        sources.sqliteRoots.length === 0
-      ) {
+      if (sources.status === "complete" && sources.sqliteRoots.length === 0) {
         return null;
       }
-      return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
-        ? null
-        : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };
+      if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
+        return null;
+      }
+      const pending = {
+        preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+      };
+      if (sources.status === "incomplete") {
+        return pending;
+      }
+      for (const storageRootDir of sources.sqliteRoots) {
+        if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
+          return pending;
+        }
+      }
+      return null;
     },
     async migrateLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);

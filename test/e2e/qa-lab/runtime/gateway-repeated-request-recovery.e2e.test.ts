@@ -70,6 +70,10 @@ const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
 const QA_RECOVERY_BOUND_MS = 30_000;
 const MODEL_REQUEST_ALLOWANCE_SECONDS = 45;
 const ORDINARY_RESPONSE_PAUSE_MS = 8_000;
+// The stalled fallback starts its response, then holds it open with keepalives,
+// so the client progress deadline (2x the allowance) ends it at 90 seconds.
+// Recovery may act only after the 45-second allowance, leaving a 45-second
+// window that always contains one 30-second diagnostic heartbeat.
 const STALLED_RESPONSE_PAUSE_MS = 90_000;
 const RECOVERY_PROGRESS_INTERVAL_MS = 30_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -395,15 +399,12 @@ describe("Gateway repeated-request recovery", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
-      // Repeated-request recovery owns semantic stagnation independently of the
-      // current provider request's deadline. Observe its settlement before queue drain.
+      // Repeated-request recovery interrupts the live-but-silent fallback after its
+      // own request allowance expires. Observe that recovery before queue drain.
       const events = await waitForStability(
         gateway,
         baselineSeq,
-        (records) =>
-          records.some(
-            (event) => event.type === "session.recovery.completed" && event.outcome === "aborted",
-          ),
+        (records) => records.some((event) => event.type === "session.recovery.completed"),
         250_000,
       );
       const stalled = events.filter(
@@ -424,7 +425,13 @@ describe("Gateway repeated-request recovery", () => {
         expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
       ]);
       expect(completed).toEqual([
-        expect.objectContaining({ action: "abort_embedded_run", outcome: "aborted" }),
+        // An active model call is interrupted like an idle timeout, so the run
+        // keeps its lane and settles through its remaining fallback retries.
+        expect.objectContaining({
+          action: "keep_lane",
+          outcome: "skipped",
+          reason: "model_attempt_recovery",
+        }),
       ]);
       expect(
         events.filter((event) => event.type === "model.call.started").length,
@@ -475,9 +482,10 @@ describe("Gateway repeated-request recovery", () => {
       const requests = await readClassifiedMockRequests(mockBaseUrl);
       const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
       // Invisible replay-safe errors exhaust the primary model's retry budget;
-      // the diagnostic owner then aborts the stalled fallback request.
+      // the diagnostic owner then interrupts the stalled fallback request, and the
+      // fallback's own retries fail fast until the run settles.
       // The mock records its planned response before the delay; lifecycle checks
-      // above prove the actual abort and completion.
+      // above prove the actual interruption and completion.
       expect(recoveryRequests).toEqual([
         ...Array.from({ length: 4 }, () =>
           expect.objectContaining({
@@ -487,17 +495,18 @@ describe("Gateway repeated-request recovery", () => {
             errorCode: "response_failed_no_details",
           }),
         ),
-        expect.objectContaining({
-          model: "gpt-5.6-luna-alt",
-          continuation: false,
-          outcome: "error",
-          errorCode: "response_failed_no_details",
-        }),
+        ...Array.from({ length: 5 }, () =>
+          expect.objectContaining({
+            model: "gpt-5.6-luna-alt",
+            outcome: "error",
+            errorCode: "response_failed_no_details",
+          }),
+        ),
       ]);
-      // The stalled turn never replied, so the queued request answers with the
-      // interruption guidance instead of a retry notice or an extra recovery turn.
+      // The interrupted attempt settles as a fallback failure rather than a
+      // stuck-run abort, so the queued request answers without stalled-turn guidance.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success", stallGuidance: true }),
+        expect.objectContaining({ outcome: "success", stallGuidance: false }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];

@@ -59,7 +59,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Keep fixture I/O from spending the attempt clock before the command starts.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     let response: ReturnType<typeof callTool> | undefined;
     try {
@@ -110,7 +110,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     try {
       await Promise.race([
@@ -340,7 +340,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       name: "lookup",
       toolCallId: "call-1",
       commandBearing: true,
-      args: { action: "search", token: "plain-…2345", text: "hello" },
+      args: { action: "search", token: "plain-secret-value-12345", text: "hello" },
     });
     const resultEvent = agentEvents.find(
       (event) =>
@@ -355,7 +355,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
-    expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
+    expect(JSON.stringify(agentEvents)).toContain("plain-secret-value-12345");
     expect(
       globalAgentEvents.find((event) => event.stream === "tool" && event.data.phase === "start"),
     ).toMatchObject({

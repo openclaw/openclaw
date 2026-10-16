@@ -14,8 +14,14 @@ vi.mock("../cli/gateway-rpc.js", () => ({
   callGatewayFromCliWithTransport: mocks.callGateway,
 }));
 
+// mock-isolation: Session lifecycle fixtures supply config without reading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -320,36 +326,6 @@ describe("sessions lifecycle commands", () => {
         2,
       );
       expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([{ key: "unknown", canonicalKey: "unknown", agentId: "work" }])(
-    "targets the Gateway owner of $key when explaining retained memory",
-    async ({ key, canonicalKey, agentId }) => {
-      mocks.callGateway
-        .mockResolvedValueOnce({ session: { key, sessionId: "session-1", agentId } })
-        .mockResolvedValueOnce({
-          ok: true,
-          key: canonicalKey,
-          deleted: true,
-          archived: ["/state/session-1.jsonl.deleted.123"],
-        });
-      const runtime = createNonExitingRuntimeEnv();
-
-      await sessionsLifecycleCommand("delete", { keys: [key], yes: true }, runtime);
-
-      expect(runtime.log).toHaveBeenCalledWith(`Deleted session ${canonicalKey}.`);
-      expect(runtime.log).toHaveBeenCalledWith(
-        "Archived transcript: /state/session-1.jsonl.deleted.123",
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Archived transcripts can remain eligible for memory search"),
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `openclaw memory forget --agent ${agentId} --session ${canonicalKey} on the Gateway host or container using its state and configuration`,
-        ),
-      );
     },
   );
 

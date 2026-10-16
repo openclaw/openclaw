@@ -3,6 +3,7 @@ import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -93,17 +94,7 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
 
 async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
-  const dropdown = menu.locator("wa-dropdown");
-  // The heading is visible before the menu finishes scaling. Observe this opening,
-  // not a previous one, before Playwright chooses an action's click coordinates.
-  await dropdown.evaluate((element) => {
-    element.removeAttribute("data-e2e-after-show");
-    element.addEventListener(
-      "wa-after-show",
-      () => element.setAttribute("data-e2e-after-show", ""),
-      { once: true },
-    );
-  });
+  const surface = menu.locator(".chat-header-session-menu__panel");
   const trigger = page.locator(".chat-header-session-menu__trigger");
   if (input === "keyboard") {
     await trigger.focus();
@@ -111,7 +102,8 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
   } else {
     await trigger.click();
   }
-  await expect.poll(() => dropdown.getAttribute("data-e2e-after-show")).not.toBeNull();
+  await surface.waitFor({ state: "visible" });
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   await menu.locator(".board-widget__page-menu-heading").waitFor();
   return menu;
 }
@@ -144,7 +136,7 @@ suite.define(() => {
         await menu.locator('[value="board-widget:resize:xl"]').waitFor();
         const itemFonts = await menu.evaluate((element) =>
           Array.from(
-            element.querySelectorAll("wa-dropdown-item"),
+            element.querySelectorAll('[role^="menuitem"]'),
             (item) => getComputedStyle(item).font,
           ),
         );
@@ -171,7 +163,7 @@ suite.define(() => {
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
@@ -179,10 +171,7 @@ suite.define(() => {
         await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Focus", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Focus");
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         const multiple = {
           ...board,

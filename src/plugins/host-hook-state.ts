@@ -3,10 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
-import {
-  resolveSessionEntryAccessTarget,
-  updateResolvedSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { updateResolvedSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
@@ -147,48 +144,43 @@ async function drainPluginNextTurnInjections(
   ) {
     return [];
   }
-  const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
   const now = params.now ?? Date.now();
-  const updated = await updateResolvedSessionEntry(
-    scope,
-    (entry) => {
-      if (!entry?.pluginNextTurnInjections) {
-        return [];
+  const updated = await updateResolvedSessionEntry(scope, (entry) => {
+    if (!entry?.pluginNextTurnInjections) {
+      return [];
+    }
+    const activePluginIds = new Set(
+      (getPluginRegistryForContext()?.plugins ?? [])
+        .filter((plugin) => plugin.status === "loaded")
+        .map((plugin) => plugin.id),
+    );
+    const drained: PluginNextTurnInjectionRecord[] = [];
+    for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
+      if (
+        !activePluginIds.has(pluginId) ||
+        !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
+      ) {
+        continue;
       }
-      const activePluginIds = new Set(
-        (getPluginRegistryForContext()?.plugins ?? [])
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
+      // Guard against malformed/hand-edited persisted state — a non-array value
+      // here would crash .filter and break prompt-building for the session.
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      const liveEntries = entries.filter(
+        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
       );
-      const drained: PluginNextTurnInjectionRecord[] = [];
-      for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-        if (
-          !activePluginIds.has(pluginId) ||
-          !resolvePromptInjectionAllowed(params.cfg.plugins?.entries?.[pluginId]?.hooks)
-        ) {
-          continue;
-        }
-        // Guard against malformed/hand-edited persisted state — a non-array value
-        // here would crash .filter and break prompt-building for the session.
-        if (!Array.isArray(entries)) {
-          continue;
-        }
-        const liveEntries = entries.filter(
-          (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
-        );
-        drained.push(...liveEntries);
-      }
-      drained.sort((left, right) => left.createdAt - right.createdAt);
-      // A drain is the consume boundary for this session queue. Inactive plugin
-      // records are stale owner state and are discarded with expired records.
-      delete entry.pluginNextTurnInjections;
-      if (drained.length > 0) {
-        entry.updatedAt = now;
-      }
-      return drained;
-    },
-    { target },
-  );
+      drained.push(...liveEntries);
+    }
+    drained.sort((left, right) => left.createdAt - right.createdAt);
+    // A drain is the consume boundary for this session queue. Inactive plugin
+    // records are stale owner state and are discarded with expired records.
+    delete entry.pluginNextTurnInjections;
+    if (drained.length > 0) {
+      entry.updatedAt = now;
+    }
+    return drained;
+  });
   return updated.found ? updated.result : [];
 }
 
@@ -205,25 +197,23 @@ export async function drainPluginNextTurnInjectionContext(params: {
   };
 }
 
-export function getPluginSessionExtensionStateSync(params: {
+export async function getPluginSessionExtensionState(params: {
   cfg: OpenClawConfig;
   pluginId: string;
   sessionKey?: string;
   agentId?: string;
-}): Record<string, PluginJsonValue> | undefined {
+}): Promise<Record<string, PluginJsonValue> | undefined> {
   const pluginId = params.pluginId.trim();
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!pluginId || !sessionKey) {
     return undefined;
   }
-  const target = resolveSessionEntryAccessTarget({
+  const entry = await readResolvedSessionEntryInWorker({
     cfg: params.cfg,
     sessionKey,
     agentId: params.agentId,
   });
-  const value = target.entry?.pluginExtensions?.[pluginId] as
-    | Record<string, PluginJsonValue>
-    | undefined;
+  const value = entry?.pluginExtensions?.[pluginId] as Record<string, PluginJsonValue> | undefined;
   return value ? structuredClone(value) : undefined;
 }
 

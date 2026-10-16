@@ -59,7 +59,7 @@ const catalog: ModelCatalogEntry[] = ["configured", "x", "y", "z"].map((id) => (
   provider: "fixture",
   id,
   name: id,
-  reasoning: true,
+  reasoning: id !== "z",
 }));
 const cfg: OpenClawConfig = {
   agents: {
@@ -127,6 +127,16 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
   expect(responses).toHaveLength(1);
   return expectDefined(responses[0], "patch response");
 }
+
+it("preserves requested thinking when switching away from and back to a reasoning model", async () => {
+  await withState(async () => {
+    await seedSession("high");
+    for (const model of ["fixture/z", "fixture/x"]) {
+      expect((await patchSession({ model }))[0]).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel).toBe("high");
+    }
+  });
+});
 
 function enqueue(
   state: OpenClawTestState,

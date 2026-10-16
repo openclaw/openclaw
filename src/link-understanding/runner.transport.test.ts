@@ -66,22 +66,6 @@ vi.mock("../process/exec.js", async () => {
   };
 });
 
-async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
   const sockets = new Set<Socket>();
   const server = createServer(handler);
@@ -124,7 +108,7 @@ afterAll(async () => {
   await receipts?.close();
 });
 
-it("cancels a non-OK response body before releasing its guarded transport", async () => {
+it("cancels a non-OK response body before releasing its guarded transport", async ({ signal }) => {
   const requestSocketClosed = deferred();
   await withServer(
     (request, response) => {
@@ -149,9 +133,9 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
         ctx: { Body: `see ${base}/error` },
       });
 
-      const result = await within(resultPromise, 1000, "link understanding did not finish");
+      const result = await withinTest(resultPromise, signal);
       expect(result).toEqual([]);
-      await within(requestSocketClosed.promise, 1000, "loopback socket stayed open");
+      await withinTest(requestSocketClosed.promise, signal);
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
       expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);

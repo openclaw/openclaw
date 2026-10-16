@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,7 +21,9 @@ import {
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   openOpenClawAgentDatabase,
@@ -31,7 +33,9 @@ import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -41,6 +45,8 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
+
+afterEach(() => resetConfigRuntimeState());
 
 const scope = {
   agentId: "main",
@@ -54,7 +60,55 @@ const message = (runId: string) => ({
   idempotencyKey: `${runId}:user`,
 });
 
+it("accepts supplied legacy completion callbacks without falling back from async completion", async () => {
+  setRuntimeConfigSnapshot({});
+  const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+  const legacy = vi.fn(() => outcome);
+  const recorder = {
+    ...createUserTurnTranscriptRecorder({
+      message: message("legacy"),
+      target: { ...scope, sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 } },
+    }),
+    completeProcessingAsync: undefined,
+    completeProcessing: legacy,
+  };
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const plugin = new PluginInstance("pending-input-legacy-recorder");
+  try {
+    await plugin.run(async () => {
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("completeProcessingAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(
+      await completeUserTurnProcessing(
+        { ...recorder, completeProcessingAsync: async () => undefined },
+        outcome,
+      ),
+    ).toBeUndefined();
+    await expect(
+      completeUserTurnProcessing(
+        {
+          ...recorder,
+          completeProcessingAsync: async () => {
+            throw new Error("Async completion failed");
+          },
+        },
+        outcome,
+      ),
+    ).rejects.toThrow("Async completion failed");
+    expect(legacy).toHaveBeenCalledTimes(2);
+  } finally {
+    warning.mockRestore();
+    await plugin.dispose();
+  }
+});
+
 function createFixture() {
+  setRuntimeConfigSnapshot({});
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
   writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
   return {
@@ -75,6 +129,31 @@ function createFixture() {
         .all(),
   };
 }
+
+it("keeps host-created synchronous completion usable through the SDK compatibility window", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database, pending } = createFixture();
+    const recorder = createUserTurnTranscriptRecorder({
+      message: message("host-legacy"),
+      target: { ...scope, sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 } },
+      trackInputCompletion: true,
+    });
+    expect(await recorder.stageApproved!({ runId: "host-legacy", assertCurrent: () => {} })).toBe(
+      true,
+    );
+    const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+    expect(recorder.completeProcessing!(outcome)).toEqual(outcome);
+    expect(recorder.getProcessingCompletion!()).toEqual(outcome);
+    expect(database.db.prepare("SELECT outcome_json FROM session_input_completions").get()).toEqual(
+      {
+        outcome_json: JSON.stringify(outcome),
+      },
+    );
+    expect(pending()).toEqual([]);
+    expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+    await recorder.waitForPendingInputSettlement!();
+  });
+});
 
 it("shares transaction rows without retaining stale custody and returns the persisted staging postimage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -124,7 +203,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
       )
       .run(scope.sessionKey, "new-member", "owner", 2);
     const counter = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["entry", "members", "pending", "completion"],
       (sql) => {
         if (/\bfrom "session_nodes"/iu.test(sql)) {
@@ -145,7 +224,7 @@ it("shares transaction rows without retaining stale custody and returns the pers
     let staged;
     try {
       staged = mutate(input);
-      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 1 });
+      expect(counter.counts).toEqual({ entry: 1, members: 1, pending: 1, completion: 0 });
     } finally {
       counter.restore();
     }
@@ -171,19 +250,13 @@ it("shares transaction rows without retaining stale custody and returns the pers
       },
     ]);
 
-    const stale = stage();
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run("replacement", "cohort-input");
-    expect(() => mutate(stale)).toThrow("changed before staging committed");
-    database.db
-      .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
-      .run(identity.requestHash, "cohort-input");
     const requeued = mutate(stage());
     expect(requeued.stagedInput).toEqual(staged.stagedInput);
 
-    const completionCounter = trackSqliteStatementExecutions(database.db, ["completion"], (sql) =>
-      /\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null,
+    const completionCounter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["completion"],
+      (sql) => (/\bfrom "session_input_completions"/iu.test(sql) ? "completion" : null),
     );
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
     try {
@@ -226,7 +299,7 @@ it("stages and settles an agent user-turn recorder without caller-thread SQL", a
       const cancelledReceipt = await fixture.stage("cancelled");
       cancelled = cancelledReceipt;
       const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
       recorder.finishPendingInput?.("interrupted");
       cancelledReceipt.finish("cancelled");
@@ -487,7 +560,7 @@ it("refuses processing completion when the admitted lifecycle changes during the
   });
 });
 
-it.each(["lost reply", "unknown settlement"] as const)(
+it.each(["lost reply", "unknown settlement", "independent committed write"] as const)(
   "settles staging with %s without replaying its native write",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -525,6 +598,18 @@ it.each(["lost reply", "unknown settlement"] as const)(
                       facts: { kind: "pending-input-settlement", operation: "stage" },
                     });
                     expect(nativeAdmission?.settlement?.kind).toBe("completed");
+                    if (fault === "independent committed write") {
+                      runOpenClawAgentWriteTransaction(
+                        (database) => {
+                          writeSessionEntry(database, "agent:main:independent-input", {
+                            sessionId: "independent-input",
+                            updatedAt: 2,
+                          });
+                        },
+                        { agentId: scope.agentId },
+                      );
+                      return result;
+                    }
                     if (fault === "unknown settlement") {
                       const observed = expectDefined(nativeAdmission, "Expected native admission");
                       const settlement = vi

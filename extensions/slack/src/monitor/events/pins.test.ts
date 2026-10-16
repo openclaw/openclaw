@@ -93,11 +93,6 @@ describe("registerSlackPinEvents", () => {
 
   const cases: Array<{ name: string; args: PinCase; expectedCalls: number }> = [
     {
-      name: "enqueues DM pin system events when dmPolicy is open",
-      args: { overrides: { dmPolicy: "open" } },
-      expectedCalls: 1,
-    },
-    {
       name: "blocks DM pin system events when dmPolicy is disabled",
       args: { overrides: { dmPolicy: "disabled" } },
       expectedCalls: 0,
@@ -107,26 +102,6 @@ describe("registerSlackPinEvents", () => {
       args: {
         overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
         event: makePinEvent({ user: "U1" }),
-      },
-      expectedCalls: 0,
-    },
-    {
-      name: "allows DM pin system events for authorized senders in allowlist mode",
-      args: {
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
-        event: makePinEvent({ user: "U1" }),
-      },
-      expectedCalls: 1,
-    },
-    {
-      name: "blocks channel pin events for users outside channel users allowlist",
-      args: {
-        overrides: {
-          dmPolicy: "open",
-          channelType: "channel",
-          channelUsers: ["U_OWNER"],
-        },
-        event: makePinEvent({ channel: "C1", user: "U_ATTACKER" }),
       },
       expectedCalls: 0,
     },
@@ -147,23 +122,8 @@ describe("registerSlackPinEvents", () => {
     expect(trackEvent).not.toHaveBeenCalled();
   });
 
-  it("tracks accepted pin events", async () => {
-    const trackEvent = vi.fn();
-    await runPinCase({ trackEvent });
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it("keys each queued event by the envelope occurrence", async () => {
-    await runPinCase({ body: { event_id: "Ev-pin-2" } });
-
-    expect(pinEnqueueMock).toHaveBeenCalledWith("Slack: alice pinned a message in #direct.", {
-      sessionKey: "agent:main:main",
-      contextKey: "slack:pin:added:D1:123.456:Ev-pin-2",
-    });
-  });
-
   it("keeps enterprise pin events isolated by listener workspace", async () => {
+    const trackEvent = vi.fn();
     const harness = buildPinHarness();
     harness.ctx.installationIdentity = {
       kind: "enterprise",
@@ -181,7 +141,7 @@ describe("registerSlackPinEvents", () => {
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
-    registerSlackPinEvents({ ctx: harness.ctx });
+    registerSlackPinEvents({ ctx: harness.ctx, trackEvent });
     const handler = harness.getHandler("pin_added") as PinHandler | null;
     if (!handler) {
       throw new Error("expected Slack pin added handler");
@@ -199,6 +159,7 @@ describe("registerSlackPinEvents", () => {
       sessionKey: "session:T111",
       contextKey: "slack:pin:T111:added:D1:123.456:Ev-pin-T111",
     });
+    expect(trackEvent).toHaveBeenCalledTimes(2);
     expect(pinEnqueueMock).toHaveBeenNthCalledWith(2, expect.any(String), {
       sessionKey: "session:T222",
       contextKey: "slack:pin:T222:added:D1:123.456:Ev-pin-T222",

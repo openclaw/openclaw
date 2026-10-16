@@ -79,12 +79,13 @@ public enum DeviceSettingsPanel: String, CaseIterable, Sendable {
     case quickChatShortcut = "quick-chat-shortcut"
     case microphoneTest = "microphone-test"
     case browserImport = "browser-import"
+    case aiSetup = "ai-setup"
     case connection, gateways, debug, diagnostics, licenses, about, watch
 }
 
 public enum DeviceSettingsPermission: String, CaseIterable, Encodable, Sendable {
     case notifications, accessibility, screenRecording, microphone
-    case camera, speechRecognition, location
+    case camera, speechRecognition, location, eventPosting
     case contacts, calendars, reminders, photos
 }
 
@@ -112,10 +113,19 @@ public enum ChromeExtensionSetupAction: String, Codable, CaseIterable, Sendable 
     case inspect, install, verify
 }
 
+public struct NodePermissionRequest: Codable, Equatable, Sendable {
+    public var nodeId: String
+    public var nodeName: String?
+    public var command: String
+    public var capabilities: [String]
+    public var state: OpenClawPermissionState
+}
+
 public enum DeviceSettingsRequest: Equatable, Sendable {
     case status
     case set(DeviceSettingKey, DeviceSettingValue)
     case requestPermission(DeviceSettingsPermission)
+    case resolvePermission(NodePermissionRequest)
     case openSystemSettings(DeviceSettingsPermission)
     case open(DeviceSettingsPanel)
     case checkForUpdates
@@ -133,6 +143,13 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
                   let rawValue = payload["value"], let value = key.value(from: rawValue)
             else { return nil }
             self = .set(key, value)
+        case "resolve-permission":
+            guard let request = payload["request"],
+                  let data = try? JSONSerialization.data(withJSONObject: request),
+                  let decoded = try? JSONDecoder().decode(NodePermissionRequest.self, from: data),
+                  !decoded.nodeId.isEmpty, !decoded.capabilities.isEmpty
+            else { return nil }
+            self = .resolvePermission(decoded)
         case "request-permission", "open-system-settings":
             guard let rawID = payload["id"] as? String, let id = DeviceSettingsPermission(rawValue: rawID)
             else { return nil }
@@ -198,6 +215,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let appBuild: String
         public let profileName: String?
         public let modelName: String?
+        public let nodeId: String?
 
         public init(
             platform: Platform = .macos,
@@ -205,7 +223,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             appVersion: String,
             appBuild: String,
             profileName: String? = nil,
-            modelName: String? = nil)
+            modelName: String? = nil,
+            nodeId: String? = nil)
         {
             self.platform = platform
             self.formFactor = formFactor
@@ -213,9 +232,10 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.appBuild = appBuild
             self.profileName = profileName
             self.modelName = modelName
+            self.nodeId = nodeId
         }
 
-        enum CodingKeys: CodingKey { case platform, formFactor, appVersion, appBuild, profileName, modelName }
+        enum CodingKeys: CodingKey { case platform, formFactor, appVersion, appBuild, profileName, modelName, nodeId }
 
         public func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
@@ -226,6 +246,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             // The wire contract requires this key even when no profile is active.
             try values.encode(self.profileName, forKey: .profileName)
             try values.encodeIfPresent(self.modelName, forKey: .modelName)
+            try values.encodeIfPresent(self.nodeId, forKey: .nodeId)
         }
     }
 
@@ -315,6 +336,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let keepAwakeEnabled: Bool?
         public let healthSummaryAvailable: Bool?
         public let healthSummaryEnabled: Bool?
+        public let aiSetupAvailable: Bool?
 
         public init(
             canvasEnabled: Bool? = nil,
@@ -328,7 +350,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             unattendedDesktopEnabled: Bool? = nil,
             keepAwakeEnabled: Bool? = nil,
             healthSummaryAvailable: Bool? = nil,
-            healthSummaryEnabled: Bool? = nil)
+            healthSummaryEnabled: Bool? = nil,
+            aiSetupAvailable: Bool? = nil)
         {
             self.canvasEnabled = canvasEnabled
             self.cameraEnabled = cameraEnabled
@@ -342,6 +365,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.keepAwakeEnabled = keepAwakeEnabled
             self.healthSummaryAvailable = healthSummaryAvailable
             self.healthSummaryEnabled = healthSummaryEnabled
+            self.aiSetupAvailable = aiSetupAvailable
         }
     }
 
@@ -411,26 +435,32 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct Permissions: Encodable, Sendable {
         public let entries: [Entry]
+        public let additionalEntries: [Entry]?
         public let location: Location
 
         public init(
             entries: [Entry],
-            location: Location)
+            location: Location,
+            additionalEntries: [Entry]? = nil)
         {
             self.entries = entries
+            self.additionalEntries = additionalEntries
             self.location = location
         }
 
         public struct Entry: Encodable, Sendable {
             public let id: DeviceSettingsPermission
             public let status: DeviceSettingsPermissionStatus
+            public let state: OpenClawPermissionState?
 
             public init(
                 id: DeviceSettingsPermission,
-                status: DeviceSettingsPermissionStatus)
+                status: DeviceSettingsPermissionStatus,
+                state: OpenClawPermissionState? = nil)
             {
                 self.id = id
                 self.status = status
+                self.state = state
             }
         }
 

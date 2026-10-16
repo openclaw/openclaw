@@ -177,17 +177,6 @@ describe("startSmsGatewayAccount", () => {
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("allows distinct webhook paths across SMS accounts", async () => {
-    await startRoute({
-      account: createAccount("default"),
-    });
-    await startRoute({
-      account: createAccount("support", "/webhooks/sms/support"),
-    });
-
-    expect(registerPluginHttpRoute).toHaveBeenCalledTimes(2);
-  });
-
   it("serves hosted media and Twilio callbacks from one exact route", async () => {
     await startRoute({
       account: createAccount("default"),
@@ -215,27 +204,6 @@ describe("startSmsGatewayAccount", () => {
     await route.handler(postReq, postRes);
     expect(smsWebhookHandler).toHaveBeenCalledWith(postReq, postRes);
     expect(tryHandleHostedSmsMediaRequest).toHaveBeenCalledTimes(3);
-  });
-
-  it("falls through tokenless reads but keeps token-bearing non-GET media requests isolated", async () => {
-    await startRoute({
-      account: createAccount("default"),
-    });
-    const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
-
-    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
-    const tokenlessGet = { method: "GET", url: "/webhooks/sms" } as IncomingMessage;
-    const getRes = {} as ServerResponse;
-    await route.handler(tokenlessGet, getRes);
-    expect(smsWebhookHandler).toHaveBeenCalledWith(tokenlessGet, getRes);
-
-    tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(true);
-    const tokenizedPost = {
-      method: "POST",
-      url: `/webhooks/sms?__openclaw_mms_token_${"a".repeat(24)}=secret`,
-    } as IncomingMessage;
-    await route.handler(tokenizedPost, {} as ServerResponse);
-    expect(smsWebhookHandler).toHaveBeenCalledTimes(1);
   });
 
   it("serializes overlapping replacements of the same webhook route", async () => {

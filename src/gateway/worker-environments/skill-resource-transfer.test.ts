@@ -9,11 +9,9 @@ import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
-import {
-  loadWorkspaceSkills,
-  readWorkspaceSkillSources,
-} from "../../skills/loading/workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../../skills/loading/workspace-skill-sources.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {

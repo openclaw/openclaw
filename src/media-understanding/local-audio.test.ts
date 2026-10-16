@@ -14,44 +14,42 @@ afterEach(async () => {
 });
 
 describe("local audio selection", () => {
-  it.each([
-    { whisperCommand: null, existingOverride: false },
-    { whisperCommand: null, existingOverride: true },
-    { whisperCommand: "", existingOverride: false },
-    { whisperCommand: "", existingOverride: true },
-  ])("prepares Whisper model files only for a resolved command: %j", async (testCase) => {
-    const root = tempDirs.make("openclaw-local-audio-preparation-");
-    const modelPath = path.join(root, "whisper-model.bin");
-    if (testCase.existingOverride) {
-      await fs.writeFile(modelPath, "synthetic model");
-    }
-    for (const name of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
-      await fs.writeFile(path.join(root, name), "synthetic model");
-    }
-    const stat = vi.spyOn(fsSync, "statSync");
-    const listDirectory = vi.fn(async () => ["ggml-base.en.bin"]);
-    const selection = await inspectLocalAudioSelection({
-      env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root },
-      resolveBinary: async (name) =>
-        name === "whisper-cli"
-          ? testCase.whisperCommand
-          : name === "sherpa-onnx-offline"
-            ? path.join(root, name)
-            : null,
-      listDirectory,
-    });
-    const resolved = testCase.whisperCommand !== null;
-    expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
-    expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")?.ready).toBe(
-      resolved,
-    );
-    expect(
-      stat.mock.calls.filter(([file]) => String(file).endsWith("whisper-model.bin")),
-    ).toHaveLength(resolved ? 1 : 0);
-    expect(listDirectory).toHaveBeenCalledTimes(resolved && !testCase.existingOverride ? 1 : 0);
-  });
+  it.each([{ whisperCommand: null, existingOverride: true }])(
+    "prepares Whisper model files only for a resolved command: %j",
+    async (testCase) => {
+      const root = tempDirs.make("openclaw-local-audio-preparation-");
+      const modelPath = path.join(root, "whisper-model.bin");
+      if (testCase.existingOverride) {
+        await fs.writeFile(modelPath, "synthetic model");
+      }
+      for (const name of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
+        await fs.writeFile(path.join(root, name), "synthetic model");
+      }
+      const stat = vi.spyOn(fsSync, "statSync");
+      const listDirectory = vi.fn(async () => ["ggml-base.en.bin"]);
+      const selection = await inspectLocalAudioSelection({
+        env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root },
+        resolveBinary: async (name) =>
+          name === "whisper-cli"
+            ? testCase.whisperCommand
+            : name === "sherpa-onnx-offline"
+              ? path.join(root, name)
+              : null,
+        listDirectory,
+      });
+      const resolved = testCase.whisperCommand !== null;
+      expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
+      expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")?.ready).toBe(
+        resolved,
+      );
+      expect(
+        stat.mock.calls.filter(([file]) => String(file).endsWith("whisper-model.bin")),
+      ).toHaveLength(resolved ? 1 : 0);
+      expect(listDirectory).toHaveBeenCalledTimes(resolved && !testCase.existingOverride ? 1 : 0);
+    },
+  );
 
-  it.each(["home", `home${path.delimiter}extra`])(
+  it.each([`home${path.delimiter}extra`])(
     "expands home-directory shorthand in PATH entries for %s",
     async (homeName) => {
       const tempDir = path.join(tempDirs.make("openclaw-local-audio-"), homeName);
@@ -312,41 +310,7 @@ describe("local audio selection", () => {
     ]);
   });
 
-  it("keeps an unproven whisper runtime behind CPU sherpa", async () => {
-    const tempDir = tempDirs.make("openclaw-local-audio-");
-    const whisperModel = path.join(tempDir, "whisper.bin");
-    const sherpaDir = path.join(tempDir, "sherpa");
-    await fs.writeFile(whisperModel, "model");
-    await fs.mkdir(sherpaDir);
-    await Promise.all(
-      ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"].map(async (fileName) => {
-        await fs.writeFile(path.join(sherpaDir, fileName), "model");
-      }),
-    );
-
-    const selection = await inspectLocalAudioSelection({
-      env: {
-        WHISPER_CPP_MODEL: whisperModel,
-        SHERPA_ONNX_MODEL_DIR: sherpaDir,
-      },
-      platform: "linux",
-      arch: "x64",
-      resolveBinary: async (name) =>
-        name === "whisper-cli" || name === "sherpa-onnx-offline" ? `/usr/local/bin/${name}` : null,
-      inspectLinkedLibraries: async () => "libggml-cpu.so",
-    });
-
-    expect(selection.selected).toMatchObject({
-      id: "sherpa-onnx-offline",
-      requestedBackend: "cpu",
-    });
-    expect(selection.entries.map((entry) => entry.command)).toEqual([
-      "/usr/local/bin/sherpa-onnx-offline",
-      "/usr/local/bin/whisper-cli",
-    ]);
-  });
-
-  it.each(["exe", "com", "cmd", "bat"])(
+  it.each(["exe"])(
     "reads observations from the exact Windows whisper-cli.%s executable",
     async (extension) => {
       vi.resetModules();

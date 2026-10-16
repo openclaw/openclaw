@@ -232,7 +232,7 @@ process.stdin.pipe(child.stdin);
                 listEnvironments: store.list,
                 getTransport: () => adapter,
                 workspaceTransfer: transfer,
-                validateWorkerTurn: placements.validateTurnClaim,
+                validateWorkerTurn: (claim) => placements.validateTurnClaim(claim),
                 launchNodeWorker: async () => {
                   throw new Error("No model turn belongs in destination proof");
                 },
@@ -288,9 +288,6 @@ process.stdin.pipe(child.stdin);
                 bootstrapWorker: async () => {
                   throw new Error("Warm allocation already bootstrapped");
                 },
-                executeInference: async () => {
-                  throw new Error("No inference belongs in destination proof");
-                },
                 nodeTunnelManager: tunnels,
                 placementStore: createWorkerSessionPlacementGate(placements),
               });
@@ -300,6 +297,7 @@ process.stdin.pipe(child.stdin);
                 node: await adapter.getCurrentNode(deviceId),
               }));
               const runtime = createGatewayWorkerPlacementRuntime({
+                initialPlacements: await placements.listAsync(),
                 scheduler,
                 environments,
                 placements,
@@ -534,9 +532,9 @@ process.stdin.pipe(child.stdin);
                   },
                   target: { kind: "gateway" },
                 });
-                const cloneFilesBefore = await fs.readdir(state.statePath("projects"), {
-                  recursive: true,
-                });
+                const cloneFilesBefore = (
+                  await fs.readdir(state.statePath("projects"), { recursive: true })
+                ).toSorted();
                 expect(cloneFilesBefore).not.toContain(sha256HexPrefixCore(url, 16));
                 const latePolicy = mode.startsWith("accepted-policy-");
                 if (mode.startsWith("accepted-")) {
@@ -747,7 +745,7 @@ process.stdin.pipe(child.stdin);
                 }
                 if (mode !== "allowed" && !latePolicy && mode !== "accepted-allowed") {
                   expect(
-                    await fs.readdir(state.statePath("projects"), { recursive: true }),
+                    (await fs.readdir(state.statePath("projects"), { recursive: true })).toSorted(),
                   ).toEqual(cloneFilesBefore);
                   expect(loadSessionEntry(identity)?.repositoryWorkspaceId).toBe(
                     repository.workspaceId,

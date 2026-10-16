@@ -327,6 +327,25 @@ export function createHostRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    const phases = normalizeHostHookStringList(subscription.phases);
+    if (phases === null) {
+      reportRegistrationError(
+        record,
+        `agent event subscription phases must be an array of non-empty strings: ${id}`,
+      );
+      return;
+    }
+    if (
+      subscription.payload !== undefined &&
+      subscription.payload !== "full" &&
+      subscription.payload !== "metadata"
+    ) {
+      reportRegistrationError(
+        record,
+        `agent event subscription payload must be full or metadata: ${id}`,
+      );
+      return;
+    }
     const existing = registry.agentEventSubscriptions.find(
       (entry) => entry.pluginId === record.id && entry.subscription.id === id,
     );
@@ -336,7 +355,12 @@ export function createHostRegistrars(state: PluginRegistryState) {
     }
     registry.agentEventSubscriptions.push(
       createRegistration(record, {
-        subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
+        subscription: {
+          ...subscription,
+          id,
+          ...(streams !== undefined ? { streams } : {}),
+          ...(phases !== undefined ? { phases } : {}),
+        },
       }),
     );
   };

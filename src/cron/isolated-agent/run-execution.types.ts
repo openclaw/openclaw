@@ -37,11 +37,13 @@ export type CronRunExecutionParams = Pick<
   | "commandBody"
   | "inputProvenance"
   | "persistSessionEntry"
+  | "preRunSessionPersisted"
 > &
   Pick<
     RunCronAgentTurnParams,
     | "cfg"
     | "job"
+    | "trigger"
     | "lane"
     | "onLaneWait"
     | "executionIdentity"
@@ -58,7 +60,6 @@ export type CronRunExecutionParams = Pick<
       agentRuntime: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
-    setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
     abortSignal?: AbortSignal;
     abortReason: () => string;
     isAborted: () => boolean;

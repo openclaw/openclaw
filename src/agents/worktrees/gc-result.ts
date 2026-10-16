@@ -17,6 +17,11 @@ export function formatWorktreeGcResult(
       `retired ${result.orphansRetired} orphan records`,
       ...result.retiredCheckoutPaths.map((checkoutPath) => `preserved checkout: ${checkoutPath}`),
       `pruned ${result.snapshotsPruned} snapshots`,
+      result.gitMaintenance &&
+        `Git ${result.gitMaintenance.stage}: ${result.gitMaintenance.repoRoot}`,
+      result.gitMaintenance?.packsBefore !== undefined &&
+        `packs ${result.gitMaintenance.packsBefore} → ${result.gitMaintenance.packsAfter ?? "pending"}`,
+      result.packsRemoved !== undefined && `removed ${result.packsRemoved} packs`,
       result.eligibleCount !== undefined && `eligible ${result.eligibleCount}`,
       result.deferredCount !== undefined && `deferred ${result.deferredCount}`,
       result.failedCount !== undefined && `failed ${result.failedCount}`,

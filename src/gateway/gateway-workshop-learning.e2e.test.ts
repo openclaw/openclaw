@@ -9,10 +9,14 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { runSkillExperienceReview } from "../skills/workshop/experience-review.js";
+import { createExperienceReviewCandidate } from "../skills/workshop/experience-review.test-support.js";
 import { listWorkshopChanges } from "../skills/workshop/library.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,6 +24,8 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
+  max_output_tokens?: number;
+  tools?: Array<{ name?: string }>;
   input?: Array<{
     type?: string;
     role?: string;
@@ -27,7 +33,6 @@ type ProviderRequest = {
     output?: unknown;
     content?: Array<{ text?: string }>;
   }>;
-  tools?: Array<{ name?: string }>;
 };
 
 function respondWithTool(
@@ -71,7 +76,115 @@ function respondWithTool(
 
 describe("Gateway automatic Workshop learning", () => {
   it(
-    "patches a learned skill through skill_workshop and announces it while foreground work continues",
+    "sends one bounded review request and stops on a provider TPM rate limit",
+    { timeout: 60_000 },
+    async () => {
+      const state = await createOpenClawTestState({
+        layout: "home",
+        prefix: "openclaw-workshop-review-rate-limit-",
+      });
+      const requests: string[] = [];
+      const providerErrors: unknown[] = [];
+      const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
+      const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
+      const skillBundle = "SKILL_BUNDLE_NOT_NEEDED_FOR_REVIEW";
+      const foregroundInstructions = "FOREGROUND_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
+      const recentEvidence =
+        "RECENT_VERIFIED_PROCEDURE: confirm the public generation matches the release.";
+      try {
+        await fs.mkdir(state.workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), workspaceInstructions);
+        await withServer(
+          (request, response) => {
+            void (async () => {
+              if (request.method !== "POST" || request.url !== "/v1/responses") {
+                response.writeHead(404).end();
+                return;
+              }
+              requests.push(await readText(request));
+              response.writeHead(429, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({
+                  error: {
+                    message: "Rate limit reached on tokens per min (TPM). Try again later.",
+                    type: "tokens",
+                    code: "rate_limit_exceeded",
+                  },
+                }),
+              );
+            })().catch((error: unknown) => {
+              providerErrors.push(error);
+              response.writeHead(500).end(String(error));
+            });
+          },
+          async (baseUrl) => {
+            const candidate = await createExperienceReviewCandidate(
+              "http-tpm-limit",
+              [
+                { role: "user", content: oldHistory, timestamp: 1 },
+                { role: "user", content: recentEvidence, timestamp: 2 },
+              ],
+              {
+                workspaceDir: state.workspaceDir,
+                modelId: "gpt-workshop-rate-limit-test",
+                baseUrl: `${baseUrl}/v1`,
+                apiKey: "synthetic-workshop-provider-key",
+              },
+            );
+            candidate.config.models!.providers!.openai!.models[0]!.maxTokens = 128_000;
+            candidate.config.agents!.defaults!.models![
+              "openai/gpt-workshop-rate-limit-test"
+            ]!.params = {
+              maxTokens: 128_000,
+              transport: "sse",
+              openaiWsWarmup: false,
+            };
+            candidate.ctx.foregroundPromptContext.promptCacheKey = "foreground-cache-affinity";
+            candidate.ctx.foregroundPromptContext.sourceReplyDeliveryMode = "message_tool_only";
+            candidate.ctx.foregroundPromptContext.skillsSnapshot = {
+              prompt: skillBundle.repeat(3_000),
+              skills: [],
+            };
+            candidate.ctx.foregroundPromptContext.extraSystemPrompt =
+              foregroundInstructions.repeat(3_000);
+            candidate.ctx.foregroundPromptContext.clientTools = [
+              {
+                type: "function",
+                function: {
+                  name: "foreground_client_tool",
+                  parameters: { type: "object", properties: {} },
+                },
+              },
+            ];
+            setRuntimeConfigSnapshot(candidate.config);
+            await state.writeConfig(candidate.config);
+
+            await expect(runSkillExperienceReview(candidate)).rejects.toThrow(/rate limit/i);
+
+            expect(providerErrors).toEqual([]);
+            expect(requests).toHaveLength(1);
+            const serialized = requests[0]!;
+            // This is the final HTTP body, including system instructions and tool schemas.
+            expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024);
+            expect(serialized).toContain(recentEvidence);
+            expect(serialized).not.toContain("OLD_HISTORY_NOT_NEEDED_FOR_REVIEW");
+            expect(serialized).not.toContain(workspaceInstructions);
+            expect(serialized).not.toContain(skillBundle);
+            expect(serialized).not.toContain(foregroundInstructions);
+            expect(serialized).not.toContain("foreground-cache-affinity");
+            const payload = JSON.parse(serialized) as ProviderRequest;
+            expect(payload.max_output_tokens).toBe(2_048);
+            expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);
+          },
+        );
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
+  it(
+    "patches a learned skill through skill_workshop and announces it without rewriting source history",
     { timeout: 150_000 },
     async () => {
       const state = await createOpenClawTestState({
@@ -89,16 +202,13 @@ describe("Gateway automatic Workshop learning", () => {
         },
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let reviewWarnings: ReturnType<typeof createWarnLogCapture> | undefined;
       const providerErrors: unknown[] = [];
-      const providerRequests: ProviderRequest[] = [];
       const reviewRequests: ProviderRequest[] = [];
-      const laterForegroundRequests: ProviderRequest[] = [];
       const reviewStarted = createDeferred();
       const releaseReview = createDeferred();
       let reviewActions: Array<{ name: string; args: Record<string, unknown> }> = [];
       let foregroundRequests = 0;
-      const laterMessage = "FOREGROUND_OVERLAP_CHECK: reply with FOREGROUND_OVERLAP_COMPLETE.";
-      const laterReply = "FOREGROUND_OVERLAP_COMPLETE";
       const outsideFile = path.join(state.workspaceDir, "operator-owned.txt");
       const outsideContent = "OUTSIDE_WORKSHOP_SENTINEL_MUST_NOT_ENTER_REVIEW\n";
       const oldRule = "Declare publication complete when the health check is green.";
@@ -142,23 +252,6 @@ describe("Gateway automatic Workshop learning", () => {
                 return;
               }
               const payload = JSON.parse(await readText(request)) as ProviderRequest;
-              providerRequests.push(payload);
-              // Runtime context can append a user-role item after the actual request.
-              if (
-                payload.input?.some(
-                  (item) =>
-                    item.role === "user" &&
-                    item.content?.some((part) => part.text?.includes(laterMessage)),
-                )
-              ) {
-                laterForegroundRequests.push(payload);
-                writeOpenAiResponsesText(response, {
-                  text: laterReply,
-                  messageId: "later_foreground_done",
-                  responseId: "later_foreground_done",
-                });
-                return;
-              }
               if (foregroundRequests < 10) {
                 foregroundRequests += 1;
                 if (foregroundRequests < 10) {
@@ -212,7 +305,7 @@ describe("Gateway automatic Workshop learning", () => {
               models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
               plugins: { slots: { memory: "none" } },
               tools: { profile: "coding" },
-              skills: { workshop: { autonomous: { mode: "auto" } } },
+              skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
             } satisfies OpenClawConfig;
             const workshop = resolveWorkshopSkillsDir(config, "main");
             const skillFile = path.join(workshop, "map-publication", "SKILL.md");
@@ -226,15 +319,11 @@ describe("Gateway automatic Workshop learning", () => {
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
-            // The review keeps the foreground tool schemas for prompt-cache reuse, where Tool
-            // Search catalogs skill_workshop behind tool_call.
             const workshopCall = (args: Record<string, unknown>) => ({
-              name: "tool_call",
-              args: { id: "skill_workshop", args },
+              name: "skill_workshop",
+              args,
             });
             reviewActions = [
-              // Acting tools are gated: they answer with a redirect instead of failing the review.
-              { name: "write", args: { path: outsideFile, content: "overwritten by review\n" } },
               workshopCall({ action: "view", name: "map-publication" }),
               workshopCall({
                 action: "patch",
@@ -258,6 +347,7 @@ describe("Gateway automatic Workshop learning", () => {
               token,
               scopes: ["operator.admin", "operator.read", "operator.write"],
             });
+            reviewWarnings = createWarnLogCapture("openclaw-gateway-workshop-learning");
             const sessionKey = "agent:main:workshop-learning-proof";
             const accepted = await gateway.client.request<{ runId: string; status: string }>(
               "agent",
@@ -293,55 +383,7 @@ describe("Gateway automatic Workshop learning", () => {
               45_000,
               "The idle Workshop review did not reach the provider.",
             );
-            let continuedTranscript: typeof originalTranscript;
-            try {
-              const laterAccepted = await gateway.client.request<{ runId: string; status: string }>(
-                "agent",
-                {
-                  sessionKey,
-                  message: laterMessage,
-                  deliver: false,
-                  idempotencyKey: randomUUID(),
-                },
-              );
-              expect(laterAccepted.status).toBe("accepted");
-              const laterCompleted = await gateway.client.request<{ status: string }>(
-                "agent.wait",
-                { runId: laterAccepted.runId, timeoutMs: 30_000 },
-                { timeoutMs: 35_000 },
-              );
-              console.log(
-                "WORKSHOP_GATEWAY_OVERLAP_OBSERVATION",
-                JSON.stringify({
-                  accepted,
-                  completed,
-                  laterAccepted,
-                  laterCompleted,
-                  source,
-                  sourceEntry: loadSessionEntry(scope),
-                  originalTranscript,
-                  currentTranscript: loadTranscriptEventsSync(source),
-                  providerRequests,
-                  laterForegroundRequests,
-                  reviewRequests,
-                  providerErrors,
-                }),
-              );
-              expect(laterCompleted.status).toBe("ok");
-              expect(laterForegroundRequests).toHaveLength(1);
-              expect(reviewRequests).toHaveLength(1);
-              continuedTranscript = loadTranscriptEventsSync(source);
-            } finally {
-              releaseReview.resolve();
-            }
-            expect(continuedTranscript.slice(0, originalTranscript.length)).toEqual(
-              originalTranscript,
-            );
-            const laterTranscript = JSON.stringify(
-              continuedTranscript.slice(originalTranscript.length),
-            );
-            expect(laterTranscript).toContain(laterMessage);
-            expect(laterTranscript).toContain(laterReply);
+            releaseReview.resolve();
             // The review announces its change in the originating conversation, where the
             // foreground agent sees it next turn and can undo it.
             await expect
@@ -349,7 +391,20 @@ describe("Gateway automatic Workshop learning", () => {
                 timeout: 80_000,
                 interval: 100,
               })
-              .toContain("💾 Learned:");
+              .toContain("💾 Learned:")
+              .catch(async (cause: unknown) => {
+                throw new Error(
+                  JSON.stringify({
+                    reviewResults: reviewRequests.map((request) =>
+                      request.input?.findLast((item) => item.type === "function_call_output"),
+                    ),
+                    changes: await listWorkshopChanges("main"),
+                    providerErrors,
+                    reviewFailure: await reviewWarnings?.findText("skill experience review failed"),
+                  }),
+                  { cause },
+                );
+              });
             const skill = await fs.readFile(skillFile, "utf8");
             const support = await fs.readFile(supportFile, "utf8");
             const outside = await fs.readFile(outsideFile, "utf8");
@@ -357,32 +412,24 @@ describe("Gateway automatic Workshop learning", () => {
             const changes = await listWorkshopChanges("main");
             expect(providerErrors).toEqual([]);
             expect(reviewRequests).toHaveLength(reviewActions.length + 1);
-            const outsideResult = reviewRequests[1]?.input?.findLast(
-              (item) => item.type === "function_call_output",
-            );
-            expect(outsideResult?.output).toContain(
-              "write is not available in this background run.",
-            );
             expect(outside).toBe(outsideContent);
             for (const reviewRequest of reviewRequests) {
               const evidence = JSON.stringify(reviewRequest);
-              expect(evidence).not.toContain(laterMessage);
               expect(evidence).not.toContain(outsideContent.trim());
             }
             expect(skill).toBe(originalSkill.replace(oldRule, newRule));
             expect(support).toBe(originalSupport.replace(oldRule, newRule));
             expect(changes).toHaveLength(2);
             expect(changes.every((change) => change.actor === "review")).toBe(true);
-            expect(finalTranscript.slice(0, continuedTranscript.length)).toEqual(
-              continuedTranscript,
-            );
-            const notice = JSON.stringify(finalTranscript.slice(continuedTranscript.length));
+            expect(finalTranscript.slice(0, originalTranscript.length)).toEqual(originalTranscript);
+            const notice = JSON.stringify(finalTranscript.slice(originalTranscript.length));
             expect(notice).toContain(`updated \`map-publication\` (${reason})`);
             expect(notice).toContain('Say \\"undo\\" to revert this skill change.');
           },
         );
       } finally {
         releaseReview.resolve();
+        reviewWarnings?.cleanup();
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "Workshop learning proof cleanup" });

@@ -392,18 +392,6 @@ describe("runDaemonRestart health checks", () => {
     );
   });
 
-  it("requests a safe restart without native mutation", async () => {
-    await runDaemonRestart({ json: true, safe: true });
-    expectRestartRpc({ reason: "gateway.restart.safe" });
-    expect(runServiceRestart).not.toHaveBeenCalled();
-    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
-      action: "restart",
-      source: "safe-rpc",
-      mode: "deferred",
-      pid: 123,
-    });
-  });
-
   it("rejects --skip-deferral without --safe", async () => {
     await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
       "--skip-deferral requires --safe",

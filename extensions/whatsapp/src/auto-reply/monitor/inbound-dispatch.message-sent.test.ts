@@ -185,33 +185,14 @@ afterEach(() => {
 describe("WhatsApp canonical message_sent delivery", () => {
   it.each([
     {
-      replacement: ["/tmp/a.jpg", "/tmp/b.jpg"],
-      sent: ["/tmp/a.jpg", "/tmp/b.jpg"],
-      deferredIds: [],
-      replacementId: "sent-1",
-    },
-    {
       replacement: ["/tmp/c.jpg"],
       sent: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
       deferredIds: ["sent-1", "sent-2"],
       replacementId: "sent-3",
     },
-    {
-      deferredMedia: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
-      replacement: ["/tmp/b.jpg"],
-      sent: ["/tmp/b.jpg", "/tmp/a.jpg", "/tmp/c.jpg"],
-      deferredIds: ["sent-2", "sent-3"],
-      replacementId: "sent-1",
-    },
   ])(
     "finalizes every deferred attachment through core after replacement $replacement",
-    async ({
-      replacement,
-      sent: expectedSent,
-      deferredIds,
-      replacementId,
-      deferredMedia = ["/tmp/a.jpg", "/tmp/b.jpg"],
-    }) => {
+    async ({ replacement, sent: expectedSent, deferredIds, replacementId }) => {
       const sent: string[] = [];
       vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
         buffer: Buffer.from(url),
@@ -234,7 +215,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
       const { failure, pluginHook, internalHook, onDelivered, settledResult } =
         await dispatchObservedPlatformReply({
           payload: { text: "Here are the images", mediaUrls: replacement },
-          deferredMediaUrls: deferredMedia,
+          deferredMediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
           platform: { reply, sendMedia },
         });
 

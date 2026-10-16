@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,6 +41,7 @@ it.each([
       session: { scope: "global" },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     if (replaceDuringRead) {
       const scope = { agentId, sessionKey: "global", env: state.env };
       await replaceSessionEntry(scope, {

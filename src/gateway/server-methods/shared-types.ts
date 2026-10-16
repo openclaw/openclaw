@@ -388,6 +388,7 @@ type GatewayTransportContext = {
   unsubscribeSessionMessageEvents: SessionMessageSubscriberRegistry["unsubscribe"];
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
+  getSessionMessageSubscriberConnIds?: (sessionKey: string) => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
 };
 
@@ -493,7 +494,7 @@ export type GatewayRequestOptions = {
   /**
    * In-process Gateway lifetime guard composed into durable session mutations.
    * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
-   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   * opaque approval commit callbacks are removed after an announced ordinary stable release window.
    */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
@@ -504,6 +505,21 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Release the request's retained sharing facts after its final effect. */
+  release?: () => void;
+  /** Retain these facts until a detached effect settles, independently of the request. */
+  retain?: () => () => void;
+  /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
+  takeRelease?: () => () => void;
+  bindCreation?: (
+    target: { sessionKey?: string; key?: string; agentId?: string },
+    operation: import("../../config/sessions/session-accessor.sqlite-entry-cache.types.js").SessionEntryCreationOperation,
+  ) => void;
+  /** Follow only the selected creator execution's own registry receipts. */
+  followRegistration?: (
+    target: { sessionKey: string; agentId: string },
+    change: import("../../state/openclaw-agent-db-contract.js").AgentDatabaseRegistryChange,
+  ) => void;
   /** Consume fresh durable facts while their physical reader remains retained. */
   withCurrent?: <T>(consume: () => T) => Promise<T>;
   withPreparedCurrent?: <T>(
@@ -536,10 +552,13 @@ export type SessionMutationAuthorization = {
   }>;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Original host/operator authority; forwarded input owns its current session policy. */
+  assertAdmittedSourceCurrent?: () => void;
   /** Fresh sharing facts for runtime custody; synchronous methods retain the released SDK contract. */
   admittedInputAuthority?: import("../../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
   recordCreatedSession?: (target: {
+    entry?: import("../../config/sessions/types.js").SessionEntry;
     agentId: string;
     sessionKey: string;
     storePath: string;

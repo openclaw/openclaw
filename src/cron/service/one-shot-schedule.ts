@@ -27,8 +27,7 @@ export function resolveManualOneShotOccurrenceAtMs(job: CronJob, ownershipAtMs: 
 
 /** Reservation owns this provenance before an enablement edit can make completion stale. */
 export function retainManualOneShotOccurrence(job: CronJob, ownershipAtMs: number): void {
-  job.state.forcePreservedNextRunAtMs =
-    resolveManualOneShotOccurrenceAtMs(job, ownershipAtMs) ?? job.state.forcePreservedNextRunAtMs;
+  job.state.forcePreservedNextRunAtMs = resolveManualOneShotOccurrenceAtMs(job, ownershipAtMs);
 }
 
 /** Retained authored occurrences can recompute a missing runnable slot after enablement. */

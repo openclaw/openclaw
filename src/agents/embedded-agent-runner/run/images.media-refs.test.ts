@@ -313,4 +313,60 @@ describe("fact-carried image references", () => {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }
   });
+
+  it("hydrates a path-less transcript image from the staged sandbox twin", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-transcript-"));
+    const stagedPath =
+      "media/inbound/openclaw-staged-abc/input-photo---11111111-1111-1111-1111-111111111111.png";
+    const mediaUri = "media://inbound/photo---11111111-1111-1111-1111-111111111111.png";
+    const hostPath = path.join(sandboxRoot, "outside-store", "photo.png");
+    try {
+      await fs.mkdir(path.dirname(path.join(sandboxRoot, stagedPath)), { recursive: true });
+      await fs.writeFile(
+        path.join(sandboxRoot, stagedPath),
+        Buffer.from(TINY_PNG_BASE64, "base64"),
+      );
+      const result = await detectAndLoadPromptImages({
+        prompt: `inspect\n[media attached: ${mediaUri}]`,
+        media: [
+          {
+            path: stagedPath,
+            url: mediaUri,
+            contentType: "image/png",
+            staged: true,
+            hydrationSuppressed: true,
+          },
+          {
+            path: hostPath,
+            url: mediaUri,
+            contentType: "image/png",
+          },
+        ],
+        userTurnTranscriptRecorder: {
+          resolveMessage: async () =>
+            ({
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ url: mediaUri, contentType: "image/png", kind: "image" }],
+              },
+            }) as never,
+        },
+        imageOrder: ["offloaded"],
+        model: { input: ["text", "image"] },
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: {
+          root: sandboxRoot,
+          bridge: createHostSandboxFsBridge(sandboxRoot),
+        },
+      });
+
+      expect(result.failedMediaCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+      expect(result.images[0]?.data).toBe(TINY_PNG_BASE64);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
 });

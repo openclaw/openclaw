@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_PR,
   REVIEWED_HEAD,
-  validClawsweeperReviewCommentPages,
   validReview,
   writeReviewArtifacts,
   type ReviewArtifactFixtureOptions,
@@ -166,7 +165,6 @@ function runMergeVerification(
     "invalid-json": "printf '%s\\n' 'not valid JSON'",
     "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
   }[checks];
-  const reviewComments = JSON.stringify(validClawsweeperReviewCommentPages(42, head));
   const observation = {
     number: 42,
     url: "https://github.com/fixture/repo/pull/42",
@@ -219,7 +217,7 @@ function runMergeVerification(
         'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
         "MERGE_REPO_NAME=fixture/repo",
         "MERGE_REPO_HOST=github.com",
-        `pr_gh_plain() { case "$*" in "issue-comments fixture/repo github.com 42") printf '%s\\n' ${JSON.stringify(reviewComments)};; "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
+        `pr_gh_plain() { case "$*" in "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
         'pr_gh_quota_read() { pr_gh_plain "$@"; }',
         `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
         "pr_gh() {",
@@ -311,10 +309,7 @@ describePosix("scripts/pr review artifact validation", () => {
 
   it("rejects a review guard whose PR metadata describes another PR", () => {
     const fixtureRoot = tempDirs.make("openclaw-pr-review-guard-");
-    const localDir = join(fixtureRoot, ".local");
-    mkdirSync(localDir);
-    writeFileSync(join(localDir, "review-mode.env"), "REVIEW_MODE=pr\n");
-    writeFileSync(join(localDir, "pr-meta.env"), "PR_NUMBER=113928\n");
+    writeReviewArtifacts(fixtureRoot, validReview(), { prNumber: 113928 });
 
     const result = runReviewShellFunction(fixtureRoot, `review_guard ${REVIEWED_PR}`);
 

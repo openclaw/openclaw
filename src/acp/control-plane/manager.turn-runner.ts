@@ -8,6 +8,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
@@ -124,6 +125,7 @@ export async function runManagerTurn(params: {
       await recordSubagentTerminalState(
         {
           childSessionKey: sessionKey,
+          agentId,
           runId: input.requestId,
           requesterSessionKey: spawnedByWatcher,
           outcomeStatus,
@@ -370,6 +372,12 @@ export async function runManagerTurn(params: {
           const eventGate = { open: true };
           const turnPromise = consumeAcpTurnStream({
             runtime,
+            source: composeSessionSourceAssertion([assertSignalAdmission], (assertSource) => {
+              assertActorCurrent();
+              input.signal?.throwIfAborted();
+              modelExecution?.assertCurrent();
+              assertSource();
+            }),
             turn: {
               handle,
               text: input.text,

@@ -1,29 +1,22 @@
-import { html } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import {
-  renderComposerDictationSendAction,
-  renderComposerDictationStatus,
-  renderComposerVoiceButton,
-  renderMicrophonePicker,
-} from "../chat/components/chat-composer-controls.ts";
 import { ComposerDictationController } from "../chat/composer-dictation.ts";
 import { ComposerMicrophonePicker } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import type { NewSessionComposerTextarea } from "./composer-controller.ts";
 
 registerNewSessionSetupEnglish();
 
 type NewSessionDictationOptions = {
-  textarea: NewSessionComposerTextareaController;
+  textarea: NewSessionComposerTextarea;
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
   canCommit: () => boolean;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
   onSubmit: () => void;
-  requestUpdate: () => void;
+  onChange: () => void;
 };
 
 /**
@@ -36,7 +29,7 @@ export class NewSessionDictationControl {
   private owner: { key: string } | null = null;
 
   constructor(private readonly options: NewSessionDictationOptions) {
-    this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
+    this.devicePicker = new ComposerMicrophonePicker(options.onChange);
   }
 
   dispose(): void {
@@ -57,11 +50,11 @@ export class NewSessionDictationControl {
       : undefined;
   }
 
-  renderStatus() {
-    return renderComposerDictationStatus(this.dictation ?? undefined);
+  get controller() {
+    return this.dictation ?? undefined;
   }
 
-  render(ownerKey: string, inputDeviceId?: string) {
+  prepare(ownerKey: string, inputDeviceId?: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
       this.dictation?.dispose();
@@ -89,7 +82,7 @@ export class NewSessionDictationControl {
         if (next !== null) {
           this.options.onMessage(next);
         }
-        this.options.requestUpdate();
+        this.options.onChange();
       },
       onError: (message: string) => {
         if (ownsDraft()) {
@@ -98,7 +91,7 @@ export class NewSessionDictationControl {
       },
       onStateChange: () => {
         if (ownsDraft()) {
-          this.options.requestUpdate();
+          this.options.onChange();
         }
       },
       onDictationUnavailable: this.devicePicker.handleOpen,
@@ -107,13 +100,13 @@ export class NewSessionDictationControl {
     this.dictation.update(dictationOptions);
     const dictation = this.dictation;
 
-    return html`
-      ${renderComposerVoiceButton({
+    return {
+      voice: {
         connected,
         disabled: !enabled,
-        dictation,
+        readDictation: () => dictation,
         idleLabel: t("newSession.dictate"),
-        microphonePicker: renderMicrophonePicker({
+        microphonePicker: {
           devices: this.devicePicker.devices,
           loading: this.devicePicker.loading,
           open: this.devicePicker.open,
@@ -129,14 +122,14 @@ export class NewSessionDictationControl {
             patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
             this.devicePicker.handleClose();
           },
-        }),
+        },
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
-      })}
-      ${renderComposerDictationSendAction(dictation, () => {
+      },
+      onSubmit: () => {
         if (ownsDraft() && this.options.canCommit()) {
           this.options.onSubmit();
         }
-      })}
-    `;
+      },
+    };
   }
 }

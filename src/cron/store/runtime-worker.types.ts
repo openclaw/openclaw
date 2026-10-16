@@ -1,3 +1,4 @@
+import type { CronConfig } from "../../config/types.cron.js";
 import type { CronJobScratchWriteInput, CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type {
   CronNotificationIntent,
@@ -10,59 +11,18 @@ import type {
   CronResolvedDeliveryState,
   CronJob,
   CronRunDiagnostics,
-  CronRunStatus,
   CronStoreFile,
 } from "../types.js";
-import type { CronJobFamilyIdentity } from "./row-codec.js";
 import type {
-  CronRunReceipt,
-  CronRunReceiptHandle,
-  CronRunReceiptStatus,
-  PreparedCronRunReceiptAdjudication,
-  PreparedCronRunReceiptClaim,
-} from "./run-receipt.types.js";
-import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
-import type { CronRunRecoveryOutcome, CronRunRecoveryPreparation } from "./run-recovery.types.js";
-import type { CronStoreSaveOptions, PreparedCronStoreChanges } from "./save.types.js";
-
-export type CronScheduleMaintenanceOptions = {
-  recomputeExpired?: boolean;
-  nowMs?: number;
-  repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
-  skipScheduleErrorHandling?: boolean;
-};
-
-export type CronReceiptTerminal = {
-  handle: CronRunReceiptHandle;
-  status: Exclude<CronRunReceiptStatus, "running">;
-  finishedAtMs: number;
-  error?: string;
-};
-
-export type StartupDeferredJob = {
-  jobId: string;
-  delayMs?: number;
-  scheduleIdentity: string | undefined;
-  createdAtMs: number;
-  payloadKind: CronJob["payload"]["kind"];
-  scheduleActivatedAtMs: number | undefined;
-  nextRunAtMs: number | undefined;
-  lastRunAtMs: number | undefined;
-  lastRunStatus: CronRunStatus | undefined;
-};
-
-export type CronReservationReleasePolicy =
-  | {
-      kind: "general";
-      restoreLastError: boolean;
-      recompute: boolean;
-      terminal?: CronReceiptTerminal;
-      requireCurrentReceipt?: boolean;
-    }
-  | { kind: "manual-abandon" }
-  | { kind: "scheduled-ineligible" }
-  | { kind: "startup-settlement"; deferredJobs: StartupDeferredJob[]; staggerMs: number };
+  CronJobMutation,
+  CronJobMutationPlan,
+  CronJobMutationSnapshot,
+} from "./job-mutations.types.js";
+import type { CronJobFamilyIdentity } from "./row-codec.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
+import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
+import type { CronScheduleMaintenanceOptions } from "./scheduler-actor.types.js";
+export type { CronScheduleMaintenanceOptions } from "./scheduler-actor.types.js";
 
 type CronSkippedRunChange =
   | {
@@ -87,15 +47,7 @@ type CronSkippedRunChange =
       scheduleMode: "advance" | "preserve";
     };
 
-export type CronReceiptRevisionRefusal = {
-  receiptId: string;
-  message: string;
-  reason: "revision-changed" | "owner-unavailable";
-};
-
-export type CronJobMutationRefusal =
-  | { kind: "store-changed" }
-  | { kind: "receipt-conflict"; receipt: CronRunReceipt };
+export type CronJobMutationRefusal = { kind: "store-changed" };
 
 type CronExternalStreamSource = { scheduleKey: string; identity: string };
 
@@ -118,8 +70,8 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.prepareJobMutation": { storeKey: string; mutation: CronJobMutation };
   "cron.recordSkippedRuns": { storeKey: string; change: CronSkippedRunChange };
-  "cron.planStartup": { storeKey: string; jobIds: string[]; skipJobIds?: string[] };
   "cron.mutateExternalState": {
     storeKey: string;
     jobId: string;
@@ -128,76 +80,28 @@ export type CronRuntimeMutationInputs = {
   "cron.writeScratch": CronJobScratchWriteInput & { createdAtMsFallback?: number };
   "cron.mutateJobs": {
     storeKey: string;
-    changes: PreparedCronStoreChanges;
-    replacement?: {
-      store: CronStoreFile;
-      jobsFingerprint: string;
-      runtimeFingerprint: string;
-      options?: CronStoreSaveOptions;
-    };
+    jobMutation: CronJobMutation;
     expectedJob?: { id: string; configRevision: string };
     preconditionJob?: CronJob;
     receiptMutation?: {
       jobId: string;
       triggerStateChanged: boolean;
       scheduleChanged: boolean;
-      owner?: PreparedCronRunReceiptAdjudication;
     };
     agentId?: string;
   };
-  "cron.reserveRuns": {
-    storeKey: string;
-    proposals: Array<{
-      jobId: string;
-      enabled: boolean;
-      configRevision: string;
-      nextRunAtMs?: number;
-      lastRunAtMs?: number;
-      lastRunStatus?: CronJob["state"]["lastRunStatus"];
-      immediate: boolean;
-    }>;
-    reservedAtMs: number;
-    preserveSchedule: boolean;
-    scheduleOwnershipAtMs: number;
-    onExit: boolean;
-  };
   "cron.maintainHistory": Record<string, never>;
-  "cron.activateRun": {
-    storeKey: string;
-    handle: CronRunReceiptHandle;
-    startedAtMs: number;
-    onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
-  };
-  "cron.releaseReservations": {
-    storeKey: string;
-    jobIds: string[];
-    policy: CronReservationReleasePolicy;
-  };
+
   "cron.markDeliveryStarted": {
     storeKey: string;
     handle: CronRunReceiptHandle;
   };
-  "cron.finishReceipt": {
-    storeKey: string;
-    terminal: CronReceiptTerminal;
-  };
   "cron.finalizeRuns": {
     storeKey: string;
-    jobIds: string[];
-    receipts: Array<{
-      terminal: CronReceiptTerminal;
-      allowMissingJob: boolean;
-      allowUnavailable: boolean;
-    }>;
   };
   "cron.removeStaleFamily": {
     storeKey: string;
     family: CronJobFamilyIdentity;
-  };
-  "cron.repairRun": {
-    storeKey: string;
-    proposal: CronRunRecoveryProposal;
-    mode: "startup" | "reclaim";
   };
   "cron.scheduleUnowned": {
     storeKey: string;
@@ -211,35 +115,53 @@ export type CronRuntimeMutationInputs = {
     notificationId: string | undefined;
     outcome: CronFailureNotificationDelivery;
   };
+  "cron.recordFailureRepairSettlement": {
+    storeKey: string;
+    jobId: string;
+    repairAtMs: number;
+    repairId: string;
+    settledAtMs: number;
+  };
 };
 
 /** Completed run facts sent to the worker; live execution owners stay on the host. */
 export type CronRunFinalizationOutcome = CronJobExecutionResult & {
   jobId: string;
   job: CronJob;
+  taskRunId?: string;
   completionStatus: CronCompletionStatus;
   deliveryState: CronResolvedDeliveryState;
   startedAt: number;
   endedAt: number;
   runReceipt?: CronRunReceiptHandle;
   activeJobMarker?: { jobRemoved?: true; scheduleMutated?: true; triggerMutated?: true };
-  request?: { preserveCadence: boolean; scheduleOwnershipAtMs: number };
+  request?: {
+    runId?: string;
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    onExitWatcherCompletion?: boolean;
+  };
 };
 
 type CronScheduleOwnershipFacts = {
   jobId: string;
   active: boolean;
-  reservation?: { markerAtMs: number; preserveWhenDisabled: boolean };
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.prepareJobMutation": {
+    input: CronRuntimeMutationInputs["cron.prepareJobMutation"];
+    snapshot: CronJobMutationSnapshot;
+    outcome: CronJobMutationPlan;
+  };
   "cron.recordSkippedRuns": {
     input: CronRuntimeMutationInputs["cron.recordSkippedRuns"];
     snapshot: {
       nowMs: number;
       defaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
-      cronConfig?: CronRunRecoveryPreparation["cronConfig"];
+      cronConfig?: CronConfig;
+      failureRepairTimeoutMs?: number;
       ownership: CronScheduleOwnershipFacts[];
     };
     outcome: {
@@ -250,25 +172,10 @@ export type CronRuntimeMutationContracts = {
       logs: CronRunRecoveryOutcome["logs"];
     };
   };
-  "cron.planStartup": {
-    input: CronRuntimeMutationInputs["cron.planStartup"];
-    snapshot: {
-      nowMs: number;
-      skipMissedJobs: boolean;
-      notificationRouting: CronNotificationRouting;
-      ownership: CronScheduleOwnershipFacts[];
-    };
-    outcome: {
-      jobs: CronJob[];
-      missed: CronJob[];
-      skippedJobIds: string[];
-      notifications: CronNotificationIntent[];
-      logs: CronRunRecoveryOutcome["logs"];
-    };
-  };
+
   "cron.mutateExternalState": {
     input: CronRuntimeMutationInputs["cron.mutateExternalState"];
-    snapshot: Pick<CronRunRecoveryPreparation, "nowMs" | "cronConfig">;
+    snapshot: { nowMs: number; cronConfig?: CronConfig };
     outcome: {
       job?: CronJob;
       nowMs: number;
@@ -283,66 +190,23 @@ export type CronRuntimeMutationContracts = {
   };
   "cron.mutateJobs": {
     input: CronRuntimeMutationInputs["cron.mutateJobs"];
-    snapshot: { nowMs: number };
+    snapshot: CronJobMutationSnapshot;
     outcome: {
       store: CronStoreFile;
       names: Map<string, string | undefined>;
-      jobsFingerprint: string;
-      runtimeFingerprint: string;
-    };
-  };
-  "cron.reserveRuns": {
-    input: CronRuntimeMutationInputs["cron.reserveRuns"];
-    snapshot: {
-      defaultAgentId?: string;
-      claims: PreparedCronRunReceiptClaim[];
-      locallyOwnedReceiptIds: string[];
-      replacements: CronRunReceiptHandle[];
-    };
-    outcome: {
-      reservations: Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>;
-      replacedReceipts: CronRunReceiptHandle[];
-    };
-  };
-  "cron.maintainHistory": {
-    input: CronRuntimeMutationInputs["cron.maintainHistory"];
-    snapshot: { nowMs: number; protectedJobIds: string[]; locallyOwnedReceiptIds: string[] };
-    outcome: { reconciled: number; pruned: number };
-  };
-  "cron.activateRun": {
-    input: CronRuntimeMutationInputs["cron.activateRun"];
-    snapshot: { markerAtMs: number; defaultAgentId?: string };
-    outcome: {
-      activation?: { job: CronJob; receipt: CronRunReceiptHandle; previousLastError?: string };
-    };
-  };
-  "cron.releaseReservations": {
-    input: CronRuntimeMutationInputs["cron.releaseReservations"];
-    snapshot: {
-      nowMs: number;
-      defaultAgentId?: string;
-      notificationRouting: CronNotificationRouting;
-      reservations: Array<{
-        jobId: string;
-        markerAtMs: number;
-        runReceipt: CronRunReceiptHandle;
-        activationPreviousLastError?: { value: string | undefined };
-      }>;
-      deferTerminal: boolean;
-    };
-    outcome: {
-      jobs: CronJob[];
+      changed: boolean;
       notifications: CronNotificationIntent[];
       logs: CronRunRecoveryOutcome["logs"];
     };
   };
+  "cron.maintainHistory": {
+    input: CronRuntimeMutationInputs["cron.maintainHistory"];
+    snapshot: { nowMs: number; protectedJobIds: string[] };
+    outcome: { reconciled: number; pruned: number; nextSweepAtMs: number | null };
+  };
+
   "cron.markDeliveryStarted": {
     input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
-    snapshot: { allowMissingJob: boolean; defaultAgentId?: string };
-    outcome: Record<string, never>;
-  };
-  "cron.finishReceipt": {
-    input: CronRuntimeMutationInputs["cron.finishReceipt"];
     snapshot: Record<string, never>;
     outcome: Record<string, never>;
   };
@@ -351,15 +215,15 @@ export type CronRuntimeMutationContracts = {
     snapshot: {
       nowMs: number;
       defaultAgentId?: string;
-      cronConfig?: CronRunRecoveryPreparation["cronConfig"];
+      cronConfig?: CronConfig;
+      failureRepairTimeoutMs?: number;
       outcomes: CronRunFinalizationOutcome[];
-      deferredReceiptIds: string[];
     };
     outcome: {
       changed: boolean;
       upsertedJobs: CronJob[];
       removedJobs: CronJob[];
-      eventPlans: Array<{ outcomeIndex: number; job?: CronJob }>;
+      eventPlans: Array<{ outcomeIndex: number; job: CronJob }>;
       notifications: CronNotificationIntent[];
       logs: CronRunRecoveryOutcome["logs"];
     };
@@ -369,14 +233,9 @@ export type CronRuntimeMutationContracts = {
     snapshot: Record<string, never>;
     outcome: { removed: number };
   };
-  "cron.repairRun": {
-    input: CronRuntimeMutationInputs["cron.repairRun"];
-    snapshot: Pick<CronRunRecoveryPreparation, "nowMs" | "cronConfig" | "proposedReceiptIsStale">;
-    outcome: CronRunRecoveryOutcome;
-  };
   "cron.scheduleUnowned": {
     input: CronRuntimeMutationInputs["cron.scheduleUnowned"];
-    snapshot: { nowMs: number; ownership: CronScheduleOwnershipFacts[] };
+    snapshot: { nowMs: number };
     outcome: {
       changed: boolean;
       jobs: CronJob[];
@@ -386,6 +245,11 @@ export type CronRuntimeMutationContracts = {
   };
   "cron.recordFailureAlertOutcome": {
     input: CronRuntimeMutationInputs["cron.recordFailureAlertOutcome"];
+    snapshot: Record<string, never>;
+    outcome: { job?: CronJob };
+  };
+  "cron.recordFailureRepairSettlement": {
+    input: CronRuntimeMutationInputs["cron.recordFailureRepairSettlement"];
     snapshot: Record<string, never>;
     outcome: { job?: CronJob };
   };
@@ -399,8 +263,6 @@ export type CronRuntimeWorkerOperations = {
     };
     output:
       | { outcome: CronRuntimeMutationContracts[Type]["outcome"] }
-      | (Type extends "cron.reserveRuns" ? { conflict: CronRunReceipt } : never)
-      | (Type extends "cron.finalizeRuns" ? { receiptRevision: CronReceiptRevisionRefusal } : never)
       | (Type extends "cron.mutateJobs"
           ? {
               mutationRefusal: CronJobMutationRefusal;

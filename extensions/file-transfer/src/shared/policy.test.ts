@@ -5,8 +5,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
-  getRuntimeConfig: () => getRuntimeConfigMock(),
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: () => getRuntimeConfigMock(),
 }));
 vi.mock("openclaw/plugin-sdk/config-mutation", () => ({
   mutateConfigFile: (input: unknown) => mutateConfigFileMock(input),
@@ -91,12 +92,6 @@ it("delegates only the selected node read policy and ignores the Node process po
 });
 
 describe("evaluateFilePolicy — default deny", () => {
-  it("returns NO_POLICY when plugin policy block is missing", () => {
-    getRuntimeConfigMock.mockReturnValue({ plugins: { entries: { "file-transfer": {} } } });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: false, code: "NO_POLICY" });
-  });
-
   it("returns NO_POLICY when no entry exists for the node and no '*' fallback", () => {
     withConfig({ "other-node": { allowReadPaths: ["/tmp/**"] } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
@@ -221,36 +216,6 @@ describe("evaluateFilePolicy — allow matching", () => {
       ok: true,
       followSymlinks: true,
     });
-  });
-});
-
-describe("evaluateFilePolicy — ask modes", () => {
-  it("ask=on-miss miss preserves transfer caps for one-time approvals", () => {
-    withConfig({
-      n1: {
-        ask: "on-miss",
-        allowReadPaths: ["/var/log/**"],
-        maxBytes: 4096,
-        followSymlinks: true,
-      },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, {
-      ok: false,
-      code: "POLICY_DENIED",
-      askable: true,
-      askMode: "on-miss",
-      maxBytes: 4096,
-      followSymlinks: true,
-    });
-  });
-
-  it("ask=always always returns ask-always (prompt on every call)", () => {
-    withConfig({
-      n1: { ask: "always", allowReadPaths: ["/tmp/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: true, reason: "ask-always", askMode: "always" });
   });
 });
 

@@ -75,10 +75,12 @@ it.skipIf(process.platform === "win32").for([
               inspect();
             }),
             closed,
-            `Missing ${text}: ${output}`,
+            `Missing ${text}`,
           ),
           testSignal,
         );
+      } catch (cause) {
+        throw new Error(`Missing ${text}: ${output}`, { cause });
       } finally {
         changes.off("output", inspect);
       }
@@ -86,14 +88,14 @@ it.skipIf(process.platform === "win32").for([
     await waitForOutput("process proof: ready:1");
     expect(child.kill(signal)).toBe(true);
     if (mode === "timeout") {
-      await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
+      await waitForOutput("process proof: cron-cancelled:restart");
       await waitForOutput("process proof: close-entered");
     } else {
       await waitForOutput("draining active work before");
       expect(output).not.toContain("process proof: close-entered");
     }
     child.send("inspect");
-    await waitForOutput("process proof: held:starts=1:pending=true");
+    await waitForOutput("process proof: held:starts=1:connectionPending=false:cronPending=1");
     expect(fs.existsSync(path.join(root, "cleanup.txt"))).toBe(false);
     expect(output).not.toContain("process proof: close-completed");
     expect(output).not.toContain("process proof: ready:2");

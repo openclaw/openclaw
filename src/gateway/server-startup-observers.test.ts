@@ -60,6 +60,7 @@ it.each([
     });
     const controller = new AbortController();
     const activate = vi.fn();
+    const refresh = vi.fn(async () => undefined);
     const registry = createEmptyPluginRegistry();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const observers = runGatewayStartupObservers({
@@ -75,7 +76,7 @@ it.each([
       log,
       logHooks: log,
       createHookRunner,
-      refreshLatestUpdateRestartSentinel: async () => undefined,
+      refreshLatestUpdateRestartSentinel: refresh,
     });
     try {
       await awaitGateBeforeSettlement(
@@ -84,6 +85,7 @@ it.each([
         "restored recovery settled before preparing its transcript reader",
       );
       expect(activate).not.toHaveBeenCalled();
+      expect(refresh).toHaveBeenCalledOnce();
       if (outcome === "close") {
         controller.abort();
       }

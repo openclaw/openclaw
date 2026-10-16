@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { GatewayRole } from "../role-policy.types.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import type { PrepareGatewayAuthenticatedReceive } from "./connection-transport.js";
 
 type PayloadLimited = { _maxPayload?: number };

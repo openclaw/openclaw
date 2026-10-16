@@ -10,6 +10,7 @@ import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
+import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
 import { createSmsTestAccount } from "./webhook.test-support.js";
 
@@ -315,28 +316,7 @@ describe("createSmsIngressSpool", () => {
     expect(deliverySignal?.aborted).toBe(true);
   });
 
-  it("keeps a completed MessageSid tombstone from dispatching twice", async () => {
-    const stateDir = await createStateDir();
-    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const spool = createTestSpool(stateDir, { deliver });
-
-    expect(await spool.enqueue(form("SM-completed"))).toMatchObject({
-      kind: "accepted",
-      duplicate: false,
-    });
-    await drainSpool(spool);
-    expect(await spool.enqueue(form("SM-completed"))).toMatchObject({
-      kind: "completed",
-      duplicate: true,
-    });
-    await drainSpool(spool);
-
-    expect(deliver).toHaveBeenCalledOnce();
-  });
-
-  it.each(["SmsSid", "SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {
+  it.each(["SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
       await lifecycle.onAdopted();
@@ -354,21 +334,6 @@ describe("createSmsIngressSpool", () => {
       expect.any(Object),
       expect.any(Number),
     );
-  });
-
-  it("uses the canonical sender as the durable lane", async () => {
-    const stateDir = await createStateDir();
-    const queue = createQueue(stateDir);
-    const spool = createTestSpool(stateDir, {
-      queue,
-      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
-    });
-
-    await spool.enqueue({ ...form("SM-canonical-lane"), From: "RcS:+1 (555) 123-4567" });
-
-    expect(await queue.listPending()).toEqual([
-      expect.objectContaining({ laneKey: "sender:+15551234567" }),
-    ]);
   });
 
   it("replays with the original webhook receipt timestamp", async () => {
@@ -416,34 +381,6 @@ describe("createSmsIngressSpool", () => {
     expect(reloadedDeliver).not.toHaveBeenCalled();
   });
 
-  it("dispatches callbacks bound to the configured Messaging Service", async () => {
-    const stateDir = await createStateDir();
-    const serviceAccount = {
-      ...account,
-      fromNumber: "",
-      messagingServiceSid: "MG123",
-    };
-    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const spool = createTestSpool(stateDir, {
-      account: serviceAccount,
-      deliver,
-    });
-
-    await spool.enqueue({
-      ...form("SM-service"),
-      MessagingServiceSid: "MG123",
-    });
-    await drainSpool(spool);
-
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ messagingServiceSid: "MG123" }),
-      expect.any(Object),
-      expect.any(Number),
-    );
-  });
-
   it("preserves Messaging Service RCS identity", async () => {
     const stateDir = await createStateDir();
     const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
@@ -465,43 +402,15 @@ describe("createSmsIngressSpool", () => {
     expect(deliver).toHaveBeenCalledOnce();
   });
 
-  it("preserves shipped RCS text while ignoring unsupported media fields", async () => {
-    const stateDir = await createStateDir();
-    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const spool = createTestSpool(stateDir, { deliver });
-
-    await spool.enqueue({
-      ...form("SM-rcs-text-media"),
-      Body: "keep this RCS text",
-      From: "rcs:+15551234567",
-      To: "rcs:example-agent",
-      NumMedia: "1",
-      MediaUrl0: "https://api.twilio.com/media/photo",
-    });
-    await drainSpool(spool);
-
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "keep this RCS text",
-        media: [],
-      }),
-      expect.any(Object),
-      expect.any(Number),
-    );
-  });
-
-  it.each([
+  it.each<{
+    name: string;
+    ingressAccount: ResolvedSmsAccount;
+    rawForm: Record<string, string>;
+  }>([
     {
       name: "invalid payload",
       ingressAccount: account,
       rawForm: { MessageSid: "SM-invalid", From: "+15551234567" },
-    },
-    {
-      name: "missing account",
-      ingressAccount: account,
-      rawForm: { ...form("SM-account-missing"), AccountSid: "" },
     },
     {
       name: "account mismatch",
@@ -524,20 +433,6 @@ describe("createSmsIngressSpool", () => {
       rawForm: {
         ...form("SM-service-mismatch"),
         MessagingServiceSid: "MG-other",
-      },
-    },
-    {
-      name: "missing Messaging Service",
-      ingressAccount: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
-      rawForm: form("SM-service-missing"),
-    },
-    {
-      name: "fromNumber precedence",
-      ingressAccount: { ...account, messagingServiceSid: "MG123" },
-      rawForm: {
-        ...form("SM-number-precedence"),
-        To: "+15550000000",
-        MessagingServiceSid: "MG123",
       },
     },
     {

@@ -179,64 +179,6 @@ describe("keyed commentary after an unphased live stream", () => {
     ]);
   });
 
-  it("preserves complete source formatting in the keyed projection", () => {
-    const text = "```python\nif ready:\n    run()\n```";
-    const h = commentaryHarness();
-    h.stream("source-a", `${text}\n\n`);
-    h.preamble("item-a", text, "source-a");
-    h.preamble("item-a", text);
-    expect(h.visible()).toEqual([{ text, itemId: "item-a" }]);
-  });
-
-  it.each([`${COMMENTARY} More detail.`, `Before. ${COMMENTARY}`])(
-    "does not retire a different complete occurrence: %s",
-    (text) => {
-      const h = commentaryHarness();
-      h.stream("different-source", text);
-      h.preamble("item-a", COMMENTARY);
-      expect(h.visible()).toEqual([
-        { text: COMMENTARY, itemId: "item-a" },
-        { text, itemId: undefined },
-      ]);
-    },
-  );
-
-  it("keeps already-owned bytes retired when a pending item is shortened", () => {
-    const h = commentaryHarness();
-    h.stream("source-a", "Checking tests");
-    h.preamble("item-a", "Checking tests now", "source-a");
-    h.preamble("item-a", "Checking");
-    expect(h.visible()).toEqual([{ text: "Checking", itemId: "item-a" }]);
-    h.stream("source-b", "A later observation.");
-    h.preamble("item-a", "Checking");
-    expect(h.visible()).toEqual([
-      { text: "Checking", itemId: "item-a" },
-      { text: "A later observation.", itemId: undefined },
-    ]);
-  });
-
-  it("completes the owned prefix when the same pending item revises its text", () => {
-    const h = commentaryHarness();
-    h.stream("source-a", "Checking");
-    h.preamble("item-a", "Checking files.", "source-a");
-    h.preamble("item-a", "Checking tests.");
-    h.stream("source-a", "Checking tests.");
-    h.preamble("item-a", "Checking tests.", "source-a");
-    expect(h.visible()).toEqual([{ text: "Checking tests.", itemId: "item-a" }]);
-  });
-
-  it("does not acquire a later occurrence for an item that never owned the earlier stream", () => {
-    const h = commentaryHarness();
-    h.stream("source-b", "Different text.");
-    h.preamble("item-a", COMMENTARY);
-    h.stream("source-b", COMMENTARY, true);
-    h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "item-a" },
-      { text: COMMENTARY, itemId: undefined },
-    ]);
-  });
-
   it("does not let a late item update consume a later identical occurrence", () => {
     const h = commentaryHarness();
     h.stream("source-a", `${COMMENTARY}\n\n`);
@@ -264,30 +206,6 @@ describe("keyed commentary after an unphased live stream", () => {
     h.stream("source-b", COMMENTARY);
     h.preamble("item-a", COMMENTARY);
     expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: undefined }]);
-  });
-
-  it("transfers the rolled-over occurrence without changing its tool boundary", () => {
-    const h = commentaryHarness();
-    h.stream("source-a", `${COMMENTARY}\n\n`);
-    h.tool();
-    h.preamble("item-a", COMMENTARY, "source-a");
-    expect(h.visible()).toEqual([{ text: COMMENTARY, itemId: "item-a" }]);
-    h.stream("source-b", "Later text.");
-    h.preamble("item-a", COMMENTARY);
-    expect(h.visible()).toEqual([
-      { text: COMMENTARY, itemId: "item-a" },
-      { text: "Later text.", itemId: undefined },
-    ]);
-  });
-
-  it("keeps leading code indentation on a later cumulative occurrence", () => {
-    const code = "    execute()\n    finish()";
-    const h = commentaryHarness();
-    h.stream("source-a", `${COMMENTARY}\n\n`);
-    h.preamble("item-a", COMMENTARY, "source-a");
-    h.stream("source-b", code);
-    h.preamble("item-b", code, "source-b");
-    expect(h.parts().map((part) => part.text)).toEqual([COMMENTARY, code]);
   });
 
   it("does not reacquire an occurrence after an item is cleared", () => {

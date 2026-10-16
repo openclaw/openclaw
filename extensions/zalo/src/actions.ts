@@ -48,7 +48,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       const sendMessageZalo = await loadZaloActionsRuntime();
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl,
         cfg,
         assertDirectAdapterHandoff,
       });

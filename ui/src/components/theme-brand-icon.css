@@ -1,0 +1,13 @@
+openclaw-theme-brand-icon {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+}
+
+openclaw-theme-brand-icon > img,
+openclaw-theme-brand-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

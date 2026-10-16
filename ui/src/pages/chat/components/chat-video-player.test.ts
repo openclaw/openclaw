@@ -15,6 +15,7 @@ afterEach(() => {
 describe("ChatVideoPlayer", () => {
   it("starts metadata loading only when the video card reaches the viewport", async () => {
     let intersect: IntersectionObserverCallback | undefined;
+    const disconnect = vi.fn();
     vi.stubGlobal(
       "IntersectionObserver",
       class {
@@ -22,7 +23,7 @@ describe("ChatVideoPlayer", () => {
           intersect = callback;
         }
         observe() {}
-        disconnect() {}
+        disconnect = disconnect;
       },
     );
     const player = document.createElement("openclaw-chat-video-player");
@@ -43,19 +44,32 @@ describe("ChatVideoPlayer", () => {
     await player.updateComplete;
 
     expect(video?.getAttribute("src")).toBe("https://example.com/clip.mp4");
-  });
+    expect(disconnect).toHaveBeenCalledOnce();
 
-  it("preserves a portrait attachment aspect ratio", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "https://example.com/portrait.mp4";
-    player.sourceIdentity = "media:portrait";
-    player.label = "portrait.mp4";
-    player.mediaWidth = 9;
-    player.mediaHeight = 16;
-    mountSolid(() => player);
+    video!.dispatchEvent(new Event("error"));
     await player.updateComplete;
+    expect(player.querySelector("video")).toBeNull();
+    expect(disconnect).toHaveBeenCalledTimes(2);
 
-    expect(player.querySelector("video")?.style.aspectRatio).toBe("9 / 16");
+    player.src = "https://example.com/recovered.mp4";
+    await player.updateComplete;
+    const recovered = player.querySelector("video")!;
+    expect(recovered).not.toBe(video);
+    expect(recovered.hasAttribute("src")).toBe(false);
+    intersect?.(
+      // SAFETY: This observer fixture exercises only the visibility field.
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      // SAFETY: The production callback does not inspect its observer argument.
+      {} as IntersectionObserver,
+    );
+    await player.updateComplete;
+    expect(recovered.getAttribute("src")).toBe("https://example.com/recovered.mp4");
+    expect(disconnect).toHaveBeenCalledTimes(3);
+
+    player.remove();
+    await Promise.resolve();
+    flush();
+    expect(disconnect).toHaveBeenCalledTimes(4);
   });
 
   it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {

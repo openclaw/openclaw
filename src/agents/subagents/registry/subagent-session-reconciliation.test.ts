@@ -4,7 +4,9 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   replaceSessionEntrySync,
+  replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -135,7 +137,9 @@ describe("subagent session reconciliation ownership", () => {
             childAgentId: encodedAgent === "main" ? "worker" : "main",
             cfg,
           };
-          expect((await loadSubagentSessionEntry(target))?.sessionId).toBe(`${encodedAgent}-child`);
+          await expect(loadSubagentSessionEntry(target)).rejects.toThrow(
+            "Subagent owning agent is unresolved",
+          );
         }
         await expect(
           loadSubagentSessionEntry({
@@ -143,10 +147,10 @@ describe("subagent session reconciliation ownership", () => {
             childAgentId: "worker",
             cfg,
           }),
-        ).rejects.toThrow("Malformed agent session key");
+        ).rejects.toThrow("Subagent owning agent is unresolved");
         await expect(async () =>
           loadSubagentSessionEntry({ childSessionKey: "global", cfg }),
-        ).rejects.toThrow("Session key does not contain an agent id");
+        ).rejects.toThrow("Subagent owning agent is unresolved");
       } finally {
         await closeOpenClawAgentDatabasesAsync(state.root);
       }
@@ -166,7 +170,7 @@ describe("subagent session reconciliation ownership", () => {
             { agentId, sessionKey: durableKey, storePath, env: state.env },
             { ...terminalSession, sessionId: "durable-child" },
           );
-          replaceSessionEntrySync(
+          await replaceSessionEntry(
             { agentId, sessionKey: childSessionKey, storePath, env: state.env },
             { ...terminalSession, sessionId: "incognito-child", incognito: true },
           );
@@ -190,6 +194,10 @@ describe("subagent session reconciliation ownership", () => {
             fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })),
           ).toBe(false);
         } finally {
+          memorySessionActorOwners.closeDatabase({
+            agentId,
+            path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env }),
+          });
           await closeOpenClawAgentDatabasesAsync(state.root);
         }
       });

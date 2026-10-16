@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +23,7 @@ import {
 import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
+export { findGitCheckoutRoot, insideGitCheckout } from "../workspace-git.js";
 
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
@@ -387,30 +387,6 @@ export async function resolveGitRepositoryPaths(
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };
-}
-
-/**
- * True when dir sits inside a git checkout: a .git entry on itself or any ancestor.
- * Existence, not directory-ness, is the signal — linked worktrees keep a .git file.
- * Mirrors `git rev-parse --show-toplevel` discovery without spawning git, so UI
- * capability checks and create-preflights cannot diverge from the worktree service.
- */
-export function findGitCheckoutRoot(start: string): string | null {
-  let current = path.resolve(start);
-  for (;;) {
-    if (existsSync(path.join(current, ".git"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
-}
-
-export function insideGitCheckout(start: string): boolean {
-  return findGitCheckoutRoot(start) !== null;
 }
 
 export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {

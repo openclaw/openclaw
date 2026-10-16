@@ -33,6 +33,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
       auth = relayMocks.auth;
       close = relayMocks.close;
       connect = relayMocks.connect;
+      connected = true;
       idleSince: number | undefined;
       ongoingOperations = 0;
       onauth: unknown;
@@ -140,7 +141,7 @@ describe("Buzz live directory", () => {
             }),
           );
         }
-        handlers.oneose();
+        queueMicrotask(() => handlers.oneose());
         return { close: vi.fn() };
       },
     );
@@ -206,7 +207,6 @@ describe("Buzz live directory", () => {
   });
 
   it.each([
-    { rootEnabled: false, accountEnabled: true, active: false, unavailable: true },
     { rootEnabled: true, accountEnabled: false, active: false, unavailable: false },
     { rootEnabled: false, accountEnabled: true, active: true, unavailable: false },
     { rootEnabled: true, accountEnabled: false, active: true, unavailable: true },

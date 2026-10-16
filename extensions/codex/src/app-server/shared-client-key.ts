@@ -31,8 +31,12 @@ export function createSharedCodexAppServerClientKeyResolver(params: {
     preparedAuth?.kind === "api-key"
       ? resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey)
       : (preparedAuth?.snapshot.secretFreeCacheKey ??
-        (authRequirement === "api-key" && !authProfileId
-          ? resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
+        ((authRequirement === "api-key" || authRequirement === "environment-api-key") &&
+        !authProfileId
+          ? resolveCodexAppServerFallbackApiKeyCacheKey({
+              startOptions: params.startOptions,
+              allowNativeAuthFile: authRequirement === "api-key",
+            })
           : undefined));
   // Capture turns cannot inherit a normal client whose loaded bytes predate the
   // filesystem snapshot. Keep their physical process generation separate.

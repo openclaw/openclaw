@@ -1,26 +1,25 @@
 // Workspace skill sync runtime tests cover sandbox synchronization and plugin-provided skills.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
-import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
-const mockResolvePluginSkillRoots = vi.hoisted(() =>
-  vi.fn(() => [] as Array<{ dir: string; rejectHardlinks: boolean }>),
-);
-
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: mockResolvePluginSkillRoots,
-}));
+const isolatedConfig = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -43,6 +42,7 @@ async function createCaseDir(prefix: string): Promise<string> {
 
 async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace: string) {
   await syncWorkspaceSkills({
+    config: isolatedConfig,
     sourceWorkspaceDir: sourceWorkspace,
     targetWorkspaceDir: targetWorkspace,
     bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
@@ -54,7 +54,7 @@ async function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
 ): Promise<string> {
-  return (await buildSkillSnapshot(workspaceDir, opts)).prompt;
+  return (await buildSkillSnapshot(workspaceDir, { config: isolatedConfig, ...opts })).prompt;
 }
 
 async function expectSyncedSkillConfinement(params: {
@@ -144,7 +144,7 @@ describe("syncWorkspaceSkills", () => {
     const skillUsagePaths = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      config: { skills: { load: { extraDirs: [extraDir] } } },
+      config: { ...isolatedConfig, skills: { load: { extraDirs: [extraDir] } } },
       bundledSkillsDir: bundledDir,
       managedSkillsDir: managedDir,
     });
@@ -193,6 +193,7 @@ describe("syncWorkspaceSkills", () => {
       frontmatterExtra: "disable-model-invocation: true",
     });
     const skillsSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
@@ -200,6 +201,7 @@ describe("syncWorkspaceSkills", () => {
     expect(skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha", "hidden"]);
     expect(skillsSnapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["alpha"]);
     const params = {
+      config: isolatedConfig,
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       bundledSkillsDir,
@@ -214,6 +216,69 @@ describe("syncWorkspaceSkills", () => {
     expect(second).toEqual(first);
     expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
+  });
+
+  it("keeps generated skills out of Git discovery across sync, cached reuse and refresh", async () => {
+    const workspace = await createCaseDir("git-workspace");
+    const targetWorkspace = path.join(workspace, ".openclaw", "sandbox-skills");
+    const sourceSkillDir = path.join(workspace, "skills", "alpha");
+    const generatedSkill = ".openclaw/sandbox-skills/skills/alpha/SKILL.md";
+    const generatedRoot = path.join(targetWorkspace, "skills");
+    const git = async (...args: string[]) =>
+      (
+        await promisify(execFile)("git", args, { cwd: workspace, env: createNestedGitEnv() })
+      ).stdout.trim();
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Original skill" });
+    await fs.mkdir(targetWorkspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "README.md"), "original\n");
+    await git("init", "--quiet");
+    await git("add", "README.md");
+    await fs.writeFile(path.join(workspace, "README.md"), "changed\n");
+    await fs.writeFile(path.join(workspace, ".openclaw", "project.txt"), "project\n");
+    await fs.writeFile(path.join(targetWorkspace, "notes.txt"), "ordinary sibling\n");
+    const options = {
+      config: isolatedConfig,
+      bundledSkillsDir: path.join(workspace, ".bundled"),
+      managedSkillsDir: path.join(workspace, ".managed"),
+    };
+    const params = {
+      ...options,
+      sourceWorkspaceDir: workspace,
+      targetWorkspaceDir: targetWorkspace,
+      skillsSnapshot: await buildSkillSnapshot(workspace, {
+        ...options,
+        snapshotVersion: getSkillsSnapshotVersion(workspace),
+      }),
+    };
+    const expectProjectChanges = async () => {
+      expect(await git("ls-files", "--others", "--exclude-standard")).toBe(
+        ".openclaw/project.txt\n.openclaw/sandbox-skills/notes.txt\nskills/alpha/SKILL.md",
+      );
+      expect(await git("diff", "--name-only")).toContain("README.md");
+    };
+
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    await git("add", "--force", generatedSkill);
+    await fs.appendFile(path.join(workspace, generatedSkill), "\ntracked edit\n");
+    const cachedMarker = path.join(generatedRoot, "alpha", "cached.txt");
+    await fs.writeFile(cachedMarker, "retained by cache\n");
+    await fs.rm(path.join(generatedRoot, ".gitignore"));
+
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    expect(await pathExists(cachedMarker)).toBe(true);
+    expect(await git("diff", "--name-only")).toContain(generatedSkill);
+
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Refreshed skill" });
+    await refreshSkillsDiscovery({ workspaceDir: workspace });
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    expect(await pathExists(cachedMarker)).toBe(false);
+    expect(await fs.readFile(path.join(workspace, generatedSkill), "utf8")).toContain(
+      "Refreshed skill",
+    );
+    expect(await git("diff", "--name-only")).toContain(generatedSkill);
   });
 
   it.each([
@@ -331,11 +396,13 @@ describe("syncWorkspaceSkills", () => {
       });
     }
     const skillsSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
     });
     const syncParams = {
+      config: isolatedConfig,
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       bundledSkillsDir,
@@ -391,12 +458,14 @@ describe("syncWorkspaceSkills", () => {
     }
     const snapshotVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const firstSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       skillFilter: ["alpha", "beta"],
       snapshotVersion,
     });
     await syncWorkspaceSkills({
+      config: isolatedConfig,
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       bundledSkillsDir,
@@ -408,12 +477,14 @@ describe("syncWorkspaceSkills", () => {
     await fs.writeFile(preservedMarker, "preserved");
 
     const secondSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       skillFilter: ["alpha", "gamma"],
       snapshotVersion,
     });
     await syncWorkspaceSkills({
+      config: isolatedConfig,
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       bundledSkillsDir,
@@ -445,7 +516,7 @@ describe("syncWorkspaceSkills", () => {
           await fs.chmod(directory, 0o555);
         }
         await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
-        bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+        await refreshSkillsDiscovery({ workspaceDir: sourceWorkspace });
 
         await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
 
@@ -487,11 +558,13 @@ describe("syncWorkspaceSkills", () => {
     await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
     await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "before");
     const firstSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
     });
     const syncParams = {
+      config: isolatedConfig,
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       bundledSkillsDir,
@@ -501,8 +574,10 @@ describe("syncWorkspaceSkills", () => {
     await syncWorkspaceSkills(syncParams);
 
     await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "after");
-    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    await refreshSkillsDiscovery({ workspaceDir: sourceWorkspace });
+    const nextVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const secondSnapshot = await buildSkillSnapshot(sourceWorkspace, {
+      config: isolatedConfig,
       bundledSkillsDir,
       managedSkillsDir,
       snapshotVersion: nextVersion,
@@ -551,6 +626,8 @@ describe("syncWorkspaceSkills", () => {
       await fs.writeFile(path.join(staleDir, "SKILL.md"), "# Stale\n", { mode: 0o444 });
       await fs.writeFile(path.join(nestedDir, "old.txt"), "old", { mode: 0o444 });
       await fs.writeFile(outsideFile, "outside", { mode: 0o444 });
+      // Pin the linked target mode independently of the caller's umask.
+      await fs.chmod(outsideFile, 0o444);
       await fs.symlink(outsideDir, path.join(staleDir, "linked-directory"));
       await fs.symlink(outsideFile, path.join(staleDir, "linked-file"));
       await fs.symlink(outsideDir, path.join(targetSkillsDir, "linked-directory"));
@@ -603,6 +680,7 @@ describe("syncWorkspaceSkills", () => {
       targetWorkspaceDir: targetWorkspace,
       agentId: "alpha",
       config: {
+        ...isolatedConfig,
         agents: {
           defaults: {
             skills: ["foo_bar", "foo.dot"],
@@ -731,6 +809,7 @@ describe("syncWorkspaceSkills", () => {
 
     await withEnvAsync({ HOME: sourceWorkspace }, () =>
       syncWorkspaceSkills({
+        config: isolatedConfig,
         sourceWorkspaceDir: sourceWorkspace,
         targetWorkspaceDir: targetWorkspace,
         bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
@@ -758,11 +837,13 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
 
-    const realPluginSkillDir = await createCaseDir("real-plugin-skill");
-    await writeSkill({
-      dir: realPluginSkillDir,
-      name: "wiki-maintainer",
-      description: "Wiki maintenance skill for sandboxed agents",
+    const pluginRoot = await createCaseDir("skill-plugin");
+    const realPluginSkillDir = path.join(pluginRoot, "skills", "wiki-maintainer");
+    await writePluginWithSkill({
+      pluginRoot,
+      pluginId: "skill-sync-fixture",
+      skillId: "wiki-maintainer",
+      skillDescription: "Wiki maintenance skill for sandboxed agents",
     });
 
     const pluginSkillsDir = path.join(sourceWorkspace, ".openclaw", "plugin-skills");
@@ -775,11 +856,14 @@ describe("syncWorkspaceSkills for plugin skills", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    mockResolvePluginSkillRoots.mockReturnValueOnce([
-      { dir: realPluginSkillDir, rejectHardlinks: true },
-    ]);
-
     const skillUsagePaths = await syncWorkspaceSkills({
+      config: {
+        plugins: {
+          allow: ["skill-sync-fixture"],
+          entries: { "skill-sync-fixture": { enabled: true } },
+          load: { paths: [pluginRoot] },
+        },
+      },
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       pluginSkillsDir,
@@ -836,11 +920,22 @@ describe("syncWorkspaceSkills for plugin skills", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    // Mock returns an allowed root that doesn't include the escaped skill
     const allowedRoot = await createCaseDir("allowed-root");
-    mockResolvePluginSkillRoots.mockReturnValueOnce([{ dir: allowedRoot, rejectHardlinks: true }]);
+    await writePluginWithSkill({
+      pluginRoot: allowedRoot,
+      pluginId: "skill-sync-fixture",
+      skillId: "allowed-skill",
+      skillDescription: "Allowed plugin skill",
+    });
 
     await syncWorkspaceSkills({
+      config: {
+        plugins: {
+          allow: ["skill-sync-fixture"],
+          entries: { "skill-sync-fixture": { enabled: true } },
+          load: { paths: [allowedRoot] },
+        },
+      },
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       pluginSkillsDir,
@@ -852,5 +947,8 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     expect(
       await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md")),
     ).toBe(false);
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "allowed-skill", "SKILL.md")),
+    ).toBe(true);
   });
 });

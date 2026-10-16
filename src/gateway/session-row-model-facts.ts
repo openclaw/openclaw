@@ -81,6 +81,6 @@ export function readSessionRowModelFacts(params: {
     rowModelIdentity,
     thinkingProjection,
     catalogEntry:
-      rowModelCatalog && provider && model ? thinkingProjection.catalogEntry : undefined,
+      rowModelCatalog && provider && model ? thinkingProjection.capacityCatalogEntry : undefined,
   };
 }

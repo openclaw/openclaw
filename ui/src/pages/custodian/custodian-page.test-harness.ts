@@ -16,7 +16,7 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
@@ -121,6 +121,11 @@ export function createContext(
   const routeListeners = new Set<() => void>();
   const context = {
     gateway,
+    runtimeConfig: {
+      state: { configSnapshot: null, configLoading: false, lastError: null },
+      ensureLoaded: vi.fn(async () => undefined),
+      subscribe: () => () => undefined,
+    },
     router: {
       getState: () => ({ location: { pathname: window.location.pathname } }),
       subscribe: (listener: () => void) => {

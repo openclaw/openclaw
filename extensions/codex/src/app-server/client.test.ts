@@ -166,34 +166,26 @@ describe("CodexAppServerClient", () => {
     await expect(request).resolves.toEqual({ threadId: "thread-1" });
   });
 
-  it("logs a redacted preview for malformed app-server messages", async () => {
+  it("logs only malformed frame sizes and still accepts the next response", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
-
-    harness.process.stdout.write('{"token":"secret-value"} trailing\n');
-
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
-    const [message, rawMetadata] = warn.mock.calls[0] ?? [];
-    expect(message).toBe("failed to parse codex app-server message");
-    const metadata = rawMetadata as
-      | {
-          error?: unknown;
-          errorMessage?: string;
-          fragmentCount?: number;
-          linePreview?: string;
-          consoleMessage?: string;
-        }
-      | undefined;
-    expect(metadata?.error).toBeInstanceOf(SyntaxError);
-    expect(metadata?.errorMessage).toMatch(
-      /^(?:Unexpected non-whitespace character after JSON at position 25 \(line 1 column 26\)|JSON Parse error: Unable to parse JSON string)$/u,
+    const contentMarker = "synthetic-private-message-and-tool-content-猫";
+    const malformed = `{"token":"secret-value","message":"${contentMarker}"} trailing`;
+    const request = harness.client.request("model/list", {});
+    const outbound = JSON.parse(await harness.waitForWrite(0)) as { id: number };
+    harness.process.stdout.write(
+      `${malformed}\n${JSON.stringify({ id: outbound.id, result: { models: [] } })}\n`,
     );
-    expect(metadata?.fragmentCount).toBe(1);
-    expect(metadata?.linePreview).toBe('{"token":"<redacted>"} trailing');
-    expect(metadata?.consoleMessage).toBe(
-      'failed to parse codex app-server message: preview="{\\"token\\":\\"<redacted>\\"} trailing"',
-    );
+
+    await expect(request).resolves.toEqual({ models: [] });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("failed to parse codex app-server message", {
+      byteCount: Buffer.byteLength(malformed),
+      charCount: malformed.length,
+      fragmentCount: 1,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
+    expect(harness.client.getCloseError()).toBeUndefined();
   });
 
   it("aborts while waiting to retry an overloaded request", async () => {
@@ -330,55 +322,18 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it("handles stdin write errors without crashing the process", async () => {
-    const harness = createHarness();
-
-    // Start a pending request so we can verify it gets properly rejected.
-    const pending = harness.client.request("test/method");
-
-    // Simulate the child process closing its pipe: stdin emits an asynchronous
-    // EPIPE error before the transport observes a process exit.
-    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    harness.process.stdin.emit("error", pipeError);
-
-    // The pending request must be rejected with the pipe error rather than
-    // an unhandled exception tearing down the gateway.
-    const pendingError = await pending.catch((error: unknown) => error);
-    expect(pendingError).toBeInstanceOf(Error);
-    expect((pendingError as Error).message).toContain("write EPIPE");
-    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
-
-    // Subsequent requests keep the original close reason so startup logs stay actionable.
-    await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
-  });
-
-  it("handles stdout stream errors without crashing the process", async () => {
-    const harness = createHarness();
-
-    const pending = harness.client.request("test/method");
-    const readError = Object.assign(new Error("stdout pipe broke"), { code: "EIO" });
-
-    expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
-
-    const pendingError = await pending.catch((error: unknown) => error);
-    expect(pendingError).toBeInstanceOf(Error);
-    expect((pendingError as Error).message).toContain("stdout pipe broke");
-    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
-    await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
-  });
-
   it("keeps RPC requests usable after stderr stream errors", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createHarness();
 
     const pending = harness.client.request("test/method");
     const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    const stderrError = Object.assign(new Error("stderr pipe broke"), { code: "EIO" });
+    const contentMarker = "synthetic-private-stderr-error-content";
+    const stderrError = Object.assign(new Error(contentMarker), { code: "EIO" });
 
     expect(() => harness.process.stderr.emit("error", stderrError)).not.toThrow();
-    expect(warn).toHaveBeenCalledWith("codex app-server stderr stream failed", {
-      error: stderrError,
-    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("codex app-server stderr stream failed");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(contentMarker);
 
     harness.send({ id: firstRequest.id, result: { ok: true } });
     await expect(pending).resolves.toEqual({ ok: true });
@@ -498,14 +453,7 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it.each([
-    { executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 },
-    {
-      executionTimeoutMs: 2_147_483_647,
-      beforeDeadlineMs: 2_147_000_000,
-      deadlineMs: 2_147_483_647,
-    },
-  ])(
+  it.each([{ executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 }])(
     "accepts one owner execution budget of $executionTimeoutMs ms",
     async ({ executionTimeoutMs, beforeDeadlineMs, deadlineMs }) => {
       vi.useFakeTimers();

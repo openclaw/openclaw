@@ -1,6 +1,7 @@
 // Agent step tests cover nested session handoff and
 // MCP runtime survival after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
 
@@ -23,6 +24,7 @@ describe("runAgentStep", () => {
   afterEach(() => {
     agentWaitMock.mockReset();
     vi.clearAllMocks();
+    clearRuntimeConfigSnapshot();
   });
 
   it("preserves bundle MCP runtime after successful nested agent steps", async () => {
@@ -40,6 +42,7 @@ describe("runAgentStep", () => {
       status: "ok",
       terminalReply: { disposition: "visible", text: "done" },
     });
+    setRuntimeConfigSnapshot({});
 
     await expect(
       runAgentStep({
@@ -53,6 +56,7 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBeUndefined();
 
+    expect(gatewayCalls[0]).toMatchObject({ replyExpectation: "optional" });
     const params = gatewayCalls[0]?.params as
       | {
           message?: string;

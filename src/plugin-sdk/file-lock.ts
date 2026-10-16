@@ -209,7 +209,13 @@ export async function acquireFileLock(
     });
     // Pin the release guard to the provider-owned target, not a mutable alias.
     const targetPath = lock.lockPath.slice(0, -".lock".length);
-    options.assertResourceUnborrowed?.(targetPath);
+    try {
+      options.assertResourceUnborrowed?.(targetPath);
+    } catch (error) {
+      // A rejected handoff still owns cleanup; the guarded public handle was never delivered.
+      await lock.release();
+      throw error;
+    }
     return {
       lockPath: lock.lockPath,
       release: async () => {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
@@ -41,8 +42,41 @@ function createHistoryRequest(
 }
 
 describe("chat history request byte budgets", () => {
+  it("keeps the requested text cap when catching up from a cursor", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:text-cap",
+        sessionId: "text-cap",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        eventId: "initial",
+        message: { role: "user", content: "Initial prompt" },
+      });
+      const history = createHistoryRequest(
+        "chat.history",
+        scope.sessionKey,
+        await createHistoryReadContext(),
+      );
+      const tail = await history({ maxChars: 12_000 });
+      const text = "Long visible reply. ".repeat(500);
+      await appendTranscriptMessage(scope, {
+        eventId: "reply",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+      const delta = await history({ cursor: tail.deltaCursor, maxChars: 12_000 });
+      expect(delta).toMatchObject({
+        kind: "delta",
+        messages: [{ message: { content: [{ type: "text", text }] } }],
+      });
+    });
+  });
+
   it("opts into smaller tool previews without changing text, paging, or full output", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:tool-previews",
@@ -130,6 +164,7 @@ describe("chat history request byte budgets", () => {
     "%s returns a small tail with a lossless back-scroll cursor",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:budgeted-history",
@@ -198,8 +233,9 @@ describe("chat history request byte budgets", () => {
     },
   );
 
-  it("bounds default older-history responses below 1 MB without losing messages", async () => {
+  it("honors larger older-history budgets without growing the default or losing messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-budgeted-history",
@@ -210,61 +246,71 @@ describe("chat history request byte budgets", () => {
         { length: 320 },
         (_, index) => `record-${index}: ${"x".repeat(7_000)}`,
       );
-      for (const [index, text] of texts.entries()) {
-        await appendTranscriptMessage(scope, {
+      await appendTranscriptMessages(scope, {
+        messages: texts.map((text, index) => ({
           message: {
             role: index % 2 === 0 ? "user" : "assistant",
             content: [{ type: "text", text }],
           },
-        });
-      }
+        })),
+      });
       const request = createHistoryRequest(
         "chat.history",
         scope.sessionKey,
         await createHistoryReadContext(),
       );
       const tail = await request({ maxBytes: 256 * 1024 });
-      const restored: unknown[] = expectDefined(
-        Array.isArray(tail.messages) ? tail.messages : undefined,
-        "tail messages",
-      ).slice();
-      let offset = expectDefined(
-        typeof tail.nextOffset === "number" ? tail.nextOffset : undefined,
-        "older-history offset",
-      );
-      let pages = 0;
-      for (;;) {
-        const page = await request({ limit: 1000, offset });
-        const messages = expectDefined(
-          Array.isArray(page.messages) ? page.messages : undefined,
-          "older-history messages",
+      expect(Buffer.byteLength(JSON.stringify(tail.messages))).toBeLessThanOrEqual(256 * 1024);
+      const pageCounts: number[] = [];
+      for (const maxBytes of [undefined, 1024 * 1024]) {
+        const restored: unknown[] = expectDefined(
+          Array.isArray(tail.messages) ? tail.messages : undefined,
+          "tail messages",
+        ).slice();
+        let offset = expectDefined(
+          typeof tail.nextOffset === "number" ? tail.nextOffset : undefined,
+          "older-history offset",
         );
-        expect(messages.length).toBeGreaterThan(0);
-        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
-        restored.unshift(...messages);
-        expect(restored.length).toBeLessThanOrEqual(texts.length);
-        pages += 1;
-        if (page.hasMore !== true) {
-          break;
+        let pages = 0;
+        for (;;) {
+          const page = await request({ limit: 1000, offset, ...(maxBytes ? { maxBytes } : {}) });
+          const messages = expectDefined(
+            Array.isArray(page.messages) ? page.messages : undefined,
+            "older-history messages",
+          );
+          const bytes = Buffer.byteLength(JSON.stringify(messages));
+          expect(messages.length).toBeGreaterThan(0);
+          expect(bytes).toBeLessThanOrEqual(maxBytes ?? 512 * 1024);
+          if (maxBytes && pages === 0) {
+            expect(bytes).toBeGreaterThan(512 * 1024);
+          }
+          restored.unshift(...messages);
+          expect(restored.length).toBeLessThanOrEqual(texts.length);
+          pages += 1;
+          if (page.hasMore !== true) {
+            break;
+          }
+          const nextOffset = expectDefined(
+            typeof page.nextOffset === "number" ? page.nextOffset : undefined,
+            "advancing older-history offset",
+          );
+          expect(nextOffset).toBeGreaterThan(offset);
+          offset = nextOffset;
         }
-        const nextOffset = expectDefined(
-          typeof page.nextOffset === "number" ? page.nextOffset : undefined,
-          "advancing older-history offset",
-        );
-        expect(nextOffset).toBeGreaterThan(offset);
-        offset = nextOffset;
-      }
 
-      expect(pages).toBeGreaterThan(1);
-      expect(restored).toHaveLength(texts.length);
-      for (const [index, message] of restored.entries()) {
-        expect(JSON.stringify(message)).toContain(texts[index]);
+        pageCounts.push(pages);
+        expect(restored).toHaveLength(texts.length);
+        for (const [index, message] of restored.entries()) {
+          expect(JSON.stringify(message)).toContain(texts[index]);
+        }
       }
+      expect(pageCounts[1]).toBeLessThan(expectDefined(pageCounts[0], "default page count"));
     });
   });
 
   it("replaces an indivisible source row with a fetchable reference across anchored and back-scroll pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-sibling-budget",
@@ -361,6 +407,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps a 5 MB tool result out of history while its reference returns every byte", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-tool",
@@ -399,6 +446,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps recovery lookahead beyond the default response target on older pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-recovery-budget",

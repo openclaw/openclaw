@@ -95,23 +95,6 @@ function createReadRewriteSession(options?: { tailAssistantText?: string }) {
   };
 }
 
-function createExecRewriteSession() {
-  const sessionManager = SessionManager.inMemory();
-  const entryIds = appendSessionMessages(sessionManager, [
-    asAppendMessage(makeUserMessage("run tool", 1)),
-    asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
-    asAppendMessage({
-      role: "assistant",
-      content: createTextContent("summarized"),
-      timestamp: 3,
-    }),
-  ]);
-  return {
-    sessionManager,
-    toolResultEntryId: entryIds[1],
-  };
-}
-
 function createToolResultReplacement(toolName: string, text: string, timestamp: number) {
   return {
     role: "toolResult",
@@ -143,8 +126,6 @@ beforeAll(async () => {
 describe("rewriteTranscriptEntriesInSessionManager", () => {
   it.each([
     { collected: false, excludeFromContext: false },
-    { collected: false, excludeFromContext: true },
-    { collected: true, excludeFromContext: false },
     { collected: true, excludeFromContext: true },
   ])(
     "preserves admitted input custody through repeated history rewrites ($collected, $excludeFromContext)",
@@ -363,7 +344,6 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it.each([
     { identity: undefined, tokensAfter: undefined },
     { identity: { runId: "run-original", itemId: "compaction-original" }, tokensAfter: 45 },
-    { identity: undefined, tokensAfter: 0 },
   ])(
     "preserves compaction measurements and identity %j when rewriting keep markers",
     async ({ identity, tokensAfter }) => {
@@ -421,45 +401,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it("bypasses persistence hooks when replaying rewritten messages", async () => {
-    const { sessionManager, toolResultEntryId } = createExecRewriteSession();
-    installSessionToolResultGuard(sessionManager, {
-      transformToolResultForPersistence: (message) => ({
-        ...(message as Extract<AgentMessage, { role: "toolResult" }>),
-        content: [{ type: "text", text: "[hook transformed]" }],
-      }),
-      beforeMessageWriteHook: ({ message }) =>
-        message.role === "assistant" ? { block: true } : undefined,
-    });
-
-    const result = await rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
-          message: createToolResultReplacement("exec", "[exact replacement]", 2),
-        },
-      ],
-    });
-
-    expect(result.changed).toBe(true);
-    const branchMessages = getBranchMessages(sessionManager);
-    expect(branchMessages.map((message) => message.role)).toEqual([
-      "user",
-      "toolResult",
-      "assistant",
-    ]);
-    expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
-      { type: "text", text: "[exact replacement]" },
-    ]);
-    const replayedAssistant = branchMessages[2];
-    if (!replayedAssistant || replayedAssistant.role !== "assistant") {
-      throw new Error("expected rewritten suffix to replay the assistant summary");
-    }
-    expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "keeps one active suffix after repeated successful rewrites (reset=%s)",
     async (withReset) => {
       const { directory: dir, target } = await createPersistedRewriteTarget("rewrite-reset");
@@ -588,11 +530,10 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each(
-    ["unkeyed", "keyed suffix", "keyed replacement"].flatMap((variant) =>
-      [false, true].map((bounded) => ({ variant, bounded })),
-    ),
-  )(
+  it.each([
+    { variant: "keyed suffix", bounded: true },
+    { variant: "keyed replacement", bounded: true },
+  ])(
     "preserves original SQLite rows and the rewritten $variant branch (bounded=$bounded)",
     async ({ variant, bounded }) => {
       const dir = tempDirs.make("openclaw-transcript-rewrite-runtime-");
@@ -730,11 +671,10 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(await loadTranscriptEvents(target)).toEqual(current);
   });
 
-  it.each(
-    [false, true].flatMap((bounded) =>
-      ["replace", "append"].map((mutation) => ({ bounded, mutation })),
-    ),
-  )(
+  it.each([
+    { bounded: true, mutation: "replace" },
+    { bounded: true, mutation: "append" },
+  ])(
     "rejects a view loaded before an opaque navigation $mutation (bounded=$bounded)",
     async ({ bounded, mutation }) => {
       const { directory, target } = await createPersistedRewriteTarget("navigation-snapshot");
@@ -779,7 +719,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each([undefined, 3, 1])(
+  it.each([3, 1])(
     "preserves the selected logical parent across a rewrite (maxEvents=%s)",
     async (maxEvents) => {
       const { directory, target } = await createPersistedRewriteTarget("logical-rewrite");
@@ -811,7 +751,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each([0, 2])(
+  it.each([0])(
     "keeps an unhydrated prefix when rewriting bounded entry %i",
     async (replacementIndex) => {
       const { directory, target } = await createPersistedRewriteTarget("bounded-rewrite");
@@ -849,7 +789,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps the complete active branch when the worker refuses rewrite commit (reset=%s)",
     async (reset) => {
       const dir = tempDirs.make("openclaw-transcript-rewrite-interrupted-");

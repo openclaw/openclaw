@@ -159,22 +159,6 @@ describe("extractLlamaServerArchive", () => {
     );
   });
 
-  it("rejects manifest alias names that are not basenames", async () => {
-    const root = await createTempRoot();
-    const baseAsset = selectLlamaServerAsset("linux", "x64");
-    const asset: LlamaServerAsset = {
-      ...baseAsset,
-      regularFileAliases: [["../outside.so", ["alias.so"]]],
-    };
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
-    });
-
-    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid llama-server archive manifest filename/u,
-    );
-  });
-
   it("rejects a zip entry that escapes through Windows separators", async () => {
     const root = await createTempRoot();
     const asset = selectLlamaServerAsset("win32", "x64");

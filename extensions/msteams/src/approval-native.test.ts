@@ -73,7 +73,7 @@ const activeExecApprovalHint: ChannelOutboundPayloadHint = {
 
 describe("Microsoft Teams native approval capability", () => {
   it("subscribes to exec, plugin, and system-agent approvals for a configured bot and approver", () => {
-    const runtime = msTeamsApprovalCapability.nativeRuntime;
+    const runtime = msTeamsApprovalCapability.nativeRuntimeAsync;
 
     expect(runtime?.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
     expect(runtime?.availability.isConfigured({ cfg: createConfig() })).toBe(true);
@@ -97,14 +97,14 @@ describe("Microsoft Teams native approval capability", () => {
     expect(isMSTeamsNativeApprovalClientEnabled({ cfg })).toBe(false);
   });
 
-  it("accepts a valid default destination as the configured approver", () => {
+  it("accepts a valid default destination as the configured approver", async () => {
     const cfg = createConfig({
       teams: { allowFrom: undefined, defaultTo: `user:${APPROVER_ID.toUpperCase()}` },
     });
 
     expect(isMSTeamsNativeApprovalClientEnabled({ cfg })).toBe(true);
     expect(
-      msTeamsApprovalCapability.authorizeActorAction?.({
+      await msTeamsApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         senderId: APPROVER_ID,
         action: "approve",
@@ -113,7 +113,7 @@ describe("Microsoft Teams native approval capability", () => {
     ).toEqual({ authorized: true });
   });
 
-  it("keeps authorization available when native forwarding is disabled", () => {
+  it("keeps authorization available when native forwarding is disabled", async () => {
     const cfg = createConfig({ approvals: { exec: { enabled: false } } });
 
     expect(
@@ -124,7 +124,7 @@ describe("Microsoft Teams native approval capability", () => {
       }),
     ).toEqual({ kind: "enabled" });
     expect(
-      msTeamsApprovalCapability.authorizeActorAction?.({
+      await msTeamsApprovalCapability.authorizeActorActionAsync?.({
         cfg,
         senderId: APPROVER_ID.toUpperCase(),
         action: "approve",
@@ -133,10 +133,10 @@ describe("Microsoft Teams native approval capability", () => {
     ).toEqual({ authorized: true });
   });
 
-  it("rejects unlisted actors for both approval kinds", () => {
+  it("rejects unlisted actors for both approval kinds", async () => {
     for (const approvalKind of ["exec", "plugin"] as const) {
       expect(
-        msTeamsApprovalCapability.authorizeActorAction?.({
+        await msTeamsApprovalCapability.authorizeActorActionAsync?.({
           cfg: createConfig(),
           senderId: OTHER_USER_ID,
           action: "approve",
@@ -149,8 +149,8 @@ describe("Microsoft Teams native approval capability", () => {
     }
   });
 
-  it("preserves implicit same-chat authorization when no approvers are configured", () => {
-    const authorization = msTeamsApprovalCapability.authorizeActorAction?.({
+  it("preserves implicit same-chat authorization when no approvers are configured", async () => {
+    const authorization = await msTeamsApprovalCapability.authorizeActorActionAsync?.({
       cfg: createConfig({ teams: { allowFrom: undefined } }),
       senderId: OTHER_USER_ID,
       action: "approve",
@@ -161,7 +161,7 @@ describe("Microsoft Teams native approval capability", () => {
     expect(isImplicitSameChatApprovalAuthorization(authorization)).toBe(true);
   });
 
-  it("routes each approval only through its bound Teams account and originating channel", () => {
+  it("routes each approval only through its bound Teams account and originating channel", async () => {
     const cfg = createConfig({
       teams: {
         defaultAccount: "support",
@@ -173,7 +173,7 @@ describe("Microsoft Teams native approval capability", () => {
     const request = createExecRequest();
 
     expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
+      await shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
         accountId: "default",
         approvalKind: "exec",
@@ -181,7 +181,7 @@ describe("Microsoft Teams native approval capability", () => {
       }),
     ).toBe(true);
     expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
+      await shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
         accountId: "support",
         approvalKind: "exec",
@@ -189,7 +189,7 @@ describe("Microsoft Teams native approval capability", () => {
       }),
     ).toBe(true);
     expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
+      await shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
         accountId: "support",
         approvalKind: "exec",
@@ -197,14 +197,14 @@ describe("Microsoft Teams native approval capability", () => {
       }),
     ).toBe(false);
     expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
+      await shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
         approvalKind: "exec",
         request: createExecRequest({ turnSourceChannel: "slack" }),
       }),
     ).toBe(false);
     expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
+      await shouldHandleMSTeamsNativeApprovalRequest({
         cfg,
         approvalKind: "exec",
         request: createExecRequest({ turnSourceTo: "  " }),
@@ -212,9 +212,9 @@ describe("Microsoft Teams native approval capability", () => {
     ).toBe(false);
   });
 
-  it("maps stable allowlisted approvers to user-prefixed Teams DM targets", () => {
+  it("maps stable allowlisted approvers to user-prefixed Teams DM targets", async () => {
     expect(
-      msTeamsApprovalCapability.native?.resolveApproverDmTargets?.({
+      await msTeamsApprovalCapability.nativeAsync?.resolveApproverDmTargets?.({
         cfg: createConfig(),
         accountId: "default",
         approvalKind: "exec",

@@ -5,8 +5,10 @@ import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import "../agents/model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -28,7 +30,10 @@ const runEmbeddedAgent = vi.hoisted(() =>
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
 const resolveSelection = vi.hoisted(() =>
-  vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
+  vi.fn(
+    (_params: { modelRef?: string }) =>
+      ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string },
+  ),
 );
 const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
   prepareCliRunContext: vi.fn(async (params: RunCliAgentParams) => ({
@@ -38,10 +43,9 @@ const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
   executePreparedCliRun: vi.fn(async () => ({ text: "The session is fixing a bug." })),
 }));
 
-const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
+const { appendMessage, admitWrite, removeSession } = vi.hoisted(() => ({
   appendMessage: vi.fn<(message: unknown) => Promise<string | undefined>>(),
   admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
-  loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
   removeSession:
     vi.fn<
       (
@@ -69,10 +73,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }
 vi.mock("../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: admitWrite,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntry: loadEntry,
-  loadExactSessionEntryCandidates: () => [],
-}));
 vi.mock("../agents/internal-session-effects.js", () => ({
   prepareInternalSessionEffectsSession: async () => preparedTarget,
   removeInternalSessionEffectsSession: removeSession,
@@ -97,7 +97,7 @@ function createCompanion(cfg: OpenClawConfig = {}) {
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
-      currentSessionId: () => "session-1",
+      currentSessionId: async () => "session-1",
       read: async () => ({
         kind: "ready",
         context: { empty: true, messages: [], sessionId: "session-1" },
@@ -121,6 +121,8 @@ const question = {
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveSelection.mockReset().mockReturnValue({ provider: "test", modelId: "model-a" });
+    executePreparedCliRun.mockReset().mockResolvedValue({ text: "The session is fixing a bug." });
     resolveApiKeyForProviderCore
       .mockReset()
       .mockRejectedValue(
@@ -129,11 +131,170 @@ describe("session companion embedded invocation", () => {
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
-    loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
     runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
+  });
+
+  it.each(["embedded", "cli", "denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
+    "preserves or recovers the utility answer across %s failure",
+    async (runtime) => {
+      const isCli = runtime === "cli" || runtime === "cli-cleanup";
+      const cleanupFails = runtime === "embedded-cleanup" || runtime === "cli-cleanup";
+      const primary = isCli
+        ? { provider: "anthropic", modelId: "claude-haiku-4-5" }
+        : { provider: "test", modelId: "model-a" };
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "test/main", fallbacks: ["test/main-backup"] },
+            utilityModel: {
+              primary: `${primary.provider}/${primary.modelId}`,
+              fallbacks: ["test/model-b"],
+            },
+            ...(isCli
+              ? {
+                  models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } } },
+                }
+              : {}),
+          },
+        },
+      };
+      resolveSelection.mockImplementation(({ modelRef }) =>
+        modelRef === "test/model-b" ? { provider: "test", modelId: "model-b" } : primary,
+      );
+      const failure = new FailoverError("Synthetic unavailable utility model", {
+        reason: "timeout",
+        provider: primary.provider,
+        model: primary.modelId,
+      });
+      const cleanup = vi.fn(async () => {
+        throw new Error("Synthetic cleanup failure");
+      });
+      if (isCli) {
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              pluginId: "anthropic",
+              config: { command: "claude" },
+            },
+          ],
+        });
+        if (cleanupFails) {
+          prepareCliRunContext.mockImplementationOnce(async (params) => ({
+            params,
+            preparedBackend: { cleanup },
+          }));
+        } else {
+          executePreparedCliRun.mockRejectedValueOnce(failure);
+        }
+      } else if (runtime === "embedded") {
+        runEmbeddedAgent.mockRejectedValueOnce(failure);
+      } else if (runtime === "embedded-cleanup") {
+        removeSession.mockImplementationOnce(cleanup);
+        runEmbeddedAgent.mockResolvedValueOnce({
+          meta: { durationMs: 1, finalAssistantVisibleText: "The original answer is preserved." },
+        });
+      }
+      const operatorAuthority =
+        runtime === "denied-primary"
+          ? createAdmittedRunOperatorAuthority({
+              profileId: "companion-reader",
+              scopes: ["operator.read"],
+              assertCurrent() {},
+              modelPolicy: prepareOperatorModelPolicy({
+                cfg,
+                policy: { sourceAgent: "main", allow: ["test/*"], deny: ["test/model-a"] },
+                manifestPlugins: [],
+              }),
+            })
+          : undefined;
+      const companion = createCompanion(cfg);
+      const answer =
+        runtime === "cli-cleanup"
+          ? "The session is fixing a bug."
+          : runtime === "embedded-cleanup"
+            ? "The original answer is preserved."
+            : "The session is reading a file.";
+      try {
+        await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
+          answer,
+        });
+        expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(
+          cleanupFails
+            ? isCli
+              ? []
+              : ["model-a"]
+            : runtime === "embedded"
+              ? ["model-a", "model-b"]
+              : ["model-b"],
+        );
+        for (const [params] of runEmbeddedAgent.mock.calls) {
+          expect(params.modelFallbacksOverride).toEqual([]);
+          expect(params.toolsAllow).toEqual(["read", "sessions_history", "sessions_search"]);
+          expect(params.requireWorkspaceOnly).toBe(true);
+        }
+        expect(executePreparedCliRun).toHaveBeenCalledTimes(isCli ? 1 : 0);
+        if (cleanupFails) {
+          expect(cleanup).toHaveBeenCalledOnce();
+          expect(removeSession).toHaveBeenCalledOnce();
+        }
+        expect(companion.state(question).exchanges).toEqual([
+          {
+            question: question.question,
+            answer,
+            ts: expect.any(Number),
+          },
+        ]);
+      } finally {
+        cliBackendsTesting.resetDepsForTest();
+        companion.dispose();
+      }
+    },
+  );
+
+  it("uses the permitted default when every configured utility candidate is denied", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "test/main",
+          utilityModel: { primary: "test/model-a", fallbacks: ["test/model-b"] },
+        },
+      },
+    };
+    resolveSelection.mockImplementation(({ modelRef }) => ({
+      provider: "test",
+      modelId: modelRef?.split("/")[1] ?? "model-a",
+    }));
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "companion-reader",
+      scopes: ["operator.read"],
+      assertCurrent() {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["test/main"] },
+        manifestPlugins: [],
+      }),
+    });
+    const companion = createCompanion(cfg);
+    try {
+      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
+        answer: "The session is reading a file.",
+      });
+      expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(["main"]);
+      expect(companion.state(question).exchanges).toEqual([
+        expect.objectContaining({
+          question: question.question,
+          answer: "The session is reading a file.",
+        }),
+      ]);
+    } finally {
+      companion.dispose();
+    }
   });
 
   it("passes a selected-text comment to the model without persisting it as a file", async () => {
@@ -540,36 +701,6 @@ describe("session companion embedded invocation", () => {
     } finally {
       resume.resolve();
       await pending.catch(() => undefined);
-      companion.dispose();
-    }
-  });
-
-  it.each([
-    { name: "missing", entry: undefined },
-    { name: "replaced", entry: { ...preparedTarget.sessionEntry, sessionId: "replacement" } },
-    {
-      name: "reset with the same id",
-      entry: { ...preparedTarget.sessionEntry, lifecycleRevision: "replacement-lifecycle" },
-    },
-    {
-      name: "claimed by another writer",
-      entry: { ...preparedTarget.sessionEntry, activeWriterRunId: "replacement-writer" },
-    },
-  ])("does not seed a session that is $name before admission", async ({ entry }) => {
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      loadEntry.mockReturnValue(entry ? { entry } : undefined);
-      await write();
-    });
-    const companion = createCompanion();
-    try {
-      await expect(companion.ask(question)).rejects.toThrow();
-      expect(appendMessage).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-      });
-    } finally {
       companion.dispose();
     }
   });

@@ -119,6 +119,8 @@ describe("custodian page", () => {
       .mockResolvedValueOnce(chatReply("Setup complete.", { sessionId: "rich-wizard-session" }));
     const { page } = await mount(request);
 
+    expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
+
     const trigger = await element<HTMLButtonElement>(
       page,
       ".custodian__wizard-step .picker-select__trigger",
@@ -263,7 +265,6 @@ describe("custodian page", () => {
     expect(replacementRequest.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat.history",
     ]);
     expect(replacementRequest.mock.calls[1]?.[1]).toMatchObject({ sessionId: "custodian-session" });
     expect(replacementRequest.mock.calls[1]?.[1]).not.toHaveProperty("message");
@@ -444,7 +445,7 @@ describe("custodian page", () => {
     expect(expand?.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("keeps a structured question attached to a silent assistant reply", async () => {
+  it("preserves a prepared literal marker alongside a structured question", async () => {
     const request = vi.fn().mockResolvedValue(
       chatReply("NO_REPLY", {
         question: {
@@ -459,10 +460,10 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
-    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.querySelector(".chat-group.assistant")).not.toBeNull();
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
     expect(page.textContent).toContain("Which channel?");
-    expect(page.textContent).not.toContain("NO_REPLY");
+    expect(page.textContent).toContain("NO_REPLY");
   });
 
   it.each([

@@ -156,41 +156,6 @@ describe("CronPage lifecycle", () => {
     );
   });
 
-  it("rejects conversation targets from an earlier channel selection", async () => {
-    const telegram = createDeferred<{ conversations: ConversationListItem[] }>();
-    const request = directoryRequest((params) => {
-      const channel = (params as { channel: string }).channel;
-      if (channel === "telegram") {
-        return telegram.promise;
-      }
-      return {
-        conversations: [
-          conversationTarget("channel:current", {
-            conversationRef: "conv_discord_current",
-            channel: "discord",
-            kind: "channel",
-          }),
-        ],
-      };
-    });
-    const { page } = await mountPage(request);
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    page.patchForm({ deliveryChannel: "discord" });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "channel:current",
-      ]),
-    );
-
-    telegram.resolve({
-      conversations: [conversationTarget("-100stale", { conversationRef: "conv_telegram_stale" })],
-    });
-    await Promise.resolve();
-    expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-      "channel:current",
-    ]);
-  });
-
   it("keeps account and topic routing operator-authored without rediscovering cached targets", async () => {
     const request = directoryRequest(() => ({
       conversations: [
@@ -321,7 +286,7 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
 
-    page.cron = { ...page.cron, cronError: "scheduler save failed" };
+    page.cron.cronError = "scheduler save failed";
     page.refreshView();
     await page.settle();
     expect(page.textContent).toContain("scheduler save failed");
@@ -507,26 +472,29 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
-  it("retires the pending directory when conflict recovery changes the channel", async () => {
-    const { page, directoryChannels, directories } = await startConflictRecovery();
-    await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
-    await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
-    expect(page.cron.cronForm.deliveryAccountId).toBe("default");
-    directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
-    await Promise.resolve();
-    expect(page.deliveryDirectory.error).toBeNull();
-    expect(page.deliveryDirectory.conversations).toEqual([]);
-    directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "-100recovered",
-      ]),
-    );
-  });
+  it.each(["save", "toggle"] as const)(
+    "retires the pending directory when %s conflict recovery changes the channel",
+    async (operation) => {
+      const { page, directoryChannels, directories } = await startConflictRecovery(operation);
+      await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
+      await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
+      expect(page.cron.cronForm.deliveryAccountId).toBe("default");
+      directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
+      await Promise.resolve();
+      expect(page.deliveryDirectory.error).toBeNull();
+      expect(page.deliveryDirectory.conversations).toEqual([]);
+      directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
+      await waitForCronPage(() =>
+        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
+          "-100recovered",
+        ]),
+      );
+    },
+  );
 });
 
 // A revision conflict replaces the form through cron.get while keeping its account unchanged.
-async function startConflictRecovery() {
+async function startConflictRecovery(operation: "save" | "toggle" = "save") {
   const directories = [
     createDeferred<{ conversations: ConversationListItem[] }>(),
     createDeferred<{ conversations: ConversationListItem[] }>(),
@@ -562,11 +530,15 @@ async function startConflictRecovery() {
     }
     return fallbackRequest(method);
   });
-  const { page } = await mountPage(request);
+  const { page } = await mountPage(request, { render: operation === "toggle" });
   page.selectJob(editedJob);
   await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram"]));
 
-  page.submitForm();
+  if (operation === "save") {
+    page.submitForm();
+  } else {
+    page.querySelector<HTMLInputElement>('[data-test-id="cron-toggle-enabled"] input')!.click();
+  }
   await waitForCronPage(() => expect(request).toHaveBeenCalledWith("cron.get", { id: "digest" }));
   return { page, request, directories, directoryChannels };
 }

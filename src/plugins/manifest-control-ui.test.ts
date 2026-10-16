@@ -54,6 +54,18 @@ describe("native Control UI manifest", () => {
     });
   });
 
+  it("preserves settings-only presentation metadata through manifest discovery", () => {
+    const controlUi = {
+      entry: "dist/control-ui/index.js",
+      activation: "settings-only",
+      settingsViews: [{ section: "memory", panel: "overview" }],
+    };
+    expect(loadPluginManifest(fixture(controlUi).dir)).toMatchObject({
+      ok: true,
+      manifest: { controlUi },
+    });
+  });
+
   it.each([
     { declaration: undefined, expected: undefined },
     { declaration: [], expected: [] },
@@ -111,6 +123,16 @@ describe("native Control UI manifest", () => {
   );
 
   it.each([
+    { entry: "dist/control-ui/index.js", activation: "settings-only" },
+    { entry: "dist/control-ui/index.js", activation: "on-startup" },
+    { entry: "dist/control-ui/index.js", settingsViews: [{ section: "memory", panel: "search" }] },
+    {
+      entry: "dist/control-ui/index.js",
+      settingsViews: [
+        { section: "memory", panel: "overview" },
+        { section: "memory", panel: "overview" },
+      ],
+    },
     { entry: "src/index.ts" },
     { entry: "dist/index.js" },
     { entry: "../dist/control-ui/index.js" },
@@ -126,5 +148,34 @@ describe("native Control UI manifest", () => {
       ok: false,
       error: expect.stringContaining("controlUi"),
     });
+  });
+
+  it("rejects unsafe generated browser paths instead of falling back to authored assets", () => {
+    const plugin = fixture({ entry: "dist/control-ui/previous/index.js" });
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify({ openclaw: { controlUi: "./browser.ts" } }),
+    );
+    fs.mkdirSync(path.join(plugin.dir, "dist"));
+    fs.writeFileSync(
+      path.join(plugin.dir, "dist/openclaw.plugin.json"),
+      JSON.stringify({ controlUi: { entry: "../another-plugin/dist/control-ui/index.js" } }),
+    );
+    expect(loadPluginManifest(plugin.dir)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("controlUi.entry"),
+    });
+  });
+
+  it("keeps authored prebuilt assets when a preceding browser build is no longer declared", () => {
+    const controlUi = { entry: "dist/control-ui/prebuilt/index.js" };
+    const plugin = fixture(controlUi);
+    fs.writeFileSync(path.join(plugin.dir, "package.json"), JSON.stringify({ openclaw: {} }));
+    fs.mkdirSync(path.join(plugin.dir, "dist"));
+    fs.writeFileSync(
+      path.join(plugin.dir, "dist/openclaw.plugin.json"),
+      JSON.stringify({ controlUi: { entry: "dist/control-ui/previous/index.js" } }),
+    );
+    expect(loadPluginManifest(plugin.dir)).toMatchObject({ ok: true, manifest: { controlUi } });
   });
 });

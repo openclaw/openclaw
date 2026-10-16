@@ -479,41 +479,51 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("keeps /usage context hidden when the context snapshot is stale", async () => {
-    const request = mockRequests({
-      "sessions.describe": () => ({
-        session: row("agent:main:main", {
-          model: "gpt-4.1-mini",
-          inputTokens: 1200,
-          outputTokens: 300,
-          totalTokens: 1500,
-          totalTokensFresh: false,
-          contextTokens: 4000,
+  it.each([false, true])(
+    "keeps /usage context hidden when stale (usage unavailable: %s)",
+    async (unavailable) => {
+      const request = mockRequests({
+        "sessions.describe": () => ({
+          session: row("agent:main:main", {
+            model: "gpt-4.1-mini",
+            inputTokens: 1200,
+            outputTokens: 300,
+            totalTokens: 1500,
+            totalTokensFresh: false,
+            ...(unavailable ? { usageReport: { state: "unavailable" as const } } : {}),
+            contextTokens: 4000,
+          }),
         }),
-      }),
-    });
+      });
 
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "usage",
-      "",
-    );
+      const result = await executeSlashCommand(
+        createTestGatewayClient(request),
+        "agent:main:main",
+        "usage",
+        "",
+      );
 
-    expect(result.content).toBe(
-      [
-        `**${t("chat.commandResults.usage.title")}**`,
-        t("chat.commandResults.usage.inputTokens", { count: "**1.2k**" }),
-        t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
-        t("chat.commandResults.usage.totalTokens", { count: "**~1.5k**" }),
-        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
-      key: "agent:main:main",
-      agentId: "main",
-    });
-  });
+      expect(result.content).toBe(
+        [
+          `**${t("chat.commandResults.usage.title")}**`,
+          t("chat.commandResults.usage.inputTokens", {
+            count: `**${unavailable ? t("chat.commandResults.usage.notAvailable") : "1.2k"}**`,
+          }),
+          t("chat.commandResults.usage.outputTokens", {
+            count: `**${unavailable ? t("chat.commandResults.usage.notAvailable") : "300"}**`,
+          }),
+          t("chat.commandResults.usage.totalTokens", {
+            count: `**${unavailable ? t("chat.commandResults.usage.notAvailable") : "~1.5k"}**`,
+          }),
+          t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
+        ].join("\n"),
+      );
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
+        key: "agent:main:main",
+        agentId: "main",
+      });
+    },
+  );
 
   it("uses the context snapshot for /usage while preserving cumulative total display", async () => {
     const request = mockRequests({

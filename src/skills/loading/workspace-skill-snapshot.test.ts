@@ -1,7 +1,7 @@
 // Workspace snapshot tests cover serialized snapshots of workspace skill state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync, createPathResolutionEnv } from "../../test-utils/env.js";
@@ -9,7 +9,7 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
@@ -18,10 +18,6 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: () => [],
-}));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
@@ -61,6 +57,7 @@ async function buildSnapshot(
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
         ...options,
+        config: { ...options?.config, plugins: { enabled: false } },
       }),
   );
 }
@@ -125,7 +122,7 @@ async function createMultiRootFixture() {
         await resolveReusableWorkspaceSkillSnapshot({
           workspaceDir: agentWorkspaceDir,
           executionWorkspaceDir,
-          config: {},
+          config: { plugins: { enabled: false } },
           skillFilter,
           watch: false,
           snapshotVersion: 1,
@@ -154,6 +151,7 @@ describe("buildSkillSnapshot", () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     await writeCustodianSkillFixture(workspaceDir);
     const config: OpenClawConfig = {
+      plugins: { enabled: false },
       agents: {
         defaults: { systemAgent: { agentId: "ops" } },
         entries: { ops: {}, writer: {} },
@@ -211,7 +209,7 @@ describe("buildSkillSnapshot", () => {
         async () =>
           await resolveEmbeddedRunSkillEntries({
             workspaceDir: agentWorkspaceDir,
-            config: {},
+            config: { plugins: { enabled: false } },
             skillsSnapshot: coldSnapshot,
             executionWorkspaceDir,
           }),
@@ -258,7 +256,10 @@ describe("buildSkillSnapshot", () => {
               workspaceDir,
               executionWorkspaceDir,
               agentId: "main",
-              config: { agents: { defaults: { skills: [] } } },
+              config: {
+                plugins: { enabled: false },
+                agents: { defaults: { skills: [] } },
+              },
               ...(override
                 ? { skillOverrides: { "session-enabled": true } }
                 : { skillFilter: ["session-enabled"] }),
@@ -288,7 +289,7 @@ describe("buildSkillSnapshot", () => {
           await resolveEmbeddedRunSkillEntries({
             workspaceDir,
             executionWorkspaceDir,
-            config: {},
+            config: { plugins: { enabled: false } },
             skillsSnapshot,
             workspaceOnly: true,
           }),
@@ -319,7 +320,7 @@ describe("buildSkillSnapshot", () => {
     const params = {
       workspaceDir: agentWorkspaceDir,
       executionWorkspaceDir,
-      config: {},
+      config: { plugins: { enabled: false } },
       skillFilter: ["ancestor", "project-only"],
       watch: false,
     };
@@ -329,7 +330,7 @@ describe("buildSkillSnapshot", () => {
     );
     expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["project-only"]);
     await writeSkill({ dir: skillDir, name: "project-only", description: "Updated instructions" });
-    bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
+    await refreshSkillsDiscovery({ workspaceDir: agentWorkspaceDir });
     const next = await withWorkspaceHome(
       agentWorkspaceDir,
       async () =>
@@ -347,7 +348,7 @@ describe("buildSkillSnapshot", () => {
         await resolveEmbeddedRunSkillEntries({
           workspaceDir: agentWorkspaceDir,
           executionWorkspaceDir,
-          config: {},
+          config: { plugins: { enabled: false } },
           workspaceOnly: true,
         }),
     );
@@ -375,6 +376,7 @@ describe("buildSkillSnapshot", () => {
     );
     const buildHomeSnapshot = async () =>
       await buildSkillSnapshot(workspaceDir, {
+        config: { plugins: { enabled: false } },
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       });

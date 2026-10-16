@@ -8,11 +8,8 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import {
-  captureIncognitoSessionSource,
-  captureIncognitoSessionTopology,
-} from "../config/sessions/session-incognito-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -21,14 +18,13 @@ import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
 /** Resolves the source session and its operator-visible ancestor audience. */
-function resolveApprovalSessionAudience(
+async function resolveApprovalSessionAudience(
   cfg: OpenClawConfig,
   persisted: boolean,
   source: string,
   sourceAgentId?: string | null,
-  binding?: ReturnType<typeof captureIncognitoSessionSource>,
-  topology?: ReturnType<typeof captureIncognitoSessionTopology>,
-): string[] {
+  sourceMemory?: ReturnType<typeof captureSessionEntryMetadataRead>,
+): Promise<string[]> {
   const canonicalize = (sessionKey: string | null | undefined, relativeToSessionKey?: string) => {
     const raw = sessionKey?.trim();
     if (!raw) {
@@ -88,18 +84,18 @@ function resolveApprovalSessionAudience(
       parsed?.rest.toLowerCase() === "global"
         ? { agentId: normalizeAgentId(parsed.agentId), sessionKey: "global" }
         : { agentId: resolveSessionStoreAgentId(cfg, sessionKey), sessionKey };
-    const storedLineage =
-      binding && isIncognitoSessionKey(sessionKey)
-        ? "kind" in binding
-          ? (binding.assertCurrent(), undefined)
-          : topology?.entries
-              .find((candidate) => candidate.agentId === target.agentId)
-              ?.facts.readSharing(sessionKey)?.entry
-        : loadSessionEntryReadOnly({
-            ...target,
-            clone: false,
-            hydrateSkillPromptRefs: false,
-          });
+    const memory = isIncognitoSessionKey(sessionKey)
+      ? sessionKey === sourceSessionKey
+        ? sourceMemory
+        : captureSessionEntryMetadataRead(target, () => getAsyncWorkSignal()?.throwIfAborted())
+      : undefined;
+    const storedLineage = memory
+      ? memory.readCurrent()
+      : await readSessionEntryReadOnlyInWorker({
+          ...target,
+          clone: false,
+          hydrateSkillPromptRefs: false,
+        });
     const parentSessionKey = storedLineage?.parentSessionKey?.trim()
       ? storedLineage.parentSessionKey
       : storedLineage?.spawnedBy;
@@ -134,34 +130,35 @@ export async function resolveApprovalSessionAudienceWithFallback(
   sourceSessionKey: string,
   sourceAgentId?: string | null,
 ): Promise<string[]> {
-  const binding = captureIncognitoSessionSource({
-    sessionKey: sourceSessionKey,
-    ...(sourceAgentId ? { agentId: sourceAgentId } : {}),
-  });
-  const claim =
-    binding && !("kind" in binding)
-      ? binding.actor.sessions.captureCurrent(sourceSessionKey)
-      : undefined;
-  const topology = binding && !("kind" in binding) ? captureIncognitoSessionTopology() : undefined;
+  const memory = captureSessionEntryMetadataRead(
+    {
+      sessionKey: sourceSessionKey,
+      ...(sourceAgentId ? { agentId: sourceAgentId } : {}),
+    },
+    () => getAsyncWorkSignal()?.throwIfAborted(),
+  );
+  const initial = memory?.readCurrent();
   let persisted: boolean;
   do {
     persisted = await prepareOptionalSubagentSessionListReadCache();
     getAsyncWorkSignal()?.throwIfAborted();
   } while (persisted && !getSubagentSessionListReadSnapshotIdentity());
-  binding?.admissionSignal?.throwIfAborted();
-  claim?.assertCurrent();
-  topology?.assertCurrent();
-  if (binding && "kind" in binding) {
-    binding.assertCurrent();
+  if (memory) {
+    const current = memory.readCurrent();
+    if (
+      current?.sessionId !== initial?.sessionId ||
+      current?.lifecycleRevision !== initial?.lifecycleRevision
+    ) {
+      throw new Error("Approval source session changed during preparation");
+    }
   }
   try {
-    return resolveApprovalSessionAudience(
+    return await resolveApprovalSessionAudience(
       getRuntimeConfig(),
       persisted,
       sourceSessionKey,
       sourceAgentId,
-      binding,
-      topology,
+      memory,
     );
   } catch {
     return [resolveApprovalFallbackAudienceSessionKey(sourceSessionKey, sourceAgentId)];

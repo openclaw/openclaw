@@ -20,3 +20,21 @@ export function normalizeOllamaWireModelId(modelId: string, providerId?: string)
   }
   return trimmed;
 }
+
+export function getOllamaLatestDedupeKey(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  return normalized.endsWith(":latest") ? normalized.slice(0, -":latest".length) : normalized;
+}
+
+export function findAvailableOllamaModelName(
+  modelName: string,
+  availableModelNames: Iterable<string>,
+): string | undefined {
+  const wantedKey = getOllamaLatestDedupeKey(modelName);
+  for (const available of availableModelNames) {
+    if (getOllamaLatestDedupeKey(available) === wantedKey) {
+      return available;
+    }
+  }
+  return undefined;
+}

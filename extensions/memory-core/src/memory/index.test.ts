@@ -114,15 +114,14 @@ describe("memory index", () => {
   it("rebuilds a missing vector table through forced sync with cached readiness", async () => {
     const manager = await getFreshManager(createCfg({ vectorEnabled: true }));
     await manager.sync({ reason: "test", force: true });
-    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const db = memoryIndexFixtureWriter(manager);
+    expect((await loadSqliteVecExtension({ db })).ok).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
       count: 1,
     });
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     expect(manager.status().vector).toMatchObject({ storeAvailable: true, dims: 4 });
-    const writer = memoryIndexFixtureWriter(manager);
-    expect((await loadSqliteVecExtension({ db: writer })).ok).toBe(true);
-    writer.exec("DROP TABLE memory_index_chunks_vec");
+    db.exec("DROP TABLE memory_index_chunks_vec");
     expect(
       db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
     ).toBeUndefined();
@@ -1177,16 +1176,16 @@ describe("memory index", () => {
       index: { state: "complete" },
       storeAvailable: undefined,
     });
+    await statusManager.close();
 
-    const writer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
-    try {
-      writer
-        .prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?")
-        .run("memory_vector_rebuild_v1");
-    } finally {
-      writer.close();
-    }
-    expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) => {
+      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
+        "memory_vector_rebuild_v1",
+      );
+    });
+    const incompleteManager = await getFreshManager(cfg, "status");
+    expect(Reflect.get(incompleteManager, "vector")).toMatchObject({ available: null, dims: 4 });
+    expect(incompleteManager.status().vector?.index).toEqual({ state: "incomplete" });
   });
 
   it("forces a rebuild after incremental writes while vectors are disabled", async () => {

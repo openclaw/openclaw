@@ -7,6 +7,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadTranscriptEventsSync,
@@ -124,18 +125,22 @@ it.each(["dirty", "unclassified"] as const)(
       }
       return snapshot.value;
     };
-    const queries = trackSqliteStatementExecutions(database.db, ["projection", "tail"], (sql) => {
-      if (!/^select /i.test(sql)) {
-        return null;
-      }
-      if (sql.includes('"session_transcript_index_state"')) {
-        return "projection";
-      }
-      return /^select "seq" from "transcript_events"/i.test(sql) &&
-        sql.includes('order by "seq" desc')
-        ? "tail"
-        : null;
-    });
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["projection", "tail"],
+      (sql) => {
+        if (!/^select /i.test(sql)) {
+          return null;
+        }
+        if (sql.includes('"session_transcript_index_state"')) {
+          return "projection";
+        }
+        return /^select "seq" from "transcript_events"/i.test(sql) &&
+          sql.includes('order by "seq" desc')
+          ? "tail"
+          : null;
+      },
+    );
     let first: ReturnType<typeof append>;
     try {
       first = append("answer", "tail");

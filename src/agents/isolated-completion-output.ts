@@ -4,6 +4,7 @@ import {
   buildAssistantFailoverSignal,
   classifyAssistantFailoverReason,
 } from "./embedded-agent-helpers/assistant-message-failures.js";
+import { recordModelFallbackStop } from "./model-fallback-stop.js";
 
 type IsolatedCompletionErrorCode =
   | "unsupported"
@@ -45,13 +46,19 @@ export function hasCliSideEffectEvidence(result: {
 
 export function requireIsolatedAssistantText(assistant: AssistantMessage): string {
   if (assistant.stopReason !== "stop" && assistant.stopReason !== "length") {
-    throw new IsolatedCompletionError(
+    const error = new IsolatedCompletionError(
       "output-rejected",
-      `Isolated completion failed with stop reason ${assistant.stopReason}.`,
-      assistant.stopReason === "error" && !isTerminalAssistantError(assistant)
+      assistant.errorMessage?.trim() ||
+        `Isolated completion failed with stop reason ${assistant.stopReason}.`,
+      (assistant.stopReason === "error" && !isTerminalAssistantError(assistant)) ||
+        assistant.stopReason === "aborted"
         ? { cause: buildAssistantFailoverSignal(assistant) }
         : undefined,
     );
+    if (isTerminalAssistantError(assistant)) {
+      recordModelFallbackStop(error);
+    }
+    throw error;
   }
   const textParts: string[] = [];
   for (const block of assistant.content) {

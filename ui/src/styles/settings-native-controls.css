@@ -15,7 +15,8 @@
   cursor: var(--cursor-action);
 }
 
-.settings-toggle__input {
+.settings-toggle__input,
+.settings-segmented__input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -85,16 +86,6 @@
 .settings-segmented__btn:has(> .settings-segmented__input) {
   position: relative;
   min-height: calc(var(--settings-control-height) - 6px);
-}
-
-.settings-segmented__input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: inherit;
 }
 
 .settings-segmented > .settings-segmented__btn:has(> input:checked) {

@@ -314,6 +314,7 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
   ),
 }));
 
+// mock-isolation: Command fixtures supply skill eligibility without reading the host approval store.
 vi.mock("../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
 }));

@@ -132,7 +132,9 @@ describe("memory retrieval thread ownership", () => {
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = await fixture.getPersistentManager(cfg);
+    // Synthetic index rows have no source transcripts. Keep resident startup
+    // reconciliation from pruning the corpus this retrieval proof owns.
+    const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "test" });
     expect(manager.status().fts?.available).toBe(true);
     const db = (manager as unknown as { db: DatabaseSync }).db;

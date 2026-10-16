@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -33,7 +34,28 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
   };
 };
 
+const lifecycleDeadlines = new WeakMap<
+  DatabaseSync,
+  { observedAt: number; nextDueAt: number; hasActiveIntents: boolean }
+>();
+
+export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
+  lifecycleDeadlines.delete(db);
+}
+
+export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
+export function hasNoActiveStandingIntents(db: DatabaseSync): boolean {
+  return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
+}
+
 export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
+  const deadline = lifecycleDeadlines.get(db);
+  if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
+    return;
+  }
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -79,6 +101,30 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
         .where("status", "=", "fired"),
     );
   }
+  const expiry = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("standing_intents")
+      // Binary64 preserves millisecond deadlines without decoding unsafe stored integers.
+      .select((eb) =>
+        eb.fn.min(eb.cast<number>("expires_at", "double precision")).as("next_expiry"),
+      )
+      .where("status", "in", ["pending", "armed", "fired"]),
+  );
+  let nextDueAt = expiry?.next_expiry ?? Infinity;
+  for (const row of fired) {
+    if (row.last_fired_at !== null) {
+      const rearmAt = row.last_fired_at + row.cooldown_seconds * 1_000;
+      if (rearmAt > nowMs) {
+        nextDueAt = Math.min(nextDueAt, rearmAt);
+      }
+    }
+  }
+  lifecycleDeadlines.set(db, {
+    observedAt: nowMs,
+    nextDueAt,
+    hasActiveIntents: expiry?.next_expiry != null,
+  });
 }
 
 export function createStandingIntentInDatabase(
@@ -86,6 +132,7 @@ export function createStandingIntentInDatabase(
   row: StandingIntentRow,
 ): StandingIntent {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   executeSqliteQuerySync(db, kysely.insertInto("standing_intents").values(row));
   return rowToIntent(row);
 }
@@ -112,6 +159,7 @@ export function cancelStandingIntentInDatabase(
   params: StandingIntentOperations["cancel"]["input"],
 ): StandingIntent | null {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   const result = executeSqliteQuerySync(
     db,
     kysely
@@ -149,12 +197,29 @@ export function matchStandingIntentsInDatabase(
   const storedSenderScope = params.senderScope;
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
+  // The lifecycle owner invalidates this absence fact on every write and rollback.
+  if (hasNoActiveStandingIntents(db)) {
+    return [];
+  }
   const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
+  const search = admitStoreSearch(db, {
+    text: {
+      intents: {
+        table: "standing_intents_fts",
+        alias: "fts",
+        fields: ["trigger_keywords"],
+        matchField: "trigger_keywords",
+      },
+    },
+  });
+  if (!search.fullText) {
+    throw new Error(search.diagnostics.join("; "));
+  }
   let candidatesQuery = kysely
     .selectFrom("standing_intents as intent")
     .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
     .selectAll("intent")
-    .where("fts.trigger_keywords", "match", ftsQuery)
+    .where(search.fullText.match(search.text.intents!, ftsQuery))
     .where("intent.status", "=", "armed")
     .where("intent.creator_sender", "is not", null)
     .where("intent.expires_at", ">", nowMs)
@@ -234,6 +299,7 @@ export function matchStandingIntentsInDatabase(
       if (!standingIntentsFitContext([...fired, firedIntent])) {
         continue;
       }
+      invalidateStandingIntentLifecycle(db);
       executeSqliteQuerySync(
         db,
         kysely

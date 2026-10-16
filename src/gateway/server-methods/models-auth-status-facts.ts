@@ -6,7 +6,6 @@ import {
 } from "../../agents/auth-health.js";
 import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../../agents/auth-profiles/credential-state.js";
 import { isExternalCliAuthProfileInScope } from "../../agents/auth-profiles/external-cli-sync.js";
-import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
@@ -139,7 +138,6 @@ function buildModelAuthStatusFacts(
   ];
 
   const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
-  const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
   const logoutProfileIds = new Set(
     Object.entries(store.profiles)
       .filter(
@@ -187,7 +185,6 @@ function buildModelAuthStatusFacts(
     readAuthHealth: readsExternalAuth ? readAuthHealth : undefined,
     usageProviderIds,
     externalProfileIds,
-    externalCliProfileIds,
     logoutProfileIds,
     configBoundProfileIds,
     configBoundAuthProviders,

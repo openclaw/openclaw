@@ -1,5 +1,5 @@
 import {
-  loadTranscriptEventsSync,
+  loadTranscriptEvents,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -28,7 +28,7 @@ import {
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
@@ -293,39 +293,6 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   }
 }
 
-function extractToolCalls(message: Record<string, unknown>): Array<{
-  id?: string;
-  tool: string;
-  args: unknown;
-}> {
-  const calls: Array<{ id?: string; tool: string; args: unknown }> = [];
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isMessageRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
-        continue;
-      }
-      const tool = readNonEmptyString(block.name) ?? "unknown";
-      calls.push({
-        id:
-          readNonEmptyString(block.id) ??
-          readNonEmptyString(block.toolCallId) ??
-          readNonEmptyString(block.toolUseId),
-        tool,
-        args: block.input ?? block.arguments ?? block.args ?? block.payload ?? null,
-      });
-    }
-  }
-  for (const call of readQaMessageFunctionCalls(message)) {
-    calls.push({ ...call, tool: call.tool ?? "unknown" });
-  }
-  return calls;
-}
-
 function extractToolResults(message: Record<string, unknown>): Array<{
   id?: string;
   tool?: string;
@@ -470,49 +437,22 @@ function resolveToolCallOrder(
   const capture = createToolCallCapture();
   const { ordered } = capture;
   const byId = new Map<string, number>();
-  const unresolvedByTool = new Map<string, Set<number>>();
-
-  const enqueueUnresolved = (tool: string, index: number) => {
-    const indices = unresolvedByTool.get(tool) ?? new Set<number>();
-    indices.add(index);
-    unresolvedByTool.set(tool, indices);
-  };
-
-  const removeUnresolved = (index: number) => {
-    const tool = ordered[index]!.tool;
-    const toolIndices = unresolvedByTool.get(tool);
-    toolIndices?.delete(index);
-    if (toolIndices?.size === 0) {
-      unresolvedByTool.delete(tool);
-    }
-  };
-
-  const matchPendingIndex = (result: { id?: string; tool?: string }) => {
-    if (result.id && byId.has(result.id)) {
-      return byId.get(result.id);
-    }
-    if (result.tool) {
-      const toolIndices = unresolvedByTool.get(result.tool);
-      if (toolIndices && toolIndices.size > 0) {
-        return toolIndices.values().next().value;
-      }
-    }
-    return capture.pending();
-  };
 
   for (const record of records) {
     if (record.role === "assistant") {
-      for (const call of extractToolCalls(record.message)) {
-        const index = capture.call(call.tool, call.args, call.id);
+      for (const call of readQaMessageToolCalls(record.message)) {
+        const index = capture.call(call.tool ?? "unknown", call.args, call.id);
         if (call.id) {
           byId.set(call.id, index);
         }
-        enqueueUnresolved(call.tool, index);
       }
     }
     if (record.role === "user" || record.role === "tool" || record.role === "toolResult") {
       for (const result of extractToolResults(record.message)) {
-        const pendingIndex = matchPendingIndex(result);
+        const pendingIndex =
+          (result.id ? byId.get(result.id) : undefined) ??
+          capture.pending(result.tool) ??
+          capture.pending();
         const pendingCall = pendingIndex === undefined ? undefined : ordered[pendingIndex];
         capture.result(pendingIndex, {
           tool: result.tool,
@@ -520,10 +460,6 @@ function resolveToolCallOrder(
           callId: pendingIndex !== undefined ? pendingCall?.callId : result.id,
           errorClass: result.errorClass,
         });
-        if (pendingIndex === undefined) {
-          continue;
-        }
-        removeUnresolved(pendingIndex);
       }
     }
   }
@@ -1112,7 +1048,7 @@ async function loadRuntimeParityCaptureSources(params: {
     }
     let transcriptBytes = "";
     try {
-      const events = loadTranscriptEventsSync({
+      const events = await loadTranscriptEvents({
         agentId: params.agentId,
         env,
         sessionId,

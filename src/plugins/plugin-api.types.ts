@@ -116,11 +116,25 @@ type OpenClawPluginSessionStateApi = {
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
 };
 
+export type PluginActiveRunSteerParams = {
+  sessionKey: string;
+  text: string;
+  /** Operator-facing note without model-only delivery instructions; defaults to text. */
+  displayText?: string;
+  idempotencyKey?: string;
+};
+
+export type PluginActiveRunSteerResult =
+  | { steered: true; runId?: string }
+  | { steered: false; reason: string };
+
 type OpenClawPluginSessionWorkflowApi = {
   /** Queue one plugin-owned context injection for the next agent turn in a session. */
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
+  /** Steer a current run without starting a turn; shown only as a Control UI notice, never a channel reply. */
+  steerActiveRun: (params: PluginActiveRunSteerParams) => Promise<PluginActiveRunSteerResult>;
   /**
    * Register cleanup metadata for a plugin-owned session scheduler job.
    * This does not schedule work or create task records; it only lets the host
@@ -361,8 +375,12 @@ export type OpenClawPluginApi = {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
-  /** Register one version 1 typed decision provider declared in the manifest. */
-  registerDecisionProvider: (provider: import("../decisions/types.js").DecisionProviderV1) => void;
+  /** Register a versioned typed decision executor declared in the manifest. */
+  registerDecisionProvider: (
+    provider:
+      | import("../decisions/types.js").DecisionProviderV1
+      | import("../decisions/types-v2.js").DecisionProviderV2,
+  ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,
@@ -395,6 +413,8 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
    */
   enqueueNextTurnInjection: OpenClawPluginSessionWorkflowApi["enqueueNextTurnInjection"];
+  /** Backs `api.session.workflow.steerActiveRun(...)`; plugins call the workflow facade. */
+  steerActiveRun: OpenClawPluginSessionWorkflowApi["steerActiveRun"];
   /**
    * Register a trusted pre-tool policy. Installed plugins must declare the
    * policy id in `contracts.trustedToolPolicies`.

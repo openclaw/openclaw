@@ -324,10 +324,10 @@ describe("runIsolatedCompletion", () => {
       );
       expect(error).toMatchObject({
         code: "output-rejected",
-        message: expect.stringContaining(`stop reason ${assistant.stopReason}`),
+        message: assistant.errorMessage,
       });
       if (kind === "terminal") {
-        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "unknown" });
+        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "terminal" });
       }
       expect(dispatch).toHaveBeenCalledOnce();
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -770,7 +770,7 @@ describe("runIsolatedCompletion", () => {
     async ({ requestedProfile, selectedProfile }) => {
       mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
       mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
-      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(selectedProfile);
       mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
 
       await expect(

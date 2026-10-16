@@ -14,6 +14,8 @@ export type ControlUiLinkReaderPreviewParams = {
   url: string;
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
+  /** Present only for a descriptor opting into the foreground session context. */
+  sessionKey?: string;
 };
 export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
   refresh?: boolean;
@@ -26,6 +28,8 @@ export type ControlUiLinkReaderImage = {
 };
 
 export type ControlUiLinkReaderPreview = {
+  /** Last-known metadata while its bounded refresh is in progress. */
+  stale?: boolean;
   /** Echo the validated requested URL; query parameters remain part of the resource identity. */
   url: string;
   title: string;

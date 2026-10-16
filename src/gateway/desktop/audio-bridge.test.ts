@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor, SpawnInput } from "../../process/supervisor/types.js";
+import { markGatewayIngressTransport } from "../ingress-attribution.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import type { RemoteControlUiIngressContext } from "../server/client-identity-types.js";
 import { createManagedLinuxAudio, type DesktopAudioSource } from "./managed-linux-audio.js";
 
 const peers = vi.hoisted(() => ({ next: undefined as unknown }));
@@ -55,6 +58,7 @@ const flush = async () => {
 function fixture(
   requester?: { isCurrent(): boolean; signal?: AbortSignal },
   source?: DesktopAudioSource,
+  ingress?: RemoteControlUiIngressContext,
 ) {
   const captures: Array<{
     stream: PassThrough;
@@ -70,13 +74,26 @@ function fixture(
     captures.push(capture);
     return capture;
   });
-  const observation = mintDesktopAudioObserver({ source: source ?? { start }, requester });
+  const observation = mintDesktopAudioObserver({
+    source: source ?? { start },
+    requester: ingress
+      ? {
+          ...requester,
+          isCurrent: () => requester?.isCurrent() ?? true,
+          remoteIngressPrincipal: ingress.resolvePrincipal(),
+        }
+      : requester,
+  });
   cleanups.push(observation.close);
   const peer = new Peer();
   const attach = (path = observation.descriptor.wsPath) => {
     peers.next = peer;
     const transport = new PassThrough();
-    handleDesktopAudioUpgrade({ url: path } as IncomingMessage, transport, Buffer.alloc(0));
+    const req = { url: path } as IncomingMessage;
+    if (ingress) {
+      markGatewayIngressTransport(req, { kind: "remote-forwarded", context: ingress });
+    }
+    handleDesktopAudioUpgrade(req, transport, Buffer.alloc(0));
     return transport;
   };
   const firstCapture = () => {
@@ -194,9 +211,13 @@ describe("screen-owned desktop audio", () => {
     },
   );
 
-  it.each([true, false])(
-    "carries live requester authority into pending capture admission (%s)",
-    async (allowed) => {
+  it.each([
+    [true, "requester"],
+    [false, "requester"],
+    [false, "ingress"],
+  ] as const)(
+    "carries live authority into pending capture admission (%s, %s)",
+    async (allowed, authority) => {
       const admission = createDeferred();
       const attempted = createDeferred();
       const settled = createDeferred();
@@ -244,7 +265,21 @@ describe("screen-owned desktop audio", () => {
       });
       const audio = await owner.ready;
       const requesterAbort = new AbortController();
-      const f = fixture({ isCurrent: () => current, signal: requesterAbort.signal }, audio.source);
+      const ingress =
+        authority === "ingress"
+          ? createRemoteControlUiIngressTestContext({
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("ingress revoked");
+                }
+              },
+            })
+          : undefined;
+      const f = fixture(
+        { isCurrent: () => authority === "ingress" || current, signal: requesterAbort.signal },
+        audio.source,
+        ingress,
+      );
       f.attach();
       f.observation.activate();
       f.peer.command("start");

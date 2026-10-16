@@ -2,6 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -65,7 +66,11 @@ export function createSqliteTranscriptArchiveWorker(
   try {
     worker = createCpuTrackedWorker(workerUrl, {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
-      workerData: { ...workerData, databaseAdmissionPort: admission.port },
+      workerData: {
+        ...workerData,
+        databaseAdmissionPort: admission.port,
+        databaseEngineSelection: getDatabaseEngineSelection(),
+      },
       transferList: [admission.port],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
@@ -379,13 +384,16 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  // Empty snapshots have no archive bytes; the deletion transaction still rejects later appends.
+  const workerPlans = deduped.filter(
+    (plan) => plan.archiveTranscript && plan.snapshot.lastSeq !== null,
+  );
   const workerResults =
     workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {
-    if (!plan.archiveTranscript) {
+    if (!plan.archiveTranscript || plan.snapshot.lastSeq === null) {
       return Object.assign({}, plan, { archive: null, archivedTranscript: null });
     }
     const result = resultBySessionId.get(plan.sessionId);

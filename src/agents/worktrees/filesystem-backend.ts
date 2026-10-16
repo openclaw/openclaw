@@ -7,6 +7,7 @@ import type {
   WorktreeFilesystemOptions,
 } from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { setWorktreePreparationTemplate } from "./preparation-timing.js";
 
 function assertActive(options: WorktreeFilesystemOptions): void {
   options.signal?.throwIfAborted();
@@ -64,6 +65,7 @@ export async function detectWorktreeFilesystemBackend(
   options: WorktreeFilesystemOptions,
 ): Promise<WorktreeFilesystemBackend | null> {
   assertActive(options);
+  setWorktreePreparationTemplate("unavailable", { reason: "filesystem-probe" });
   const backend = await nativeWorktreeFilesystem.probe(parentPath, options);
   assertActive(options);
   if (process.platform === "win32") {
@@ -85,7 +87,7 @@ export async function detectWorktreeFilesystemBackend(
       },
     };
   }
-  if (backend !== "apfs" && backend !== "btrfs") {
+  if (backend !== "apfs" && backend !== "btrfs" && backend !== "xfs") {
     return null;
   }
   const apfs =
@@ -95,6 +97,7 @@ export async function detectWorktreeFilesystemBackend(
     const parentAcl = await apfs.readDirectoryAcl(parentPath, options);
     assertActive(options);
     if (parentAcl === undefined || parentAcl === "inheritable") {
+      setWorktreePreparationTemplate("unavailable", { reason: "parent-acl" });
       return null;
     }
   }
@@ -117,9 +120,9 @@ export async function detectWorktreeFilesystemBackend(
   };
   return {
     id: backend,
-    // Btrfs shares directory metadata; APFS allocates file and directory metadata.
+    // Btrfs shares directory metadata; APFS and XFS allocate per-entry metadata.
     estimateCloneBytes: (entries, indexBytes) =>
-      16 * 1024 ** 2 + 2 * indexBytes + (backend === "apfs" ? entries * 8192 : 0),
+      16 * 1024 ** 2 + 2 * indexBytes + (backend === "btrfs" ? 0 : entries * 8192),
     async createTemplate(destination, templateOptions) {
       assertActive(templateOptions);
       if (backend === "apfs") {

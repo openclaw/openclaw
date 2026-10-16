@@ -20,7 +20,7 @@ const plugin = {
     const service = createAcpxRuntimeService({
       pluginConfig: api.pluginConfig,
       getAllowedAgents: () => api.runtime.config.current().acp?.allowedAgents,
-      openKeyedStore: (options) => api.runtime.state.openKeyedStore(options),
+      openKeyedStore: (options) => api.runtime.state.openKeyedStoreV2(options),
     });
     api.registerService(service);
     const currentConfig = () => api.runtime.config.current().plugins?.entries?.acpx?.config;

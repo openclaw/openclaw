@@ -9,13 +9,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
-import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  normalizeMentionText,
-  stripMentions,
-} from "./reply/mentions.js";
+import { buildMentionRegexes, matchesMentionPatterns, stripMentions } from "./reply/mentions.js";
 import { prepareReplyConversation } from "./reply/prompt-session-context.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
@@ -91,18 +85,10 @@ describe("applyTemplate", () => {
   });
 });
 
-describe("normalizeInboundTextNewlines", () => {
-  it("normalizes CRLF/CR to LF", () => {
-    expect(normalizeInboundTextNewlines("a\r\nb")).toBe("a\nb");
-    expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
-  });
-});
-
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
-      // Use actual CRLF for newline normalization test, not literal \n sequences
-      Body: "a\r\nb\r\nc",
+      Body: "a\r\nb\rc",
       RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
@@ -226,21 +212,6 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
-
-  it("fills a generic content type only when media exists", () => {
-    const withMedia: MsgContext = {
-      Body: "hi",
-      media: [{ path: "/tmp/file.bin" }],
-    };
-    const outWithMedia = finalizeInboundContext(withMedia);
-    expect(outWithMedia.media).toEqual([
-      expect.objectContaining({ path: "/tmp/file.bin", contentType: "application/octet-stream" }),
-    ]);
-
-    const withoutMedia: MsgContext = { Body: "hi" };
-    const outWithoutMedia = finalizeInboundContext(withoutMedia);
-    expect(outWithoutMedia.media).toBeUndefined();
-  });
 });
 
 describe("inbound dedupe", () => {
@@ -345,15 +316,11 @@ describe("mention helpers", () => {
     expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
-  it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
-  });
-
   it("matches patterns case-insensitively", () => {
     const regexes = buildMentionRegexes({
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
-    expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("OPEN\u200bCLAW: hi", regexes)).toBe(true);
   });
 
   it("lets catch-all mention patterns match empty text", () => {

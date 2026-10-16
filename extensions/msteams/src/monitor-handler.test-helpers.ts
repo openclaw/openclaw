@@ -173,11 +173,6 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       reply: {
         dispatchReplyWithBufferedBlockDispatcher:
           dispatchReplyWithBufferedBlockDispatcher as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        createReplyDispatcherWithTyping: () => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-        }),
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
         resolveHumanDelayConfig: () => undefined,

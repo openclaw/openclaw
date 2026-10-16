@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => mocks.config,
+  readRuntimeConfig: () => mocks.config,
   getRuntimeConfigSourceSnapshot: () => mocks.config,
 }));
 vi.mock("../control-service.js", () => ({

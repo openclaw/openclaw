@@ -52,7 +52,7 @@ export function hasSessionTranscriptMessageInDatabase(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(transcriptEventNavigationSql().as("event_json"))
+        .select(transcriptEventNavigationSql(database.db).as("event_json"))
         .where("session_id", "=", sessionId)
         .where("seq", "not in", classified)
         .orderBy("seq", "desc"),

@@ -23,7 +23,7 @@ import type {
 import { normalizeBoardMetadata } from "./store-board-normalizers.js";
 import type { WorkboardBoardInput, WorkboardListOptions } from "./store-inputs.js";
 import { normalizeBoardId, normalizeBoardIdRequired } from "./store-normalizers.js";
-import { freezeCardList, readCards } from "./store-read.js";
+import { readCards } from "./store-read.js";
 import { WorkboardStoreRuntime } from "./store-runtime.js";
 
 function emptyBoardSummary(id: string): WorkboardBoardSummary {
@@ -70,22 +70,27 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
-  listCards(board: unknown): Promise<
+  listCards(
+    board: unknown,
+    sessionKey?: string,
+  ): Promise<
     WorkboardListResult & {
       boards: WorkboardBoardSummary[];
-      revision: WorkboardChange & { boardId?: string };
+      revision: WorkboardChange & { boardId?: string; sessionKey?: string };
     }
   > {
     return this.runOperation(() => {
       const boardId = normalizeBoardId(board);
       const writeToken = this.refreshWriteReceipt();
       const revision = this.cardsRevision;
-      const cached = this.cardLists.get(boardId);
+      const cached = sessionKey === undefined ? this.cardLists.get(boardId) : undefined;
       if (cached) {
         return cached;
       }
       const pending: ReturnType<WorkboardBoardStore["listCards"]> = Promise.all([
-        this.list({ boardId }),
+        sessionKey === undefined
+          ? this.list({ boardId })
+          : readCards(this.store, { kind: "session-links", sessionKey, boardId }),
         this.listBoards(),
       ])
         .then(([cards, { boards }]) => {
@@ -93,18 +98,23 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
             cards: cards.map(redactClaimToken),
             boards,
             statuses: WORKBOARD_STATUSES,
-            revision: { ...revision, ...(boardId === undefined ? {} : { boardId }) },
+            revision: {
+              ...revision,
+              ...(boardId === undefined ? {} : { boardId }),
+              ...(sessionKey === undefined ? {} : { sessionKey }),
+            },
           };
-          freezeCardList(result);
           // A concurrent update may finish this read with older facts; the writer
           // receipt invalidates them on the next request.
           return result;
         })
         .catch((error: unknown) => {
-          this.cardLists.delete(boardId);
+          if (sessionKey === undefined) {
+            this.cardLists.delete(boardId);
+          }
           throw error;
         });
-      if (writeToken !== undefined) {
+      if (writeToken !== undefined && sessionKey === undefined) {
         this.cardLists.set(boardId, pending);
       }
       return pending;
@@ -114,27 +124,14 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
   async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {
     const boards = new Map<string, WorkboardBoardSummary>();
     for (const entry of await this.boardStore.entries()) {
-      if (entry.value?.version !== 1 || !entry.value.board?.id) {
-        continue;
-      }
-      const board = entry.value.board;
+      const { createdAt: _createdAt, archivedAt, ...board } = entry.value.board;
       boards.set(board.id, {
-        id: board.id,
-        ...(board.kind ? { kind: board.kind } : {}),
-        ...(board.kind === "sessions" ? { sessions: board.sessions } : {}),
-        ...(board.name ? { name: board.name } : {}),
-        ...(board.description ? { description: board.description } : {}),
-        ...(board.icon ? { icon: board.icon } : {}),
-        ...(board.color ? { color: board.color } : {}),
-        ...(board.automationJobId ? { automationJobId: board.automationJobId } : {}),
-        ...(board.defaultWorkspace ? { defaultWorkspace: board.defaultWorkspace } : {}),
-        ...(board.orchestration ? { orchestration: board.orchestration } : {}),
+        ...board,
         total: 0,
         active: 0,
         archived: 0,
         byStatus: {},
-        updatedAt: board.updatedAt,
-        ...(board.archivedAt ? { archivedAt: board.archivedAt } : {}),
+        ...(archivedAt ? { archivedAt } : {}),
       });
     }
     if (!boards.has("default")) {
@@ -248,9 +245,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         throw new Error("board still has cards; archive it or move/delete the cards first.");
       }
       for (const entry of await this.subscriptionStore.entries({ boardId })) {
-        if (entry.value?.version === 1 && entry.value.subscription?.boardId === boardId) {
-          await this.subscriptionStore.delete(entry.key);
-        }
+        await this.subscriptionStore.delete(entry.key);
       }
       return { deleted: await this.boardStore.delete(boardId) };
     });

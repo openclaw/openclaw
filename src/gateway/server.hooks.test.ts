@@ -48,7 +48,6 @@ const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
 afterEach(() => {
-  drainSystemEvents(resolveMainKey());
   vi.restoreAllMocks();
   sessionEvents.captureTarget.mockClear();
   sessionEvents.enqueue.mockClear();

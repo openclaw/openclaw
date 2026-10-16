@@ -121,7 +121,7 @@ function sleepSync(ms: number): void {
 /** Protect the caller and every known ancestor, including an unreadable parent, from cleanup. */
 export function inspectSelfAndAncestorPidsSync(
   _spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
-  options: { requireVerifiedParent?: boolean } = {},
+  options: { requireVerifiedParent?: boolean; throughPid?: number } = {},
 ): { pids: Set<number>; complete: boolean } {
   const pids = new Set<number>([process.pid]);
   const immediateParent = process.ppid;
@@ -137,7 +137,10 @@ export function inspectSelfAndAncestorPidsSync(
     return { pids, complete: true };
   }
   try {
-    const ancestry = readProcessAncestry(process.pid, { maxDepth: MAX_ANCESTOR_WALK_DEPTH + 2 });
+    const ancestry = readProcessAncestry(process.pid, {
+      maxDepth: MAX_ANCESTOR_WALK_DEPTH + 2,
+      ...(options.throughPid === undefined ? {} : { throughPid: options.throughPid }),
+    });
     if (!ancestry) {
       return { pids, complete: false };
     }

@@ -293,6 +293,7 @@ export function createDiscordDraftPreviewController(params: {
       // reopening callbacks, then transfer only confirmed transport custody.
       freezeProgress();
       await withDiscordRequestAuthority(assertCurrent, async () => {
+        await info.onPlatformSendDispatch?.();
         assertCurrent();
         stream.update(text, { complete: true });
         await stream.flush();

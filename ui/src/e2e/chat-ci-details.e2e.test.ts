@@ -15,7 +15,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -215,7 +215,7 @@ async function setup(
     },
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, automationSessionKey));
-  await openDetailsPullRequests(page);
+  await openChatDetails(page);
   if (options.defer) {
     await gateway.deferNext(DETAILS_METHOD);
   }

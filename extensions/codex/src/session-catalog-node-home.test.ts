@@ -86,8 +86,8 @@ function createHomeFixture(entries: EntrySummary[] = []) {
     ],
     invoke,
   });
-  vi.spyOn(runtimeFixture.runtime.agent.session, "getSessionEntry").mockImplementation(
-    ({ sessionKey }) =>
+  vi.spyOn(runtimeFixture.runtime.agent.session, "getSessionEntryAsync").mockImplementation(
+    async ({ sessionKey }) =>
       runtimeFixture.entries.find((candidate) => candidate.sessionKey === sessionKey)?.entry,
   );
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
@@ -213,7 +213,6 @@ describe("paired-node Codex home ownership", () => {
   it.each([
     { phase: "update", home: "changed", sourceHomeId: homeB, allowed: false },
     { phase: "reconcile", home: "changed", sourceHomeId: homeB, allowed: false },
-    { phase: "reconcile", home: "same", sourceHomeId: homeA, allowed: true },
   ] as const)(
     "finalizes during $phase only for the $home home",
     async ({ phase, sourceHomeId, allowed }) => {

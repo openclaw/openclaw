@@ -157,6 +157,14 @@ async function stagingFixture(mac: MacScriptFixture, architectures = ["arm64", "
   await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
   await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-runtime.sh", path.join(scripts, "stage-mac-runtime.sh"));
+  await write(
+    path.join(scripts, "lib/desktop-runtime-prune.mjs"),
+    readFileSync("scripts/lib/desktop-runtime-prune.mjs"),
+  );
+  await write(
+    path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
+    'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+  );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');

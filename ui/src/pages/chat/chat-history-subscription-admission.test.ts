@@ -35,7 +35,7 @@ function admissionFixture() {
 }
 
 describe("foreground history subscription admission", () => {
-  it("retries a compensated subscription timeout before history without replacing cached input", async () => {
+  it("retries a subscription timeout before history without replacing cached input", async () => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
@@ -43,7 +43,7 @@ describe("foreground history subscription admission", () => {
     const key = "agent:main:timeout-recovery";
     const cached = [{ role: "assistant", content: "Cached conversation" }];
     let attempts = 0;
-    const compensated = createDeferred();
+    const requested = createDeferred();
     const state = makeChatHost({
       sessionKey: key,
       chatMessages: cached,
@@ -52,6 +52,7 @@ describe("foreground history subscription admission", () => {
         "sessions.messages.subscribe": () => {
           attempts += 1;
           if (attempts === 1) {
+            requested.resolve();
             throw new GatewayProtocolRequestTimeoutError({
               method: "sessions.messages.subscribe",
               timeoutMs: 30_000,
@@ -60,10 +61,7 @@ describe("foreground history subscription admission", () => {
           }
           return { key, agentId: "main" };
         },
-        "sessions.messages.unsubscribe": () => {
-          compensated.resolve();
-          return {};
-        },
+        "sessions.messages.unsubscribe": () => ({}),
         "chat.startup": () => ({ messages: cached }),
       },
     });
@@ -71,9 +69,9 @@ describe("foreground history subscription admission", () => {
     onTestFinished(() => state.sessions.dispose());
     const subscription = syncSelectedSessionMessageSubscription(state);
     const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    await compensated.promise;
+    await requested.promise;
     await vi.advanceTimersByTimeAsync(0);
-    expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(1);
+    expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(0);
     expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
     expect(state.chatMessages).toEqual(cached);
     expect(state.chatError).toBeNull();

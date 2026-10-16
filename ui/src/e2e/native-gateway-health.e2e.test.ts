@@ -84,7 +84,7 @@ async function installNativeHost(page: Page) {
 }
 
 function gatewayRow(page: Page, id: string): Locator {
-  return page.locator(`wa-dropdown-item[value="gateway:${encodeURIComponent(id)}"]`);
+  return page.locator(`[data-value="gateway:${encodeURIComponent(id)}"]`);
 }
 
 async function assertSelectionUnchanged(page: Page) {

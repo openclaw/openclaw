@@ -16,8 +16,8 @@ describe("prepared worker demand expiry", () => {
       const source = await fixture.attach(await fixture.ready(await fixture.seed("source")));
       await fixture.teardown(source);
       const placements = createWorkerSessionPlacementStore({ database: fixture.database });
-      const placement = placements.get(`session:${source.environmentId}`)!;
-      placements.retireSessionPlacement({
+      const placement = (await placements.getAsync(`session:${source.environmentId}`))!;
+      await placements.retireSessionPlacementAsync({
         sessionId: placement.sessionId,
         expectedState: "failed",
         expectedGeneration: placement.generation,

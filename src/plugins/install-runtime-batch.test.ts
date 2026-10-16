@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runClawPluginBatch } from "../claws/plugin-runtime.js";
-import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
+import * as configIO from "../config/io.factory.js";
 import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
@@ -68,15 +68,19 @@ function holdIndexRead() {
 function holdPolicyRead() {
   const entered = createDeferredCore();
   const resume = createDeferredCore();
-  const read = deferredMigrations.readDeferredPluginMigrationsAsync;
-  vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockImplementationOnce(
-    async (...args) => {
-      const rows = await read(...args);
-      entered.resolve();
-      await resume.promise;
-      return rows;
-    },
-  );
+  const create = configIO.createConfigIO;
+  vi.spyOn(configIO, "createConfigIO").mockImplementationOnce((options) => {
+    const io = create(options);
+    return {
+      ...io,
+      readConfigFileSnapshotForWrite: async (...args) => {
+        const snapshot = await io.readConfigFileSnapshotForWrite(...args);
+        entered.resolve();
+        await resume.promise;
+        return snapshot;
+      },
+    };
+  });
   return { entered, resume };
 }
 
@@ -476,13 +480,20 @@ it.each(["index", "deferred obligation"] as const)(
             reason: "Legacy fixture awaits its plugin migration",
             command: "openclaw doctor --fix",
             requiresStateMigration: true,
-            configPaths: [["legacyFixture"]],
-            validationExcludedPaths: [["legacyFixture"]],
+            configPaths: [["plugins", "entries", "held-owner", "config"]],
+            validationExcludedPaths: [["plugins", "entries", "held-owner", "config"]],
           },
         ],
       });
       const configWithHeldObligation = JSON.stringify({
-        legacyFixture: { root: path.join(root, "unrelated-legacy-data") },
+        plugins: {
+          entries: {
+            "held-owner": {
+              enabled: false,
+              config: { legacyFixture: { root: path.join(root, "unrelated-legacy-data") } },
+            },
+          },
+        },
       });
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, configWithHeldObligation);
       const index = await readPersistedInstalledPluginIndex({ env });
@@ -497,7 +508,7 @@ it.each(["index", "deferred obligation"] as const)(
       expect(before.pending).toEqual([
         expect.objectContaining({
           pluginId: "held-owner",
-          validationExcludedPaths: [["legacyFixture"]],
+          validationExcludedPaths: [["plugins", "entries", "held-owner", "config"]],
         }),
       ]);
       const acquire = leaseAcquisition.acquireOpenClawStateLease;

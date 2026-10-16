@@ -5,19 +5,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import {
   invokeConfigOpenFile,
   invokeConfigPatch,
-  invokeConfigSchema,
   startConfigWrite,
 } from "./config-invocations.test-support.js";
-import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
+import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
@@ -96,13 +96,8 @@ vi.mock("./config-write-flow.js", async () => {
   };
 });
 
-const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+const { execOpenPathMock } = vi.hoisted(() => ({
   execOpenPathMock: vi.fn(),
-  loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
-    schema: { type: "object" },
-    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
-    version: "test-schema",
-  })),
 }));
 
 vi.mock("./open-path.js", async () => {
@@ -110,8 +105,9 @@ vi.mock("./open-path.js", async () => {
   return { ...actual, execOpenPath: execOpenPathMock };
 });
 
-vi.mock("../../config/runtime-schema.js", () => ({
-  loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, uiHints: undefined }),
 }));
 
 function mockOpenPathError(error: Error) {
@@ -170,7 +166,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  clearConfigSchemaResponseCacheForTests();
+  invalidateGatewayRuntimeConfigSchema();
+  invalidateConfigGetResponseCache();
   resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
 });
@@ -355,32 +352,6 @@ describe("config.openFile", () => {
         `config.openFile failed path=${pathPrefix}...: open failed`,
       );
     });
-  });
-});
-
-describe("config schema response cache", () => {
-  it("rebuilds after config writes change schema inputs", async () => {
-    await invokeConfigSchema();
-    const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
-
-    expect(patch.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true }),
-      undefined,
-    );
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
-
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("rebuilds when the active plugin registry generation changes", async () => {
-    await invokeConfigSchema();
-    setActivePluginRegistry(createTestRegistry([]));
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 });
 

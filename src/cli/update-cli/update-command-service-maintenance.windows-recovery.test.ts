@@ -20,6 +20,50 @@ import * as windowsRecovery from "./update-command-windows-task.js";
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
 
+it.each(["ERROR: Access is denied.", "HRESULT 0x80070005"])(
+  "reports elevation guidance without restoring a denied task disable: %s",
+  (detail) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("win32");
+      const task = vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) =>
+        args[0] === "/Query"
+          ? {
+              code: 0,
+              stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+              stderr: "",
+            }
+          : { code: 1, stdout: "", stderr: detail },
+      );
+      const service = createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+          sourcePath: path.join(home, "gateway.cmd"),
+        }),
+        readRuntime: async () => ({ status: "running" }),
+        isLoaded: async () => true,
+      });
+      mocks.service.mockReturnValue(service);
+      const failure = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+      }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        failureFacts: [expect.objectContaining({ code: "windows-task-elevation-required" })],
+        message: expect.stringContaining("elevated terminal (Run as administrator)"),
+      });
+      expect(String(failure)).toContain("npm i -g 'openclaw@<target>' --allow-scripts=openclaw");
+      expect(String(failure)).toContain("openclaw doctor --fix");
+      expect(String(failure)).toContain("openclaw gateway restart");
+      expect(
+        task.mock.calls.map(([args]) => (args[0] === "/Change" ? args.at(-1) : args[0])),
+      ).toEqual(["/Query", "/DISABLE"]);
+      expect(service.stop).not.toHaveBeenCalled();
+    }),
+);
+
 it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-reject"] as const)(
   "retains caller authority when Windows task recovery loses its owner before %s",
   (lostBefore) =>

@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -90,11 +94,16 @@ suite.define(() => {
       await gateway.setOnline(true);
       await current.getByText("No active sessions.", { exact: true }).waitFor();
       expect(await current.locator(".activity-current-work__row").count()).toBe(0);
+      await page.clock.install();
+      await pauseVirtualClock(page);
       await gateway.setMethodResponse("sessions.list", {
         __mockError: { code: "UNAVAILABLE", message: "Snapshot unavailable" },
       });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
+      // Cross the full refresh window and deliver its nested mock response timer.
+      await page.clock.runFor(5_001);
       await current.getByText("Could not load active sessions.", { exact: true }).waitFor();
+      await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();
       await current.getByText("No active sessions.", { exact: true }).waitFor();

@@ -23,7 +23,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const config = { ui: { prefs: { locale: "en" } } };
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           presenceUsers: [{ id: "appearance-user", name: "Appearance User", self: true }],
           methodResponses: {
             "config.get": {
@@ -47,6 +47,18 @@ suite.define(() => {
         const swatches = accentSection.locator(".settings-accent-swatch");
         const defaultSwatch = accentSection.locator('[data-accent-preset="default"]');
         const coralSwatch = accentSection.locator('[data-accent-preset="coral"]');
+        const selectAccent = async (preset: "coral" | "default", accent: string | null) => {
+          const after = await gateway.deferNext("users.prefs.set");
+          await accentSection.locator(`[data-accent-preset="${preset}"]`).click();
+          const request = await gateway.waitForRequest("users.prefs.set", { after });
+          expect(request.params).toEqual({ entries: { "ui.accent": accent } });
+          // Profile reads must observe the commit before its successful reply.
+          await gateway.setMethodResponse("users.prefs.get", {
+            status: "ok",
+            entries: accent === null ? {} : { "ui.accent": accent },
+          });
+          await gateway.resolveDeferred("users.prefs.set");
+        };
         await accentSection.scrollIntoViewIfNeeded();
         expect(await swatches.first().getAttribute("data-accent-preset")).toBe("default");
         await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("true");
@@ -62,7 +74,7 @@ suite.define(() => {
           });
         }
 
-        await coralSwatch.click();
+        await selectAccent("coral", "#ff8066");
 
         await expect.poll(() => coralSwatch.getAttribute("aria-pressed")).toBe("true");
         await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("false");
@@ -97,7 +109,7 @@ suite.define(() => {
           });
         }
 
-        await defaultSwatch.click();
+        await selectAccent("default", null);
         await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("true");
         await expect
           .poll(() => defaultSwatch.locator(".settings-accent-swatch__reset").count())

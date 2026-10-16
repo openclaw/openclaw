@@ -75,11 +75,7 @@ export function TranscriptSearch(props: TranscriptSearchProps) {
             placeholder={t("sessionsView.transcriptSearchPlaceholder")}
             value={query()}
             disabled={!props.transcriptSearchAvailable}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.onTranscriptSearchChange(event.currentTarget.value);
-              }
-            }}
+            onInput={(event) => props.onTranscriptSearchChange(event.currentTarget.value)}
           />
         </div>
         <button
@@ -113,11 +109,10 @@ export function TranscriptSearch(props: TranscriptSearchProps) {
         <Show when={retryStatus()} keyed>
           {(status) => (
             <div
-              class={
-                status === "error"
-                  ? "sessions-transcript-search__notice sessions-transcript-search__notice--danger"
-                  : "sessions-transcript-search__notice"
-              }
+              class={[
+                "sessions-transcript-search__notice",
+                { "sessions-transcript-search__notice--danger": status === "error" },
+              ]}
             >
               <span>{retryNotice()}</span>
               <button class="btn btn--sm" type="button" onClick={props.onTranscriptSearch}>

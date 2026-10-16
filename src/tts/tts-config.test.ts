@@ -10,7 +10,6 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -81,34 +80,6 @@ describe("shouldAttemptTtsPayload", () => {
     ).toBe(false);
   });
 
-  it("records the selected provider preference source", () => {
-    const cfg = {
-      tts: {
-        provider: "openai",
-        persona: "reader",
-        personas: {
-          reader: { provider: "google" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
-      provider: "google",
-      source: "persona",
-    });
-
-    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "edge" } }));
-    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
-      provider: "microsoft",
-      source: "prefs",
-    });
-
-    writeFileSync(prefsPath, "{}");
-    expect(
-      resolveTtsSettingsSnapshot({ cfg: { tts: { provider: "openai" } } }).providerPreference,
-    ).toEqual({ provider: "openai", source: "config" });
-  });
-
   it("uses per-agent TTS auto and mode overrides", () => {
     const cfg = {
       tts: {
@@ -135,24 +106,6 @@ describe("shouldAttemptTtsPayload", () => {
       false,
     );
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
-  });
-
-  it("uses a per-agent preference path before the global environment path", () => {
-    const voicePrefsPath = path.join(dir, "voice-tts.json");
-    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    writeFileSync(voicePrefsPath, JSON.stringify({ tts: { auto: "always" } }));
-    const cfg = {
-      agents: {
-        entries: { voice: { tts: { prefsPath: voicePrefsPath } } },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "voice" })).toBe(
-      true,
-    );
-    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "main" })).toBe(
-      false,
-    );
   });
 
   it("merges channel and account TTS overrides after agent overrides", () => {

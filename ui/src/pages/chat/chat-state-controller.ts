@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -10,17 +9,20 @@ import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscr
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
   clearWorkspaceTimer,
 } from "./components/chat-session-workspace-state.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
@@ -33,6 +35,7 @@ import {
   notifyRenderLifecycleForTest,
   type RenderLifecycle,
 } from "./render-lifecycle.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
@@ -49,175 +52,249 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
   ];
 }
 
-export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
-  private attachmentReadsValue: ChatAttachmentReadLifecycle;
-  readonly composerPersistence: ChatComposerPersistence;
-  private stateValue: TState | undefined;
-  private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
-  private previousChatLoading = false;
-  private previousTranscriptSources: readonly unknown[] = [];
-  private previousChatStream: string | null = null;
-  private scrollAfterUpdate = false;
-  private scrollContentChangedAfterUpdate = false;
-  private forceScrollAfterUpdate = false;
-  private readonly cleanups: Array<() => void> = [];
-  private renderLifecycleConnected = false;
-  private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
+export function createChatState<TState extends ChatPageHost>(
+  renderer: {
+    requestUpdate: () => void;
+    readonly updateComplete: Promise<unknown>;
+  },
+  onStateChange?: () => void,
+  onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
+) {
+  let stateValue: TState | undefined;
+  let attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
+  const composerPersistence = new ChatComposerPersistence(() => stateValue);
+  let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
+  let previousChatLoading = false;
+  let previousTranscriptSources: readonly unknown[] = [];
+  let previousChatStream: string | null = null;
+  let pendingScroll: { force: boolean; contentChanged: boolean } | undefined;
+  const cleanups: Array<() => void> = [];
+  let disposed = false;
+  let renderLifecycleScope: ChatRenderLifecycleScope | undefined;
+  let backgroundRenderFrame: number | undefined;
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly onStateChange?: () => void,
-    private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
-  ) {
-    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
-      this.stateValue?.requestUpdate?.(),
-    );
-    this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
-    host.addController(this);
-  }
+  const api = {
+    composerPersistence,
 
-  get attachmentReads(): ChatAttachmentReadLifecycle {
-    return this.attachmentReadsValue;
-  }
+    get disposed() {
+      return disposed;
+    },
 
-  takeAttachmentReads(): ChatAttachmentReadLifecycle {
-    const reads = this.attachmentReadsValue;
-    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
-      this.stateValue?.requestUpdate?.(),
-    );
-    return reads;
-  }
+    dispose(this: void) {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      cancelRenderLifecycleScope();
+      attachmentReadsValue.abortReads();
+      // Flush while stateValue still points at the active session. Composer
+      // persistence is owned here so teardown order cannot lose it.
+      composerPersistence.stop();
+      stopChatEffects();
+      stateValue = undefined;
+      previousTranscriptSources = [];
+    },
 
-  adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
-    this.attachmentReadsValue.abortReads();
-    this.attachmentReadsValue = reads;
-    reads.retarget(this.attachmentInputProps(state), () => state.requestUpdate?.());
-  }
+    get attachmentReads(): ChatAttachmentReadLifecycle {
+      return attachmentReadsValue;
+    },
 
-  attachmentInputProps(state: TState) {
-    const reads = this.attachmentReads;
-    const readSignal = reads.readSignal;
-    return {
-      uploadConfig: state.uploadConfig,
-      attachmentReads: reads,
-      attachments: state.chatAttachments,
-      attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
-      getAttachments: () => state.chatAttachments,
-      pendingAttachmentReads: reads.pendingReads,
-      getPendingAttachmentReads: () => reads.pendingReads,
-      readSignal,
-      onPendingReadsChange: (delta: 1 | -1) => {
-        if (delta === 1 && readSignal === reads.readSignal) {
-          markChatComposerEdit(state);
-        }
-        reads.updatePending(readSignal, delta);
-      },
-      onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
-        state.chatAttachments = next;
-        state.requestUpdate?.();
-      },
-    };
-  }
-
-  createRenderLifecycle(): RenderLifecycle {
-    this.cancelRenderLifecycleScope();
-    const scope: ChatRenderLifecycleScope = new Set();
-    this.renderLifecycleScope = scope;
-    return {
-      invalidate: () => {
-        this.requestUpdateForScope(scope);
-      },
-      afterCommit: (effect, onCancel) => this.afterCommit(scope, effect, onCancel),
-    };
-  }
-
-  attach(state: TState) {
-    if (this.stateValue && this.stateValue !== state) {
-      this.privateDraftReview?.controller.abort();
-      disposeSelectedSessionMessageSubscription(this.stateValue);
-      releaseChatMediaResourceSubscriber(this.stateValue.requestUpdate);
-      this.attachmentReads.abortReads();
-      this.composerPersistence.stop();
-      cancelChatStreamRenderFrame(this.stateValue);
-      cancelChatScroll(this.stateValue);
-      stopChatRealtimeTalk(this.stateValue);
-    }
-    this.stateValue = state;
-    this.previousTranscriptSources = transcriptSources(state);
-    state.canRestoreComposer = () => this.stateValue === state && this.composerPersistence.active;
-    this.previousChatLoading = state.chatLoading;
-    this.previousChatStream = state.chatStream;
-    const renderLifecycle = state.renderLifecycle;
-    state.requestUpdate = () => renderLifecycle.invalidate();
-    this.cleanups.push(
-      chatOutboxOwner(state).subscribe(state, (item) => {
-        if (this.stateValue === state) {
-          this.onQueuedMessageDiscarded?.(item);
-        }
-      }),
-    );
-    // Retained and hidden panes still own corrections; transport availability
-    // must not release their reload protection before Save or Cancel does.
-    this.cleanups.push(
-      registerControlUiReloadGuard(
-        () => this.stateValue !== state || (!state.chatQueuedEdit && !this.hasPrivateDraft(state)),
-        () => {
-          if (!state.chatQueuedEdit && this.hasPrivateDraft(state)) {
-            showToast({
-              message: t("chat.privateDraftReload.blocked"),
-              actionLabel: t("chat.privateDraftReload.review"),
-              onAction: () => void this.reviewPrivateDraft(state),
-            });
-            return;
+    projectRunActivity(state: TState | undefined) {
+      return state?.connected
+        ? {
+            client: state.client,
+            agentId: resolveChatAgentId(state),
+            working: isChatRunWorking({
+              runActive: hasDirectSessionRun(state),
+              queue: state.chatQueue,
+              runStatus: state.chatRunStatus,
+              sessionKey: state.sessionKey,
+              startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
+            }),
+            completion: state.chatRunStatus,
           }
-          const edit = state.chatQueuedEdit;
-          const client = state.client;
-          showToast({
-            message: t("chat.queue.reloadBlocked"),
-            actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
-            onAction: () => {
-              if (
-                this.stateValue === state &&
-                state.client === client &&
-                edit &&
-                activeQueuedMessageEdit(state) === edit
-              ) {
-                state.reviewQueuedMessageEdit?.();
-              }
-            },
-          });
-        },
-      ),
-    );
-    const sendChat = state.handleSendChat;
-    state.handleSendChat = async (messageOverride, options, submissionAction) => {
-      const pending = sendChat(messageOverride, options, submissionAction);
-      renderLifecycle.invalidate();
-      try {
-        return await pending;
-      } finally {
-        renderLifecycle.invalidate();
-      }
-    };
-    const commitDraftChange = state.handleChatDraftChange;
-    state.handleChatDraftChange = (next, mentions) => {
-      commitDraftChange(next, mentions);
-      this.composerPersistence.schedule();
-    };
-    const navigateInputHistory = state.handleChatInputHistoryKey;
-    state.handleChatInputHistoryKey = (input) => {
-      const result = navigateInputHistory(input);
-      if (result.handled) {
-        this.composerPersistence.schedule();
-        // A history recall mutates chatMessage directly; without invalidating,
-        // the composer textarea stays empty until an unrelated event re-renders.
-        state.renderLifecycle.invalidate();
-      }
-      return result;
-    };
-  }
+        : null;
+    },
 
-  private hasPrivateComposerInput(state: TState): boolean {
+    takeAttachmentReads(): ChatAttachmentReadLifecycle {
+      const reads = attachmentReadsValue;
+      attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
+      return reads;
+    },
+
+    adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
+      attachmentReadsValue.abortReads();
+      attachmentReadsValue = reads;
+      reads.retarget(api.attachmentInputProps(state), () => state.requestUpdate?.());
+    },
+
+    attachmentInputProps(state: TState) {
+      const reads = attachmentReadsValue;
+      const readSignal = reads.readSignal;
+      return {
+        uploadConfig: state.uploadConfig,
+        attachmentReads: reads,
+        attachments: state.chatAttachments,
+        attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
+        getAttachments: () => state.chatAttachments,
+        pendingAttachmentReads: reads.pendingReads,
+        getPendingAttachmentReads: () => reads.pendingReads,
+        readSignal,
+        onPendingReadsChange: (delta: 1 | -1) => {
+          if (delta === 1 && readSignal === reads.readSignal) {
+            markChatComposerEdit(state);
+          }
+          reads.updatePending(readSignal, delta);
+        },
+        onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+          state.chatAttachments = next;
+          state.requestUpdate?.();
+        },
+      };
+    },
+
+    createRenderLifecycle(): RenderLifecycle {
+      cancelRenderLifecycleScope();
+      const scope: ChatRenderLifecycleScope = new Set();
+      renderLifecycleScope = scope;
+      return {
+        invalidate: () => {
+          requestUpdateForScope(scope);
+        },
+        afterCommit: (effect, onCancel) => afterCommit(scope, effect, onCancel),
+      };
+    },
+
+    attach(state: TState) {
+      if (stateValue && stateValue !== state) {
+        privateDraftReview?.controller.abort();
+        disposeSelectedSessionMessageSubscription(stateValue);
+        releaseChatMediaResourceSubscriber(stateValue.requestUpdate);
+        attachmentReadsValue.abortReads();
+        composerPersistence.stop();
+        cancelChatStreamRenderFrame(stateValue);
+        cancelChatScroll(stateValue);
+        stopChatRealtimeTalk(stateValue);
+      }
+      stateValue = state;
+      previousTranscriptSources = transcriptSources(state);
+      state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
+      previousChatLoading = state.chatLoading;
+      previousChatStream = state.chatStream;
+      const renderLifecycle = state.renderLifecycle;
+      state.requestUpdate = () => renderLifecycle.invalidate();
+      cleanups.push(
+        chatOutboxOwner(state).subscribe(state, (item) => {
+          if (stateValue === state) {
+            onQueuedMessageDiscarded?.(item);
+          }
+        }),
+      );
+      // Retained and hidden panes still own corrections; transport availability
+      // must not release their reload protection before Save or Cancel does.
+      cleanups.push(
+        registerControlUiReloadGuard(
+          () => stateValue !== state || (!state.chatQueuedEdit && !hasPrivateDraft(state)),
+          () => {
+            if (!state.chatQueuedEdit && hasPrivateDraft(state)) {
+              showToast({
+                message: t("chat.privateDraftReload.blocked"),
+                actionLabel: t("chat.privateDraftReload.review"),
+                onAction: () => void reviewPrivateDraft(state),
+              });
+              return;
+            }
+            const edit = state.chatQueuedEdit;
+            const client = state.client;
+            showToast({
+              message: t("chat.queue.reloadBlocked"),
+              actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
+              onAction: () => {
+                if (
+                  stateValue === state &&
+                  state.client === client &&
+                  edit &&
+                  activeQueuedMessageEdit(state) === edit
+                ) {
+                  state.reviewQueuedMessageEdit?.();
+                }
+              },
+            });
+          },
+        ),
+      );
+      const sendChat = state.handleSendChat;
+      state.handleSendChat = async (messageOverride, options, submissionAction) => {
+        const pending = sendChat(messageOverride, options, submissionAction);
+        renderLifecycle.invalidate();
+        try {
+          return await pending;
+        } finally {
+          renderLifecycle.invalidate();
+        }
+      };
+      const commitDraftChange = state.handleChatDraftChange;
+      state.handleChatDraftChange = (next, mentions) => {
+        commitDraftChange(next, mentions);
+        composerPersistence.schedule();
+      };
+      const navigateInputHistory = state.handleChatInputHistoryKey;
+      state.handleChatInputHistoryKey = (input) => {
+        const result = navigateInputHistory(input);
+        if (result.handled) {
+          composerPersistence.schedule();
+          // A history recall mutates chatMessage directly; without invalidating,
+          // the composer textarea stays empty until an unrelated event re-renders.
+          state.renderLifecycle.invalidate();
+        }
+        return result;
+      };
+    },
+
+    addCleanup(cleanup: () => void) {
+      cleanups.push(cleanup);
+    },
+
+    requestBackgroundUpdate(): void {
+      if (renderLifecycleScope) {
+        requestUpdateForScope(renderLifecycleScope, true);
+      }
+    },
+
+    handleTranscriptResize(): void {
+      if (stateValue && !disposed) {
+        scheduleCommittedChatScroll(stateValue, false, false, { source: "resize" });
+      }
+    },
+
+    commitRender() {
+      if (renderLifecycleScope && isRenderLifecycleScopeActive(renderLifecycleScope)) {
+        notifyRenderLifecycleForTest(renderer, "commit");
+      }
+      const pending = pendingScroll;
+      pendingScroll = undefined;
+      if (stateValue && pending) {
+        scheduleCommittedChatScroll(stateValue, pending.force, stateValue.chatHasAutoScrolled, {
+          contentChanged: pending.contentChanged,
+        });
+      }
+    },
+
+    prepareRender() {
+      // A render consumes both deferred producers before their next frame.
+      cancelBackgroundRender();
+      const state = stateValue;
+      if (state?.chatStreamRenderFrame != null) {
+        cancelChatStreamRenderFrame(state);
+        composerPersistence.persistChangedState();
+        captureRenderLifecycleChanges();
+        onStateChange?.();
+      }
+    },
+  };
+  return api;
+
+  function hasPrivateComposerInput(state: TState): boolean {
     return (
       isIncognitoComposerScope(state, resolveUiConversationIdentity(state, state.sessionKey)) &&
       Boolean(
@@ -226,12 +303,12 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         state.chatGoalDraftMode ||
         state.chatReplyTarget ||
         state.chatMentions?.length ||
-        this.attachmentReads.pendingReads,
+        attachmentReadsValue.pendingReads,
       )
     );
   }
 
-  private privateFallback(state: TState) {
+  function privateFallback(state: TState) {
     return Object.entries(state.chatComposerFallbackByScope).find(([key, fallback]) => {
       const scope = parseStoredChatOutboxScope(key);
       return (
@@ -247,29 +324,29 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     });
   }
 
-  private hasPrivateDraft(state: TState): boolean {
-    return this.hasPrivateComposerInput(state) || Boolean(this.privateFallback(state));
+  function hasPrivateDraft(state: TState): boolean {
+    return hasPrivateComposerInput(state) || Boolean(privateFallback(state));
   }
 
-  private async reviewPrivateDraft(state: TState): Promise<void> {
-    if (this.stateValue !== state || this.privateDraftReview || !this.hasPrivateDraft(state)) {
+  async function reviewPrivateDraft(state: TState): Promise<void> {
+    if (stateValue !== state || privateDraftReview || !hasPrivateDraft(state)) {
       return;
     }
     const owner = captureChatComposerOwner(state);
-    const fallback = this.hasPrivateComposerInput(state) ? undefined : this.privateFallback(state);
+    const fallback = hasPrivateComposerInput(state) ? undefined : privateFallback(state);
     const { sessionKey, connectionEpoch } = state;
     const chatMessage = fallback?.[1].message ?? state.chatMessage;
     const chatMentions = fallback ? fallback[1].mentions : state.chatMentions;
     const chatGoalDraftMode = fallback ? fallback[1].goalMode : state.chatGoalDraftMode;
     const chatReplyTarget = fallback ? fallback[1].replyTarget : state.chatReplyTarget;
     const attachments = [...(fallback?.[1].attachments ?? state.chatAttachments)];
-    const reads = this.attachmentReads;
+    const reads = attachmentReadsValue;
     const pendingReads = fallback ? 0 : reads.pendingReads;
     const retryReload = state.captureComposerRecoveryReload?.();
     const review = {
       controller: new AbortController(),
       isCurrent: () =>
-        this.stateValue === state &&
+        stateValue === state &&
         state.client === owner.client &&
         isChatComposerOwnerCurrent(state, owner) &&
         state.sessionKey === sessionKey &&
@@ -280,12 +357,12 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
             state.chatMentions === chatMentions &&
             state.chatGoalDraftMode === chatGoalDraftMode &&
             state.chatReplyTarget === chatReplyTarget &&
-            this.attachmentReads === reads &&
+            attachmentReadsValue === reads &&
             reads.pendingReads === pendingReads &&
             state.chatAttachments.length === attachments.length &&
             attachments.every((attachment, index) => state.chatAttachments[index] === attachment)),
     };
-    this.privateDraftReview = review;
+    privateDraftReview = review;
     try {
       if (!review.isCurrent() || review.controller.signal.aborted) {
         return;
@@ -329,65 +406,86 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         showToast({ message: t("chat.privateDraftReload.unavailable") });
       }
     } finally {
-      if (this.privateDraftReview === review) {
-        this.privateDraftReview = undefined;
+      if (privateDraftReview === review) {
+        privateDraftReview = undefined;
       }
       if (
         !review.isCurrent() &&
-        this.stateValue === state &&
+        stateValue === state &&
         state.client === owner.client &&
         state.sessionKey === sessionKey &&
-        this.hasPrivateDraft(state)
+        hasPrivateDraft(state)
       ) {
         showToast({
           message: t("chat.privateDraftReload.changed"),
           actionLabel: t("chat.privateDraftReload.review"),
-          onAction: () => void this.reviewPrivateDraft(state),
+          onAction: () => void reviewPrivateDraft(state),
         });
       }
     }
   }
 
-  addCleanup(cleanup: () => void) {
-    this.cleanups.push(cleanup);
+  function isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
+    return !disposed && renderLifecycleScope === scope;
   }
 
-  private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
-    return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
+  function cancelBackgroundRender(): void {
+    if (backgroundRenderFrame !== undefined) {
+      cancelAnimationFrame(backgroundRenderFrame);
+      backgroundRenderFrame = undefined;
+    }
   }
 
-  private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
-    if (!this.isRenderLifecycleScopeActive(scope)) {
+  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
+    if (!isRenderLifecycleScopeActive(scope)) {
       return false;
     }
-    if (this.privateDraftReview && !this.privateDraftReview.isCurrent()) {
-      this.privateDraftReview.controller.abort();
+    if (privateDraftReview && !privateDraftReview.isCurrent()) {
+      privateDraftReview.controller.abort();
     }
-    this.composerPersistence.persistChangedState();
-    this.captureRenderLifecycleChanges();
-    this.onStateChange?.();
-    notifyRenderLifecycleForTest(this.host, "invalidate");
-    this.host.requestUpdate();
+    composerPersistence.persistChangedState();
+    captureRenderLifecycleChanges();
+    onStateChange?.();
+    notifyRenderLifecycleForTest(renderer, "invalidate");
+    // Only background producers opt in. Draft persistence and scroll ownership
+    // are captured above, and transcript changes still commit before paint.
+    if (
+      background &&
+      !pendingScroll &&
+      globalThis.document?.visibilityState !== "hidden" &&
+      typeof globalThis.requestAnimationFrame === "function"
+    ) {
+      backgroundRenderFrame ??= requestAnimationFrame(() => {
+        backgroundRenderFrame = undefined;
+        if (isRenderLifecycleScopeActive(scope)) {
+          renderer.requestUpdate();
+        }
+      });
+    } else {
+      cancelBackgroundRender();
+      renderer.requestUpdate();
+    }
     return true;
   }
 
-  private cancelRenderLifecycleScope(): void {
-    const scope = this.renderLifecycleScope;
+  function cancelRenderLifecycleScope(): void {
+    cancelBackgroundRender();
+    const scope = renderLifecycleScope;
     if (!scope) {
       return;
     }
-    this.renderLifecycleScope = undefined;
+    renderLifecycleScope = undefined;
     for (const cancel of scope) {
       cancel();
     }
   }
 
-  private afterCommit(
+  function afterCommit(
     scope: ChatRenderLifecycleScope,
     effect: AfterCommitEffect,
     onCancel?: () => void,
   ): () => void {
-    if (!this.isRenderLifecycleScopeActive(scope)) {
+    if (!isRenderLifecycleScopeActive(scope)) {
       onCancel?.();
       return () => undefined;
     }
@@ -416,16 +514,16 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     };
     scope.add(cancel);
     // Request first so updateComplete represents the render this effect needs.
-    if (!this.requestUpdateForScope(scope)) {
+    if (!requestUpdateForScope(scope)) {
       cancel();
       return cancel;
     }
-    const completion = this.host.updateComplete;
+    const completion = renderer.updateComplete;
     void completion.then(() => {
       if (!scope.has(cancel)) {
         return;
       }
-      if (!this.isRenderLifecycleScopeActive(scope)) {
+      if (!isRenderLifecycleScopeActive(scope)) {
         cancel();
         return;
       }
@@ -433,7 +531,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       try {
         const nextCleanup = effect(complete);
         if (typeof nextCleanup === "function") {
-          if (scope.has(cancel) && this.isRenderLifecycleScopeActive(scope)) {
+          if (scope.has(cancel) && isRenderLifecycleScopeActive(scope)) {
             cleanup = nextCleanup;
           } else {
             nextCleanup();
@@ -449,67 +547,37 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return cancel;
   }
 
-  private captureRenderLifecycleChanges() {
-    const state = this.stateValue;
+  function captureRenderLifecycleChanges() {
+    const state = stateValue;
     if (!state) {
       return;
     }
     const sources = transcriptSources(state);
     const messagesChanged = sources.some(
-      (source, index) => this.previousTranscriptSources[index] !== source,
+      (source, index) => previousTranscriptSources[index] !== source,
     );
-    const streamChanged = this.previousChatStream !== state.chatStream;
-    const loadingChanged = this.previousChatLoading !== state.chatLoading;
-    const loadFinished = this.previousChatLoading && !state.chatLoading;
-    const streamStarted = this.previousChatStream == null && typeof state.chatStream === "string";
-    this.previousTranscriptSources = sources;
-    this.previousChatLoading = state.chatLoading;
-    this.previousChatStream = state.chatStream;
+    const streamChanged = previousChatStream !== state.chatStream;
+    const loadingChanged = previousChatLoading !== state.chatLoading;
+    const loadFinished = previousChatLoading && !state.chatLoading;
+    const streamStarted = previousChatStream == null && typeof state.chatStream === "string";
+    previousTranscriptSources = sources;
+    previousChatLoading = state.chatLoading;
+    previousChatStream = state.chatStream;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
       return;
     }
-    this.scrollAfterUpdate = true;
-    this.scrollContentChangedAfterUpdate ||= messagesChanged || streamChanged;
-    this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
+    pendingScroll = {
+      contentChanged: pendingScroll?.contentChanged || messagesChanged || streamChanged,
+      force: pendingScroll?.force || loadFinished || streamStarted || !state.chatHasAutoScrolled,
+    };
   }
 
-  handleTranscriptResize(): void {
-    if (this.stateValue && this.renderLifecycleConnected) {
-      scheduleCommittedChatScroll(this.stateValue, false, false, { source: "resize" });
+  function stopChatEffects() {
+    privateDraftReview?.controller.abort();
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
     }
-  }
-
-  hostConnected() {
-    this.renderLifecycleConnected = true;
-    // A lifecycle created while detached must never become active on reconnect.
-    this.cancelRenderLifecycleScope();
-  }
-
-  hostUpdated() {
-    if (this.renderLifecycleScope && this.isRenderLifecycleScopeActive(this.renderLifecycleScope)) {
-      notifyRenderLifecycleForTest(this.host, "commit");
-    }
-    const state = this.stateValue;
-    if (!this.scrollAfterUpdate) {
-      return;
-    }
-    const force = this.forceScrollAfterUpdate;
-    const contentChanged = this.scrollContentChangedAfterUpdate;
-    this.scrollAfterUpdate = false;
-    this.scrollContentChangedAfterUpdate = false;
-    this.forceScrollAfterUpdate = false;
-    if (!state) {
-      return;
-    }
-    scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
-  }
-
-  private stopChatEffects() {
-    this.privateDraftReview?.controller.abort();
-    while (this.cleanups.length > 0) {
-      this.cleanups.pop()?.();
-    }
-    const state = this.stateValue;
+    const state = stateValue;
     if (state) {
       disposeSelectedSessionMessageSubscription(state);
       releaseChatMediaResourceSubscriber(state.requestUpdate);
@@ -527,20 +595,5 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();
     }
-  }
-
-  hostDisconnected() {
-    this.renderLifecycleConnected = false;
-    this.cancelRenderLifecycleScope();
-    this.attachmentReads.abortReads();
-    // Flush while stateValue still points at the active session. Composer
-    // persistence is owned here so controller registration order cannot lose it.
-    this.composerPersistence.stop();
-    this.stopChatEffects();
-    this.stateValue = undefined;
-    this.previousTranscriptSources = [];
-    this.scrollAfterUpdate = false;
-    this.scrollContentChangedAfterUpdate = false;
-    this.forceScrollAfterUpdate = false;
   }
 }

@@ -50,7 +50,7 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasBilling = hasBillableUsage(params.usage);
   const hasPromptTokens =
-    typeof params.promptTokens === "number" &&
+    params.promptTokens !== undefined &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
   const hasUsableLastCallUsage =
@@ -60,6 +60,7 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
 
   // A monetary-only update must not invalidate the existing context observation.
   const hasContextUpdate =
+    params.usage?.usageReport?.state === "unavailable" ||
     hasUsage ||
     hasFreshContextSnapshot ||
     hasCurrentContextSnapshot ||
@@ -79,8 +80,6 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,
     currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
-    hasUsage,
-    hasBilling,
     hasContextUpdate,
     hasFreshContextSnapshot,
     hasCurrentContextSnapshot,

@@ -9,6 +9,13 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
+
+export async function withAgentCommandTestHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  return withTempHomeCore(fn, {
+    prefix: "openclaw-agent-",
+  });
+}
 
 export function createDefaultAgentResult(params?: {
   payloads?: Array<Record<string, unknown>>;

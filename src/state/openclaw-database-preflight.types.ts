@@ -80,7 +80,7 @@ export type OpenClawDatabasePreflightOptions = {
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
   scope?: "state";
   signal?: AbortSignal;
-  /** Updates use the isolated online reader; other inspections preserve source artifacts. */
+  /** False permits isolated online readers and SQLite read marks; true preserves source bytes. */
   preserveSourceArtifacts?: boolean;
   /** Omit for current-runtime checks; updates pass their complete target pair. */
   supportedVersions?: OpenClawSchemaVersions;
@@ -94,6 +94,8 @@ export type OpenClawDatabasePreflightOptions = {
         registeredDatabases: readonly { agentId: string; path: string }[],
       ) => readonly { agentId: string; path: string }[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
+  /** Final verification includes required held stores without granting migration authority. */
+  inspectHeldAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
   agentAdmissionConfig?: OpenClawConfig;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 };

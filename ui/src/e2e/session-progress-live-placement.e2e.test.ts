@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -370,10 +371,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Restore split", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Restore split");
         await restoreChatAsMain(page);
         await openChatDetails(visiblePane);
 
@@ -385,7 +383,17 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         const sideHeader = sidePanel.locator('[data-region-header="side"]');
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await captureProof(page, "details-mobile-header.png");
+        await expect
+          .poll(() =>
+            visiblePane.evaluate((element) => {
+              const header = element.querySelector(".sidebar-region__header")!;
+              const details = element.querySelector(".chat-details")!;
+              return details.getBoundingClientRect().top >= header.getBoundingClientRect().bottom;
+            }),
+          )
+          .toBe(true);
+        await selectChatLayoutAction(page, "Minimize side panel");
         await sideHeader.waitFor({ state: "hidden" });
         await openChatDetails(visiblePane);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
@@ -494,20 +502,6 @@ suite.define(() => {
 
   it.each([
     {
-      name: "completed",
-      colorScheme: "light" as const,
-      width: 560,
-      status: "completed",
-      active: false,
-    },
-    {
-      name: "paused",
-      colorScheme: "dark" as const,
-      width: 1280,
-      status: "in_progress",
-      active: false,
-    },
-    {
       name: "active",
       colorScheme: "dark" as const,
       width: 560,
@@ -598,7 +592,8 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-expanded-before.png");
-          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          await card.getByRole("button", { name: "Task progress options" }).click();
+          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
           await expect.poll(() => card.count()).toBe(0);
           await captureProof(page, "hide-" + name + "-after.png");
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
@@ -643,7 +638,8 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
-          await card.getByRole("button", { name: "Dismiss progress card" }).press("Enter");
+          await card.getByRole("button", { name: "Task progress options" }).press("Enter");
+          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
           await expect.poll(() => card.count()).toBe(0);
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
           await page.reload();
@@ -686,7 +682,7 @@ suite.define(() => {
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
         await card.getByRole("button", { name: "Task progress options" }).click();
-        const clear = card.locator('wa-dropdown-item[value="clear"]');
+        const clear = card.locator('[data-value="clear"]');
         await expect.poll(() => clear.isVisible()).toBe(true);
         await captureProof(page, "clear-separate-control-before.png");
         await clear.click();
@@ -745,8 +741,9 @@ suite.define(() => {
         const card = page.locator('[data-progress-card-placement="details"]');
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
-        expect(await card.locator('wa-dropdown-item[value="clear"]').count()).toBe(0);
-        await card.getByRole("button", { name: "Dismiss progress card" }).click();
+        expect(await card.locator('[data-value="clear"]').count()).toBe(0);
+        await card.getByRole("button", { name: "Task progress options" }).click();
+        await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
         await expect.poll(() => card.count()).toBe(0);
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
         await page.reload();

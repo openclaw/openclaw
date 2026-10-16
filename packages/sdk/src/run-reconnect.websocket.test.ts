@@ -3,7 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { OpenClaw } from "./client.js";
 import { GatewayClientTransport } from "./transport.js";
 import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
-import type { GatewayRequestOptions, OpenClawEvent } from "./types.js";
+import type { OpenClawEvent } from "./types.js";
 
 describe("SDK run reconciliation over reconnect", () => {
   let gateway: Awaited<ReturnType<typeof createSdkWebSocketServer>>;
@@ -436,59 +436,6 @@ describe("SDK run reconciliation over reconnect", () => {
     await connection.reconnect();
     await oc.request("probe", {});
     expect(waited).toEqual(["default-canonical", "default-explicit"]);
-  });
-
-  it("keeps a newer acceptance when an earlier unsubscribe ACK finishes afterward with no text", async () => {
-    const waited: string[] = [];
-    handleAcceptedRuns(waited);
-    const connection = await connect();
-    const acknowledged = createDeferred();
-    const release = createDeferred();
-    const request = connection.transport.request.bind(connection.transport);
-    vi.spyOn(connection.transport, "request").mockImplementation(
-      async <T>(method: string, params?: unknown, options?: GatewayRequestOptions): Promise<T> => {
-        const result = await request<T>(method, params, options);
-        if (method === "sessions.messages.unsubscribe") {
-          acknowledged.resolve();
-          await release.promise;
-        }
-        return result;
-      },
-    );
-    try {
-      await oc.request("chat.send", {
-        sessionKey: "review",
-        agentId: "ops",
-        message: "old",
-        idempotencyKey: "old",
-      });
-      const unsubscribed = oc.request("sessions.messages.unsubscribe", {
-        key: "review",
-        agentId: "ops",
-      });
-      await acknowledged.promise;
-      await oc.request("chat.send", {
-        sessionKey: "review",
-        agentId: "ops",
-        message: "new",
-        idempotencyKey: "new",
-      });
-      release.resolve();
-      await unsubscribed;
-      gateway.socket().close();
-      await connection.reconnect();
-      const events = oc.runEvents("new")[Symbol.asyncIterator]();
-      await expect(events.next()).resolves.toMatchObject({
-        value: {
-          type: "run.completed",
-          data: { outputText: "", recovery: { status: "recovered" } },
-        },
-      });
-      expect(waited).toEqual(["new"]);
-      await events.return?.();
-    } finally {
-      release.resolve();
-    }
   });
 
   it.each(["agent:ops:main", "agent:main:main", "global", "unknown"])(

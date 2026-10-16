@@ -1,11 +1,10 @@
-import { ContextNotFoundError } from "@solidjs/signals";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import { definePanelBridge } from "../solid-panel-bridge.tsx";
 import { TerminalPanel } from "./terminal-panel-component.tsx";
 import { CATALOG_TERMINAL_READY_TIMEOUT_MS, TerminalPanelController } from "./terminal-panel.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import dockStyles from "../dock-panel-solid.css?inline";
-import tabStyles from "../panel-tab-strip-solid.css?inline";
 import terminalStyles from "./terminal-panel.css?inline";
 
 export type TerminalInputs = Pick<
@@ -50,12 +49,9 @@ export function defineTerminalPanelElement(
     tag,
     createController,
     (controller) => {
-      try {
-        controller.context = useApplication();
-      } catch (error) {
-        if (!(error instanceof ContextNotFoundError)) {
-          throw error;
-        }
+      const application = useOptionalApplication();
+      if (application) {
+        controller.context = application;
       }
       const styles = `${dockStyles}\n${tabStyles}\n${terminalStyles}`.replaceAll(
         "openclaw-terminal-panel",

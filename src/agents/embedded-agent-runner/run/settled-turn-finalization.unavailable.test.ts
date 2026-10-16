@@ -30,7 +30,7 @@ describe("unavailable finalization through the real core backend", () => {
 
   it("preserves a failed cron turn and its transcript when finalization is unavailable", async () => {
     const expectedText =
-      "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
+      "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening. Note: some tool actions may have already been executed — please verify before retrying.";
     const admittedRunContext = await admission.admit("embedded");
     const assistant = buildEmbeddedRunnerAssistant({
       provider: "openai",
@@ -95,6 +95,7 @@ describe("unavailable finalization through the real core backend", () => {
         agentId: "main",
         sessionKey: target.sessionKey,
         sessionTarget: target,
+        config: {},
         authProfileStore: { version: 1, profiles: {} },
         resolvedApiKey: "synthetic-unused-host-key",
       },
@@ -115,13 +116,10 @@ describe("unavailable finalization through the real core backend", () => {
     expect(runAttempt).not.toHaveBeenCalled();
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.prepared.failureSignal).toBeUndefined();
-    expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: expectedText }),
-    ]);
-    expect(result.attempt.assistantTexts).toEqual([expectedText]);
-    expect(result.attempt.assistantTranscriptOwned).toBe(true);
-    expect(result.attempt.terminal).toBe(attempt.terminal);
+    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+    expect(result.attempt).toBe(attempt);
+    expect(result.attempt.assistantTexts).toEqual([]);
+    expect(result.attempt.assistantTranscriptOwned).not.toBe(true);
     const resolved = await resolveEmbeddedRunTerminal(
       makeTerminalInput({
         ...result.prepared,
@@ -143,28 +141,18 @@ describe("unavailable finalization through the real core backend", () => {
       replayInvalid: true,
       error: { message: expect.stringContaining("at capacity") },
     });
+    expect(resolved.result.payloads).toEqual([
+      expect.objectContaining({ text: expectedText, isError: true }),
+    ]);
     expect(
       resolveRunEntryTerminalOutcome({ result: resolved.result, fallbackExhausted: false }),
     ).toMatchObject({ status: "error" });
     expect(result.prepared.finalAssistantVisibleText).toBe("");
     expect(result.prepared.finalAssistantRawText).toBe("");
-    expect(result.attempt.currentAttemptAssistant).toMatchObject({
-      provider: assistant.provider,
-      model: assistant.model,
-    });
+    expect(result.attempt.currentAttemptAssistant).toBeUndefined();
     expect(JSON.stringify(attempt)).toBe(original);
     expect(attempt.terminal.kind).toBe("failed");
     const transcript = await readVisibleSessionTranscriptMessageEntries(target);
-    expect(transcript.slice(0, prefix.length)).toEqual(prefix);
-    expect(transcript.slice(prefix.length)).toMatchObject([
-      {
-        message: {
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: expectedText }],
-        },
-      },
-    ]);
-    expect(transcript).toHaveLength(prefix.length + 1);
+    expect(transcript).toEqual(prefix);
   });
 });

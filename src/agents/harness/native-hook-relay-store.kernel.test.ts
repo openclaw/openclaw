@@ -50,7 +50,7 @@ it("settles relay ownership mutations without reading or overwriting a renewed l
         database,
         [
           {
-            snapshot: { record, updatedAtMs: 1 },
+            record,
             reason: "expired",
           },
         ],

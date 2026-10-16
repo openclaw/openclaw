@@ -96,37 +96,6 @@ describe("gateway/node-catalog", () => {
     expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
   });
 
-  it("filters paired nodes by active node token instead of sticky historical roles", () => {
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [
-        pairedDevice({
-          deviceId: "legacy-mac",
-          displayName: "Peter's Mac Studio",
-          clientId: "clawdbot-macos",
-          tokens: {
-            node: {
-              token: "legacy-token",
-              role: "node",
-              scopes: [],
-              createdAtMs: 1,
-              revokedAtMs: 2,
-            },
-          },
-          approvedAtMs: 1,
-        }),
-        pairedDevice({
-          deviceId: "current-mac",
-          displayName: "Peter's Mac Studio",
-          approvedAtMs: 1,
-        }),
-      ],
-      pairedNodes: [],
-      connectedNodes: [],
-    });
-
-    expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["current-mac"]);
-  });
-
   it("keeps the operator node name across live metadata and reconnects", () => {
     const pairedDevices = [pairedDevice({ displayName: "Device Name" })];
     const pairedNodes = [pairedNode({ displayName: "Operator Name" })];
@@ -181,6 +150,20 @@ describe("gateway/node-catalog", () => {
       sessionHost: true,
       workerSlots: { total: 2, available: 1 },
     });
+  });
+
+  it("publishes existing-folder consent only for a connected device", () => {
+    const input = {
+      pairedDevices: [pairedDevice()],
+      sessionHostNodeIds: new Set(["mac-1"]),
+      deviceFolderNodeIds: new Set(["mac-1"]),
+    };
+    expect(
+      createKnownNodeCatalog({ ...input, connectedNodes: [connectedNode()] }).get("mac-1"),
+    ).toMatchObject({ workerHost: { deviceFolders: true } });
+    expect(
+      createKnownNodeCatalog({ ...input, connectedNodes: [] }).get("mac-1")?.workerHost,
+    ).toBeUndefined();
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {

@@ -125,6 +125,7 @@ export type InternalPluginLoadOverrides = {
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   const subagent: PluginRuntime["subagent"] = {
     complete: (...args) => runtime.subagent.complete(...args),
+    forkSession: (...args) => runtime.subagent.forkSession(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
@@ -155,12 +156,24 @@ function createCapabilityCatalogContextResolver(
 }
 
 export function loadOpenClawPluginsCore(
+  ...args: Parameters<typeof loadOpenClawPluginsSteps>
+): PluginRegistry {
+  const steps = loadOpenClawPluginsSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next();
+  }
+  return step.value;
+}
+
+/** One registration sequence, consumed synchronously by CLI/SDK callers or incrementally by hosts. */
+export function* loadOpenClawPluginsSteps(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
   inspectionResources?: PluginRegistryInspectionResources,
   trackActivationCleanup?: (completion: Promise<void>) => void,
-): PluginRegistry {
+): Generator<(() => Promise<void>) | undefined, PluginRegistry> {
   if (getPluginCache().retirement) {
     throw new Error("Plugin inventory has retired; begin a new plugin operation.");
   }
@@ -534,26 +547,41 @@ export function loadOpenClawPluginsCore(
         }
         continue;
       }
+      const attemptedBefore = state.pluginLoadAttemptCount;
       const input = inputs.get(manifestRecord.id);
-      const loadCandidate = () =>
-        loadRuntimePluginCandidate({
-          candidate,
-          manifestRecord,
-          context,
-          options,
-          onlyPluginIdSet,
-          dreamingSidecar,
-          validateOnly,
-          registryBuilder: builder,
-          loadPluginModule,
-          logger,
-          state,
-          preparedConfig: input?.source === candidate.source ? input.config : { input: undefined },
-        });
-      if (options.previousRegistry) {
-        withPluginRegistryPreparationScope(registry, loadCandidate);
-      } else {
-        loadCandidate();
+      const candidateSteps = loadRuntimePluginCandidate({
+        candidate,
+        manifestRecord,
+        context,
+        options,
+        onlyPluginIdSet,
+        dreamingSidecar,
+        validateOnly,
+        registryBuilder: builder,
+        loadPluginModule,
+        logger,
+        state,
+        preparedConfig: input?.source === candidate.source ? input.config : { input: undefined },
+      });
+      const runCandidate = <T>(run: () => T): T =>
+        options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
+      let candidateStep = runCandidate(() => candidateSteps.next());
+      while (!candidateStep.done) {
+        const prepare = candidateStep.value;
+        try {
+          yield () => runCandidate(prepare);
+          candidateStep = runCandidate(() => candidateSteps.next());
+        } catch (error) {
+          // Preserve the candidate's rollback and diagnostic owner on acquisition
+          // failure, rather than abandoning the whole unpublished registry.
+          candidateStep = runCandidate(() => candidateSteps.throw(error));
+        }
+      }
+      if (state.pluginLoadAttemptCount !== attemptedBefore) {
+        yield;
+        if (getPluginCache().retirement) {
+          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+        }
       }
     }
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;

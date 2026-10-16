@@ -3,6 +3,7 @@ import {
   isSessionEntryDataSql,
   observeSqliteReadSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   upsertSessionEntryCore,
@@ -18,6 +19,7 @@ describe("agent session preparation worker boundary", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const kind of ["ordinary", "failed-present", "failed-missing", "archived"] as const) {
         const sessionKey = `agent:main:preparation-${kind}`;

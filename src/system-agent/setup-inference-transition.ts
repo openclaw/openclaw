@@ -106,6 +106,8 @@ export function captureSetupInferenceFileUndo(
 /** Setup coordinates effects; the selected config and auth owners retain their own undo. */
 export async function commitSetupInferenceActivation(params: {
   preserveWorkingConnection?: boolean;
+  /** First-run clients cannot complete a restart handshake, but may load a new plugin. */
+  requireApplied?: true;
   configTarget: SetupInferenceConfigTarget;
   config: OpenClawConfig;
   activate: (assertCurrent: () => void) => Promise<SetupCredentialActivationReceipt | undefined>;
@@ -134,8 +136,8 @@ export async function commitSetupInferenceActivation(params: {
       })
     : undefined;
   const restore = async () => {
-    const rollbackCredential = () => {
-      credential?.rollback();
+    const rollbackCredential = async () => {
+      await credential?.rollback();
       credential = undefined;
     };
     const restoredApplication = application
@@ -144,7 +146,7 @@ export async function commitSetupInferenceActivation(params: {
             assertApplicationCurrent = assertCurrent;
             assertCurrent();
             // Recovery must capture auth only after restoring this activation's credential.
-            rollbackCredential();
+            await rollbackCredential();
           },
         })
       : undefined;
@@ -152,7 +154,7 @@ export async function commitSetupInferenceActivation(params: {
       configCommitted && undoConfig
         ? await undoConfig(attachRuntimeConfigWriteApplication({}, restoredApplication))
         : { config: (await params.configTarget.read()).config, written: false };
-    rollbackCredential();
+    await rollbackCredential();
     if (restoredApplication && restored.written) {
       if (!restoredApplication.claimed || (await restoredApplication.result) !== "applied") {
         throw new Error(
@@ -213,6 +215,7 @@ export async function commitSetupInferenceActivation(params: {
         const status = application.claimed ? await application.result : "unclaimed";
         if (
           !params.preserveWorkingConnection &&
+          !params.requireApplied &&
           (status === "restart-pending" || status === "applied-restart-required")
         ) {
           return true;

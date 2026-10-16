@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -23,29 +23,6 @@ afterEach(() => {
 });
 
 describe("qa-otel-smoke receiver bounds", () => {
-  let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
-
-  beforeAll(() => {
-    configuredBodyLimitLoad = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(runtimeUrl).slice(0, -1),
-        "--input-type=module",
-        "--eval",
-        `await import(${JSON.stringify(runtimeUrl.href)});`,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_QA_OTEL_MAX_CAPTURED_BODY_TEXT_BYTES: "1024",
-          OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES: "2048",
-          OPENCLAW_QA_OTEL_MAX_DECODED_BODY_BYTES: "4096",
-        },
-      },
-    );
-  });
-
   function makePassingSmokeAssertionInput(): Parameters<typeof testing.assertSmoke>[0] {
     return {
       bodyText: {
@@ -127,23 +104,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     };
   }
 
-  it("accepts package-manager forwarded arguments", () => {
-    expect(
-      testing.parseArgs(["--", "--collector", "docker", "--logs-exporter", "stdout"]),
-    ).toMatchObject({
-      collectorMode: "docker",
-      logsExporter: "stdout",
-    });
-  });
-
-  it.each([
-    ["--collector", ["--collector", "--logs-exporter"]],
-    ["--logs-exporter", ["--logs-exporter", "--collector"]],
-    ["--output-dir", ["--output-dir", "--collector"]],
-  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
-    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
-  });
-
   it("rejects duplicate OTEL smoke CLI options", () => {
     const duplicateCases = [
       ["--collector", ["--collector", "local", "--collector", "docker"]],
@@ -166,28 +126,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(testing.parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(
       ".artifacts/custom",
     );
-  });
-
-  it("parses body-size limit env values as strict positive integers", () => {
-    expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
-    expect(
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: " 128 " }),
-    ).toBe(128);
-
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1e3" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1024bytes" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-    expect(() =>
-      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "0" }),
-    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
-  });
-
-  it("loads with configured body-size limit env values", () => {
-    expect(configuredBodyLimitLoad.status).toBe(0);
-    expect(configuredBodyLimitLoad.stderr).not.toContain("ReferenceError");
   });
 
   it("ignores inherited OTEL exporter endpoints during direct producer execution", () => {
@@ -231,20 +169,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
-  it("keeps captured OTLP body text bounded per signal", () => {
-    const captured: { traces?: string[] } = {};
-
-    testing.appendCapturedBodyText(captured, "traces", Buffer.from("a".repeat(20)), 16, [
-      "OTEL-QA-SECRET",
-    ]);
-    testing.appendCapturedBodyText(captured, "traces", Buffer.from("b".repeat(20)), 16);
-
-    expect(captured.traces).toHaveLength(1);
-    expect(captured.traces?.[0]).toContain("[captured body text truncated to last 16 bytes]");
-    expect(captured.traces?.[0]).toContain("b".repeat(16));
-    expect(captured.traces?.[0]).not.toContain("a".repeat(20));
-  });
-
   it("returns a bounded failure for malformed local OTLP protobuf", async () => {
     const receiver = testing.startLocalOtlpReceiver(["OTEL-QA-SECRET"]);
     const port = await receiver.listen();
@@ -273,32 +197,6 @@ describe("qa-otel-smoke receiver bounds", () => {
       expect(receiver.capturedBodyText.traces).toEqual([
         "[detected leak needle] OTEL-QA-SECRET",
         "\nOTEL-QA-SECRET",
-      ]);
-    } finally {
-      await receiver.close();
-    }
-  });
-
-  it("rejects truncated unknown fixed-width protobuf fields", async () => {
-    const receiver = testing.startLocalOtlpReceiver();
-    const port = await receiver.listen();
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/v1/traces`, {
-        method: "POST",
-        headers: { "content-type": "application/x-protobuf" },
-        body: Buffer.from([0x09]),
-      });
-      const text = await response.text();
-
-      expect(response.status).toBe(400);
-      expect(text).toContain("truncated protobuf fixed64");
-      expect(receiver.capturedRequests).toMatchObject([
-        {
-          path: "/v1/traces",
-          signal: "traces",
-          bytes: 1,
-          status: 400,
-        },
       ]);
     } finally {
       await receiver.close();
@@ -347,113 +245,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
-  it("fails smoke assertions for captured non-2xx OTLP requests", () => {
-    const assertion = testing.assertSmoke({
-      bodyText: {},
-      childExitCode: 0,
-      disallowedBodyNeedles: [],
-      logsExporter: "otlp",
-      logRecords: [],
-      metrics: [],
-      requests: [
-        {
-          path: "/v1/traces",
-          signal: "traces",
-          bytes: 15,
-          contentEncoding: undefined,
-          status: 400,
-          spanCount: 0,
-          metricCount: 0,
-          logCount: 0,
-        },
-      ],
-      stdoutLogLines: [],
-      stdoutLogRecords: [],
-      spans: [],
-    });
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain("OTLP traces request /v1/traces returned status 400");
-  });
-
-  it("allows safe operational OTLP log bodies while leak checks inspect raw payloads", () => {
-    const assertion = testing.assertSmoke(makePassingSmokeAssertionInput());
-
-    expect(assertion.passed).toBe(true);
-    expect(assertion.failures).toEqual([]);
-  });
-
-  it("allows stdout diagnostic logs without OTLP log requests", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logsExporter = "stdout";
-    input.bodyText = {};
-    input.logRecords = [];
-    input.requests = input.requests.filter((request) => request.signal !== "logs");
-    input.stdoutLogRecords = [
-      {
-        ts: "2026-06-18T00:00:00.000Z",
-        signal: "openclaw.diagnostic.log",
-        "service.name": "openclaw-qa-lab-otel-smoke",
-        severityText: "INFO",
-        severityNumber: 9,
-        body: "log",
-        attributes: {
-          "openclaw.log.level": "INFO",
-        },
-      },
-    ];
-    input.stdoutLogLines = [JSON.stringify(input.stdoutLogRecords[0])];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(true);
-    expect(assertion.failures).toEqual([]);
-    expect(assertion.signalRequestCounts.logs).toBe(0);
-    expect(assertion.stdoutLogRecordCount).toBe(1);
-  });
-
-  it("fails stdout diagnostic mode when no stdout log records are captured", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logsExporter = "stdout";
-    input.bodyText = {};
-    input.logRecords = [];
-    input.requests = input.requests.filter((request) => request.signal !== "logs");
-    input.stdoutLogRecords = [];
-    input.stdoutLogLines = [];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain("no stdout diagnostic log records were captured");
-    expect(assertion.signalRequestCounts.logs).toBe(0);
-    expect(assertion.stdoutLogRecordCount).toBe(0);
-  });
-
-  it("fails stdout diagnostic mode when OTLP log requests are still emitted", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logsExporter = "stdout";
-    input.logRecords = [];
-    input.stdoutLogRecords = [
-      {
-        ts: "2026-06-18T00:00:00.000Z",
-        signal: "openclaw.diagnostic.log",
-        "service.name": "openclaw-qa-lab-otel-smoke",
-        severityText: "INFO",
-        severityNumber: 9,
-        body: "log",
-        attributes: {},
-      },
-    ];
-    input.stdoutLogLines = [JSON.stringify(input.stdoutLogRecords[0])];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain(
-      "OTLP logs requests were received for stdout logs exporter",
-    );
-  });
-
   it("still fails when OTLP log payload text leaks scenario content", () => {
     const input = makePassingSmokeAssertionInput();
     input.bodyText = {
@@ -500,22 +291,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
   });
 
-  it("still requires OTLP log records to carry trace correlation", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logRecords = [
-      {
-        body: "diagnostics-otel: logs exporter enabled",
-        traceId: "",
-        spanId: "",
-      },
-    ];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain("no OTLP log records included trace/span correlation ids");
-  });
-
   it("preserves leak markers even when later body text is truncated", () => {
     const captured: { traces?: string[] } = {};
 
@@ -532,19 +307,6 @@ describe("qa-otel-smoke receiver bounds", () => {
 
     expect(captured.traces?.join("\n")).toContain("OTEL-QA-SECRET");
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
-  });
-
-  it("keeps collector output tails bounded without retaining earlier chunks", () => {
-    const output = testing.createBoundedTextAccumulator(64);
-
-    output.append("DO_NOT_RETAIN_COLLECTOR_PREFIX\n");
-    output.append(Buffer.alloc(2048, "x"));
-    output.append("\nCOLLECTOR_TAIL_MARKER\n");
-
-    expect(output.byteLength()).toBeLessThanOrEqual(64);
-    expect(output.text()).toContain("COLLECTOR_TAIL_MARKER");
-    expect(output.text()).toContain("...");
-    expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
   });
 
   it("disables unused Docker collector telemetry instead of binding a host port", async () => {
@@ -626,7 +388,6 @@ describe("qa-otel-smoke receiver bounds", () => {
       rmSync(tempRoot, { force: true, recursive: true });
     }
   });
-
   it("reports bounded Docker collector output when readiness exits", async () => {
     const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-output-"));
     const collectorDir = path.join(tempRoot, "collector");

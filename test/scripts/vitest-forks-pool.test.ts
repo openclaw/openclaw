@@ -6,6 +6,7 @@ import { shouldEnableNodeDiagnosticReports } from "../../scripts/lib/node-diagno
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.ts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -234,8 +235,7 @@ export default {
             "native",
           ],
           cwd: root,
-          env: {
-            ...process.env,
+          env: testRunnerFixtureEnv({
             HOME: home,
             USERPROFILE: home,
             TMPDIR: tmp,
@@ -245,7 +245,7 @@ export default {
             NODE_OPTIONS: `--require=${preload}`,
             OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
             POOL_DIAGNOSTIC_FIXTURE_SECRET: "fixture-env-value-do-not-print",
-          },
+          }),
           signal,
         });
         const output = `${result.stdout}\n${result.stderr}`;

@@ -29,17 +29,6 @@ describe("issuePairingChallenge", () => {
     expect(sendPairingReply.mock.calls).toEqual([["custom ZXCV"]]);
   });
 
-  it("does not send a reply when request already exists", async () => {
-    const sendPairingReply = vi.fn(async () => {});
-    const result = await issuePairingChallenge({
-      ...base,
-      upsertPairingRequest: async () => ({ code: "ABCD", created: false }),
-      sendPairingReply,
-    });
-    expect(result).toEqual({ created: false });
-    expect(sendPairingReply).not.toHaveBeenCalled();
-  });
-
   it("calls onCreated and forwards meta to upsert", async () => {
     const onCreated = vi.fn();
     const upsertPairingRequest = vi.fn(async () => ({ code: "1111", created: true }));

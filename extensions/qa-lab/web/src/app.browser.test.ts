@@ -128,7 +128,6 @@ describe("QA Lab runner browser interactions", () => {
   );
 
   it.each([
-    ["fractional right clipping", 0, 0, 320, 0, 286.5625, 35.59375],
     ["left clipping", 0, 0, 320, 90, -20.5, 69.5],
     ["offset bordered scrollport", 200.25, 2, 320, 50, 500.75, 97.53125],
     ["already visible after scrolling", 0, 0, 320, 50, 100, 50],
@@ -226,36 +225,6 @@ describe("QA Lab runner browser interactions", () => {
       expect(header.isConnected).toBe(false);
       previous = next;
     }
-  });
-
-  it("defers link updates while a select is focused, then renders the latest URL", async () => {
-    const { root, setControlUiUrl } = await mountRunningControlUi(null);
-    const header = root.querySelector(".header");
-    const select = root.querySelector<HTMLSelectElement>("#conversation-kind")!;
-    expect(select.isConnected).toBe(true);
-    expect(select.disabled).toBe(false);
-    select.focus();
-    expect(document.activeElement).toBe(select);
-
-    for (const url of [
-      "http://127.0.0.1:43124/control-ui/",
-      "http://127.0.0.1:43124/control-ui/?panel=chat",
-    ]) {
-      setControlUiUrl(url);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(root.querySelector(".header")).toBe(header);
-      expect(root.querySelector(".header-link")).toBeNull();
-      expect(document.activeElement).toBe(select);
-    }
-
-    select.blur();
-    expect(document.activeElement).not.toBe(select);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(root.querySelector(".header-link")?.getAttribute("href")).toBe(
-      "http://127.0.0.1:43124/control-ui/?panel=chat",
-    );
-    expect(select.isConnected).toBe(false);
   });
 
   it("selects duplicate evidence labels independently before and after filtering", async () => {

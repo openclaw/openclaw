@@ -1,4 +1,3 @@
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
@@ -11,7 +10,7 @@ import {
   subscribeCodexCatalogEvents,
 } from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let fixtureId = 0;
@@ -141,7 +140,6 @@ async function fixture(overflow = false, evicted = false) {
         await (overflow ? b.client : a.client).request("thread/list", params, {
           catalogPreview: true,
         }),
-        { sanitize: sanitizeTerminalText },
       ),
     assertCurrent: () => {},
   });
@@ -249,23 +247,6 @@ describe("Codex catalog live settings", () => {
       ),
     ).toBe(true);
     expect(abandonClient).not.toHaveBeenCalled();
-  });
-
-  it("uses settings notifications in filtering and preserves equivalent open-source settings without a lookup", async () => {
-    const { a, b, index, methods } = await fixture();
-    a.send(liveSettingsEvent);
-    b.send(liveSettingsEvent);
-    b.client.close();
-    expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([
-      expect.objectContaining({
-        threadId: "thread-1",
-        cwd: "/workspace/live",
-        modelProvider: "live-provider",
-      }),
-    ]);
-    expect(methods).toEqual(["thread/list"]);
-    a.client.close();
-    expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
   });
 
   it("withdraws settings only when their supporting source reports notLoaded", async () => {

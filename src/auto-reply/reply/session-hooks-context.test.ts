@@ -631,13 +631,14 @@ describe("session hook context wiring", () => {
       await admission.run(() =>
         parent.run(() =>
           initSessionState({
-            ctx: { Body: "/new", SessionKey: sessionKey },
+            ctx: { Body: "/reset", SessionKey: sessionKey },
             cfg: { session: { store: storePath } } as OpenClawConfig,
             commandAuthorized: true,
           }),
         ),
       );
       expect(releases).toHaveLength(3);
+      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
       admission.release();
       await withinTest(parent.drain(), signal);
       expect(getActiveGatewayRootWorkCount()).toBe(3);
@@ -702,52 +703,8 @@ describe("session hook context wiring", () => {
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "new" });
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks explicit /reset rollovers with reason reset", async () => {
-    const sessionKey = "agent:main:telegram:direct:456";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-explicit-reset",
-      sessionKey,
-      sessionId: "reset-session",
-      text: "reset me",
-    });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/reset", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "reset" });
-  });
-
-  it("maps custom reset trigger aliases to the new-session reason", async () => {
-    const sessionKey = "agent:main:telegram:direct:alias";
-    const { storePath } = await createStoredSession({
-      prefix: "openclaw-session-hook-reset-alias",
-      sessionKey,
-      sessionId: "alias-session",
-      text: "alias me",
-    });
-    const cfg = {
-      session: {
-        store: storePath,
-        resetTriggers: ["/fresh"],
-      },
-    } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/fresh", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-    expectFields(event, { reason: "new" });
   });
 
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {

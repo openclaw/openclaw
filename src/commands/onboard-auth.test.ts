@@ -9,9 +9,12 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
-import { upsertApiKeyProfile, writeOAuthCredentials } from "../plugins/provider-auth-helpers.js";
+import {
+  upsertApiKeyProfileAsync,
+  writeOAuthCredentials,
+} from "../plugins/provider-auth-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 
 const providerEnvVarsById = vi.hoisted((): Record<string, readonly string[]> => ({
@@ -59,7 +62,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>, label =
 }
 
 function readEffectiveAuthProfiles(agentDir: string) {
-  return ensureAuthProfileStore(agentDir, {
+  return ensureAuthProfileStoreAsync(agentDir, {
     readOnly: true,
     syncExternalCli: false,
   });
@@ -117,14 +120,14 @@ describe("writeOAuthCredentials", () => {
     }
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
-      const effectiveStore = readEffectiveAuthProfiles(dir);
+      const effectiveStore = await readEffectiveAuthProfiles(dir);
       expectFields(effectiveStore.profiles?.["openai:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
       });
     }
-    const inheritedSiblingStore = readEffectiveAuthProfiles(workerAgentDir);
+    const inheritedSiblingStore = await readEffectiveAuthProfiles(workerAgentDir);
     expectFields(inheritedSiblingStore.profiles?.["openai:default"], {
       refresh: "refresh-sync",
       access: "access-sync",
@@ -156,7 +159,7 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai", creds, kidAgentDir);
 
-    const kidParsed = readEffectiveAuthProfiles(kidAgentDir);
+    const kidParsed = await readEffectiveAuthProfiles(kidAgentDir);
     expectFields(kidParsed.profiles?.["openai:default"], {
       access: "access-kid",
       type: "oauth",
@@ -233,7 +236,7 @@ describe("upsertApiKeyProfile secret refs", () => {
     agentDir: string,
     profileId: string,
   ): Promise<AuthProfileEntry | undefined> {
-    const parsed = readEffectiveAuthProfiles(agentDir);
+    const parsed = await readEffectiveAuthProfiles(agentDir);
     const profile = parsed.profiles[profileId];
     if (!profile || profile.type !== "api_key") {
       return undefined;
@@ -251,12 +254,16 @@ describe("upsertApiKeyProfile secret refs", () => {
     process.env.MOONSHOT_API_KEY = "sk-moonshot-env"; // pragma: allowlist secret
     process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
 
-    upsertApiKeyProfile({
+    await upsertApiKeyProfileAsync({
       provider: "moonshot",
       input: "sk-moonshot-env",
       agentDir: env.agentDir,
     });
-    upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env", agentDir: env.agentDir });
+    await upsertApiKeyProfileAsync({
+      provider: "openai",
+      input: "sk-openai-env",
+      agentDir: env.agentDir,
+    });
 
     expectFields(await readProfile(env.agentDir, "moonshot:default"), {
       key: "sk-moonshot-env",
@@ -267,26 +274,26 @@ describe("upsertApiKeyProfile secret refs", () => {
     });
     expect((await readProfile(env.agentDir, "openai:default"))?.keyRef).toBeUndefined();
 
-    upsertApiKeyProfile({
+    await upsertApiKeyProfileAsync({
       provider: "moonshot",
       input: "sk-moonshot-env",
       agentDir: env.agentDir,
       options: { secretInputMode: "ref" }, // pragma: allowlist secret
     });
-    upsertApiKeyProfile({
+    await upsertApiKeyProfileAsync({
       provider: "openai",
       input: "sk-openai-env",
       agentDir: env.agentDir,
       options: { secretInputMode: "ref" }, // pragma: allowlist secret
     });
-    upsertApiKeyProfile({
+    await upsertApiKeyProfileAsync({
       provider: "moonshot",
       input: "${MOONSHOT_API_KEY}",
       agentDir: env.agentDir,
       profileId: "moonshot:inline",
     });
     process.env.MOONSHOT_API_KEY = "sk-moonshot-other"; // pragma: allowlist secret
-    upsertApiKeyProfile({
+    await upsertApiKeyProfileAsync({
       provider: "moonshot",
       input: "sk-moonshot-plaintext",
       agentDir: env.agentDir,

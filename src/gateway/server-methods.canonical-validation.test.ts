@@ -1,6 +1,7 @@
 import { symlinkSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
@@ -114,6 +115,7 @@ it.each(["sessions.patch", "talk.session.create"])(
 
 it("authorizes exact rows independently of bulk validation and fences corrupt subscriptions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const insert = database.db.prepare(`INSERT INTO session_nodes
       (session_key, current_session_id, entry_json, entry_valid, updated_at)
@@ -200,7 +202,7 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       const client = sharingPolicyClient({ user: "reader", scopes: ["operator.sessions.read"] });
       const authorize = (key?: string, requestClient = client, requestContext = context) => {
         const result = authorizeGatewayRequestPreDispatch({
-          method: key ? "sessions.messages.subscribe" : "sessions.list",
+          method: key ? "sessions.describe" : "sessions.list",
           requestParams: key ? { key } : {},
           client: requestClient,
           context: requestContext,
@@ -259,7 +261,7 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       );
       expect(dirtySettled).toBe(false);
       revokedClient.connect.scopes = [];
-      unavailableGatewayMethods.add("sessions.messages.subscribe");
+      unavailableGatewayMethods.add("sessions.describe");
       releaseRow.resolve();
       expect(await Promise.race([dirty, joinedBulk.promise])).toMatchObject({ error: null });
       expect(await revoked).toMatchObject({ error: { code: "FORBIDDEN" } });
@@ -277,21 +279,28 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
         factsInvalidated: true,
       });
       subscribeSessionMessageEvents.mockClear();
-      await expect(
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "corrupt-subscribe",
-            method: "sessions.messages.subscribe",
-            params: { key: "agent:main:dirty-0" },
-          },
-          client: { ...client, connId: "corrupt-subscribe" },
-          context,
-          respond: vi.fn(),
-          isWebchatConnect: () => false,
-          extraHandlers: sessionSubscriptionHandlers,
+      const corruptRespond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "corrupt-subscribe",
+          method: "sessions.messages.subscribe",
+          params: { key: "agent:main:dirty-0" },
+        },
+        client: { ...client, connId: "corrupt-subscribe" },
+        context,
+        respond: corruptRespond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionSubscriptionHandlers,
+      });
+      expect(corruptRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid persisted session row"),
         }),
-      ).rejects.toThrow("invalid persisted session row");
+      );
       expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
     } finally {
       releaseRow.resolve();

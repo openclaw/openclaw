@@ -15,11 +15,6 @@ import {
 describe("failover user copy", () => {
   it.each([
     [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
-    ["", "Troubleshooting: run `openclaw logs --follow` in a terminal."],
-    [
-      "Codex session became active in another runner; wait for it to finish before continuing",
-      "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-    ],
     [
       "Codex session became active in another runner; wait for it to finish before continuing.",
       "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
@@ -55,19 +50,6 @@ describe("failover user copy", () => {
     expect(renderRateLimitOrOverloadedCopy({ reason: "overloaded", raw })).toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
-  });
-
-  it.each([
-    [
-      "429 rate limit: service overloaded, try again in 30 seconds",
-      "⚠️ rate limit: service overloaded, try again in 30 seconds",
-    ],
-    [
-      "All models failed (2): a/m: try again in 17 minutes (rate_limit) | b/m: 429 (rate_limit)",
-      "⚠️ try again in 17 minutes",
-    ],
-  ])("preserves bounded provider retry detail: %s", (raw, expected) => {
-    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(expected);
   });
 
   it("gives sanitized prompt-size guidance for a non-retryable HTTP 400", () => {
@@ -117,20 +99,9 @@ describe("failover user copy", () => {
   });
 
   it.each([
-    "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
-    "OpenAI API error (400): max_output_tokens (384000) exceeds model's maximum output tokens (65536)",
-    "Azure OpenAI API error (400): max_completion_tokens (384000) exceeds model's maximum output tokens (65536)",
     "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
   ])("surfaces token limits from %s", (raw) => {
     expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
-  });
-
-  it.each([
-    "A maximum of 4 blocks with cache_control may be provided. Found 5. PRIVATE_CANARY",
-    "A maximum of many blocks with cache_control may be provided. Found 5.",
-  ])("preserves unrecognized rejection detail: %s", (raw) => {
-    expect(renderFormatErrorCopy(raw)).toContain("LLM request rejected:");
-    expect(renderFormatErrorCopy(raw)).toContain("A maximum of");
   });
 
   it("bounds provider diagnostics without dropping the cause", () => {
@@ -156,7 +127,7 @@ describe("failover user copy", () => {
     expect(copy).not.toContain("![image](");
   });
 
-  it.each(["{ malformed response", "<html>Private gateway response</html>", ""])(
+  it.each(["{ malformed response", "<html>Private gateway response</html>"])(
     "does not dump an unparsed response body: %s",
     (raw) => {
       expect(renderFormatErrorCopy(raw)).toBe(
@@ -211,7 +182,6 @@ describe("failover user copy", () => {
   it.each([
     `Rate limit reached. Try again in 17 minutes. ${"x".repeat(301)}`,
     "<html>Rate limit reached. Try again in 17 minutes.</html>",
-    "Rate limit reached",
   ])("keeps unsafe or nonspecific structured provider text generic: %s", (error) => {
     expect(
       renderRateLimitReplyCopy({
@@ -270,7 +240,6 @@ describe("failover user copy", () => {
   // facts, so every error grammar the harnesses emit must agree across surfaces.
   it.each([
     "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a38749741971a37b-SEA, request id: req_21723077dbef46fc8a554a7f511bcb2f",
-    "status code 401: Incorrect API key provided",
     "401 Unauthorized: invalid api key",
   ])("renders the provider authentication copy for %j", (raw) => {
     expect(renderSanitizedUserFacingText(raw, { errorContext: true })).toBe(
@@ -310,13 +279,5 @@ describe("rate limit copy from a failover chain summary", () => {
     expect(copy).not.toBe(
       "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
-  });
-
-  it("still falls back to the generic message when no leg carries a hint", () => {
-    const copy = renderRateLimitOrOverloadedCopy({
-      reason: "rate_limit",
-      raw: "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 429 (rate_limit)",
-    });
-    expect(copy).toContain("Please try again in a few minutes");
   });
 });

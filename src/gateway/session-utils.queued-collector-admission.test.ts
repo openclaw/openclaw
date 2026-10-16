@@ -27,7 +27,7 @@ import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const { parentKey, requestContext, operatorClient } = useQueuedCollectorFixture();
 
@@ -236,7 +236,9 @@ describe("queued collector native admission", () => {
         expect(order).toEqual([]);
         expect(registration).toHaveBeenCalledOnce();
         await expect(registration.mock.results[0]?.value).resolves.toBe(false);
-        expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeDefined();
+        expect(
+          (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
+        ).toBeDefined();
         const interrupted = expectDefined(
           registryMemory.getCurrentSubagentRunOwner(registryMemory.subagentRuns, entry),
           "cancelled native collector before publication",
@@ -270,7 +272,9 @@ describe("queued collector native admission", () => {
         expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
         expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
         expect(order).toContain("deleted");
-        expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry).toBeUndefined();
+        expect(
+          (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
+        ).toBeUndefined();
       } finally {
         releasePublication.resolve();
         if (nativeRunId) {

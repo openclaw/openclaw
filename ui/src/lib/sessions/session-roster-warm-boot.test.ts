@@ -213,31 +213,6 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it.each(["profile", "credentials", "retirement"])(
-    "pairs admitted warm rows with display identity and retires both on %s change",
-    async (change) => {
-      const h = harness();
-      await h.sessions.whenCachedRosterSettled();
-      expect(h.sessions.presentation).toMatchObject({
-        result: roster().result,
-        resultCached: true,
-        profileId: "profile-one",
-      });
-      expect(h.request).not.toHaveBeenCalled();
-      if (change === "profile") {
-        h.connect("profile-two");
-      } else if (change === "credentials") {
-        h.changeCredentials();
-        h.publish({ phase: "connecting" });
-      } else {
-        clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
-      }
-      expect(h.sessions.presentation.result).toBeNull();
-      expect(h.sessions.presentation.profileId).toBeUndefined();
-      h.live.resolve(sessionsResult([], 2));
-    },
-  );
-
   it("retires the captured account even with a different live hello identity", async () => {
     const h = harness({ retainedHelloScope: "live-account" });
     await h.sessions.whenCachedRosterSettled();

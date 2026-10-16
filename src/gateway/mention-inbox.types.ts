@@ -40,14 +40,20 @@ export type MentionInbox = {
     input: UsersMentionableParams,
     publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
   ) => Promise<void>;
+  /** @deprecated Await validateRecipientsAsync. Removed in a later release after stable deprecation. */
   validateRecipients: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
     profileIds: readonly string[],
   ) => Result<readonly string[], ErrorShape>;
-  /** @deprecated Await listAsync and publish its current result. Removed in the next Plugin SDK major. */
+  validateRecipientsAsync: (
+    client: GatewayClient | null,
+    input: UsersMentionableParams,
+    profileIds: readonly string[],
+  ) => Promise<Result<readonly string[], ErrorShape>>;
+  /** @deprecated Await listAsync and publish its current result. The synchronous adapter rejects calls; its signature is removed in a later release after stable deprecation. */
   list: (client: GatewayClient | null) => Result<MentionsListResult, ErrorShape>;
-  /** @deprecated Await dismissAsync and publish its current result. Removed in the next Plugin SDK major. */
+  /** @deprecated Await dismissAsync and publish its current result. The synchronous adapter rejects calls; its signature is removed in a later release after stable deprecation. */
   dismiss: (
     client: GatewayClient | null,
     ids: readonly string[],
@@ -61,9 +67,9 @@ export type MentionInbox = {
     ids: readonly string[],
     publish: (result: Result<MentionsListResult, ErrorShape>) => undefined,
   ) => Promise<void>;
-  /** @deprecated Await recordCommittedInputAsync. Removed in the next Plugin SDK major. */
+  /** @deprecated Queues recording; await recordCommittedInputAsync for completion. */
   recordCommittedInput: (input: MentionCommittedInput) => void;
-  /** @deprecated Await invalidateAsync. Removed in the next Plugin SDK major. */
+  /** @deprecated Await invalidateAsync. The synchronous adapter rejects calls; its signature is removed in a later release after stable deprecation. */
   invalidate: (sessionKey?: string) => void;
   recordCommittedInputAsync: (input: MentionCommittedInput) => Promise<void>;
   invalidateAsync: (sessionKey?: string) => Promise<void>;

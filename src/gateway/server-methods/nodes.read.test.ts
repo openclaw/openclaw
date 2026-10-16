@@ -97,6 +97,34 @@ async function invoke(
 }
 
 describe("node read projections", () => {
+  it("uses current node bindings when pairing publications replace historical roles", async () => {
+    const current = createPairedNode("current-node");
+    const revoked = createPairedNode("revoked-node");
+    const operator = createPairedNode("operator-device");
+    // Devices without approved surfaces are still listed if they hold a current node token.
+    delete current.nodeSurface;
+    delete revoked.nodeSurface;
+    delete operator.nodeSurface;
+    revoked.tokens!.node!.revokedAtMs = 2;
+    operator.roles = ["operator"];
+    operator.tokens = {
+      operator: { token: "test-operator-token", role: "operator", scopes: [], createdAtMs: 1 },
+    };
+    const registry = new NodeRegistry();
+    const paired = [current, revoked, operator];
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot(paired));
+    resolveLocalNodeIdMock.mockResolvedValue(undefined);
+    const readIds = async () => {
+      const respond = await invoke(registry, "node.list", {});
+      expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      return respond.mock.calls[0]![1].nodes.map((node: NodeListNode) => node.nodeId);
+    };
+    expect(await readIds()).toEqual(["current-node"]);
+    current.tokens!.node!.revokedAtMs = 3;
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot(paired));
+    expect(await readIds()).toEqual([]);
+  });
+
   it("shares immutable catalog rows until pairing or live node facts change", async () => {
     const paired = createPairedNode("cached-node");
     const registry = new NodeRegistry();

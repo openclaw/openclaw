@@ -3,8 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
+import { updateAuthProfileStoreWithLock } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resolveCliAuthBindingFingerprint,
@@ -180,7 +183,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(renamed).not.toBe(primary);
   });
 
-  it("keeps strict CLI bindings stable for a known OAuth principal", () => {
+  it("keeps strict CLI bindings stable for a known OAuth principal", async () => {
     let access = "access-a";
     let refresh = "refresh-a";
     setCliAuthEpochTestDeps({
@@ -194,15 +197,15 @@ describe("resolveCliAuthEpoch", () => {
       }),
     });
 
-    const first = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+    const first = await resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
     access = "access-b";
     refresh = "refresh-b";
-    const second = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+    const second = await resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
 
     expect(second).toBe(first);
   });
 
-  it("fingerprints the materialized value selected for a profile SecretRef", () => {
+  it("fingerprints the materialized value selected for a profile SecretRef", async () => {
     const profileId = "google-gemini-cli:work";
     const credential = {
       type: "api_key" as const,
@@ -213,15 +216,15 @@ describe("resolveCliAuthEpoch", () => {
       ensureAuthProfileStore: () => createAuthProfileStoreFixture({ [profileId]: credential }),
     });
 
-    expect(
+    await expect(
       resolveCliAuthBindingFingerprint({
         provider: "google-gemini-cli",
         config: {},
         authProfileId: profileId,
         skipLocalCredential: true,
       }),
-    ).toBeUndefined();
-    const first = resolveCliAuthBindingFingerprint({
+    ).resolves.toBeUndefined();
+    const first = await resolveCliAuthBindingFingerprint({
       provider: "google-gemini-cli",
       config: {},
       authProfileId: profileId,
@@ -233,7 +236,7 @@ describe("resolveCliAuthEpoch", () => {
       },
       skipLocalCredential: true,
     });
-    const second = resolveCliAuthBindingFingerprint({
+    const second = await resolveCliAuthBindingFingerprint({
       provider: "google-gemini-cli",
       config: {},
       authProfileId: profileId,
@@ -251,7 +254,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
   });
 
-  it("excludes unused ambient CLI auth from profile-owned bindings", () => {
+  it("excludes unused ambient CLI auth from profile-owned bindings", async () => {
     let localAccess = "local-access-a";
     const profileStore: AuthProfileStore = createAuthProfileStoreFixture({
       "google-gemini-cli:work": {
@@ -274,14 +277,14 @@ describe("resolveCliAuthEpoch", () => {
       ensureAuthProfileStore: () => profileStore,
     });
 
-    const first = resolveCliAuthBindingFingerprint({
+    const first = await resolveCliAuthBindingFingerprint({
       provider: "google-gemini-cli",
       config: {},
       authProfileId: "google-gemini-cli:work",
       skipLocalCredential: true,
     });
     localAccess = "local-access-b";
-    const second = resolveCliAuthBindingFingerprint({
+    const second = await resolveCliAuthBindingFingerprint({
       provider: "google-gemini-cli",
       config: {},
       authProfileId: "google-gemini-cli:work",
@@ -289,6 +292,52 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     expect(second).toBe(first);
+  });
+
+  it("reads strict credential bindings off-thread and observes an in-process replacement", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profileId = "fixture:binding";
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [profileId]: { type: "api_key", provider: "fixture", key: "synthetic-first" },
+        },
+      });
+      const params = {
+        provider: "fixture",
+        config: {},
+        agentDir: state.agentDir(),
+        authProfileId: profileId,
+        skipLocalCredential: true,
+      };
+      const observation = observeHostDataSql();
+      let first: string | undefined;
+      try {
+        first = await resolveCliAuthBindingFingerprint(params);
+        expect(
+          observation.queries.filter((sql) => /\bauth_profile_(?:store|state)\b/iu.test(sql)),
+        ).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+      expectCliAuthEpoch(first);
+      const updated = await updateAuthProfileStoreWithLock({
+        agentDir: state.agentDir(),
+        saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+        updater(store) {
+          store.profiles[profileId] = {
+            type: "api_key",
+            provider: "fixture",
+            key: "synthetic-replacement",
+          };
+          return true;
+        },
+      });
+      expect(updated).not.toBeNull();
+      const second = await resolveCliAuthBindingFingerprint(params);
+      expectCliAuthEpoch(second);
+      expect(second).not.toBe(first);
+    });
   });
 
   it("keeps identity-less oauth auth-profile epochs scoped to the profile id", async () => {

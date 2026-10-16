@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-failures=0
-
-run_check() {
-  local label="$1"
-  shift
-
-  echo "::group::${label}"
-  if "$@"; then
-    echo "[ok] ${label}"
-  else
-    echo "::error title=${label} failed::${label} failed"
-    failures=1
-  fi
-  echo "::endgroup::"
-}
+source "$(dirname "${BASH_SOURCE[0]}")/ci-collect-checks.sh"
 
 check_groups=("$ADDITIONAL_CHECK_GROUP")
 if [[ "$ADDITIONAL_CHECK_GROUP" == "source-contracts" ]]; then
@@ -32,7 +18,7 @@ for check_group in "${check_groups[@]}"; do
       if [[ "$TYPE_GRAPH_BOUNDARY_OWNER" == "check-plan" || ( -z "$TYPE_GRAPH_BOUNDARY_OWNER" && -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ) ]]; then
         boundary_runner+=(--core-test-boundary-owner=test-types)
       fi
-      "${boundary_runner[@]}"
+      run_check "boundaries" "${boundary_runner[@]}"
       ;;
     prompt-snapshots)
       # No presence fallback: the boundary runner previously invoked
@@ -97,10 +83,10 @@ for check_group in "${check_groups[@]}"; do
         run_check "plugin-sdk:api:check (historical compatibility)" pnpm run plugin-sdk:api:check
       elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
         echo "::error title=Plugin SDK API check unavailable::Compatibility target provides neither plugin-sdk:api:diff nor plugin-sdk:api:check."
-        failures=1
+        ci_check_failures=1
       else
         echo "::error title=Plugin SDK API diff unavailable::Current CI targets must provide plugin-sdk:api:diff."
-        failures=1
+        ci_check_failures=1
       fi
       ;;
     extension-package-boundary)
@@ -118,4 +104,4 @@ for check_group in "${check_groups[@]}"; do
   esac
 done
 
-exit "$failures"
+finish_checks

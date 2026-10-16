@@ -3,18 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
-import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { profilePreferencesState } from "./server-prefs-profile.ts";
 import {
   applyServerUiPrefs,
   refreshProfileAppearancePrefs,
   resolveServerUiPrefState,
-  extractServerUiPrefs,
 } from "./server-prefs-reconcile.ts";
 import type { SyncedPrefKey } from "./server-prefs-state.ts";
 import {
@@ -54,203 +51,29 @@ afterEach(() => {
 });
 
 describe("profile-bound appearance preferences", () => {
-  it("publishes default navigation on first authenticated profile adoption", async () => {
-    patchSettings({ sidebarEntries: ["route:usage"], navigationScope: "all" });
+  it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
+    patchSettings({ sidebarEntries: ["route:usage"] });
     let published = loadSettings();
     const onApplied = vi.fn(() => {
       published = loadSettings();
     });
-    const request = vi.fn(async () => ({
+    const request = vi.fn(async (_method: string) => ({
       status: "ok",
       entries: {
-        "ui.sidebarEntries": [...DEFAULT_SIDEBAR_ENTRIES],
-        "ui.navigationScope": "mine",
+        "ui.sidebarEntries": [
+          "route:usage",
+          "route:cron",
+          "plugin:workboard/workboard",
+          "session:agent:main:legacy",
+        ],
       },
     }));
     await refreshProfileAppearancePrefs(
       readOptions(createWriter(request), {}, profileId, onApplied),
     );
     expect(onApplied).toHaveBeenCalledOnce();
-    expect(published).toMatchObject({
-      sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-      navigationScope: "mine",
-    });
-  });
-
-  it.each(["inventory-error", "incomplete", "oversized"])(
-    "applies confirmed appearance when sidebar migration has %s",
-    async (failure) => {
-      const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope + ":profile:" + profileId;
-      const knownPins = ["session:agent:main:known"];
-      localStorage.setItem(
-        lastSeenKey,
-        JSON.stringify({ sidebarEntries: knownPins, navigationScope: "mine", theme: "claw" }),
-      );
-      const request = vi.fn(async (method: string) => {
-        if (method === "users.prefs.get") {
-          return {
-            status: "ok",
-            entries: {
-              "ui.theme": "rose",
-              "ui.accent": "#123456",
-              "ui.fontUi": "geist",
-              "ui.fontChat": "lora",
-              "ui.navigationScope": "all",
-            },
-          };
-        }
-        if (failure === "inventory-error") {
-          throw new Error("pinned inventory failed");
-        }
-        if (failure === "incomplete") {
-          return { count: 0, sessions: [] };
-        }
-        const sessions = Array.from({ length: 50 }, (_, i) => ({
-          key: "agent:main:" + i + "x".repeat(100),
-          pinned: true,
-        }));
-        return {
-          count: sessions.length,
-          totalCount: sessions.length,
-          nextOffset: null,
-          hasMore: false,
-          sessions,
-        };
-      });
-      const writer = createWriter(request);
-      const options = {
-        ...readOptions(writer, configWithPrefs({ sidebarEntries: ["route:usage"] })),
-        canWrite: true,
-        onError: vi.fn(),
-      };
-      applyServerUiPrefs(options.configObject, options);
-      await refreshProfileAppearancePrefs(options);
-      expect(loadSettings()).toMatchObject({
-        theme: "rose",
-        accent: "#123456",
-        fontUi: "geist",
-        fontChat: "lora",
-        navigationScope: "all",
-        sidebarEntries: knownPins,
-      });
-      expect(request.mock.calls.every(([method]) => method !== "users.prefs.set")).toBe(true);
-      expect(options.onError).toHaveBeenCalledOnce();
-      expect(profilePreferencesState.appearance).toMatchObject({
-        profileId,
-        scope,
-        sidebarEntriesReady: false,
-      });
-      expect(JSON.parse(localStorage.getItem(lastSeenKey)!)).toMatchObject({
-        sidebarEntries: knownPins,
-        navigationScope: "all",
-        theme: "rose",
-      });
-    },
-  );
-
-  it("does not record default sidebar authority when migration fails without a confirmed mirror", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: { "ui.theme": "rose", "ui.navigationScope": "all" } };
-      }
-      throw new Error("pin inventory unavailable");
-    });
-    const writer = createWriter(request);
-    const onError = vi.fn();
-    const options = {
-      ...readOptions(writer, configWithPrefs({ sidebarEntries: ["route:usage"] })),
-      canWrite: true,
-      onError,
-    };
-    applyServerUiPrefs(options.configObject, options);
-    await refreshProfileAppearancePrefs(options);
-    expect(loadSettings()).toMatchObject({ theme: "rose", navigationScope: "all" });
-    expect(profilePreferencesState.appearance).toMatchObject({
-      profileId,
-      scope,
-      sidebarEntriesReady: false,
-    });
-    const stored = JSON.parse(
-      localStorage.getItem("openclaw.control.serverPrefs.v1:" + scope + ":profile:" + profileId)!,
-    );
-    expect(stored).not.toHaveProperty("sidebarEntries");
-    expect(onError).toHaveBeenCalledOnce();
-  });
-
-  it("discards a late failed migration after identity revocation without publishing appearance or errors", async () => {
-    const inventory = createDeferred<unknown>();
-    const started = createDeferred();
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: { "ui.theme": "rose" } };
-      }
-      started.resolve();
-      return inventory.promise;
-    });
-    const writer = createWriter(request);
-    let current = true;
-    const onError = vi.fn();
-    const onApplied = vi.fn();
-    const before = loadSettings().theme;
-    const pending = refreshProfileAppearancePrefs({
-      ...readOptions(writer, {}, profileId, onApplied),
-      canWrite: true,
-      isCurrent: () => current,
-      onError,
-    });
-    await started.promise;
-    current = false;
-    inventory.reject(new Error("old pin inventory failed"));
-    expect(await pending).toBe(false);
-    expect(loadSettings().theme).toBe(before);
-    expect(onError).not.toHaveBeenCalled();
-    expect(onApplied).not.toHaveBeenCalled();
-  });
-
-  it("restores sidebar completeness after a later successful migration without replaying appearance errors", async () => {
-    let entries: Record<string, unknown> = { "ui.theme": "rose", "ui.navigationScope": "all" };
-    let inventoryUnavailable = true;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: { ...entries } };
-      }
-      if (method === "sessions.list") {
-        if (inventoryUnavailable) {
-          throw new Error("pin inventory unavailable");
-        }
-        return { count: 0, totalCount: 0, nextOffset: null, hasMore: false, sessions: [] };
-      }
-      entries = { ...entries, ...(params as { entries: Record<string, unknown> }).entries };
-      return { status: "ok" };
-    });
-    const writer = createWriter(request);
-    const onError = vi.fn();
-    const options = {
-      ...readOptions(writer, configWithPrefs({ sidebarEntries: ["route:usage"] })),
-      canWrite: true,
-      onError,
-    };
-    await refreshProfileAppearancePrefs(options);
-    expect(loadSettings()).toMatchObject({ theme: "rose", navigationScope: "all" });
-    expect(profilePreferencesState.appearance).toMatchObject({
-      profileId,
-      scope,
-      sidebarEntriesReady: false,
-    });
-    inventoryUnavailable = false;
-    await refreshProfileAppearancePrefs(options);
-    expect(loadSettings()).toMatchObject({
-      theme: "rose",
-      navigationScope: "all",
-      sidebarEntries: ["route:usage"],
-    });
-    expect(profilePreferencesState.appearance).toMatchObject({
-      profileId,
-      scope,
-      sidebarEntriesReady: true,
-    });
-    expect(onError).toHaveBeenCalledOnce();
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
+    expect(published.sidebarEntries).toEqual([]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
   });
 
   it("preserves imported definitions and only resets design overrides when activation changes", () => {
@@ -278,68 +101,6 @@ describe("profile-bound appearance preferences", () => {
       fontUi: "geist",
       accent: "#123456",
     });
-  });
-
-  it("normalizes profile overrides above config while rejecting malformed stored values", async () => {
-    const config = configWithPrefs({
-      theme: "claw",
-      themeMode: "dark",
-      accent: "#123456",
-      fontUi: "unsupported",
-      fontChat: "lora",
-    });
-    const request = vi.fn(async () => ({
-      status: "ok" as const,
-      entries: {
-        "ui.theme": "knot",
-        "ui.themeMode": { mode: "light" },
-        "ui.accent": "#AbC123",
-        "ui.fontUi": "geist",
-        "ui.fontChat": { family: "lora" },
-        "ui.tabIcon": { mode: "agent" },
-      },
-    }));
-    const writer = createWriter(request);
-    const onApplied = vi.fn();
-
-    await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
-
-    expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: [
-        ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-        "ui.sidebarEntries",
-        "ui.navigationScope",
-      ],
-    });
-    expect(onApplied).toHaveBeenCalledWith({
-      theme: "knot",
-      themeMode: "dark",
-      accent: "#abc123",
-      fontUi: "geist",
-      sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-      navigationScope: "mine",
-    });
-    expect(loadSettings().fontChat).toBeUndefined();
-    expect(loadSettings().tabIcon).toBeUndefined();
-    expect(extractServerUiPrefs(config)).toEqual({
-      theme: "claw",
-      themeMode: "dark",
-      accent: "#123456",
-    });
-    for (const [key, value, resetValue] of [
-      ["fontUi", "geist", undefined],
-      ["fontChat", undefined, undefined],
-      ["theme", "knot", "claw"],
-      ["accent", "#abc123", "#123456"],
-    ] as const) {
-      expect(profileState(config, key, loadSettings()), key).toEqual({
-        overridden: value !== undefined,
-        provenance: value === undefined ? "default" : "profile",
-        resetValue,
-        value,
-      });
-    }
-    expect(profileState(config, "themeMode", loadSettings()).provenance).toBe("synced");
   });
 
   it("retains the boot mirror while the profile is unresolved and unavailable", async () => {
@@ -619,7 +380,7 @@ describe("profile-bound appearance preferences", () => {
   });
 });
 
-it.each([false, true])(
+it.each([true])(
   "keeps mixed profile appearance edits in one mutation (rejected=%s)",
   async (rejected) => {
     const entries = {

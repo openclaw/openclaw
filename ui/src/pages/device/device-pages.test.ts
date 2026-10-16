@@ -299,26 +299,22 @@ describe("native device settings pages", () => {
     expect(page.textContent).not.toContain("Keep computer awake");
   });
 
-  it("inspects Chrome on entry and focus without installing, and keeps explicit refresh", async () => {
+  it("leaves Chrome data untouched on entry and focus until explicit refresh", async () => {
     const { capability } = createCapability();
     const page = await mount("openclaw-device-page", capability);
     const setup = page.querySelector<DevicePageElement>("openclaw-native-chrome-setup")!;
     await setup.updateComplete;
-    await vi.waitFor(() => expect(setup.textContent).toContain("Setup required on this device"));
-    expect(capability.setupChromeExtension).toHaveBeenCalledExactlyOnceWith("inspect");
+    expect(capability.setupChromeExtension).not.toHaveBeenCalled();
     window.dispatchEvent(new Event("focus"));
-    await vi.waitFor(() => expect(capability.setupChromeExtension).toHaveBeenCalledTimes(2));
+    flush();
     await setup.updateComplete;
+    expect(capability.setupChromeExtension).not.toHaveBeenCalled();
     const refresh = [...setup.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "Refresh setup status",
     )!;
     refresh.click();
     await vi.waitFor(() => expect(setup.textContent).toContain("Setup required on this device"));
-    expect(capability.setupChromeExtension.mock.calls).toEqual([
-      ["inspect"],
-      ["inspect"],
-      ["inspect"],
-    ]);
+    expect(capability.setupChromeExtension).toHaveBeenCalledExactlyOnceWith("inspect");
     expect(capability.installChromeExtension).not.toHaveBeenCalled();
   });
   it.each(["openclaw-device-page", "openclaw-device-permissions-page"] as const)(
@@ -730,6 +726,7 @@ describe("native device settings pages", () => {
   it.each([
     ["screenRecording", "Screen Recording", "notDetermined", "Not granted", "Grant…"],
     ["accessibility", "Accessibility", "notDetermined", "Not granted", "Grant…"],
+    ["eventPosting", "Event Posting", "notDetermined", "Not granted", "Grant…"],
   ] as const)(
     "requests %s access and retains explicit settings recovery without assuming a prior denial",
     async (id, title, status, label, action) => {

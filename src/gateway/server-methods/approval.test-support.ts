@@ -9,7 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import type { ExecApprovalRecord } from "../exec-approval-manager.js";
-import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.js";
+import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
@@ -21,12 +21,7 @@ import {
   bindGatewayRequestHandlerMutationAuthority,
   bindWebSocketRequestMutationAuthority,
 } from "./session-mutation-guards.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayRequestOptions,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
 
 export function getOperatorApproval(
   params: Parameters<typeof getOperatorApprovalDetailedInDatabase>[0],
@@ -216,39 +211,4 @@ export function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
   };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-export function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-  scopes?: string[];
-  approvalRuntime?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: params.scopes ?? ["operator.approvals"],
-    },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-  } as GatewayClient;
-}
-
-export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
 }

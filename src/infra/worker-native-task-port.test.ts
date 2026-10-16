@@ -2,13 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
   NativeWorkerRequest,
   NativeWorkerRuntime,
 } from "./worker-native-lifecycle.types.js";
+
+// These endpoints run on the Gateway main thread; Vitest itself runs in a worker.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -83,6 +90,9 @@ function fixture() {
 describe("retained worker direct task transport", () => {
   it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
     const { worker, port, peer, context, controls } = fixture();
+    const before = getWorkerMessageMetrics().find(
+      (entry) => entry.kind === "other" && entry.direction === "from_worker",
+    );
     const events: unknown[] = [];
     worker.on("message", (message) => events.push([message, context.getStore()]));
     worker.on("started", () => {
@@ -102,6 +112,17 @@ describe("retained worker direct task transport", () => {
       ["buffered", "constructor"],
       ["queued", "constructor"],
     ]);
+    expect(
+      getWorkerMessageMetrics().find(
+        (entry) => entry.kind === "other" && entry.direction === "from_worker",
+      ),
+    ).toEqual({
+      kind: "other",
+      direction: "from_worker",
+      messages: (before?.messages ?? 0) + 2,
+      payloadBytes: (before?.payloadBytes ?? 0) + 28,
+      unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+    });
   });
 
   it("discards buffered data when its native owner fails before startup without inventing exit", async () => {

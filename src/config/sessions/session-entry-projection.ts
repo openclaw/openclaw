@@ -17,6 +17,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingExecNotifications: undefined,
   restartRecoveryOperatorSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
@@ -33,6 +34,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingExecNotifications",
   "restartRecoveryOperatorSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
@@ -74,6 +76,7 @@ export function projectPublicSessionEntryPatch(
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
 export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  usageReport: undefined,
   inputTokens: undefined,
   outputTokens: undefined,
   cacheRead: undefined,

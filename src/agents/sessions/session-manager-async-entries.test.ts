@@ -1,10 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
@@ -13,6 +15,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -277,6 +280,47 @@ it("propagates queued write revocation and user/custom commit failures without p
     expect(await loadTranscriptEvents(target)).toEqual(before);
     const recovered = await manager.appendCustomEntryAsync("after-failure");
     expect(manager.getEntry(recovered)?.parentId).toBe(seed);
+  });
+});
+
+it("adopts a compaction owner's canonical parent without a host reload", async () => {
+  await withOpenClawTestState({ label: "async-compaction-parent" }, async (state) => {
+    const { target, manager } = await openFixture(state, "compaction-parent");
+    const first = expectDefined(
+      await manager.appendMessageAsync({ role: "user", content: "Retained", timestamp: 1 }),
+      "retained entry id",
+    );
+    const tail = await manager.appendCustomEntryAsync("side-history");
+    const sql = observeHostDataSql();
+    let boundary: string;
+    try {
+      boundary = await withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
+            prepared: {
+              ...prepared,
+              event: { ...prepared.event, parentId: first },
+              appendIntent: undefined,
+            },
+            transcriptByteCompactionLatch: {
+              activeBytes: 2048,
+              sessionId: target.sessionId,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("Summary", first, 100),
+      );
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(manager.getBranch().map(({ id }) => id)).toEqual([first, boundary]);
+    expect(manager.getEntry(tail)).toMatchObject({ id: tail });
+    expect(manager.getEntry(boundary)).toMatchObject({ parentId: first, type: "compaction" });
+    const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+    expect(reopened.getEntries()).toEqual(manager.getEntries());
+    expect(reopened.getBranch()).toEqual(manager.getBranch());
   });
 });
 

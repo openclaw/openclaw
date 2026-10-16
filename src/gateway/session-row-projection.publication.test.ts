@@ -5,10 +5,8 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.test-support.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
@@ -29,8 +27,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -158,6 +158,14 @@ it.each(["native", "worker"] as const)(
           sessionChanges.emit({ ...scope, storePath: warm!.storeTarget.storePath });
           expect(projection.sharingTarget(query)).toBeNull();
           expect(projection.capture(query)?.publishedSource).toBeUndefined();
+          expect(() => projection.selectEntries(query)).toThrow(SessionRowFactsPending);
+          const refreshed = await listProjectedSessions({
+            projection,
+            opts: { includePeople: true },
+          });
+          expect(refreshed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
+            "Updated label",
+          );
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();
@@ -271,7 +279,9 @@ it("retains newer cached native metadata through reentrant identity publication"
     let stopRows = () => {};
     try {
       await list();
-      expect(Boolean(readCommittedSessionEntryCache(database.db))).toBe(true);
+      expect(
+        Boolean(readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))),
+      ).toBe(true);
       const originalGeneration = projection.capture({
         agentId: scope.agentId,
         key: scope.sessionKey,
@@ -335,7 +345,9 @@ it("publishes maintenance removals before row listeners recreate the key", async
         if (event.kind === "delete" && event.previous.sessionKeys.includes(scope.sessionKey)) {
           identities.push(`delete:${event.previous.sessionId}`);
           removalState.push({
-            cachedId: readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId,
+            cachedId: readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+              scope.sessionKey,
+            )?.sessionId,
             storedId: loadSessionEntry(scope)?.sessionId,
           });
         } else if (
@@ -371,10 +383,12 @@ it("publishes maintenance removals before row listeners recreate the key", async
     });
     const diagnostics = {};
     try {
-      expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)?.sessionId).toBe(
-        "removed",
-      );
-      await runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
+      expect(
+        readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
+          scope.sessionKey,
+        )?.sessionId,
+      ).toBe("removed");
+      await runSqliteSessionReclamation({ plan, diagnostics });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(callbackErrors).toEqual([]);
       expect(identities).toEqual(["delete:removed", "create:replacement"]);

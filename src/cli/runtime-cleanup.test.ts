@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { registerSessionResourceCleanup } from "../../packages/ai/src/session-resources.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js";
+import {
+  closeCliResources,
+  getPendingCliDisposers,
+  runCliDisposer,
+  waitForPendingCliDisposers,
+} from "./runtime-cleanup.js";
 
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
@@ -43,6 +49,34 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+it.each([false, true])(
+  "reports a failed disposer without preventing later cleanup (after deadline: %s)",
+  async (afterDeadline) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = createDeferredCore();
+    const events: string[] = [];
+    const cleanup = runCliDisposer("failed-resource", async () => {
+      await pending.promise;
+      throw new Error("resource close failed");
+    });
+    if (afterDeadline) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(cleanup).resolves.toBeUndefined();
+    }
+    pending.resolve();
+    await cleanup;
+    await waitForPendingCliDisposers();
+    await runCliDisposer("next-resource", async () => {
+      events.push("next-resource");
+    });
+    expect(console.error).toHaveBeenCalledWith(
+      "CLI cleanup failed: failed-resource: resource close failed",
+    );
+    expect(console.error).toHaveBeenCalledTimes(afterDeadline ? 2 : 1);
+    expect(events).toEqual(["next-resource"]);
+  },
+);
 
 it("continues later cleanup when a harness disposer never settles", async () => {
   const gate = createDeferredCore();
@@ -130,4 +164,18 @@ it("stops scheduling and joins admitted callbacks before dependent CLI resources
 it("leaves watcher retirement to an embedded caller without process ownership", async () => {
   await closeCliResources();
   expect(skillsClosed).not.toHaveBeenCalled();
+});
+
+it("retires provider session resources after a one-shot command", async () => {
+  const expired = vi.fn();
+  const retainedSocketTimer = setTimeout(expired, 60_000);
+  const unregister = registerSessionResourceCleanup(() => clearTimeout(retainedSocketTimer));
+  try {
+    await closeCliResources();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(expired).not.toHaveBeenCalled();
+  } finally {
+    unregister();
+    clearTimeout(retainedSocketTimer);
+  }
 });

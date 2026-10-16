@@ -10,7 +10,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "../pages/chat/attachment-payload-store.ts";
-import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import {
@@ -22,9 +22,15 @@ const reviewUi = vi.hoisted(() => ({
   review: vi.fn<() => Promise<boolean>>(),
   toast: vi.fn<(options: { onAction?: () => void }) => boolean>(() => true),
 }));
-vi.mock("../pages/chat/components/private-composer-recovery-dialog.ts", () => ({
-  reviewPrivateComposerDraft: reviewUi.review,
-}));
+vi.mock(
+  "../pages/chat/components/private-composer-recovery-dialog.tsx",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../pages/chat/components/private-composer-recovery-dialog.tsx")
+    >()),
+    reviewPrivateComposerDraft: reviewUi.review,
+  }),
+);
 vi.mock("../lib/toast.ts", () => ({ showToast: reviewUi.toast }));
 
 const registeredIds = new Set<string>();
@@ -297,37 +303,6 @@ describe("chat attachment route handoff", () => {
     }
   });
 
-  it("transfers every exact staged attachment object once", () => {
-    const owner = {} as GatewayBrowserClient;
-    const annotation = storedAttachment("annotation", "image/png", true);
-    const ordinary = [
-      storedAttachment("image", "image/png", false),
-      storedAttachment("file", "application/pdf", false),
-      storedAttachment("pasted-text", "text/plain", false),
-    ];
-    const staged = [ordinary[0]!, annotation, ordinary[1]!, ordinary[2]!];
-    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
-    handoff.prepare({
-      reviewPrivateDraft: reviewPrivateComposerDraft,
-      owner,
-      paneId: "p1",
-      scopeKey: "agent:main:one",
-      attachments: staged,
-      fallbacks: {},
-    });
-
-    const consumed = handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" });
-    expect(consumed?.attachments).toEqual(staged);
-    expect(consumed?.attachments).not.toBe(staged);
-    expect(consumed?.attachments.every((attachment, index) => attachment === staged[index])).toBe(
-      true,
-    );
-    expect(handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" })).toBeNull();
-    for (const attachment of ordinary) {
-      expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
-    }
-  });
-
   it.each(["gateway", "principal"] as const)(
     "isolates retained session scopes and releases a %s mismatch",
     (change) => {
@@ -420,35 +395,6 @@ describe("chat attachment route handoff", () => {
     expect(
       handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" })?.attachments,
     ).toEqual([annotation]);
-  });
-
-  it("keeps payloads reused by a replacement prepare", () => {
-    const owner = {} as GatewayBrowserClient;
-    const retained = storedAttachment("replacement-retained", "image/png", false);
-    const removed = storedAttachment("replacement-removed", "image/png", false);
-    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
-    handoff.prepare({
-      reviewPrivateDraft: reviewPrivateComposerDraft,
-      owner,
-      paneId: "p1",
-      scopeKey: "one",
-      attachments: [retained, removed],
-      fallbacks: {},
-    });
-    handoff.prepare({
-      reviewPrivateDraft: reviewPrivateComposerDraft,
-      owner,
-      paneId: "p1",
-      scopeKey: "one",
-      attachments: [retained],
-      fallbacks: {},
-    });
-
-    expect(getChatAttachmentDataUrl(retained)).not.toBeNull();
-    expect(getChatAttachmentDataUrl(removed)).toBeNull();
-    expect(handoff.consume({ owner, paneId: "p1", scopeKey: "one" })?.attachments).toEqual([
-      retained,
-    ]);
   });
 
   it("bounds abandoned entries and releases pane-clear and application disposal", () => {

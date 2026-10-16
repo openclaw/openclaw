@@ -31,6 +31,7 @@ const {
   sessionTabRegistryMocks: sessionTabs,
   toolCommonMocks: runtime,
   resetBrowserToolMocks,
+  mockSingleBrowserProxyNode,
 } = await import("./browser-tool.test-support.js");
 
 // mock-isolation: Keep registration lazy without starting the real browser service.
@@ -69,18 +70,6 @@ function durableOwnership(nativeTargetId: string) {
 
 function nodeReply(result: Record<string, unknown>, route?: BrowserProxyRoute) {
   return { ok: true, payload: { result, ...(route ? { route } : {}) } };
-}
-
-function mockSingleBrowserProxyNode() {
-  nodes.listNodes.mockResolvedValue([
-    {
-      nodeId: "node-1",
-      displayName: "Browser Node",
-      connected: true,
-      caps: ["browser"],
-      commands: ["browser.proxy", "browser.proxy.upload.v1"],
-    },
-  ]);
 }
 
 function setResolvedBrowserProfiles(
@@ -263,6 +252,24 @@ it.each<{
   exactBody?: Record<string, unknown>;
   doctor?: true;
 }>([
+  {
+    name: "requested open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: 60_000 },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 75_000,
+    nodeTimeout: 70_000,
+    params: { path: "/tabs/open", timeoutMs: 65_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
+  },
+  {
+    name: "default open navigation",
+    input: { action: "open", url: "https://example.com/slow" },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 70_000,
+    nodeTimeout: 65_000,
+    params: { path: "/tabs/open", timeoutMs: 60_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
   {
     name: "requested download wait",
     input: { action: "waitfordownload", path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
@@ -1095,16 +1102,6 @@ it.each([
     expect(client.browserCloseTab).not.toHaveBeenCalled();
   },
 );
-
-it("preserves disconnected node tab availability in the tool result", async () => {
-  mockSingleBrowserProxyNode();
-  gateway.callGatewayTool.mockResolvedValueOnce(nodeReply({ running: false, tabs: [] }));
-
-  const result = await execute({ action: "tabs", target: "node" });
-
-  expect(result?.details).toMatchObject({ running: false, tabCount: 0, tabs: [] });
-  expect(firstResultText(result)).toContain('"running": false');
-});
 
 it("touches the canonical dialog target after automatic host fallback", async () => {
   mockSingleBrowserProxyNode();

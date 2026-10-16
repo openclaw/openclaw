@@ -5,6 +5,10 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
@@ -143,9 +147,23 @@ describe("buildStatusText channel features", () => {
 
 describe("buildStatusText global subagent scope", () => {
   beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
-  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+  afterEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
+  });
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
+    const cfg: StatusTextParams["cfg"] = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          research: {},
+          ops: {},
+        },
+      },
+      session: { scope: "global" },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["research", "ops"]) {
       seedSubagentRunForReadTest({
         runId: `status-global-${agentId}`,
@@ -162,16 +180,7 @@ describe("buildStatusText global subagent scope", () => {
     }
 
     const text = await renderTelegramStatus({
-      cfg: {
-        agents: {
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: {
-            research: {},
-            ops: {},
-          },
-        },
-        session: { scope: "global" },
-      },
+      cfg,
       sessionEntry: { sessionId: "global-status", updatedAt: 0 },
       sessionKey: "global",
       agentId: "research",
@@ -304,6 +313,14 @@ describe("session status cost line", () => {
     );
   });
 
+  it("preserves existing usage when the session cost cache fails", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
+
+    await expect(
+      appendSessionCostLine("existing usage", {}, "main", sessionEntry, storePath),
+    ).resolves.toBe("existing usage");
+  });
+
   it("omits a stale cached summary", async () => {
     mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
       cacheStatus: {
@@ -357,39 +374,44 @@ describe("session status cost line", () => {
 });
 
 describe("buildStatusText thinking facts", () => {
-  it("keeps the prepared thinking level for a discovered Ollama reasoning model", async () => {
-    const text = await buildStatusText(
-      statusParams({
-        sessionEntry: {
-          sessionId: "wa-ollama-think",
-          updatedAt: 0,
-          thinkingLevel: "high",
-          modelOverride: "glm-5.2:cloud",
-          providerOverride: "ollama",
-        },
-        statusChannel: "whatsapp",
-        provider: "ollama",
-        model: "glm-5.2:cloud",
-        thinkingCatalog: [
-          {
-            provider: "ollama",
-            id: "glm-5.2:cloud",
-            reasoning: true,
+  it.each([
+    { reasoning: true, expected: "think high" },
+    { reasoning: false, expected: "think off (requested high; clamped)" },
+  ])(
+    "shows requested and effective thinking for an Ollama model (reasoning=$reasoning)",
+    async ({ reasoning, expected }) => {
+      const text = await buildStatusText(
+        statusParams({
+          sessionEntry: {
+            sessionId: "wa-ollama-think",
+            updatedAt: 0,
+            thinkingLevel: "high",
+            modelOverride: "glm-5.2:cloud",
+            providerOverride: "ollama",
           },
-        ],
-        resolvedThinkLevel: "high",
-        resolvedReasoningLevel: "on",
-        resolveDefaultThinkingLevel: async () => "high",
-        pluginHealthLineOverride: "Plugins: test",
-        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-        modelAuthOverride: "local",
-        activeModelAuthOverride: "local",
-      }),
-    );
+          statusChannel: "whatsapp",
+          provider: "ollama",
+          model: "glm-5.2:cloud",
+          thinkingCatalog: [
+            {
+              provider: "ollama",
+              id: "glm-5.2:cloud",
+              reasoning,
+            },
+          ],
+          resolvedThinkLevel: "high",
+          resolvedReasoningLevel: "on",
+          resolveDefaultThinkingLevel: async () => "high",
+          pluginHealthLineOverride: "Plugins: test",
+          primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+          modelAuthOverride: "local",
+          activeModelAuthOverride: "local",
+        }),
+      );
 
-    expect(text).toContain("think high");
-    expect(text).not.toMatch(/think\s+off\b/);
-  });
+      expect(text).toContain(expected);
+    },
+  );
 });
 
 describe("buildStatusText lazy loader retry", () => {

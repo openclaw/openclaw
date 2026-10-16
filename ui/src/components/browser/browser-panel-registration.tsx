@@ -1,8 +1,8 @@
+import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import { definePanelBridge } from "../solid-panel-bridge.tsx";
 import type { BrowserPanelInputs, BrowserPanelPresentation } from "./browser-panel-presentation.ts";
 import { BrowserPanelContent } from "./browser-panel-solid.tsx";
 import dockStyles from "../dock-panel-solid.css?inline";
-import tabStyles from "../panel-tab-strip-solid.css?inline";
 import browserStyles from "./browser-panel.css?inline";
 
 export type { BrowserPanelInputs } from "./browser-panel-presentation.ts";

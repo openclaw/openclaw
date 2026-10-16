@@ -192,7 +192,10 @@ it.skipIf(process.platform === "win32").each(["unrecognized child", "foreign ali
       if (child.kind !== "acquired") {
         throw new Error("Missing refused child fixture");
       }
-      const bound = f.store.bindUpdateChildren([child.lease], process.ppid);
+      const bound = f.store.bindUpdateChildren(
+        [child.lease],
+        f.store.processIdentity(process.ppid),
+      );
       if (!bound) {
         throw new Error("Missing bound child fixture");
       }

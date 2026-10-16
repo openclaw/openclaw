@@ -3,7 +3,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
 import {
   McpAppViewController,
@@ -57,6 +57,10 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       { equals: (a, b) => a.every((value, index) => value === b[index]) },
     );
     createEffect(presentation, () => controller.updatePresentation());
+    createEffect(
+      () => props.surface,
+      () => controller.updateReservedHeight(),
+    );
     onCleanup(() => {
       controllers.delete(host);
       void controller.teardown();
@@ -116,6 +120,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       title: { default: "" },
       deepLink: { default: undefined, attribute: false },
       onRelaunch: { default: undefined, attribute: false },
+      onHeightChange: { default: undefined, attribute: false },
       relaunching: { default: false },
       displayMode: { default: "inline", attribute: "display-mode", reflect: true },
     },

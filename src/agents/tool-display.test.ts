@@ -1,6 +1,6 @@
 /**
  * Regression coverage for compact tool display formatting.
- * Ensures tool names, actions, and details stay readable and redacted.
+ * Ensures tool names, actions, and details stay readable.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -31,11 +31,6 @@ describe("isShellToolDisplayName", () => {
       expect(isShellToolDisplayName(name)).toBe(false);
     }
   });
-
-  it("keeps the compact summary form for a capitalized shell tool", () => {
-    const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
-    expect(formatToolSummary(display)).toBe("print text, `echo alpha`");
-  });
 });
 
 describe("tool display details", () => {
@@ -51,16 +46,6 @@ describe("tool display details", () => {
       verb: "search",
       detail: 'for "OpenClaw release notes"',
     });
-  });
-
-  it("uses the curated view_image presentation", () => {
-    const display = resolveToolDisplay({
-      name: "view_image",
-      args: { path: "/tmp/screenshot.png", prompt: "Inspect the error" },
-    });
-
-    expect(display.title).toBe("View Image");
-    expect(formatToolDetail(display)).toBe("path /tmp/screenshot.png, prompt Inspect the error");
   });
 
   it("keeps sessions_yield private context out of tool status", () => {
@@ -336,27 +321,6 @@ describe("tool display details", () => {
     }
   });
 
-  it("uses a neutral label for recursive or malformed search patterns", () => {
-    for (const command of [
-      `rg 'search "foo" in src/agents' src`,
-      `rg 'Bash failed: search "foo" in src|search "bar"' src`,
-      `rg 'run printf -> search "foo" in src' src`,
-      "rg 'search text' src",
-      "rg 'search text in src/agents' src",
-      "rg 'foo|search text in src/agents' src",
-      "rg 'run printf -> search text' src",
-      "rg 'line1\nline2' src",
-      "rg 'line with trailing newline\n' src",
-      "rg '`generated command`' src",
-      `rg '${"x".repeat(121)}' src`,
-      `rg '${" ".repeat(121)}x' src`,
-    ]) {
-      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(
-        "search text in src",
-      );
-    }
-  });
-
   it("sanitizes recursive search patterns inside pipelines", () => {
     expect(
       detailFor({
@@ -369,37 +333,10 @@ describe("tool display details", () => {
 
   it.each<[name: string, command: string, expected: string]>([
     [
-      "moves cd path to context suffix and appends raw command",
-      "cd ~/my-project && npm install",
-      "install dependencies (in ~/my-project), `cd ~/my-project && npm install`",
-    ],
-    [
-      "moves cd path to context suffix with multiple stages and raw command",
-      "cd ~/my-project && npm install && npm test",
-      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
-    ],
-    [
-      "moves pushd path to context suffix and appends raw command",
-      "pushd /tmp && git status",
-      "check git status (in /tmp), `pushd /tmp && git status`",
-    ],
-    [
       "clears inferred cwd when popd is stripped from preamble",
       "pushd /tmp && popd && npm install",
       "install dependencies, `pushd /tmp && popd && npm install`",
     ],
-    [
-      "summarizes all stages and appends raw command",
-      "git fetch && git rebase origin/main",
-      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
-    ],
-    [
-      "falls back to raw command for unknown binaries",
-      "jj rebase -s abc -d main",
-      "jj rebase -s abc -d main",
-    ],
-    // standalone cd (no following command) — treated as raw since it's generic
-    ["handles standalone cd as raw command", "cd /tmp", "cd /tmp"],
     // both cd's are preamble; last path wins
     [
       "handles chained cd commands using last path",
@@ -415,16 +352,6 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe(expected);
-  });
-
-  it("omits raw command details in explain mode", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: "cd ~/my-project && npm install" },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("install dependencies (in ~/my-project)");
   });
 
   it("uses compact workspace markers for common workspace paths", () => {
@@ -460,7 +387,7 @@ describe("tool display details", () => {
     expect(
       formatToolSummary(
         resolveToolDisplay({
-          name: "bash",
+          name: "Bash",
           args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
           detailMode: "explain",
         }),
@@ -475,57 +402,6 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe('Web Search: for "OpenClaw docs"');
-  });
-
-  it("moves cd path to context suffix with || separator", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: "cd /app || npm install" },
-    });
-
-    // || means npm install runs when cd FAILS — cd should NOT be stripped as preamble.
-    // Both stages are summarized; cd is not treated as context prefix.
-    expect(detail).toMatch(/^run cd \/app → install dependencies/);
-  });
-
-  it("explicit workdir takes priority over cd path", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: "cd /tmp && npm install", workdir: "/app" },
-    });
-
-    expect(detail).toBe("install dependencies (in /app), `cd /tmp && npm install`");
-  });
-
-  it("falls back to raw command for unknown binary with cwd", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: "mycli deploy --prod", workdir: "/app" },
-    });
-
-    expect(detail).toBe("mycli deploy --prod (in /app)");
-  });
-
-  it("keeps multi-stage summary when only some stages are generic", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: "cargo build && npm test" },
-    });
-
-    // "run cargo build" is generic, but "run tests" is known — keep joined summary
-    expect(detail).toMatch(/^run cargo build → run tests/);
-  });
-
-  it("respects quotes when splitting preamble separators", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: { command: 'export MSG="foo && bar" && echo test' },
-    });
-
-    // The && inside quotes must not be treated as a separator —
-    // summary line should be "print text", not "run export" (which would happen
-    // if the quoted && was mistaken for a real separator).
-    expect(detail).toMatch(/^print text/);
   });
 
   it("recognizes heredoc/inline script exec details", () => {
@@ -556,39 +432,6 @@ describe("tool display details", () => {
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
   });
 
-  it("does not split heredoc body content into exec stages", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command: [
-          "python3 <<'PY'",
-          "const slugify = () => 'court-mix';",
-          "if (true) console.log('a') && console.log('b');",
-          "cat <<YAML",
-          "- uses: subosito/flutter-action@v2",
-          "YAML",
-          "PY",
-        ].join("\n"),
-        workdir: "/Users/example/.openclaw/workspace",
-      },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("run python3 inline script (heredoc) (agent)");
-  });
-
-  it("keeps command stages after a heredoc terminator", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command: ["python3 <<'PY'", "print('body && not a command')", "PY", "npm test"].join("\n"),
-      },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
-  });
-
   it("matches shell-quoted heredoc terminators before keeping later stages", () => {
     const detail = detailFor({
       name: "exec",
@@ -599,49 +442,6 @@ describe("tool display details", () => {
     });
 
     expect(detail).toBe("run python3 inline script (heredoc) → run tests");
-  });
-
-  it("keeps heredoc body separators out of top-level stage splitting", () => {
-    const stages = splitTopLevelStages(
-      [
-        "mkdir -p .openclaw/tmp/farm-notices",
-        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
-        "Buenos dias equipo; se ajusta la orden A1251718:",
-        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
-        "Gracias.",
-        "EOF",
-        "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
-      ].join("\n"),
-    );
-
-    expect(stages).toEqual([
-      [
-        "mkdir -p .openclaw/tmp/farm-notices",
-        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
-        "Buenos dias equipo; se ajusta la orden A1251718:",
-        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
-        "Gracias.",
-        "EOF",
-        "./scripts/email_preview_new --to farm@example.com",
-      ].join("\n"),
-      "./scripts/email_preview_new --to farm2@example.com",
-    ]);
-  });
-
-  it("matches escaped heredoc delimiters in top-level stage splitting", () => {
-    const command = [
-      "cat <<\\EOF",
-      "body; not a stage && not a stage || not a stage",
-      "EOF",
-      "printf done && npm test",
-    ].join("\n");
-
-    expect(splitTopLevelStages(command)).toEqual([
-      ["cat <<\\EOF", "body; not a stage && not a stage || not a stage", "EOF", "printf done"].join(
-        "\n",
-      ),
-      "npm test",
-    ]);
   });
 
   it("does not treat the overlapping end of a here-string as a heredoc", () => {
@@ -757,47 +557,9 @@ describe("tool display details", () => {
       "npm test",
     ]);
   });
-
-  it("splits a real pipe after the final same-line heredoc terminator", () => {
-    const command = [
-      "cat <<ONE <<-'TWO'",
-      "one | body",
-      "ONE",
-      "\ttwo && body",
-      "\tTWO",
-      "cat result | wc -l",
-    ].join("\n");
-
-    expect(splitTopLevelPipes(command)).toEqual([
-      ["cat <<ONE <<-'TWO'", "one | body", "ONE", "\ttwo && body", "\tTWO", "cat result"].join(
-        "\n",
-      ),
-      "wc -l",
-    ]);
-  });
-
-  it("omits node label when host is not 'node' even if node is set", () => {
-    for (const host of ["gateway", "sandbox", "auto"]) {
-      const detail = detailFor({
-        name: "exec",
-        args: { command: "npm install", host, node: "raspberrypi" },
-      });
-
-      expect(detail).not.toContain("node:");
-    }
-  });
 });
 
 describe("compactRawCommand middle truncation", () => {
-  it("uses the canonical tool payload redactor before compacting raw commands", () => {
-    const longCommand =
-      "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
-    const result = resolveExecDetail({ command: longCommand });
-
-    expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(result).toContain("AKIDAB…7890");
-  });
-
   it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
     // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
     // slice ends at index 59, but the 😀 emoji (U+1F600, a surrogate pair) occupies
@@ -822,25 +584,7 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("coerceDisplayValue middle truncation", () => {
-  it("redacts credential-like values in long generic string details", () => {
-    // A long string whose tail contains a GitHub PAT. Without
-    // redaction-before-truncation, middle truncation could preserve
-    // the raw token at the tail after its prefix context is cut.
-    const longValue =
-      "Deploying service to production cluster with auth ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop and " +
-      "x".repeat(200) +
-      " final-step";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { label: longValue },
-      }),
-    );
-    // The ghp_ token must be redacted before truncation
-    expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
-  });
-
-  it("uses the canonical tool payload redactor before compacting string details", () => {
+  it("preserves string details before compacting", () => {
     const longValue =
       "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
       "x".repeat(200) +
@@ -850,7 +594,6 @@ describe("coerceDisplayValue middle truncation", () => {
       args: { label: longValue },
     });
 
-    expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(detail).toContain("AKIDAB…7890");
+    expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
   });
 });

@@ -4,7 +4,7 @@ import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-co
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   formatSqliteSessionFileMarker,
-  getSessionEntry,
+  getSessionEntryAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +18,7 @@ import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helper
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -61,7 +62,7 @@ async function resolveTelegramCommandTranscriptContext(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ agentId: params.agentId, sessionKey, storePath });
+    const entry = await getSessionEntryAsync({ agentId: params.agentId, sessionKey, storePath });
     const sessionId = entry?.sessionId?.trim() || randomUUID();
     const sessionFile = formatSqliteSessionFileMarker({
       agentId: params.agentId,
@@ -103,13 +104,6 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
-  const targetSessionEntry = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
-    agentId: dispatch.route.agentId,
-    sessionKey: dispatch.targetSessionKey,
-    storePath: dispatch.nativeCommandRuntime.resolveStorePath(dispatch.runtimeCfg.session?.store, {
-      agentId: dispatch.route.agentId,
-    }),
-  });
   const from = dispatch.isGroup
     ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
     : `telegram:${dispatch.chatId}`;
@@ -166,7 +160,7 @@ export async function executeTelegramPluginCommand(
     sessionKey: dispatch.targetSessionKey,
     sessionId: transcriptContext.sessionId,
     sessionFile: transcriptContext.sessionFile,
-    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    authProfileId: transcriptContext.authProfileId,
     commandBody,
     config: dispatch.runtimeCfg,
     from,
@@ -193,24 +187,19 @@ export async function executeTelegramPluginCommand(
   const progressResultText = deliverableResult.text;
   if (
     progressMessageId != null &&
-    dispatch.telegramDeps.editMessageTelegram &&
     typeof progressResultText === "string" &&
     progressResultText.trim().length > 0 &&
     (!renderable || editable)
   ) {
     try {
-      await dispatch.telegramDeps.editMessageTelegram(
-        dispatch.chatId,
-        progressMessageId,
-        progressResultText,
-        {
-          cfg: dispatch.runtimeCfg,
-          accountId: dispatch.route.accountId,
-          textMode: "markdown",
-          linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
-          buttons: renderable ? telegramData?.buttons : undefined,
-        },
-      );
+      const { editMessageTelegram } = await loadTelegramSendModule();
+      await editMessageTelegram(dispatch.chatId, progressMessageId, progressResultText, {
+        cfg: dispatch.runtimeCfg,
+        accountId: dispatch.route.accountId,
+        textMode: "markdown",
+        linkPreview: dispatch.runtimeTelegramCfg.linkPreview,
+        buttons: renderable ? telegramData?.buttons : undefined,
+      });
       await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
         accountId: dispatch.route.accountId,
         agentId: dispatch.opts.ownerAgentId,

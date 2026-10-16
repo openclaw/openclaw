@@ -106,6 +106,8 @@ Standard files OpenClaw expects inside the workspace:
 If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
 </Note>
 
+The workspace document editor and `agents.files.set` accept up to 2 MiB of UTF-8 text per file. Larger saves are rejected before replacing the existing document. This byte limit is separate from prompt truncation settings and the identity form's avatar support.
+
 ## What is NOT in the workspace
 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
@@ -137,6 +139,11 @@ before updating; current Doctor leaves that file untouched. See the
 ## Git backup (recommended, private)
 
 Treat the workspace as private memory. Put it in a **private** git repo so it is backed up and recoverable.
+
+Git is optional. An empty `.git` directory is treated as a non-Git workspace and
+left untouched. Partial Git metadata or a linked worktree whose metadata is missing
+still blocks Git operations with checkout-preservation guidance; repair the original
+repository metadata before retrying.
 
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 

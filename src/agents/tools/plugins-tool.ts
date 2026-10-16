@@ -2,6 +2,7 @@ import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import type { listManagedPlugins } from "../../plugins/management-service.js";
@@ -10,6 +11,7 @@ import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
+import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const PLUGINS_TOOL_RESULT_MAX_BYTES = 3_840;
 
@@ -90,6 +92,7 @@ const PluginsToolSchema = Type.Object(
       "disable",
       "uninstall",
       "reload",
+      "reloadAndResume",
     ]),
     pluginId: Type.Optional(Type.String()),
     query: Type.Optional(
@@ -108,13 +111,22 @@ const PluginsToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export function createPluginsTool(): AnyAgentTool {
+export function createPluginsTool(options?: {
+  sessionId?: string;
+  runId?: string;
+  onYield?: SessionsYieldCallback;
+}): AnyAgentTool {
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
+  const requestOwners = captureExecRequestOwners({
+    runId: options?.runId,
+    sessionId: options?.sessionId,
+  });
   return {
     name: "plugins",
     label: "Plugins",
+    async: false,
     description:
-      "Inspect, search, install from the official catalog or ClawHub, enable, disable, uninstall, or reload plugins. Reload an installed plugin after editing its local files. Check restartRequired: compiled bundled code needs a Gateway restart. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
+      "Inspect, search, install from the official catalog or ClawHub, enable, disable, uninstall, or reload plugins. After editing local plugin files, use reloadAndResume to end this turn, finish cleanup, reload, and resume this same conversation with success or failure. Never wait for a CLI reload from a turn holding that plugin. reload is synchronous for callers not holding it. Check restartRequired: compiled bundled code needs a Gateway restart. Cleanup is best effort; read warnings in the result. Supported conversations refresh their tools at the next model step after running programs settle; finish the current program before using changed tools. Other runtimes may require a new conversation for changed tool names or schemas. Do not repeat completed mutations.",
     parameters: PluginsToolSchema,
     execute: async (_toolCallId, args, signal) => {
       runtimeRefresh.assertCurrent();
@@ -130,6 +142,16 @@ export function createPluginsTool(): AnyAgentTool {
           method = "plugins.list";
           request = {};
           break;
+        case "reloadAndResume": {
+          const { handoffPluginReload } = await import("./plugins-reload-handoff.js");
+          return await handoffPluginReload({
+            ...options,
+            requestOwners,
+            signal,
+            request: { plugins: [{ pluginId: required("pluginId") }], ...consent },
+            formatResult: (payload) => JSON.stringify(pluginsToolResult(payload).details),
+          });
+        }
         case "inspect":
         case "uninstall":
         case "reload":

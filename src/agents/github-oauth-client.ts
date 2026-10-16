@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
@@ -26,27 +25,22 @@ const GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_MAX_DURATION_SECONDS = 366 * 24 * 60 * 60;
 const GITHUB_OAUTH_MAX_INTERVAL_SECONDS = 60 * 60;
 
-// TTL bounds only remote revocation staleness. Rotation changes the token key;
-// disconnected or retired profiles provide no token before any cache lookup.
+// Writes wait for expired verification. Display reads may reuse account facts while
+// the bounded probe refreshes; token rotation and profile retirement stay live.
 const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
 const GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES = 32;
 type GitHubCredentialVerificationResult =
-  | { status: "available"; account: GitHubToolAccount; scopes: string[] }
+  | { status: "available"; account: GitHubToolAccount; scopes: string[]; stale?: true }
   | { status: "unavailable" | "rate_limited" | "unverified" };
-let verifiedCredentials = new Map<
-  string,
-  {
-    result: Extract<GitHubCredentialVerificationResult, { status: "available" }>;
-    expiresAt: number;
-  }
->();
-const pending = new Map<string, Promise<GitHubCredentialVerificationResult>>();
+const verifiedCredentials = createStaleWhileRevalidateCache<GitHubCredentialVerificationResult>({
+  maxEntries: GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES,
+  ttlMs: GITHUB_CREDENTIAL_VERIFICATION_TTL_MS,
+  cacheable: (result) => result.status === "available",
+});
 
 export function clearGitHubCredentialVerificationCache(): void {
   clearNativeGitHubTokenCache();
-  // Pending probes retain the old map, so clearing cannot be undone by their completion.
-  verifiedCredentials = new Map();
-  pending.clear();
+  verifiedCredentials.clear();
 }
 
 type GitHubOAuthRequestOptions = {
@@ -294,7 +288,7 @@ async function readGitHubResponse(response: Response, surface: string, timeoutMs
 /** Public credentials use their fixed issuer; other issuers require an explicit endpoint. */
 export async function verifyGitHubCredential(
   token: string,
-  options: GitHubOAuthRequestOptions = {},
+  options: GitHubOAuthRequestOptions & { allowStale?: boolean } = {},
 ): Promise<GitHubCredentialVerificationResult> {
   registerSecretValueForRedaction(token);
   try {
@@ -304,12 +298,6 @@ export async function verifyGitHubCredential(
     }
     const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
     const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
-    const cache = verifiedCredentials;
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.result;
-    }
-    cache.delete(key);
     const create = async (): Promise<GitHubCredentialVerificationResult> => {
       const timeoutMs = resolveTimerTimeoutMs(
         options.timeoutMs,
@@ -349,13 +337,16 @@ export async function verifyGitHubCredential(
       Object.freeze(result.account);
       Object.freeze(result.scopes);
       Object.freeze(result);
-      cache.set(key, { result, expiresAt: Date.now() + GITHUB_CREDENTIAL_VERIFICATION_TTL_MS });
-      pruneMapToMaxSize(cache, GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES);
       return result;
     };
-    return await (options.signal || options.timeoutMs !== undefined
-      ? create()
-      : getOrCreatePromise(pending, key, create, { evictOnSettled: true }));
+    // Caller-owned deadlines cannot cancel another reader's shared verification.
+    if (options.signal || options.timeoutMs !== undefined) {
+      return await create();
+    }
+    const { value, stale } = await verifiedCredentials.read(key, create, {
+      allowStale: options.allowStale === true,
+    });
+    return stale && value.status === "available" ? { ...value, stale: true } : value;
   } catch {
     // Network errors, response bodies, and abort reasons can contain credentials.
     return { status: "unverified" };

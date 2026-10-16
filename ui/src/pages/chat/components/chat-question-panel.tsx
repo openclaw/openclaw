@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -33,12 +33,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   const [currentQuestionIndex, setCurrentQuestionIndex] = createSignal(0);
   const [uncontrolledCollapsed, setUncontrolledCollapsed] = createSignal(initialModel.collapsed);
   const [draftRevision, setDraftRevision] = createSignal(0);
-  const [actionRevision, setActionRevision] = createSignal(0);
-  let pendingAction: { kind: "submit" | "skip" } | null = null;
-  const pendingKind = () => {
-    actionRevision();
-    return pendingAction?.kind ?? null;
-  };
+  const [pendingKind, setPendingKind] = createSignal<"submit" | "skip" | null>(null);
+  let resolving = false;
   let live = true;
   let answerTextarea: HTMLTextAreaElement | null = null;
   let measuredAnswer: string | null = null;
@@ -133,7 +129,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
   };
   const resolve = async (kind: "submit" | "skip") => {
     const value = model();
-    if (value.disabled || value.submitting || pendingAction) {
+    if (value.disabled || value.submitting || resolving) {
       return;
     }
     let run: () => void | Promise<void>;
@@ -156,17 +152,16 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
       }
       run = onSkip;
     }
-    const action = { kind };
-    pendingAction = action;
-    setActionRevision((revision) => revision + 1);
+    resolving = true;
+    setPendingKind(kind);
     try {
       await run();
     } catch {
       /* The caller owns the error shown in model.error. */
     } finally {
-      if (live && pendingAction === action) {
-        pendingAction = null;
-        setActionRevision((revision) => revision + 1);
+      resolving = false;
+      if (live) {
+        setPendingKind(null);
       }
     }
   };
@@ -184,24 +179,34 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     if (disabled() || event.isComposing || event.keyCode === 229) {
       return;
     }
-    if (event.target instanceof HTMLTextAreaElement) {
-      if (
-        event.key === "Enter" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (item.allowEmpty || answerValues(model(), item).length > 0)
-      ) {
-        event.preventDefault();
-        advanceOrSubmit(item);
-      }
+    // Links and file pickers retain native activation instead of submitting answers.
+    if (
+      event.target instanceof HTMLAnchorElement ||
+      (event.target instanceof HTMLInputElement && event.target.type === "file")
+    ) {
       return;
     }
     if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      (event.target === event.currentTarget ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLButtonElement &&
+          ["radio", "checkbox"].includes(event.target.getAttribute("role") ?? ""))) &&
+      (item.allowEmpty || answerValues(model(), item).length > 0)
+    ) {
+      event.preventDefault();
+      advanceOrSubmit(item);
+      return;
+    }
+    if (
+      event.target instanceof HTMLTextAreaElement ||
       event.metaKey ||
       event.ctrlKey ||
-      event.altKey ||
-      event.target instanceof HTMLAnchorElement
+      event.altKey
     ) {
       return;
     }

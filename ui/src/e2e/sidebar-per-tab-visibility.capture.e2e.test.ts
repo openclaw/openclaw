@@ -145,14 +145,6 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox > textarea");
         await composer.fill("Keep this unsent draft in the original tab");
         const originalUrl = page.url();
-        await page.locator('[data-navigation-view="sessions"]').click();
-        if (!catalog) {
-          // Native fixture rows have no human owner; expose them explicitly in All.
-          await page
-            .locator(".sidebar-navigation-scope")
-            .getByRole("button", { name: "All", exact: true })
-            .click();
-        }
         const link = page.locator(
           catalog
             ? '[data-session-section="catalog:codex"] .sidebar-recent-session__link'

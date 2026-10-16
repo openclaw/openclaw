@@ -2,14 +2,14 @@ import { observeElementRect, type Rect, type Virtualizer } from "@tanstack/virtu
 import {
   resolveTranscriptScrollMargin,
   syncScrollMargin,
-  type PositionRailGutterController,
+  type createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
 import { unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 
 type ViewportRectOwner = {
   getScrollElement(): HTMLDivElement | null;
   getHeaderHeight(): number;
-  positionRail: Pick<PositionRailGutterController, "read" | "sync">;
+  positionRail: Pick<ReturnType<typeof createPositionRailGutter>, "read" | "sync">;
   commitComposerResize(): void;
   measureConnectedRows(): boolean;
   queueRowMeasure(): void;
@@ -29,8 +29,18 @@ export class TranscriptViewportRect {
 
   constructor(private readonly owner: ViewportRectOwner) {}
 
-  recordMeasuredWidth(width: number): void {
-    this.observedWidth = Math.round(width);
+  commit(widthChanged: boolean): void {
+    this.owner.positionRail.sync();
+    if (!widthChanged) {
+      return;
+    }
+    const rect = this.owner.getScrollElement()?.getBoundingClientRect();
+    if (!rect?.width || !rect.height) {
+      return;
+    }
+    // The observer must not repeat this committed width's row scan.
+    this.observedWidth = Math.round(rect.width);
+    this.owner.measureConnectedRows();
   }
 
   sync(): void {

@@ -49,12 +49,24 @@ export function isRequesterSettleWakeForRun(params: {
 }): boolean {
   const { entry, requesterSessionKey, requesterAgentId } = params;
   const wake = entry.requesterSettleWake;
-  const pauseNotice = entry.pauseReason === "sessions_yield" && wake?.pauseNotice;
-  const batchRunIds = pauseNotice ? [entry.runId] : wake?.batchRunIds;
+  if (!wake) {
+    return false;
+  }
+  const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
+  // Dispatch selects the surviving members of its frozen generation. Retired
+  // rows no longer contribute to the admitted wake's identity.
+  const batchRunIds = pauseNotice
+    ? [entry.runId]
+    : wake.batchRunIds?.filter((id) => {
+        const member = params.runsById.get(id);
+        return (
+          member?.requesterSettleWake !== undefined &&
+          member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
+        );
+      });
   if (
     entry.requesterSessionKey !== requesterSessionKey ||
     (entry.requesterAgentId && entry.requesterAgentId !== requesterAgentId) ||
-    !wake ||
     wake.attemptCount < 1 ||
     !isSameSubagentRun(params.runsById.get(entry.runId), entry) ||
     !batchRunIds?.includes(entry.runId)
@@ -129,7 +141,6 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       status: wake.status,
       attemptCount: wake.attemptCount,
       replayCount: wake.replayCount ?? 0,
-      deferralCount: wake.deferralCount ?? 0,
       nextAttemptAt: wake.nextAttemptAt,
       lastError: wake.lastError,
       batchRunIds: wake.batchRunIds?.toSorted(),

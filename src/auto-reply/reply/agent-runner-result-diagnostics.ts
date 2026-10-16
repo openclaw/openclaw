@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import { resolveModelAuthModeAsync } from "../../agents/model-auth.js";
 import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
@@ -47,8 +47,7 @@ export async function buildReplyDiagnosticsPayload(params: {
     preflightCompactionApplied,
   } = params;
   const { runResult, providerUsed, modelUsed, contextTokensUsed, promptTokens } = accounting;
-  // Inherited preferences can change during execution; explicit turn choices
-  // still win over the generation-fenced session supplied by completion.
+  // Explicit turn choices win over the terminal owner's session preferences.
   const verboseEnabled =
     (normalizeVerboseLevel(
       followupRun.run.verboseLevelOverride ??
@@ -59,10 +58,12 @@ export async function buildReplyDiagnosticsPayload(params: {
   const traceAuthorized = followupRun.run.traceAuthorized === true;
   const traceLevel = followupRun.run.traceLevelOverride ?? activeSessionEntry?.traceLevel;
   const traceEnabled = traceAuthorized && (traceLevel === "on" || traceLevel === "raw");
+  const thinkingClamp = runResult.meta?.requestShaping?.thinkingClamp;
   if (!verboseEnabled && !traceEnabled) {
     return undefined;
   }
   const lines = [
+    ...(thinkingClamp ? [thinkingClamp] : []),
     ...(verboseEnabled ? resolveSessionPluginStatusLines(activeSessionEntry) : []),
     ...(traceEnabled ? resolveSessionPluginTraceLines(activeSessionEntry) : []),
   ];
@@ -82,9 +83,9 @@ export async function buildReplyDiagnosticsPayload(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+          ? await resolveModelAuthModeAsync(providerUsed, cfg, undefined, {
               workspaceDir: followupRun.run.workspaceDir,
-            }) ?? undefined)
+            })
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??

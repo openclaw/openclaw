@@ -1,11 +1,24 @@
+import { availableParallelism } from "node:os";
 import type { Locator, Page } from "playwright";
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import type { MockGatewayWindow } from "./control-ui-e2e-contract.ts";
-// Loaded CI runners regularly stall real Chromium renders past 10s; the larger
-// CI budget trades failure latency, not coverage (mirrors the ui-e2e vitest
-// config's expect.poll budget). Local runs keep the snappy 10s deadline.
-export const controlUiE2eWaitTimeoutMs =
-  process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true" ? 30_000 : 10_000;
+
+const loadedWaitTimeoutMs = 30_000;
+
+// Loaded CI runners and small (<=4 CPU) hosts regularly stall real Chromium
+// renders past 10s; the larger budget trades failure latency, not coverage
+// (mirrors the ui-e2e vitest config's expect.poll budget). Roomier local hosts
+// keep the snappy 10s deadline for the shared production bundle; a private
+// source server raises this live binding for the rest of its test process.
+export let controlUiE2eWaitTimeoutMs =
+  process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true" || availableParallelism() <= 4
+    ? loadedWaitTimeoutMs
+    : 10_000;
+
+/** A cold Vite dev server transforms thousands of source modules on first page load. */
+export function extendControlUiE2eWaitTimeoutForSourceServer(): void {
+  controlUiE2eWaitTimeoutMs = loadedWaitTimeoutMs;
+}
 
 /** Selected descriptors and cached rows can render before the authoritative roster. */
 export async function waitForControlUiInitialRoster(page: Page): Promise<void> {

@@ -127,11 +127,7 @@ export function createCatalogIoCounters() {
         }
         if (args.includes("app-server-thread-bindings")) {
           counts.bindingAuthorityReads++;
-        } else if (
-          sql.includes("pragma data_version") ||
-          sql.includes("pragma schema_version") ||
-          sql.includes("openclaw_session_nodes_cache_generation")
-        ) {
+        } else if (sql.includes("pragma data_version") || sql.includes("pragma schema_version")) {
           counts.sqliteFreshnessReads++;
         } else if (sql.includes("entry_json") || sql.includes("entry_list_json")) {
           counts.sessionPayloadReads++;

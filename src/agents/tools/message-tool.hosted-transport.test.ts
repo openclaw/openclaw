@@ -139,6 +139,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
     const config: OpenClawConfig = {
+      agents: { entries: { ops: {} }, defaults: { workspace: state.workspaceDir } },
       gateway: {
         mode: "remote",
         port: local.port,

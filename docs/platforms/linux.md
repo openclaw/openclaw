@@ -9,29 +9,31 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
 ## Desktop companion
 
 The OpenClaw Linux companion is a Tauri desktop app for local and remote
-Gateways. It:
+Gateways. On Windows, the native [Windows Hub](/platforms/windows#recommended-windows-hub)
+is recommended; this cross-platform [Tauri app](/platforms/windows#backup-tauri-desktop-app)
+is the backup, available in regular OpenClaw releases with bundled Bun for a local
+Windows Gateway. On Linux, it:
 
-- walks new users through choosing a local Gateway, a discovered remote Gateway,
-  a manually entered Gateway URL, or an SSH tunnel
+- automatically sets up a local Gateway for fresh installs, with manual local,
+  discovered remote, direct URL, and SSH choices available if setup fails
 - installs the OpenClaw CLI and runs fresh local installations on the bundled
   OpenClaw Bun fork, without requiring a global CLI install; release builds
-  install their matching stable version, while development builds ask for
-  the channel first
+  install their matching stable version, while development builds use
+  Development for automatic setup
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens Model Setup for an unconfigured local or remote Gateway, discovers
-  available AI access, and waits for your explicit action before selecting,
-  testing, installing, or saving a provider
+- opens custodian onboarding after automatic local setup to prepare AI access
+  and explain the selection; manual setup retains the explicit Model Setup picker
 - continues into guided onboarding after connecting a new model; onboarding can
   import detected Claude Code, Codex, or Hermes memories into the agent workspace
   (the same import stays available later under Settings → Import Memory)
@@ -74,7 +76,7 @@ credential. A remote-only desktop connection still needs a browser node on this
 computer to expose its tabs to the remote Gateway.
 
 Development builds use an existing local CLI rather than downloading an
-unrelated stable runtime. The Windows Tauri test build does not provide this
+unrelated stable runtime. The Windows Tauri build does not provide this
 runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
 disconnection, and manual recovery.
 
@@ -84,8 +86,8 @@ The Linux companion shares one Bun fork pin with the native macOS app and CI.
 Runtime admission, SQLite safety checks, and the fork's disabled implicit package
 auto-install remain enabled. macOS Tauri test builds keep their existing runtime
 behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
-test builds retain their existing runtime until a signed Windows fork is
-available; an unsigned dry-run is not shippable. See
+releases use the signed Windows fork from the shared pin for local setup; an
+unsigned dry-run is not shippable. See
 [Bun compatibility](/install/bun-compatibility).
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -111,8 +113,9 @@ streaming only. Other device commands belong to the [CLI node host](/cli/node) a
 [Linux Node plugin](/platforms/linux#node-capabilities).
 
 The [native macOS app](/platforms/macos) and [Windows Hub](/platforms/windows)
-are separate applications, not this shell's opt-in macOS and Windows Tauri test
-bundles. See their platform pages for requirements and capabilities.
+are separate applications. Windows Hub is the recommended Windows app; this
+Tauri shell is the backup. The macOS Tauri build remains an opt-in test bundle.
+See the platform pages for requirements and capabilities.
 
 ### Gateway selection
 
@@ -210,8 +213,21 @@ desktop connection. Closing the window to the tray keeps sharing active.
 
 ### First-run setup
 
-Choose **Get started** on the welcome screen, then choose where your assistant
-should live:
+With no saved OpenClaw configuration or Gateway profiles, the app starts local
+setup automatically and opens custodian onboarding in the Control UI. The
+custodian prepares available AI access and explains the selection and alternatives.
+**Use a different Gateway** opens Manage Gateways, **Review permissions** opens
+this computer's permissions, and **Open AI setup** opens Model Setup.
+The card labels the local Gateway **This computer** and saved remote Gateways
+by name; its native actions retain the selected Gateway's base path.
+
+Automatic setup uses the same bundled runtime, installer, and CLI-managed service
+as manual local setup. It never automatically joins a discovered Gateway. Existing
+configurations and remote setups keep their current behavior. An unreadable saved
+profile store or any automatic setup failure returns to the manual choices with
+the error visible.
+
+In manual setup, choose where your assistant should live:
 
 - **On this computer** installs any missing local prerequisites and starts the
   Gateway as a systemd user service.
@@ -236,7 +252,7 @@ shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
-After the connection succeeds, Model Setup discovers AI access available to the
+After a manual connection succeeds, Model Setup discovers AI access available to the
 selected Gateway and shows it as a choice. Discovery does not import or copy an
 account. On a fresh visit, the companion does not select, test, install, or save
 a provider until you choose its action. Provider sign-in or API-key entry is

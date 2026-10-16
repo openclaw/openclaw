@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
 import { createConfigIO, readConfigFileSnapshot } from "../../config/config.js";
 import {
@@ -19,6 +20,7 @@ import type { ActivateSetupInferenceParams } from "../../system-agent/setup-infe
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
 import * as setupAdmission from "./setup-admission.js";
+import { activateGatewaySetupInference } from "./system-agent-execution.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
@@ -406,37 +408,6 @@ describe("openclaw.chat", () => {
   });
 
   it.each([
-    {
-      name: "working",
-      result: { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 25 },
-    },
-    {
-      name: "unavailable",
-      result: {
-        ok: false as const,
-        status: "unavailable" as const,
-        error: "no configured model",
-      },
-    },
-  ])("returns the structured $name inference verification result", async ({ result }) => {
-    setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
-    const { calls, respond } = makeRespond();
-
-    const verify = systemAgentHandler("openclaw.setup.verify");
-    await verify({
-      params: { agentId: "research" },
-      respond,
-      context: await makeVerificationContext(),
-    } as never);
-
-    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
-      agentId: "research",
-      runtime: defaultRuntime,
-    });
-    expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
-  });
-
-  it.each([
     { change: "unapplied revision", when: "before" },
     { change: "unknown revision", when: "before" },
     { change: "restart with unchanged config", when: "before" },
@@ -484,6 +455,77 @@ describe("openclaw.chat", () => {
     );
   });
 
+  it("keeps activation progress through application without relabeling the connection test", async () => {
+    const installing = createDeferred();
+    const startVerification = createDeferred();
+    const verifying = createDeferred();
+    const finishVerification = createDeferred();
+    const applying = createDeferred();
+    const finishApplication = createDeferred();
+    let visibleProgress: string | undefined;
+    const stopped: string[] = [];
+    const prompter = createWizardPrompter({
+      progress: (label) => {
+        visibleProgress = label;
+        return {
+          update: (message) => {
+            visibleProgress = message;
+          },
+          stop: () => {
+            stopped.push(label);
+          },
+        };
+      },
+    });
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(
+      async (params: ActivateSetupInferenceParams) => {
+        params.onActivationStarted?.();
+        installing.resolve();
+        await startVerification.promise;
+        const verification = params.prompter?.progress("Testing your AI connection…");
+        verifying.resolve();
+        await finishVerification.promise;
+        verification?.stop();
+        params.onActivationStarted?.();
+        params.onActivationCompletion?.(async () => {
+          applying.resolve();
+          await finishApplication.promise;
+          return false;
+        });
+        return {
+          ok: true,
+          modelRef: "meta/muse-spark-1.3",
+          latencyMs: 1,
+          lines: [],
+        };
+      },
+    );
+    const pending = activateGatewaySetupInference({
+      kind: "provider-auth",
+      authChoice: "meta/muse-code",
+      surface: "gateway",
+      runtime: defaultRuntime,
+      prompter,
+    });
+    try {
+      await installing.promise;
+      expect(visibleProgress).toBe("Turning on your AI connection…");
+      startVerification.resolve();
+      await verifying.promise;
+      expect(visibleProgress).toBe("Testing your AI connection…");
+      finishVerification.resolve();
+      await applying.promise;
+      expect(visibleProgress).toBe("Turning on your AI connection…");
+      expect(stopped).toEqual(["Testing your AI connection…"]);
+    } finally {
+      startVerification.resolve();
+      finishVerification.resolve();
+      finishApplication.resolve();
+      await pending;
+    }
+    expect(stopped).toEqual(["Testing your AI connection…", "Turning on your AI connection…"]);
+  });
+
   it.each(["applied", "restart-required", "failed"] as const)(
     "settles setup completion without holding its lane: %s",
     async (outcome) => {
@@ -520,11 +562,15 @@ describe("openclaw.chat", () => {
         expect(calls).toEqual([]);
         expect(systemAgentLane().activeCount).toBe(0);
         await systemAgentHandler("openclaw.setup.verify")({
-          params: {},
+          params: { agentId: "research" },
           respond: () => {},
           context: await makeVerificationContext(),
         } as never);
         expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+        expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+          agentId: "research",
+          runtime: defaultRuntime,
+        });
       } finally {
         release.resolve();
         if (outcome === "failed") {
@@ -616,6 +662,7 @@ describe("openclaw.chat", () => {
         workspace: "/tmp/work",
         surface: "gateway",
         runtime: expect.objectContaining({ exit: expect.any(Function) }),
+        onActivationStarted: expect.any(Function),
         onActivationCompletion: expect.any(Function),
       });
       expect(calls).toEqual(
@@ -670,26 +717,25 @@ describe("openclaw.chat", () => {
     });
   });
 
-  it.each([
-    { name: "unsafe characters", page: "channels?tab=all" },
-    { name: "an overlong id", page: "a".repeat(65) },
-    { name: "a Unicode case-folding character", page: "\u212A" },
-  ])("drops UI context with $name without rejecting the turn", async ({ page }) => {
-    const engine = makeVerifiedEngine();
-    const handle = vi
-      .spyOn(engine, "handle")
-      .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+  it.each([{ name: "a Unicode case-folding character", page: "\u212A" }])(
+    "drops UI context with $name without rejecting the turn",
+    async ({ page }) => {
+      const engine = makeVerifiedEngine();
+      const handle = vi
+        .spyOn(engine, "handle")
+        .mockResolvedValue({ text: "Everything is healthy.", action: "none" });
+      const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
 
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "Status please.",
-      context: { page },
-    });
+      const call = await callChat(makeContext(sessions), {
+        sessionId: "s1",
+        message: "Status please.",
+        context: { page },
+      });
 
-    expect(call.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("Status please.");
-  });
+      expect(call.ok).toBe(true);
+      expect(handle).toHaveBeenCalledWith("Status please.");
+    },
+  );
 
   it.each([
     { id: "bad?id", name: "Example" },

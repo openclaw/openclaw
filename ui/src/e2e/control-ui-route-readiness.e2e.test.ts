@@ -53,11 +53,6 @@ suite.define(() => {
                   methodResponses: {
                     "config.get": { config: {}, hash: "history-profile-config" },
                     "system.info": { platform: "darwin" },
-                    // The saved involving-me filter belongs to All, not the default Mine view.
-                    "users.prefs.get": {
-                      status: "ok",
-                      entries: { "ui.navigationScope": "all" },
-                    },
                   },
                 }
               : {}),

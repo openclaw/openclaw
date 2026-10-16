@@ -164,6 +164,7 @@ describe("detectChangedScope", () => {
       { runNode: true, runSkillsPython: true },
     ],
     [[".github/workflows/ci.yml"], { runNode: true, runWindows: true, runUiTests: true }],
+    [["scripts/lib/ci-test-runtime.mts"], { runNode: true, runUiTests: true }],
     [["scripts/ci-xcodebuild.py"], { runNode: true, runIosBuild: true }],
     [["scripts/ci-xcodebuild.py.bak"], { runNode: true }],
     [["scripts/install.ps1"], { runNode: true, runWindows: true, runChangedSmoke: true }],

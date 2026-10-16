@@ -2,8 +2,9 @@ export class WorkerTaskError extends Error {
   constructor(
     message: string,
     readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "WorkerTaskError";
   }
 }

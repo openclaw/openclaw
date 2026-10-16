@@ -1,12 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { WORKER_ENVIRONMENT_TERMINAL_STATES } from "./state.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type {
   WorkerEnvironmentPruneObservation,
   WorkerEnvironmentPruneReadInput,
@@ -25,7 +26,7 @@ function normalizeLimit(value: number): number {
 }
 
 export function readTerminalWorkerEnvironmentPrunePage(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorkerEnvironmentPruneReadInput,
 ) {
   if (!Number.isSafeInteger(params.nowMs) || params.nowMs < 0) {
@@ -74,7 +75,7 @@ export function readTerminalWorkerEnvironmentPrunePage(
 }
 
 export function pruneObservedTerminalWorkerEnvironments(
-  db: DatabaseSync,
+  db: EngineConnection,
   observations: readonly WorkerEnvironmentPruneObservation[],
 ): number {
   if (observations.length === 0) {
@@ -105,7 +106,7 @@ export function pruneObservedTerminalWorkerEnvironments(
     // including the profile, activation and terminal age, under the write lock.
     // Worker transport drops the SQLite driver's null prototype; all column values stay exact.
     if (current && isDeepStrictEqual({ ...current }, { ...observed })) {
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         currentQuery
           .deleteFrom("worker_environments")

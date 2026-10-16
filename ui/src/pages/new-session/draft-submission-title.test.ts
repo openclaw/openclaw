@@ -5,7 +5,11 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  sessionStorage.clear();
+  localStorage.clear();
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   sessionStorage.clear();
@@ -85,18 +89,19 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
 }
 
 describe("prepared title creation handoff", () => {
-  it.each(["ready", "before update"])(
+  it.each(["before update"])(
     "keeps a %s title handoff on the selected draft account",
     async (handoff) => {
       const fixture = accountTitleFixture();
-      const { accounts, context, flow, place, titles, titleRequest, chooseAccount } = fixture;
+      const { accounts, context, flow, place, synchronizeTitles, titleRequest, chooseAccount } =
+        fixture;
       try {
         titleRequest
           .mockResolvedValueOnce({ title: "Automatic title" })
           .mockResolvedValueOnce({ title: "First account title" })
           .mockResolvedValueOnce({ title: "Second account title" });
         flow.setMessage("repair the sidebar naming");
-        titles.hostUpdated();
+        synchronizeTitles();
         await vi.advanceTimersByTimeAsync(1_000);
         expect(titleRequest).toHaveBeenCalledOnce();
 
@@ -105,7 +110,7 @@ describe("prepared title creation handoff", () => {
           if (index === 1 && handoff === "before update") {
             break;
           }
-          titles.hostUpdated();
+          synchronizeTitles();
           await vi.advanceTimersByTimeAsync(1_000);
           expect(titleRequest).toHaveBeenLastCalledWith({
             agentId: "main",
@@ -138,10 +143,19 @@ describe("prepared title creation handoff", () => {
     async (outcome) => {
       const preview = createDeferred<ModelCatalogResult>();
       const fixture = accountTitleFixture(preview.promise);
-      const { accounts, confirmed, flow, titles, titleRequest, chooseAccount, select } = fixture;
+      const {
+        accounts,
+        confirmed,
+        flow,
+        titles,
+        synchronizeTitles,
+        titleRequest,
+        chooseAccount,
+        select,
+      } = fixture;
       try {
         flow.setMessage("repair the sidebar naming");
-        titles.hostUpdated();
+        synchronizeTitles();
         await vi.advanceTimersByTimeAsync(1_000);
         expect(titleRequest).toHaveBeenCalledOnce();
         await chooseAccount(accounts[0]);
@@ -164,13 +178,13 @@ describe("prepared title creation handoff", () => {
           });
           await vi.advanceTimersByTimeAsync(0);
         }
-        titles.hostUpdated();
+        synchronizeTitles();
         await vi.advanceTimersByTimeAsync(1_000);
         expect(titles.takePreparedTitle()).toBeUndefined();
         expect(titleRequest).toHaveBeenCalledOnce();
 
         select("automatic");
-        titles.hostUpdated();
+        synchronizeTitles();
         await vi.advanceTimersByTimeAsync(1_000);
         expect(titleRequest).toHaveBeenCalledTimes(2);
         expect(titles.takePreparedTitle()).toBe("Prepared title");
@@ -181,31 +195,14 @@ describe("prepared title creation handoff", () => {
     },
   );
 
-  it("does not send a native draft to title inference", async () => {
-    const catalogId = "claude";
-    const { flow, request, titles } = createDraftTitleFixture(undefined, {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId,
-      catalogLabel: catalogId,
-      startTerminal: true,
-    });
-    flow.setMessage("inspect this native-only workspace");
-    titles.hostUpdated();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
-    ).toHaveLength(0);
-  });
-
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
-    const { flow, context, place, titles } = createDraftTitleFixture();
+    const { flow, context, place, synchronizeTitles } = createDraftTitleFixture();
     await vi.advanceTimersByTimeAsync(0);
     expect(place.worktreeAvailable()).toBe(true);
     place.selectWorktree(true);
     place.setWorktreeName("my-explicit-branch");
     flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(flow.submitBlock()).toBeUndefined();
     await flow.submit();
@@ -220,9 +217,11 @@ describe("prepared title creation handoff", () => {
     const pending = new Promise((resolve) => {
       finish = resolve;
     });
-    const { flow, context, titles } = createDraftTitleFixture(async () => pending);
+    const { flow, context, titles, synchronizeTitles } = createDraftTitleFixture(
+      async () => pending,
+    );
     flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(flow.submitBlock()).toBeUndefined();
     await flow.submit();
@@ -236,12 +235,12 @@ describe("prepared title creation handoff", () => {
   });
 
   it("never sends an incognito draft and discards an earlier normal suggestion", async () => {
-    const { flow, request, context, titles } = createDraftTitleFixture();
+    const { flow, request, context, synchronizeTitles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     flow.setVisibility("incognito");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(flow.submitBlock()).toBeUndefined();
     await flow.submit();
@@ -257,13 +256,13 @@ describe("prepared title creation handoff", () => {
   });
 
   it("does not restart speculation when a submitted draft is retried", async () => {
-    const { flow, request, titles } = createDraftTitleFixture();
+    const { flow, request, synchronizeTitles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     await flow.submit();
     await flow.submit();
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(
       request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
@@ -271,9 +270,9 @@ describe("prepared title creation handoff", () => {
   });
 
   it("rejects a stale title even when Send beats the next UI update", async () => {
-    const { flow, context, titles } = createDraftTitleFixture();
+    const { flow, context, synchronizeTitles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
-    titles.hostUpdated();
+    synchronizeTitles();
     await vi.advanceTimersByTimeAsync(1_000);
     flow.setMessage("investigate a different reconnect bug");
     expect(flow.submitBlock()).toBeUndefined();

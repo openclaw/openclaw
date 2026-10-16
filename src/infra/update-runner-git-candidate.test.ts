@@ -313,12 +313,12 @@ describe("Git candidate activation", () => {
       prepareGitExposure: async (candidateRoot, _sha, env) => {
         exposed = true;
         expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
-        expect(
-          resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
-            cwd: candidateRoot,
-            useCache: false,
-          }),
-        ).toBe(nodeRuntime.path);
+        const exposedNode = resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+          cwd: candidateRoot,
+          useCache: false,
+        });
+        expect(exposedNode).toBeDefined();
+        expect(await fs.realpath(exposedNode!)).toBe(await fs.realpath(nodeRuntime.path));
       },
     });
     expect(result.status).toBe("ok");
@@ -370,7 +370,11 @@ describe("Git candidate activation", () => {
       expect(step.exitCode).toBe(1);
       const output = `${step.stdoutTail ?? ""}\n${step.stderrTail ?? ""}`;
       expect(output).toContain(requiredEngine);
-      expect(output).toContain(nodeRuntime.path);
+      const reportedNode = step.stdoutTail?.match(
+        /^Node \S+ \((.+)\); requires engines\.node /,
+      )?.[1];
+      expect(reportedNode).toBeDefined();
+      expect(await fs.realpath(reportedNode!)).toBe(await fs.realpath(nodeRuntime.path));
       expect(output).toContain(nodeRuntime.version);
     }
     expect(packageManagerCommands).toEqual([]);
@@ -747,6 +751,7 @@ describe("Git candidate activation", () => {
       const candidateSha = await advanceRemote();
       const command = runCommand;
       let resetFaultInjected = false;
+      const rollbackFailure = new Error("rollback command unavailable");
       const recoveryTimeouts: Array<number | undefined> = [];
       runCommand = async (argv, options) => {
         if (faultInjected && argv[0] === "git" && argv[2] === root) {
@@ -762,7 +767,7 @@ describe("Git candidate activation", () => {
         ) {
           resetFaultInjected = true;
           if (restoreSource === "throw") {
-            throw new Error("rollback command unavailable");
+            throw rollbackFailure;
           }
           return { code: 1, stdout: "", stderr: "source restoration failed" };
         }
@@ -798,7 +803,12 @@ describe("Git candidate activation", () => {
       });
       const execution = update({ timeoutMs, progress: { onRollbackOutcome } });
       if (restoreSource === "throw") {
-        await expect(execution).rejects.toThrow("rollback command unavailable");
+        const failure = await execution.catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure).toMatchObject({
+          cause: rollbackFailure,
+          errors: expect.arrayContaining([rollbackFailure]),
+        });
         expect(resetFaultInjected).toBe(true);
         expect(onRollbackOutcome).toHaveBeenLastCalledWith({
           status: "failed",

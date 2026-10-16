@@ -13,6 +13,7 @@ import {
   ModelsProbeParamsSchema,
   ModelsProbeResultSchema,
   SkillsDetailResultSchema,
+  SkillsStatusParamsSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
 import { ModelsListParamsSchema } from "./model-catalog.js";
@@ -114,6 +115,13 @@ describe("AgentsUpdateParamsSchema", () => {
   it("distinguishes omitted, cleared, and invalid model values", () => {
     expectAccepted(AgentsUpdateParamsSchema, { agentId: "work" }, { agentId: "work", model: null });
     expectRejected(AgentsUpdateParamsSchema, { agentId: "work", model: "" });
+  });
+});
+
+describe("SkillsStatusParamsSchema", () => {
+  it("accepts an explicit refresh while retaining strict request validation", () => {
+    expectAccepted(SkillsStatusParamsSchema, {}, { agentId: "main", refresh: true });
+    expectRejected(SkillsStatusParamsSchema, { refresh: "true" }, { refresh: true, unknown: 1 });
   });
 });
 

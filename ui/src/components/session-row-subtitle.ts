@@ -1,12 +1,7 @@
-import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { t } from "../i18n/index.ts";
-import { resolveToolDisplayIcon } from "../lib/chat/tool-display-icon.ts";
 import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
-import { icons } from "./icons.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 
 type SidebarSessionSubtitle = {
@@ -60,9 +55,14 @@ export function resolveSidebarSessionSubtitle(params: {
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
-  // Questions use the leading hand tooltip; failures use the session hovercard.
-  // Neither should grow a second line or fall back to lower-priority activity.
-  if (session.attention.kind === "question" || session.attention.kind === "error") {
+  // Questions and approvals use the leading attention icon tooltip; failures use
+  // the session hovercard. None should grow a second line or fall back to
+  // lower-priority activity.
+  if (
+    session.attention.kind === "question" ||
+    session.attention.kind === "approval" ||
+    session.attention.kind === "error"
+  ) {
     return { subtitle: undefined, narration: undefined };
   }
   const attention = sessionAttentionSubtitle(session.attention);
@@ -88,7 +88,7 @@ export function resolveSidebarSessionSubtitle(params: {
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
   // Preview off hides ambient text only. Subtitle-owned attention and a critical
-  // observer headline survive the toggle: pending approvals and the
+  // observer headline survive the toggle: agent-declared attention and the
   // stuck / waiting-on-user health states still belong beside their session, even
   // when the operator hides routine activity previews.
   if (!params.showPreview) {
@@ -124,28 +124,4 @@ export function resolveSidebarSessionSubtitle(params: {
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
   const subtitle = attention ?? agentStatus ?? observer ?? narration ?? finalReply ?? workSubtitle;
   return { subtitle, narration };
-}
-
-export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {
-  if (!value.subtitle) {
-    return nothing;
-  }
-  const label = value.toolName ? `${t("chat.toolCards.tool")}: ${value.toolName}` : undefined;
-  const icon = value.toolName
-    ? html`<openclaw-tooltip .content=${label} .describe=${false}
-        ><span class="sidebar-session-tool" role="img" aria-label=${label}
-          >${icons[resolveToolDisplayIcon(value.toolName)]}</span
-        ></openclaw-tooltip
-      >`
-    : nothing;
-  const text = value.narration
-    ? keyed(
-        value.narration,
-        html`<span
-          class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration"
-          >${value.subtitle}</span
-        >`,
-      )
-    : html`<span class="sidebar-recent-session__subtitle">${value.subtitle}</span>`;
-  return html`${icon}${text}`;
 }

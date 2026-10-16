@@ -5,6 +5,7 @@ import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
@@ -32,6 +33,7 @@ export async function prepareCompactionSessionAgent(params: {
   effectiveWorkspace: string;
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
+  modelCallUrgency?: ModelCallUrgency;
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
@@ -83,6 +85,7 @@ export async function prepareCompactionSessionAgent(params: {
     params.agentDir,
     undefined,
     {
+      modelCallUrgency: params.modelCallUrgency,
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       auth: params.runtimePlan?.auth.selectedAuthMode
         ? {

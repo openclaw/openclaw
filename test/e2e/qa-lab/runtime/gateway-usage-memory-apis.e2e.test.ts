@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../../../../src/config/config.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -14,7 +18,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
 import { clearModelAuthStatusUsageCache } from "../../../../src/gateway/server-methods/models-auth-status-usage-cache.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
-import { loadGatewaySessionEntryReadOnly } from "../../../../src/gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "../../../../src/gateway/session-utils.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -196,6 +200,7 @@ describe("gateway usage and memory APIs", () => {
         clearConfigCache();
         clearModelAuthStatusUsageCache();
 
+        await captureRuntimeConfigAsyncReader()();
         const { databasePath } = await seedCompletedUsageSession(state);
         const databaseStats = await fs.stat(databasePath);
         expect(databaseStats.isFile()).toBe(true);
@@ -206,7 +211,7 @@ describe("gateway usage and memory APIs", () => {
           sessionId: FIXTURE_SESSION_ID,
           storePath: databasePath,
         });
-        const storedSession = loadGatewaySessionEntryReadOnly(FIXTURE_SESSION_KEY);
+        const storedSession = await loadGatewaySessionEntryReadOnlyAsync(FIXTURE_SESSION_KEY);
         expect(storedSession).toMatchObject({
           entry: {
             sessionId: FIXTURE_SESSION_ID,

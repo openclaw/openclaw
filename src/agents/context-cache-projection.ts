@@ -1,9 +1,9 @@
 import { setImmediate as yieldToGateway } from "node:timers/promises";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 const CONTEXT_PROJECTION_BATCH_SIZE = 512;
 
@@ -48,7 +48,7 @@ function applyDiscoveredContextWindow(
   cache: Map<string, number>,
   model: ContextWindowModelEntry,
 ): void {
-  if (!model?.id) {
+  if (!model.id) {
     return;
   }
   const discoveredContextTokens =
@@ -63,9 +63,17 @@ function applyDiscoveredContextWindow(
     return;
   }
 
-  const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  const provider = model.provider ? normalizeProviderId(model.provider) : "";
   for (const key of contextModelKeys(model.id, provider || undefined)) {
     cacheMinimum(cache, key, contextTokens);
+  }
+}
+
+function* configuredModels(modelsConfig: ModelsConfig | undefined) {
+  for (const [providerId, provider] of Object.entries(modelsConfig?.providers ?? {})) {
+    for (const model of provider?.models ?? []) {
+      yield { providerId, model };
+    }
   }
 }
 
@@ -74,22 +82,8 @@ export function applyConfiguredContextWindows(params: {
   windowCache: Map<string, number>;
   modelsConfig: ModelsConfig | undefined;
 }): void {
-  const providers = params.modelsConfig?.providers;
-  if (!providers || typeof providers !== "object") {
-    return;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
-    if (!Array.isArray(provider?.models)) {
-      continue;
-    }
-    for (const model of provider.models) {
-      applyConfiguredContextWindow({
-        cache: params.cache,
-        windowCache: params.windowCache,
-        providerId,
-        model,
-      });
-    }
+  for (const model of configuredModels(params.modelsConfig)) {
+    applyConfiguredContextWindow({ ...params, ...model });
   }
 }
 
@@ -99,11 +93,7 @@ function applyConfiguredContextWindow(params: {
   providerId: string;
   model: ConfiguredModel;
 }): void {
-  const modelId = typeof params.model?.id === "string" ? params.model.id : undefined;
-  const contextTokens =
-    typeof params.model?.contextTokens === "number" ? params.model.contextTokens : undefined;
-  const contextWindow =
-    typeof params.model?.contextWindow === "number" ? params.model.contextWindow : undefined;
+  const { id: modelId, contextTokens, contextWindow } = params.model;
   const configuredValue =
     contextTokens && contextTokens > 0
       ? { cache: params.cache, value: contextTokens }
@@ -121,8 +111,7 @@ function applyConfiguredContextWindow(params: {
 function resolveDiscoveredAnthropicFixedContextWindow(
   model: ContextWindowModelEntry,
 ): number | undefined {
-  const provider =
-    typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
+  const provider = model.provider ? normalizeProviderId(model.provider) : undefined;
   if (provider) {
     return resolveAnthropicFixedContextWindow(provider, model.id);
   }
@@ -165,24 +154,15 @@ export async function prepareContextWindowCaches(params: {
     contextWindowCache: new Map(),
   };
   let processed = 0;
-  const providers = params.config.models?.providers;
-  if (providers && typeof providers === "object") {
-    for (const [providerId, provider] of Object.entries(providers)) {
-      if (!Array.isArray(provider?.models)) {
-        continue;
-      }
-      for (const model of provider.models) {
-        applyConfiguredContextWindow({
-          cache: caches.configuredTokenCache,
-          windowCache: caches.contextWindowCache,
-          providerId,
-          model,
-        });
-        processed += 1;
-        if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
-          await yieldToGateway();
-        }
-      }
+  for (const model of configuredModels(params.config.models)) {
+    applyConfiguredContextWindow({
+      cache: caches.configuredTokenCache,
+      windowCache: caches.contextWindowCache,
+      ...model,
+    });
+    processed += 1;
+    if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+      await yieldToGateway();
     }
   }
   await projectModels({

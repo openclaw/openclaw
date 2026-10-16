@@ -11,6 +11,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -26,7 +27,10 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import { acquireReplyOperationSessionActor } from "./reply-run-registry.state.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -74,6 +78,13 @@ it("creates a missing persistent store through reply admission without main-thre
     const sessionKey = "agent:main:first-worker-admission";
     openOpenClawStateDatabase({ env: state.env });
     expect(fs.existsSync(storePath)).toBe(false);
+    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    const sharing = await prepareSessionMutationFacts({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      allowMissing: true,
+    });
     const sql = observeMainThreadSql({ includeClose: true });
     sql.calibrate();
     const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
@@ -85,6 +96,7 @@ it("creates a missing persistent store through reply admission without main-thre
         sessionId: "first-worker-admission-session",
         kind: "visible",
         resetTriggered: false,
+        onDatabaseRegistration: sharing.followRegistration,
       }).then((admitted) => {
         result = admitted;
         return admitted;
@@ -96,6 +108,7 @@ it("creates a missing persistent store through reply admission without main-thre
       expect(result.sessionEntry).toBeUndefined();
       expect(result.databaseClaim.isCurrent()).toBe(true);
       expect(fs.existsSync(storePath)).toBe(true);
+      expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       sql.expectIdle();
@@ -106,6 +119,7 @@ it("creates a missing persistent store through reply admission without main-thre
       } finally {
         opened.mockRestore();
         sql.restore();
+        sharing.release();
       }
     }
   });
@@ -446,10 +460,13 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               cancel() {},
             });
             if (ending === "frozen-restart") {
-              active.operation.freezeAbort();
-              work.beginClose(createAgentRunRestartAbortError());
-              expect(active.operation.abortForRestart()).toBe(false);
-              expect(active.operation.abortSignal.aborted).toBe(false);
+              const operation = active.operation;
+              operation.freezeAbort();
+              const restartReason = createAgentRunRestartAbortError();
+              work.beginClose(restartReason);
+              expect(operation.abortForRestart()).toBe(false);
+              expect(operation.abortSignal.aborted).toBe(false);
+              expect(() => getReplyOperationSessionTarget(operation)).toThrow(restartReason);
             } else {
               expect(
                 ending === "restart-abort"

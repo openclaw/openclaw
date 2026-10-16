@@ -4,13 +4,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
-  trackSqliteDatabaseAdmissionWorker,
-  type SqliteDatabaseAdmissionCursor,
-} from "./sqlite-database-admission.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
+import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
@@ -21,6 +18,7 @@ import {
   markWorkerRetirement,
   receiveWorkerMemoryPort,
 } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -41,7 +39,6 @@ const admissions = resolveGlobalSingleton(
       Parameters<WorkerTaskHost["captureTaskContext"]>[0],
       {
         owner: SqliteWorkerOperationAdmission;
-        cursor: SqliteDatabaseAdmissionCursor;
         sent: boolean;
         retiring: boolean;
       }
@@ -107,7 +104,6 @@ export function createWorkerTaskHost(
               }
             }),
           ),
-          cursor: createSqliteDatabaseAdmissionCursor(),
           sent: false,
           retiring: false,
         };
@@ -118,9 +114,12 @@ export function createWorkerTaskHost(
           admissions.delete(worker);
         });
       }
+      // The retained relay supplies current facts on demand; global snapshots grow with sessions.
+      const selection = getDatabaseEngineSelection();
       const context: WorkerTaskContext = {
+        ...(selection ? { databaseEngineSelection: selection } : {}),
         deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
-        databaseAdmissions: captureSqliteDatabaseAdmissions(admission.cursor),
+        databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
         ...(!admission.sent ? { databaseAdmissionPort: admission.owner.port } : {}),
       };
       admission.sent = true;
@@ -140,8 +139,11 @@ export function createWorkerTaskHost(
         );
     },
     receiveMessage: receiveWorkerMemoryPort,
+    observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     workerStarted(worker, pool) {
-      trackSqliteDatabaseAdmissionWorker(worker);
+      if (owner.databaseAccess !== "read-only") {
+        trackSqliteDatabaseAdmissionWorker(worker);
+      }
       attributeWorkerToPool(worker, pool);
     },
     workerRetiring(worker, reason) {

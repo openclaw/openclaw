@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -14,6 +15,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("reads prepared history catalogs without querying the unused requester identity", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const profile = ensureProfileForEmail("history@example.test");
     const scope = { agentId: "main", sessionKey: "agent:main:requester-history" };
     await upsertSessionEntryCore(scope, { sessionId: "requester-history", updatedAt: 1 });

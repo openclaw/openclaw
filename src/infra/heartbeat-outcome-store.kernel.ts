@@ -1,20 +1,20 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type HeartbeatDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_outcomes" | "session_nodes">;
 export type HeartbeatOutcomeInput = Insertable<OpenClawAgentKyselyDatabase["heartbeat_outcomes"]>;
 export type HeartbeatOutcomeRow = Selectable<OpenClawAgentKyselyDatabase["heartbeat_outcomes"]>;
 
-/** The caller owns the synchronous transaction and its current admission. */
+/** The caller admits this single atomic statement before execution. */
 export function persistHeartbeatOutcomeInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   values: HeartbeatOutcomeInput,
-): undefined {
+): HeartbeatOutcomeRow | undefined {
   const agentDb = getNodeSqliteKysely<HeartbeatDatabase>(db);
   const { session_key: _sessionKey, ...replacement } = values;
-  executeSqliteQuerySync(
+  return executeSqliteQuerySync(
     db,
     agentDb
       .insertInto("heartbeat_outcomes")
@@ -62,12 +62,13 @@ export function persistHeartbeatOutcomeInDatabase(
           context_run_id: null,
           context_claimed_at: null,
         }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows[0];
 }
 
 export function claimHeartbeatOutcomeRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { sessionKey: string; runId: string },
 ): HeartbeatOutcomeRow | undefined {
   const agentDb = getNodeSqliteKysely<HeartbeatDatabase>(db);

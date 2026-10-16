@@ -32,47 +32,41 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupGatewayRetiredPluginArtifacts } from "./server-retained-plugin-cleanup.js";
 
-it.each(["empty", "state", "temporary"] as const)(
-  "leaves shared state and hot metadata untouched with only %s captures",
-  async (placement) => {
-    await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
-      const database = openOpenClawStateDatabase({ env: state.env });
-      loadInstalledPluginIndexInstallRecordsSync();
-      const cache = getProcessPluginCache();
-      const fact = cache.persistedInstalledIndex.get(database.path);
-      expect(fact).toBeDefined();
-      const capture =
-        placement === "empty"
-          ? undefined
-          : createPluginNativeCaptureRoot(state.stateDir, placement);
-      const witness = new DatabaseSync(database.path, { readOnly: true });
-      const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
-      const before = version();
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const observer = observeParentSqlite();
+it("leaves shared state and hot metadata untouched with only state captures", async () => {
+  await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    loadInstalledPluginIndexInstallRecordsSync();
+    const cache = getProcessPluginCache();
+    const fact = cache.persistedInstalledIndex.get(database.path);
+    expect(fact).toBeDefined();
+    const capture = createPluginNativeCaptureRoot(state.stateDir, "state");
+    const witness = new DatabaseSync(database.path, { readOnly: true });
+    const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
+    const before = version();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const observer = observeParentSqlite();
+    try {
       try {
-        try {
-          await cleanupGatewayRetiredPluginArtifacts({
-            log,
-            startupInstallPaths: [],
-            signal: new AbortController().signal,
-            assertCurrent: () => {},
-          });
-          expect(observer.counts).toEqual(emptySqliteCounts());
-        } finally {
-          observer.restore();
-        }
-        expect(version()).toBe(before);
-        expect(cache.persistedInstalledIndex.get(database.path)).toBe(fact);
-        expect(log.info).not.toHaveBeenCalled();
-        expect(log.warn).not.toHaveBeenCalled();
+        await cleanupGatewayRetiredPluginArtifacts({
+          log,
+          startupInstallPaths: [],
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        });
+        expect(observer.counts).toEqual(emptySqliteCounts());
       } finally {
-        witness.close();
-        await capture?.disposeAsync();
+        observer.restore();
       }
-    });
-  },
-);
+      expect(version()).toBe(before);
+      expect(cache.persistedInstalledIndex.get(database.path)).toBe(fact);
+      expect(log.info).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      witness.close();
+      await capture.disposeAsync();
+    }
+  });
+});
 
 it("preserves package files retained by plugin uninstall", async () => {
   await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {

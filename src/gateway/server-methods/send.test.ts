@@ -13,13 +13,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { resolveOutboundTargetWithPlugin } from "../../infra/outbound/targets-resolve-shared.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -190,13 +193,11 @@ vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   completeRestartRecoveryTerminalDelivery: mocks.completeRestartRecoveryTerminalDelivery,
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: mocks.loadSessionEntry,
-  };
-});
+// mock-isolation: Send-method fixtures bind synthetic session rows without opening session storage.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) =>
+    mocks.loadSessionEntry(params.key),
+}));
 
 const {
   invokeGatewayMessageMethod,
@@ -1092,24 +1093,29 @@ describe("gateway send mirroring", () => {
     expect(response?.[3]?.channel).toBe("slack");
   });
 
-  it("rejects empty sends when neither text nor media is present", async () => {
-    await expectRejectedSend({ channel: "slack", message: "   " }, "text or media is required");
-  });
-
-  it("returns actionable guidance when channel is internal webchat", async () => {
-    const response = await expectRejectedSend(
-      { channel: "webchat" },
-      "unsupported channel: webchat",
-    );
-    expect(response[2]?.message).toContain("Use `chat.send`");
-  });
-
-  it("rejects unknown send channels without delivering", async () => {
-    mocks.getChannelPlugin.mockReturnValue(undefined);
-    await expectRejectedSend(
-      { channel: "definitely-not-a-real-channel-xyz" },
+  it.each([
+    ["slack", "   ", "text or media is required"],
+    ["webchat", "hi", "unsupported channel: webchat"],
+    [
+      "definitely-not-a-real-channel-xyz",
+      "hi",
       "unsupported channel: definitely-not-a-real-channel-xyz",
-    );
+    ],
+    ["slack", "hi", "target not found"],
+  ])("rejects channel %s and message %j: %s", async (channel, message, error) => {
+    if (channel === "definitely-not-a-real-channel-xyz") {
+      mocks.getChannelPlugin.mockReturnValue(undefined);
+    }
+    if (error === "target not found") {
+      mocks.resolveOutboundTarget.mockResolvedValue({ ok: false, error: new Error(error) });
+    }
+    const response = await expectRejectedSend({ channel, message }, error);
+    if (channel === "webchat") {
+      expect(response[2]?.message).toContain("Use `chat.send`");
+    }
+    if (error === "target not found") {
+      expect(response[3]?.channel).toBe("slack");
+    }
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -1181,6 +1187,7 @@ describe("gateway send mirroring", () => {
   it("carries an authenticated creator's required sandbox into an outbound session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("required-outbound@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = {
         gateway: {
           roles: {
@@ -1195,7 +1202,8 @@ describe("gateway send mirroring", () => {
             },
           },
         },
-      };
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const context = {
         ...makeContext(),
         getRuntimeConfig: () => cfg,
@@ -1319,15 +1327,6 @@ describe("gateway send mirroring", () => {
     runSend,
     mockDeliverySuccess,
     registerMessageThreadAddressingPlugin,
-  });
-
-  it("returns invalid request when outbound target resolution fails", async () => {
-    mocks.resolveOutboundTarget.mockResolvedValue({
-      ok: false,
-      error: new Error("target not found"),
-    });
-    const response = await expectRejectedSend({ channel: "slack" }, "target not found");
-    expect(response[3]?.channel).toBe("slack");
   });
 
   it("strips forged current-turn context from agent runs without an ingress capability", async () => {
@@ -1551,54 +1550,45 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry a delivered terminal reply when receipt finalization fails", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
-      jsonResult({ ok: true, messageId: "tg-ambiguous-receipt" }),
-    );
-    mocks.completeRestartRecoveryTerminalDelivery.mockRejectedValueOnce(
-      new Error("receipt store unavailable"),
-    );
-    const { respond } = await runTelegramTerminalAction({
-      sessionId: "session-ambiguous-receipt",
-      idempotencyKey: "idem-ambiguous-receipt",
-      sourceTurnId: "channel-user:v1:ambiguous-receipt",
-      toolCallId: "message-call-ambiguous",
-      message: "delivered with pending receipt",
-    });
+  it.each(["receipt finalization fails", "transcript mirroring is rejected"])(
+    "preserves a delivered terminal reply when %s",
+    async (failure) => {
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+        jsonResult({ ok: true, messageId: "tg-2" }),
+      );
+      if (failure === "receipt finalization fails") {
+        mocks.completeRestartRecoveryTerminalDelivery.mockRejectedValueOnce(
+          new Error("receipt store unavailable"),
+        );
+      } else {
+        mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+          ok: false,
+          code: "blocked",
+          reason: "transcript write rejected",
+        });
+      }
+      const sessionKey = "agent:main:telegram:direct:chat-123";
 
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the provider receipt durable when transcript mirroring is rejected", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
-      jsonResult({ ok: true, messageId: "tg-2" }),
-    );
-    mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
-      ok: false,
-      code: "blocked",
-      reason: "transcript write rejected",
-    });
-    const sessionKey = "agent:main:telegram:direct:chat-123";
-
-    const { respond } = await runTelegramTerminalAction({
-      sessionId: "session-2",
-      idempotencyKey: "idem-source-message-action-2",
-      sourceTurnId: "channel-user:v1:telegram-message-2",
-      toolCallId: "message-call-2",
-      message: "delivered but unrecorded",
-    });
-
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
+      const { respond } = await runTelegramTerminalAction({
         sessionId: "session-2",
-        sessionKey,
+        idempotencyKey: "idem-source-message-action-2",
         sourceTurnId: "channel-user:v1:telegram-message-2",
-      }),
-    );
-  });
+        toolCallId: "message-call-2",
+        message: "delivered but unrecorded",
+      });
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "session-2",
+          sessionKey,
+          sourceTurnId: "channel-user:v1:telegram-message-2",
+        }),
+      );
+    },
+  );
 
   it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {
     registerMessageActionPlugin({

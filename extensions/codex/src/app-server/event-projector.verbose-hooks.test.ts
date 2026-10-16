@@ -21,6 +21,7 @@ import {
   forCurrentTurn,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import * as sessionHistory from "./session-history.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -39,7 +40,7 @@ const hookRun = {
 };
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("redacts secrets in verbose command summaries", async () => {
+  it("preserves source text in verbose command summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -61,8 +62,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
 
     const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
-    expect(text).toContain("OPENAI_API_KEY=*** pnpm test");
-    expect(text).not.toContain("sk-1234567890abcdefZZZZ");
+    expect(text).toContain("OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test");
   });
 
   it("hides command arguments from ordinary verbose dynamic tool summaries", async () => {
@@ -305,14 +305,16 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const params = await createParams();
     const projector = await createProjector({ ...params, onAgentEvent });
 
-    await projector.handleNotification({
-      method: "hook/started",
-      params: {
-        threadId: THREAD_ID,
-        turnId: null,
-        run: { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" },
-      },
-    });
+    await projector.handleNotification(
+      prepareCodexServerNotification({
+        method: "hook/started",
+        params: {
+          threadId: THREAD_ID,
+          turnId: null,
+          run: { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" },
+        },
+      }),
+    );
 
     const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.hook",

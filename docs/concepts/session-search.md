@@ -37,8 +37,14 @@ applied. Sandboxed agents remain limited to sessions they spawned when spawned-s
 is enabled. Incognito sessions remain excluded; narrowing visibility from `all` blocks ordinary
 cross-agent access.
 
-Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
+Excerpts preserve transcript text, including credentials. Results are bounded by count, excerpt
 length, and total response size.
+
+Each transcript search request allows up to 90 seconds, leaving dispatch and
+authorization headroom around the reader's 60-second budget, including worker admission.
+If it times out, retry `sessions_search` with a `sessionKey` to search one session
+or more specific query keywords. A timeout does not mean that no matching
+conversation exists.
 
 ## Control UI search
 

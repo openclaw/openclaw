@@ -69,6 +69,31 @@ describe("prepared pool retention and source admission", () => {
     expectSummary(["orphaned", "preparing"], 0);
   });
 
+  it("keeps satisfied targets quiet and reports an unsatisfied shared cap", async () => {
+    await readyReserve();
+    const warn = vi.fn();
+    const owner = fixture.pool({ warn });
+    await fixture.schedule(owner);
+    await fixture.schedule(owner);
+    expect(warn).not.toHaveBeenCalled();
+
+    fixture.developmentProfile.readyWorkers = 2;
+    fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
+    await fixture.schedule(owner);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/Prepared worker refill skipped .*: shared prepared capacity reached$/),
+    );
+    await fixture.schedule(owner);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    fixture.developmentProfile.readyWorkers = 1;
+    await fixture.schedule(owner);
+    fixture.developmentProfile.readyWorkers = 2;
+    await fixture.schedule(owner);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(fixture.reserves()).toHaveLength(1);
+  });
+
   it.each([
     "retention",
     "missing provider",

@@ -12,6 +12,7 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearBootEchoContextForSession,
@@ -55,6 +56,10 @@ const EMPTY_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 const secretDeps = {
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
@@ -207,11 +212,13 @@ describe("registered message action source completion", () => {
         resetTriggered: false,
       });
       try {
+        const config: OpenClawConfig = {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowWithinProvider: true } } },
+        };
+        setRuntimeConfigSnapshot(config);
         const tool = createMessageTool({
-          config: {
-            ...workspaceConfig,
-            tools: { message: { crossContext: { allowWithinProvider: true } } },
-          },
+          config,
           ...source,
           agentId: identity.agentId,
           runId: identity.runId,
@@ -271,6 +278,7 @@ function createFailingMessageTool(error: Error) {
   const runMessageAction = vi.fn(async () => {
     throw error;
   });
+  setRuntimeConfigSnapshot({});
   const tool = createMessageTool({
     config: {},
     runId: "run-queued-delivery",
@@ -356,6 +364,7 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
       throw new Error("Credential preparation must not run for a missing account");
     });
     try {
+      setRuntimeConfigSnapshot(cfg);
       const tool = createMessageTool({
         config: cfg,
         agentId: identity.agentId,
@@ -535,6 +544,7 @@ describe("message tool terminal source actions", () => {
       requesterAccountId: "default",
       toolContext: source,
     });
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -598,7 +608,7 @@ describe("message tool terminal source actions", () => {
         terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
         settledTurnFinalizationAvailable: true,
       });
-      expect(finalization === null).toBe(completes);
+      expect(finalization).toBeNull();
     }
   });
 });
@@ -646,6 +656,7 @@ describe("message tool group thread replies", () => {
         },
       ]),
     );
+    setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
@@ -699,6 +710,7 @@ describe("message tool group thread replies", () => {
       const hookRunner = createHookRunner(
         createMockPluginRegistry([{ hookName: "message_sending", handler: sendingHook }]),
       );
+      setRuntimeConfigSnapshot({});
       const tool = createMessageTool({
         config: {},
         agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
@@ -824,6 +836,7 @@ describe("message tool group thread replies", () => {
         "Other thread",
         "Top-level send",
         "**Reviewer**\nRedirected reply",
+        "**Reviewer**\nNO_REPLY",
         "**Reviewer**\n",
         "**Reviewer**\nEdited final",
         "Unplaced edit",
@@ -832,6 +845,7 @@ describe("message tool group thread replies", () => {
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
         [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],
       ]);

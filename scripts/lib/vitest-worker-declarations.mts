@@ -3,7 +3,7 @@ export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
 // The CLI loads this package-root supervisor by URL instead of bundling it.
-export const vitestWorkerRuntimeAssets = ["node-host-launcher.mjs"];
+export const vitestWorkerRuntimeAssets = ["cli-invocation.mjs", "node-host-launcher.mjs"];
 
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
@@ -11,10 +11,10 @@ export const runtimeProcessDeclarationEntries = {
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/document-extract/document-extractor-worker-entrypoint":
     "extensions/document-extract/document-extractor-worker-entrypoint.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "infra/postgres-sync/locks-runtime.test-support":
+    "src/infra/postgres-sync/locks-runtime.test-support.ts",
   "worker/native-worker-entrypoints.test-support":
     "src/worker/native-worker-entrypoints.test-support.ts",
   "extensions/acpx/src/runtime.admission-retention-entrypoint.test-support":
@@ -98,8 +98,8 @@ export const vitestWorkerDeclarationEntries = {
     "packages/llm-core/src/retention-runtime.test-support.ts",
   "packages/agent-core/retention-runtime.test-support":
     "packages/agent-core/src/retention-runtime.test-support.ts",
-  "packages/ai/providers/clean-for-gemini-runtime.test-support":
-    "packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts",
+  "packages/ai/providers/tool-schema-depth-runtime.test-support":
+    "packages/ai/src/providers/tool-schema-depth-runtime.test-support.ts",
   "packages/terminal-core/table-runtime.test-support":
     "packages/terminal-core/src/table-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
@@ -107,8 +107,16 @@ export const vitestWorkerDeclarationEntries = {
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",
+  "extensions/codex/doctor-closed-stdin.test-support":
+    "extensions/codex/src/doctor-closed-stdin.test-support.ts",
+  "extensions/codex/doctor-closed-stdin-entrypoint.test-support":
+    "extensions/codex/src/doctor-closed-stdin-entrypoint.test-support.ts",
+  "extensions/codex/session-history-worker-entrypoint":
+    "extensions/codex/session-history-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":
@@ -151,6 +159,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "infra/database-engine/update-preflight.runtime.test-support":
+    "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":

@@ -44,7 +44,11 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<
         typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
       >[0] & { mode: "database-restore-preparation" })
-    | { mode: "database-generations"; paths: string[] };
+    | {
+        mode: "database-generations";
+        paths: string[];
+        pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+      };
   switch (input.mode) {
     case "database-restore-preparation": {
       const { prepareUpdateDatabaseRestoreSourceInProcess } =
@@ -52,8 +56,9 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
-      return readUpdateDatabaseGenerations(input.paths);
+      const { readUpdatePhysicalDatabaseGenerations } =
+        await import("./update-database-generations.js");
+      return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
     }
     case "inventory": {
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
@@ -75,6 +80,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "snapshot":
       return snapshotUpdateCandidateState({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         onProgress: createUpdateStateInspectionReporter(
           !input.streamProgress,
           input.streamEntryProgress,
@@ -88,6 +94,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "versions":
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:

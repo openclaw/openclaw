@@ -524,11 +524,9 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
+  // An explicitly empty roster owns no agent workspaces; listAgentIds already
+  // supplies the implicit owner for raw pre-roster configs.
   const agentIds = listAgentIds(cfg);
-  if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
-  }
-
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
     const workspaceDir = workspaceDirRaw?.trim();

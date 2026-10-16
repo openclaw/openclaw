@@ -9,6 +9,7 @@ import type {
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -30,7 +31,8 @@ export type PreparedQuestionCallerRead = {
   reads: readonly SessionEntryWorkerRead[];
   prepareCurrent: () => Promise<void>;
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
-  retainNative: () => { assertCurrent: () => void; release: () => void };
+  /** Retain owner-held policy facts; final checks never acquire a durable reader. */
+  retainCurrent: () => { assertCurrent: () => void; release: () => void };
 };
 
 export type QuestionInputAuthority = {
@@ -65,7 +67,7 @@ export function readQuestionDispatchCapability(assertCurrent?: QuestionDispatchC
   return assertCurrent ? questionDispatchCapabilities.get(assertCurrent) : undefined;
 }
 
-/** Preserve reservation refusal tracking on every final policy check and native grant. */
+/** Preserve reservation refusal tracking on every final policy check. */
 export function bindQuestionDispatchGuard(
   assertCurrent: () => void,
   authority: QuestionInputAuthority | undefined,
@@ -103,16 +105,16 @@ export function bindQuestionDispatchGuard(
         prepareCurrent: prepareCurrent!,
         assertPrepared: (reads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0]) =>
           guard(() => callerRead.assertPrepared(reads)),
-        retainNative: () => {
-          let native: ReturnType<PreparedQuestionCallerRead["retainNative"]>;
+        retainCurrent: () => {
+          let retained: ReturnType<PreparedQuestionCallerRead["retainCurrent"]>;
           try {
-            native = callerRead.retainNative();
+            retained = callerRead.retainCurrent();
           } catch (error) {
             return refuse(error);
           }
           return {
-            release: native.release,
-            assertCurrent: () => guard(native.assertCurrent),
+            release: retained.release,
+            assertCurrent: () => guard(retained.assertCurrent),
           };
         },
       },
@@ -148,7 +150,7 @@ export type PreparedToolAuthorityRead = {
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
   /** Ordinary legacy queue admission only; never call from a worker grant. */
   assertLegacyCurrent: () => void;
-  retainNative?: PreparedQuestionCallerRead["retainNative"];
+  retainCurrent?: PreparedQuestionCallerRead["retainCurrent"];
 };
 const toolAuthorityReadScope = new AsyncLocalStorage<{
   reads: PreparedToolAuthorityRead[];
@@ -233,15 +235,20 @@ function assertQuestionCompatibilityCurrent(
   fallback: () => void,
 ) {
   assertActive();
-  const native = callerRead?.retainNative();
+  const retained = callerRead?.retainCurrent();
   try {
-    if (native) {
-      native.assertCurrent();
+    if (retained) {
+      retained.assertCurrent();
     } else {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "question dispatcher authority.assertCurrent synchronous preparation",
+        replacement: "await authority.assertCurrentAsync() before the final effect assertion",
+      });
       fallback();
     }
   } finally {
-    native?.release();
+    retained?.release();
   }
   assertActive();
 }
@@ -262,7 +269,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
   const supported =
     !captured.assertCompatibility &&
     captured.reads.length > 0 &&
-    captured.reads.every((read) => read.retainNative);
+    captured.reads.every((read) => read.retainCurrent);
   const assertLegacyReads = () => {
     for (const read of captured.reads) {
       read.assertLegacyCurrent();
@@ -289,8 +296,8 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
           }
           assertActive();
         },
-        retainNative: () => {
-          const retained: ReturnType<PreparedQuestionCallerRead["retainNative"]>[] = [];
+        retainCurrent: () => {
+          const retained: ReturnType<PreparedQuestionCallerRead["retainCurrent"]>[] = [];
           const release = () => {
             const errors: unknown[] = [];
             for (const read of retained.toReversed()) {
@@ -304,7 +311,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
           };
           try {
             for (const read of captured.reads) {
-              retained.push(read.retainNative!());
+              retained.push(read.retainCurrent!());
             }
             return {
               release,
@@ -489,10 +496,10 @@ export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   ownerPluginId: string;
   create: AgentHarnessScheduledToolProjectionFactory;
 }): void {
-  scheduledToolProjectionCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, create: params.create }),
-  );
+  scheduledToolProjectionCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    create: params.create,
+  });
 }
 
 /** Resolves a private issuer only for the exact authoritative plugin owner. */
@@ -509,10 +516,10 @@ export function registerAgentHarnessTtsProvenanceTransferCapability(params: {
   ownerPluginId: string;
   transfer: AgentHarnessTtsProvenanceTransfer;
 }): void {
-  ttsProvenanceTransferCapabilities.set(
-    params.hostCapabilities,
-    Object.freeze({ ownerPluginId: params.ownerPluginId, transfer: params.transfer }),
-  );
+  ttsProvenanceTransferCapabilities.set(params.hostCapabilities, {
+    ownerPluginId: params.ownerPluginId,
+    transfer: params.transfer,
+  });
 }
 
 /** Resolves private TTS delivery transfer only for the exact authoritative plugin owner. */

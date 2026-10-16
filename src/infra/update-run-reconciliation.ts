@@ -1,4 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -24,6 +25,7 @@ type ReconciliationOptions = UpdateRunLedgerOptions & {
 function prepareReconciliation(options: ReconciliationOptions) {
   const captured = {
     ...options,
+    signal: options.signal ?? getAsyncWorkSignal(),
     env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
     ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
   };
@@ -38,7 +40,7 @@ function prepareReconciliation(options: ReconciliationOptions) {
     options: captured,
     context,
     assertCurrent,
-    async read(command: OpenClawStateReadCommand) {
+    async read<Command extends OpenClawStateReadCommand>(command: Command) {
       const reply = await withArtifactPreservingStateReads(() =>
         executeExistingOpenClawStateRead(captured, command, {
           context,
@@ -84,6 +86,7 @@ async function reconcileCandidates(
       }),
     {
       existingOnly: true,
+      signal: options.signal,
       assertCurrent,
       createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
         context.admission.databasePath,
@@ -113,9 +116,6 @@ export async function reconcileAbandonedUpdateRunsAsync(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "updateRuns.reconciliationCandidates") {
-    throw new Error("Unexpected update run reconciliation lookup result");
-  }
   return (await reconcileCandidates(reply.candidates, selection, prepared)).reconciled;
 }
 
@@ -128,9 +128,6 @@ export async function getUpdateRunWithReconciliationAsync(
   const reply = await prepared.read({ type: "updateRuns.reconciliationCandidate", runId });
   if (!reply) {
     return { run: undefined };
-  }
-  if (!reply.ok || reply.type !== "updateRuns.reconciliationCandidate") {
-    throw new Error("Unexpected update run reconciliation lookup result");
   }
   if (!reply.candidate) {
     return { run: undefined };

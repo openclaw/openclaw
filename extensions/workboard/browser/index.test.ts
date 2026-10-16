@@ -54,9 +54,21 @@ it("keeps reassigned session cards current through events without polling", asyn
   });
   const boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
   let currentCard = card;
-  const request = vi.fn(async (method: string) => {
+  let responseBytes = 0;
+  const request = vi.fn(async (method: string, params: unknown) => {
     if (method === "workboard.cards.list") {
-      return { cards: [currentCard], boards };
+      const result = {
+        cards:
+          params && typeof params === "object" && "sessionKey" in params
+            ? [currentCard]
+            : [
+                currentCard,
+                createWorkboardCard({ id: "history", notes: "history".repeat(10_000) }),
+              ],
+        boards,
+      };
+      responseBytes += JSON.stringify(result).length;
+      return result;
     }
     if (method === "workboard.boards.list") {
       return { boards };
@@ -76,11 +88,16 @@ it("keeps reassigned session cards current through events without polling", asyn
     const accessory = registrations.get("accessory/linked-card") as ControlUiAccessory;
     const mounted = accessory.mount(container, createViewContext(host, context));
     disposeAccessory = () => mounted?.dispose?.();
+    await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain(card.title);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
+    expect(request.mock.calls).toEqual([
+      ["workboard.boards.list", {}],
+      ["workboard.cards.list", { sessionKey: session.key }],
+    ]);
+    expect(responseBytes).toBeLessThan(2048);
 
-    // The session accessory follows the catalog's refreshed card state.
+    // The accessory refreshes its own bounded session query.
     currentCard = {
       ...card,
       title: "Current captured conversation",
@@ -90,7 +107,14 @@ it("keeps reassigned session cards current through events without polling", asyn
     fixture.emit("plugin.workboard.changed", { epoch: "catalog-epoch", revision: 1 });
     await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain(currentCard.title);
-    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls).toEqual(
+      expect.arrayContaining([
+        ["workboard.boards.list", {}],
+        ["workboard.cards.list", { sessionKey: session.key }],
+      ]),
+    );
+    expect(responseBytes).toBeLessThan(2048);
   } finally {
     disposeAccessory();
     dispose?.();
@@ -211,7 +235,7 @@ it.each(["open", "another board", "hidden"] as const)(
       if (method === "workboard.boards.delete") {
         return deleted.promise;
       }
-      if (method === "workboard.cards.list" && pendingCatalog) {
+      if (method === "workboard.boards.list" && pendingCatalog) {
         const pending = pendingCatalog;
         pendingCatalog = undefined;
         return pending;
@@ -354,7 +378,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
       created = true;
       return { board };
     }
-    if (method === "workboard.cards.list") {
+    if (method === "workboard.cards.list" || method === "workboard.boards.list") {
       return created
         ? refreshed.promise
         : refreshing
@@ -430,7 +454,8 @@ it("disambiguates a created board and its sibling before pinning through a stale
   }
 });
 
-it("keeps accessories on the same recovered snapshot and retires pending activation reads", async () => {
+it("recovers accessory reads independently from the catalog and retires pending reads", async () => {
+  vi.useFakeTimers();
   const fixture = workboardTestHost();
   const hostListeners = fixture.listeners.size;
   const { host, connection, registrations } = fixture;
@@ -438,7 +463,24 @@ it("keeps accessories on the same recovered snapshot and retires pending activat
   const session = createGatewaySession();
   const card = createWorkboardCard({ title: "Linked card", sessionKey: session.key });
   const boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
-  const request = vi.fn().mockResolvedValue({ cards: [card], boards });
+  let currentCard = card;
+  let failCardRead = false;
+  let pendingCardRead: Promise<unknown> | undefined;
+  const request = vi.fn(async (method: string) => {
+    if (method === "workboard.boards.list") {
+      return { boards };
+    }
+    if (failCardRead) {
+      failCardRead = false;
+      throw new Error("Temporary read failure");
+    }
+    if (pendingCardRead) {
+      const pending = pendingCardRead;
+      pendingCardRead = undefined;
+      return pending;
+    }
+    return { cards: [currentCard] };
+  });
   host.request = request as typeof host.request;
   const dispose = await workboardPlugin.activate(host);
   const container = document.createElement("div");
@@ -447,35 +489,40 @@ it("keeps accessories on the same recovered snapshot and retires pending activat
   const mounted = accessory.mount(container, createViewContext(host, context));
   let disposed = false;
   try {
-    await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.textContent).toContain(card.title);
     expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
 
-    request.mockRejectedValueOnce(new Error("Temporary read failure"));
+    failCardRead = true;
     fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(request.mock.settledResults[1]?.type).toBe("rejected"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request.mock.settledResults.some((result) => result.type === "rejected")).toBe(true);
     expect(container.textContent).toContain(card.title);
 
-    request.mockResolvedValueOnce({ cards: [{ ...card, metadata: { archivedAt: 1 } }], boards });
+    currentCard = { ...card, metadata: { archivedAt: 1 } };
     fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(container.querySelector("a")).toBeNull());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector("a")).toBeNull();
 
+    currentCard = card;
     fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.textContent).toContain(card.title);
 
     const pending = createDeferred<unknown>();
-    request.mockReturnValueOnce(pending.promise);
-    const count = request.mock.calls.length;
+    pendingCardRead = pending.promise;
     fixture.emit("plugin.workboard.changed", {});
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(count + 1));
+    await vi.advanceTimersByTimeAsync(0);
+    const count = request.mock.calls.length;
     mounted?.dispose?.();
     dispose?.();
     disposed = true;
     const invalidations = vi.mocked(host.ui.invalidate).mock.calls.length;
-    pending.resolve({ cards: [{ ...card, title: "Retired response" }], boards });
-    await pending.promise;
+    pending.resolve({ cards: [{ ...card, title: "Retired response" }] });
+    await vi.advanceTimersByTimeAsync(0);
     fixture.emit("plugin.workboard.changed", {});
     fixture.notify();
-    expect(request).toHaveBeenCalledTimes(count + 1);
+    expect(request).toHaveBeenCalledTimes(count);
     expect(vi.mocked(host.ui.invalidate).mock.calls.length).toBe(invalidations);
     expect(container.childElementCount).toBe(0);
     expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(0);

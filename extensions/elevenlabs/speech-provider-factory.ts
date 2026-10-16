@@ -2,14 +2,13 @@ import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import {
+  createSpeechDirectiveParser,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -153,105 +152,92 @@ function resolveElevenLabsTalkApiKey(config: SpeechProviderConfig): string | und
   });
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
+function createElevenLabsDirectiveParser(
   formatErrorMessage: PluginCapabilityCatalogContext["formatErrorMessage"],
 ) {
-  try {
-    const overrides: SpeechProviderOverrides = { ...ctx.currentOverrides };
-    switch (ctx.key) {
-      case "voiceid":
-      case "voice_id":
-      case "elevenlabs_voice":
-      case "elevenlabsvoice":
-        if (!ctx.policy.allowVoice) {
-          return { handled: true };
-        }
-        if (!isValidElevenLabsVoiceId(ctx.value)) {
-          return { handled: true, warnings: [`invalid ElevenLabs voiceId "${ctx.value}"`] };
-        }
-        overrides.voiceId = ctx.value;
-        break;
-      case "model":
-      case "modelid":
-      case "model_id":
-      case "elevenlabs_model":
-      case "elevenlabsmodel":
-        if (!ctx.policy.allowModelId) {
-          return { handled: true };
-        }
-        overrides.modelId = normalizeElevenLabsTtsModelId(ctx.value);
-        break;
-      case "stability":
-      case "similarity":
-      case "similarityboost":
-      case "similarity_boost":
-      case "style":
-      case "speed": {
-        if (!ctx.policy.allowVoiceSettings) {
-          return { handled: true };
-        }
-        const setting = ctx.key.startsWith("similarity") ? "similarityBoost" : ctx.key;
-        const value = parseStrictFiniteNumber(ctx.value);
-        if (value == null) {
-          return { handled: true, warnings: [`invalid ${setting} value`] };
-        }
-        requireInRange(value, setting === "speed" ? 0.5 : 0, setting === "speed" ? 2 : 1, setting);
-        overrides.voiceSettings = {
-          ...asOptionalRecord(overrides.voiceSettings),
-          [setting]: value,
-        };
-        break;
-      }
-      case "speakerboost":
-      case "speaker_boost":
-      case "usespeakerboost":
-      case "use_speaker_boost": {
-        if (!ctx.policy.allowVoiceSettings) {
-          return { handled: true };
-        }
-        const value = parseBooleanValue(ctx.value);
-        if (value == null) {
-          return { handled: true, warnings: ["invalid useSpeakerBoost value"] };
-        }
-        overrides.voiceSettings = {
-          ...asOptionalRecord(overrides.voiceSettings),
-          useSpeakerBoost: value,
-        };
-        break;
-      }
-      case "normalize":
-      case "applytextnormalization":
-      case "apply_text_normalization":
-        if (!ctx.policy.allowNormalization) {
-          return { handled: true };
-        }
-        overrides.applyTextNormalization = normalizeApplyTextNormalization(ctx.value);
-        break;
-      case "language":
-      case "languagecode":
-      case "language_code":
-        if (!ctx.policy.allowNormalization) {
-          return { handled: true };
-        }
-        overrides.languageCode = normalizeLanguageCode(ctx.value);
-        break;
-      case "seed":
-        if (!ctx.policy.allowSeed) {
-          return { handled: true };
-        }
-        overrides.seed = normalizeSeed(parseStrictInteger(ctx.value) ?? Number.NaN);
-        break;
-      default:
-        return { handled: false };
-    }
-    return { handled: true, overrides };
-  } catch (error) {
-    return {
-      handled: true,
-      warnings: [formatErrorMessage(error)],
-    };
-  }
+  return createSpeechDirectiveParser(
+    {
+      voiceid: [
+        "allowVoice",
+        ["voiceid", "voice_id", "elevenlabs_voice", "elevenlabsvoice"],
+        {
+          parse: (ctx) =>
+            isValidElevenLabsVoiceId(ctx.value)
+              ? { handled: true, overrides: { voiceId: ctx.value } }
+              : { handled: true, warnings: [`invalid ElevenLabs voiceId "${ctx.value}"`] },
+        },
+      ],
+      modelId: [
+        "allowModelId",
+        ["model", "modelid", "model_id", "elevenlabs_model", "elevenlabsmodel"],
+        { value: (ctx) => normalizeElevenLabsTtsModelId(ctx.value) },
+      ],
+      stability: [
+        "allowVoiceSettings",
+        ["stability", "similarity", "similarityboost", "similarity_boost", "style", "speed"],
+        {
+          parse: (ctx) => {
+            const setting = ctx.key.startsWith("similarity") ? "similarityBoost" : ctx.key;
+            const value = parseStrictFiniteNumber(ctx.value);
+            if (value == null) {
+              return { handled: true, warnings: [`invalid ${setting} value`] };
+            }
+            requireInRange(
+              value,
+              setting === "speed" ? 0.5 : 0,
+              setting === "speed" ? 2 : 1,
+              setting,
+            );
+            return {
+              handled: true,
+              overrides: {
+                voiceSettings: {
+                  ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
+                  [setting]: value,
+                },
+              },
+            };
+          },
+        },
+      ],
+      speakerboost: [
+        "allowVoiceSettings",
+        ["speakerboost", "speaker_boost", "usespeakerboost", "use_speaker_boost"],
+        {
+          parse: (ctx) => {
+            const value = parseBooleanValue(ctx.value);
+            return value == null
+              ? { handled: true, warnings: ["invalid useSpeakerBoost value"] }
+              : {
+                  handled: true,
+                  overrides: {
+                    voiceSettings: {
+                      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
+                      useSpeakerBoost: value,
+                    },
+                  },
+                };
+          },
+        },
+      ],
+      applyTextNormalization: [
+        "allowNormalization",
+        ["normalize", "applytextnormalization", "apply_text_normalization"],
+        { value: (ctx) => normalizeApplyTextNormalization(ctx.value) },
+      ],
+      languageCode: [
+        "allowNormalization",
+        ["language", "languagecode", "language_code"],
+        { value: (ctx) => normalizeLanguageCode(ctx.value) },
+      ],
+      seed: [
+        "allowSeed",
+        ["seed"],
+        { value: (ctx) => normalizeSeed(parseStrictInteger(ctx.value) ?? Number.NaN) },
+      ],
+    },
+    { formatErrorMessage },
+  );
 }
 
 async function listElevenLabsVoices(params: {
@@ -338,6 +324,8 @@ function resolveElevenLabsTtsRequest(
 export function buildElevenLabsSpeechProvider({
   formatErrorMessage,
 }: Pick<PluginCapabilityCatalogContext, "formatErrorMessage">): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey));
   return {
     id: "elevenlabs",
     label: "ElevenLabs",
@@ -345,7 +333,7 @@ export function buildElevenLabsSpeechProvider({
     defaultModel: DEFAULT_ELEVENLABS_MODEL_ID,
     models: ELEVENLABS_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeElevenLabsProviderConfig(rawConfig),
-    parseDirectiveToken: (ctx) => parseDirectiveToken(ctx, formatErrorMessage),
+    parseDirectiveToken: createElevenLabsDirectiveParser(formatErrorMessage),
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
       const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
@@ -411,8 +399,9 @@ export function buildElevenLabsSpeechProvider({
         timeoutMs: req.timeoutMs,
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputPlan = resolveElevenLabsOutputPlan(req);

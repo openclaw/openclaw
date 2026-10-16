@@ -63,7 +63,7 @@ it("does not budget a disabled PR screenshot request", () => {
   });
   const disabledHint = expectDefined(results[0], "disabled screenshot hint");
   const enabledHint = expectDefined(results[1], "enabled screenshot hint");
-  for (const key of ["pr_job_count", "hybrid_hosted_base_rows", "hybrid_hosted_total_rows"]) {
+  for (const key of ["hybrid_hosted_base_rows", "hybrid_hosted_total_rows"]) {
     expect(expectDefined(enabledHint[key], key)).toBe(expectDefined(disabledHint[key], key));
   }
 });

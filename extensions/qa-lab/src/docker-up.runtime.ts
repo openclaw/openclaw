@@ -32,15 +32,10 @@ async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
   }
 }
 
-function isMissingCommandError(
-  error: unknown,
-  command: string,
-  seen = new Set<unknown>(),
-): boolean {
-  if (!error || seen.has(error)) {
+function isMissingCommandError(error: unknown, command: string): boolean {
+  if (!error) {
     return false;
   }
-  seen.add(error);
   if (typeof error !== "object") {
     return formatErrorMessage(error).includes(`spawn ${command} ENOENT`);
   }
@@ -53,7 +48,7 @@ function isMissingCommandError(
   ) {
     return true;
   }
-  return isMissingCommandError(candidate.cause, command, seen);
+  return isMissingCommandError(candidate.cause, command);
 }
 
 async function runQaLabBuild(repoRoot: string, runCommand: RunCommand) {

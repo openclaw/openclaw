@@ -10,7 +10,6 @@ import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createExecutionStartedOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
@@ -52,7 +51,6 @@ describe("cron script admission", () => {
     const config: OpenClawConfig = {};
     const admitted: AdmittedRunContext[] = [];
     const retained: HeadlessParams["ctx"][] = [];
-    const started = vi.fn();
     const prepare = prepareRuntime(
       config,
       probe(async () => {
@@ -86,7 +84,6 @@ describe("cron script admission", () => {
           onPostAdmission: (context: AdmittedRunContext) => {
             admitted.push(context);
           },
-          onExecutionStarted: started,
         },
       };
       await expect(runtime.executePayload(params)).resolves.toMatchObject({
@@ -102,7 +99,6 @@ describe("cron script admission", () => {
     expect(retained.map((ctx) => ctx.runId)).toEqual(
       admitted.map((context) => context.operationalRunInstance.runId),
     );
-    expect(started).toHaveBeenCalledTimes(2);
   });
 
   it.each(["admission", "gateway", "abort"] as const)(
@@ -213,47 +209,5 @@ describe("cron script admission", () => {
       release.forEach((entry) => entry.resolve());
       await Promise.all([first, second]);
     }
-  });
-
-  it("binds execution ownership to the payload admission after its condition closes", async () => {
-    const config: OpenClawConfig = {};
-    const admitted: AdmittedRunContext[] = [];
-    const bind = vi.fn((context: AdmittedRunContext) => {
-      expect(getAdmittedRunDelegatedAuthority(context)).toBeDefined();
-    });
-    const owner = createExecutionStartedOwnerBinding(bind);
-    const runtime = createCronScriptRuntime({
-      config,
-      prepareRuntime: prepareRuntime(
-        config,
-        probe(async () => jsonResult({})),
-      ),
-      runHeadless: async () => completed({ fire: true }),
-    });
-    const params = {
-      jobId: "condition-then-payload",
-      script: "return result",
-      state: null,
-      executionIdentity: {
-        ingress: { kind: "schedule" as const, boundary: "cron.script", state: "present" as const },
-        onPostAdmission: (context: AdmittedRunContext) => {
-          admitted.push(context);
-          return owner.onPostAdmission(context);
-        },
-        onExecutionStarted: owner.onExecutionStarted,
-      },
-    };
-
-    await expect(runtime.evaluateTrigger(params)).resolves.toMatchObject({
-      kind: "evaluated",
-      fire: true,
-    });
-    expect(bind).not.toHaveBeenCalled();
-    expect(getAdmittedRunDelegatedAuthority(admitted[0]!)).toBeUndefined();
-
-    await expect(runtime.executePayload(params)).resolves.toMatchObject({ kind: "completed" });
-    expect(bind).toHaveBeenCalledExactlyOnceWith(admitted[1]);
-    expect(admitted[1]).not.toBe(admitted[0]);
-    expect(getAdmittedRunDelegatedAuthority(admitted[1]!)).toBeUndefined();
   });
 });

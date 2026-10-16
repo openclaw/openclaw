@@ -8,6 +8,7 @@ import {
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
   ConfigFileSnapshot,
+  ConfigSnapshotReadOptions,
   GatewayAuthMode,
   GatewayBindMode,
   GatewayTailscaleMode,
@@ -31,6 +32,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
@@ -41,12 +43,10 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
-  GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-  inspectGatewayCrashLoopBreaker,
-  recordGatewayBootStart,
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
@@ -131,23 +131,17 @@ function parseEnumOption<T extends string>(
   return raw ? (allowed.find((value) => value === raw) ?? null) : null;
 }
 
-async function readGatewayStartupConfig(params: {
-  lowerPrecedenceEnv: Readonly<Record<string, string>>;
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
-}): Promise<{
+async function readGatewayStartupConfig(
+  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
+  readOptions: Pick<ConfigSnapshotReadOptions, "lowerPrecedenceEnv"> = {},
+): Promise<{
   cfg: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead = await params.startupTrace.measure("cli.config-snapshot", () =>
-    readConfigFileSnapshotWithPluginMetadata({
-      isolateEnv: true,
-      observe: false,
-      ...(Object.keys(params.lowerPrecedenceEnv).length > 0
-        ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
-        : {}),
-    }),
+  const snapshotRead = await startupTrace.measure("cli.config-snapshot", () =>
+    readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true, observe: false, ...readOptions }),
   );
   const { snapshot } = snapshotRead;
   if (!snapshot.valid && isConfigReadFailure(snapshot)) {
@@ -219,10 +213,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     lowerPrecedenceEnv: Readonly<Record<string, string>>;
   }
 > {
-  const startupConfig = await readGatewayStartupConfig({
-    lowerPrecedenceEnv: {},
-    startupTrace: params.startupTrace,
-  });
+  const startupConfig = await readGatewayStartupConfig(params.startupTrace);
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
@@ -232,7 +223,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
   const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
   return {
-    ...(await readGatewayStartupConfig({ lowerPrecedenceEnv, startupTrace: params.startupTrace })),
+    ...(await readGatewayStartupConfig(params.startupTrace, { lowerPrecedenceEnv })),
     lowerPrecedenceEnv,
   };
 }
@@ -478,6 +469,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 
   gatewayLog.info("loading configuration…");
+  await installGatewayDatabaseEngine();
   const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
     await readGatewayStartupConfigWithShellEnv({
       startupTrace,
@@ -836,17 +828,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    crashLoopDecision = inspectGatewayCrashLoopBreaker(process.env, startedAtMs);
-    const bootStartReason = crashLoopDecision.tripped
-      ? crashLoopDecision.shouldWriteStabilityBundle
-        ? GATEWAY_CRASH_LOOP_BREAKER_REASON
-        : undefined
-      : crashLoopDecision.recovered
-        ? GATEWAY_CRASH_LOOP_RECOVERED_REASON
-        : undefined;
-    // Shared-state schema failures make this write fail open, so no lifecycle
-    // row exists for Doctor to reconcile after it repairs the schema.
-    activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
+    const boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
+    crashLoopDecision = boot.decision;
+    activeBootId = boot.id;
     bootRecorded = activeBootId !== undefined;
     channelAutostartSuppression = undefined;
     tryRecoverChannelAutostartSuppression = undefined;
@@ -877,8 +861,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   };
   const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
-    completeGatewayBootLifecycle(activeBootId, completion, process.env);
+    const bootId = activeBootId;
     activeBootId = undefined;
+    return completeGatewayBootLifecycle(bootId, completion, process.env);
   };
   const startLoop = async (lifecycleLockDeadlineMs?: number) => {
     const code = await runGatewayLoop({
@@ -890,7 +875,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       completeBoot,
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
       onRestartStartupFailure: triageStartupFailure,
-      start: async ({ requestHotReloadRecovery, ...startupOptions } = {}) => {
+      start: async (startOptions = {}) => {
+        const { requestHotReloadRecovery, ...startupOptions } = startOptions;
         const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -994,7 +980,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       runtime: defaultRuntime,
       retry: async () => await runGatewayCommandOnce(opts, hooks),
     });
-    if (recovery.status === "recovered") {
+    if (recovery) {
       return;
     }
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
@@ -1005,7 +991,6 @@ const testing = {
   createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
   resolveGatewayLockErrorExitCode,
-  resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 

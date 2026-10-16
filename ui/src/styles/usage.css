@@ -532,13 +532,25 @@
   background: var(--bg-hover);
 }
 
-.usage-filter-select[open] .usage-filter-trigger {
+.usage-filter-trigger > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-filter-trigger[aria-expanded="true"] {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.usage-filter-select::part(menu),
-.usage-export-menu::part(menu) {
+.usage-filter-select .oc-menu {
+  --oc-overlay-max-width: min(320px, calc(100dvw - 48px));
+
+  min-width: min(220px, var(--oc-overlay-available-width, calc(100dvw - 48px)));
+  background: var(--bg-elevated);
+}
+
+.usage-export-menu > .oc-menu {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
   padding: var(--menu-padding);
@@ -558,11 +570,23 @@
   border-radius: var(--menu-item-radius);
   background: transparent;
   font-size: 12px;
-  transition: background 0.12s ease;
 }
 
-.usage-filter-option:hover {
-  background: var(--bg-hover);
+.usage-filter-option .oc-menu-item__check {
+  order: 0;
+  margin-inline-start: 0;
+}
+
+.usage-filter-select [data-value="command:clear"] + .usage-filter-option {
+  margin-block-start: 9px;
+}
+
+.usage-filter-select [data-value="command:clear"] + .usage-filter-option::before {
+  position: absolute;
+  inset-inline: 8px;
+  top: -5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  content: "";
 }
 
 .usage-query-chips,
@@ -1669,13 +1693,6 @@
   font-size: 13px;
   font-weight: 700;
   color: var(--text-strong);
-}
-
-.usage-more-sessions {
-  padding: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 .sessions-selected-group {

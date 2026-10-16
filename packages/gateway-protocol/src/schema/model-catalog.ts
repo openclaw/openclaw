@@ -126,6 +126,8 @@ export const ModelChoiceSchema = closedObject({
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
   profileId: Type.Optional(NonEmptyString),
+  /** Advisory only: configured ids missing from a successful server listing. */
+  unlistedConfiguredModelIds: Type.Optional(Type.Array(NonEmptyString)),
   status: Type.Union([
     Type.Literal("ready"),
     Type.Literal("auth-rejected"),

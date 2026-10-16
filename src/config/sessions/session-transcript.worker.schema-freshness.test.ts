@@ -131,84 +131,100 @@ it("borrows canonical writer proof without a native reader and still fences fore
   });
 });
 
-it("transfers bounded history JSON without retaining the worker buffer", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "main";
-    const sessionKey = "agent:main:history-transfer";
-    const sessionId = "history-transfer";
-    const { path } = openOpenClawAgentDatabase({ agentId, env: state.env });
-    const scope = { agentId, sessionKey, sessionId, storePath: path, env: state.env };
-    replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
-    for (const [index, length] of [64, 200_000].entries()) {
-      appendTranscriptMessageSync(scope, {
-        eventId: `message-${index}`,
-        message: {
-          role: "assistant",
-          timestamp: 1_800_000_000_000 + index,
-          content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
-        },
-      });
-    }
-    await closeOpenClawAgentDatabaseByPathAsync(path);
-    const stateContext = captureOpenClawStateReadWorkerContext({ env: state.env });
-    const params: ChatHistoryPageParams & { sessionId: string; storePath: string } = {
-      entry: undefined,
-      provider: undefined,
-      sessionId,
-      storePath: path,
-      sessionAgentId: agentId,
-      canonicalKey: sessionKey,
-      max: 200,
-      maxHistoryBytes: 1024,
-      effectiveMaxChars: 300_000,
-      offset: undefined,
-      messageId: undefined,
-    };
-    const read = async (encodeResponse: boolean) => {
-      const reply = await worker.read({
-        kind: "history-page",
-        database: { agentId, path },
-        request: { kind: "rpc", params: { ...params, encodeResponse } },
-        target: {
-          transcript: { agentId, sessionId, sessionKey, storePath: path, sessionFile: sessionKey },
-          entryValidationKey: sessionKey,
-          stateDatabase: {
-            path: stateContext.admission.databasePath,
-            environment: stateContext.environment,
+it.for([0, 1])(
+  "transfers bounded history JSON at offset %i without retaining the worker buffer",
+  async (offset) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "main";
+      const sessionKey = "agent:main:history-transfer";
+      const sessionId = "history-transfer";
+      const { path } = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const scope = { agentId, sessionKey, sessionId, storePath: path, env: state.env };
+      replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+      for (const [index, length] of [64, 200_000].entries()) {
+        appendTranscriptMessageSync(scope, {
+          eventId: `message-${index}`,
+          message: {
+            role: "assistant",
+            timestamp: 1_800_000_000_000 + index,
+            content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
           },
-        },
-      });
-      assert(reply.ok && typeof reply.value === "object" && reply.value !== null);
-      assert("kind" in reply.value && reply.value.kind === "rpc");
-      return { reply, page: reply.value.page };
-    };
-    try {
-      const ordinary = await read(false);
-      const expected = prepareChatHistoryResponsePage(ordinary.page, params);
-      const { reply, page } = await read(true);
-      const body = page.encodedResponse?.messages;
-      assert(body);
-      expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
-      expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
-      const received = structuredClone(reply, { transfer: worker.transfers(reply) });
-      expect(body.byteLength).toBe(0);
-      expect(received).toMatchObject({
-        ok: true,
-        value: {
-          kind: "rpc",
-          page: {
-            messages: [],
-            encodedResponse: {
-              messages: new TextEncoder().encode(JSON.stringify(expected.messages)),
+        });
+      }
+      await closeOpenClawAgentDatabaseByPathAsync(path);
+      const stateContext = captureOpenClawStateReadWorkerContext({ env: state.env });
+      const params: ChatHistoryPageParams & { sessionId: string; storePath: string } = {
+        entry: undefined,
+        provider: undefined,
+        sessionId,
+        storePath: path,
+        sessionAgentId: agentId,
+        canonicalKey: sessionKey,
+        max: 200,
+        maxHistoryBytes: 1024,
+        effectiveMaxChars: 300_000,
+        offset,
+        messageId: undefined,
+      };
+      const read = async (encodeResponse: boolean) => {
+        const reply = await worker.read({
+          kind: "history-page",
+          database: { agentId, path },
+          request: { kind: "rpc", params: { ...params, encodeResponse } },
+          target: {
+            transcript: {
+              agentId,
+              sessionId,
+              sessionKey,
+              storePath: path,
+              sessionFile: sessionKey,
+            },
+            entryValidationKey: sessionKey,
+            stateDatabase: {
+              path: stateContext.admission.databasePath,
+              environment: stateContext.environment,
             },
           },
-        },
-      });
-    } finally {
-      worker.close(JSON.stringify([{ path }]));
-    }
-  });
-});
+        });
+        assert(reply.ok && typeof reply.value === "object" && reply.value !== null);
+        assert("kind" in reply.value && reply.value.kind === "rpc");
+        return { reply, page: reply.value.page };
+      };
+      try {
+        const ordinary = await read(false);
+        expect(ordinary.page.pagination).toMatchObject({ offset, totalMessages: 2 });
+        const expected = prepareChatHistoryResponsePage(ordinary.page, params);
+        const { reply, page } = await read(true);
+        const body = page.encodedResponse?.messages;
+        assert(body);
+        expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
+        expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
+        expect(page.pagination).toBeUndefined();
+        expect(page.anchor).toBeUndefined();
+        expect(Object.hasOwn(page, "activeLeafEntryId")).toBe(offset === 0);
+        expect(page.encodedResponse?.totalMessages).toBe(2);
+        expect(page.encodedResponse?.nextOffset).toBe(expected.nextOffset);
+        expect(page.encodedResponse?.hasMore).toBe(expected.hasMore);
+        const received = structuredClone(reply, { transfer: worker.transfers(reply) });
+        expect(body.byteLength).toBe(0);
+        expect(received).toMatchObject({
+          ok: true,
+          value: {
+            kind: "rpc",
+            page: {
+              messages: [],
+              encodedResponse: {
+                messages: new TextEncoder().encode(JSON.stringify(expected.messages)),
+              },
+            },
+          },
+        });
+      } finally {
+        worker.close(JSON.stringify([{ path }]));
+      }
+    });
+  },
+);
 
 it.for([
   { change: "newer schema", sql: "PRAGMA user_version = 999", error: undefined },
@@ -255,7 +271,9 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
+        await expect(
+          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
+        ).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

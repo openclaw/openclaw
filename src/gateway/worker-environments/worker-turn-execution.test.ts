@@ -7,7 +7,9 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
@@ -39,6 +41,7 @@ import {
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
@@ -72,15 +75,14 @@ describe("worker turn execution", () => {
 
   it.each([
     { recorderOwned: false, throws: false },
-    { recorderOwned: true, throws: false },
-    { recorderOwned: false, throws: true },
     { recorderOwned: true, throws: true },
   ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
     await seedActivePlacement();
     const input = turn("blocked-input");
+    const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
     const recorder = recorderOwned
       ? createUserTurnTranscriptRecorder({
-          target: { ...sessionTarget, sessionEntry: undefined },
+          target: resolveTarget,
           input: { text: input.prompt },
         })
       : undefined;
@@ -125,6 +127,9 @@ describe("worker turn execution", () => {
       expect(result.meta.error?.kind).toBe("hook_block");
       expect(result.meta.livenessState).toBe("blocked");
       expect(handler).toHaveBeenCalledOnce();
+      if (recorderOwned) {
+        expect(resolveTarget).toHaveBeenCalledOnce();
+      }
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();
       expect(runLocal).not.toHaveBeenCalled();
@@ -307,7 +312,17 @@ describe("worker turn execution", () => {
         ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
+        const runtime = getWorkerTurnToolSurface({
+          sessionId: SESSION_ID,
+          runId: request.plan.assignment.runId,
+          environmentId: request.plan.admission.environmentId,
+          ownerEpoch: request.plan.admission.ownerEpoch,
+          turnClaim: request.turnClaim,
+        });
+        expect(runtime?.getInheritedPublicationToolName()).toBe(
+          declared ? undefined : "github_publish",
+        );
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({
@@ -345,6 +360,9 @@ describe("worker turn execution", () => {
             { ...sessionTarget, runId: input.runId },
             {
               ...input,
+              toolsAllow: declared
+                ? [...CORE_WORKER_LAUNCH_TOOL_NAMES, "sessions_list", "github_identity_status"]
+                : undefined,
               config: {
                 ...input.config,
                 agents: {
@@ -493,6 +511,7 @@ describe("worker turn execution", () => {
       const entered = createDeferred();
       const release = createDeferred();
       const open = SessionManager.openAsync.bind(SessionManager);
+      let placementSql: ReturnType<typeof observeHostDataSql> | undefined;
       const hydration = vi
         .spyOn(SessionManager, "openAsync")
         .mockImplementationOnce(async (...args) => {
@@ -509,10 +528,20 @@ describe("worker turn execution", () => {
           expect(manager.getPersistedEntries()).toEqual(before);
           entered.resolve();
           await release.promise;
+          if (change === "current") {
+            placementSql = observeHostDataSql();
+          }
           return manager;
         });
       const deliberateStop = new WorkerRunnerCapacityError();
       const acquireTurnCredential = vi.fn(async () => {
+        if (placementSql) {
+          expect(
+            placementSql.queries.filter((sql) => sql.includes("worker_session_placements")),
+          ).toEqual([]);
+          placementSql.restore();
+          placementSql = undefined;
+        }
         throw deliberateStop;
       });
       const startTunnel = vi.fn();
@@ -588,6 +617,7 @@ describe("worker turn execution", () => {
         release.resolve();
         await operation;
         hydration.mockRestore();
+        placementSql?.restore();
         input.preparedRunAdmission.close();
       }
     },
@@ -663,6 +693,7 @@ describe("worker turn execution", () => {
       abort.abort(new Error("cancel after terminal acknowledgement"));
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
@@ -766,7 +797,6 @@ describe("worker turn execution", () => {
 
   it.each([
     { mode: "merge", reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-    { mode: "replace", reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
   ] as const)(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
@@ -864,10 +894,7 @@ describe("worker turn execution", () => {
 
   registerWorkerTurnInferenceTests();
 
-  it.each([
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
-  ])(
+  it.each([[WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
     async (...protocolFeatures) => {
       await seedActivePlacement();

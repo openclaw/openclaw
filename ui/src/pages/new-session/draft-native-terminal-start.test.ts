@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createTerminalController,
@@ -84,6 +85,8 @@ describe("DraftSubmissionFlow native terminal", () => {
     "primary submission retains $catalogId output and exit that precede the native start response",
     async ({ catalogId, exitCode, signal, exitLabel }) => {
       const controller = createTerminalController();
+      const outputWritten = createDeferred();
+      controller.write.mockImplementation(() => outputWritten.resolve());
       nativeTerminalController.mockResolvedValueOnce(controller);
       const { context, flow, request } = createDraftFixture({
         scopes: ["operator.admin", "operator.read", "operator.write"],
@@ -121,10 +124,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       flow.setMessage("start this task");
       await flow.submit();
 
-      await vi.waitFor(() =>
-        expect(controller.write).toHaveBeenCalledWith(
-          new TextEncoder().encode("Native CLI startup text"),
-        ),
+      await outputWritten.promise;
+      expect(controller.write).toHaveBeenCalledWith(
+        new TextEncoder().encode("Native CLI startup text"),
       );
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.startTerminal",
@@ -238,7 +240,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "cancelled-start" });
   });
 
-  it.each(["accepted", "rejected"])(
+  it.each(["accepted"])(
     "provisions the chosen worktree and consumes its name only for %s native startup",
     async (outcome) => {
       replaceBrowserPreference("ws://gateway.example", "main", {

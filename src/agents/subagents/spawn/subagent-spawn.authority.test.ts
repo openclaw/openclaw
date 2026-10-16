@@ -13,6 +13,7 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
@@ -70,21 +71,20 @@ describe("pending spawn invocation authority", () => {
     "stops a fresh spawn below a completed persistent sibling while a %s drain remains pending",
     async (slowBranch) => {
       const originalConfig = getRuntimeConfig();
-      await writeFile(
-        path.join(fixture.stateDir, "openclaw.json"),
-        JSON.stringify({
-          ...originalConfig,
-          agents: {
-            ...originalConfig.agents,
-            defaults: {
-              ...originalConfig.agents?.defaults,
-              subagents: { maxSpawnDepth: 2 },
-            },
+      const config = {
+        ...originalConfig,
+        agents: {
+          ...originalConfig.agents,
+          defaults: {
+            ...originalConfig.agents?.defaults,
+            subagents: { maxSpawnDepth: 2 },
           },
-        }),
-      );
+        },
+      };
+      await writeFile(path.join(fixture.stateDir, "openclaw.json"), JSON.stringify(config));
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      setRuntimeConfigSnapshot(config);
       const { cfg, storePath, context, admission, parent } = await createBoundParent();
       const key = (id: string) => `agent:main:subagent:${id}`;
       const ids = slowBranch === "sibling" ? ["a", "b"] : ["a", "b", "d"];
@@ -100,6 +100,8 @@ describe("pending spawn invocation authority", () => {
         await registerSubagentRun({
           runId: id,
           childSessionKey: key(id),
+          childAgentId: "main",
+          sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: "original" },
           controllerSessionKey: id === "d" ? key("a") : parentSessionKey,
           requesterSessionKey: id === "d" ? key("a") : parentSessionKey,
           requesterAgentId: "main",

@@ -8,6 +8,8 @@ export type PreparedGitHubToolEnvironment = Readonly<{
   excludedStoreNames: readonly string[];
   /** A local process must retain the host-selected profile and author identity. */
   managedLocalIdentity: boolean;
+  /** Selected credentials require the host-owned exec lifecycle, not a runtime shell overlay. */
+  hostExecutionRequired?: true;
 }>;
 
 export type PreparedGitHubPublicationIdentity = Readonly<{
@@ -16,4 +18,6 @@ export type PreparedGitHubPublicationIdentity = Readonly<{
   host?: string;
   account: GitHubToolAccount;
   env: NodeJS.ProcessEnv;
+  stale?: true;
+  accessExpiresAtMs?: number;
 }>;

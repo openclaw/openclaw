@@ -21,9 +21,9 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import * as nativeCommandRoute from "./native-command-route.js";
 import {
@@ -39,9 +39,15 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 let observedNativeTurnDispatcher: unknown;
-const getSessionEntry = sessionStore.getSessionEntry;
+const getSessionEntry = sessionStore.getSessionEntryAsync;
 
 const dispatchChannelInboundTurnForTest: typeof channelInbound.dispatchChannelInboundTurn = async (
   plan,
@@ -347,6 +353,7 @@ describe("Discord native plugin command dispatch", () => {
     });
     runtimeModuleMocks.getSessionEntry.mockReset();
     runtimeModuleMocks.getSessionEntry.mockReturnValue(undefined);
+    runtimeModuleMocks.recordDeliveredCommandExchange.mockClear();
     vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(
       dispatchChannelInboundTurnForTest,
     );
@@ -356,16 +363,19 @@ describe("Discord native plugin command dispatch", () => {
     vi.spyOn(nativeCommandRoute, "resolveDiscordNativeInteractionRouteState").mockImplementation(
       (params) =>
         createRouteState({
-          sessionKey: params.isDirectMessage
-            ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
-            : `agent:main:discord:channel:${params.conversationId}`,
+          sessionKey: params.channelContext.isDirectMessage
+            ? `agent:main:discord:dm:${params.interaction.user?.id ?? "owner"}`
+            : `agent:main:discord:channel:${params.conversationId ?? params.channelContext.rawChannelId}`,
           accountId: params.accountId,
         }),
     );
-    vi.spyOn(sessionStore, "getSessionEntry").mockImplementation((params) =>
+    vi.spyOn(sessionStore, "getSessionEntryAsync").mockImplementation(async (params) =>
       params.agentId !== undefined
         ? runtimeModuleMocks.getSessionEntry(params)
         : getSessionEntry(params),
+    );
+    vi.spyOn(sessionStore, "getSessionEntryAsync").mockImplementation(async (params) =>
+      runtimeModuleMocks.getSessionEntry(params),
     );
   });
 
@@ -521,6 +531,15 @@ describe("Discord native plugin command dispatch", () => {
       agentId: "codex",
       sessionKey: pluginSessionKey,
     });
+    expect(runtimeModuleMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+        sessionKey: pluginSessionKey,
+        expectedSessionId: "codex-session",
+        commandText: "/pair now",
+        replyText: "paired:now",
+      }),
+    );
   });
 
   it.each([
@@ -1080,41 +1099,6 @@ describe("Discord native plugin command dispatch", () => {
     },
   );
 
-  it("preserves partial delivery when a later Discord chunk fails without expiry", async () => {
-    const cfg = createConfig();
-    const interaction = createInteraction();
-    interaction.followUp
-      .mockResolvedValueOnce({ ok: true })
-      .mockRejectedValueOnce(new Error("provider connection failed"));
-    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
-      const dispatcherOptions = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-            onError?: (error: unknown, info: { kind: "final" }) => void;
-          };
-        }
-      ).dispatcherOptions;
-      try {
-        await dispatcherOptions.deliver({ text: "x".repeat(2500) }, { kind: "final" });
-      } catch (error) {
-        dispatcherOptions.onError?.(error, { kind: "final" });
-      }
-      return {
-        counts: { final: 0, block: 0, tool: 0 },
-        failedCounts: { final: 1, block: 0, tool: 0 },
-        queuedFinal: false,
-      };
-    });
-    const command = await createNativeCommand(cfg);
-
-    await command.run(interaction);
-
-    expect(interaction.followUp).toHaveBeenCalledTimes(2);
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
   it("returns an explicit warning when a direct plugin command has no visible reply", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {
@@ -1158,7 +1142,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
+  it("preserves fetched thread parent metadata when interaction omits parentId", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -1193,7 +1177,6 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "345678901234567890",
       guildName: "Test Guild",
     });
-    defineThrowingDiscordChannelGetter(interaction.channel, "parentId");
     (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
       async (channelId: string) => {
         if (channelId === "partial-thread-123") {

@@ -44,7 +44,6 @@ import {
 import {
   createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
 /** Keep capability donors bound to one model and runtime without merging sibling metadata. */
@@ -52,12 +51,19 @@ export function selectModelCatalogRuntimeEntry(params: {
   entry: ModelCatalogEntry;
   routeVariants: readonly ModelCatalogEntry[];
   runtimeId: string;
+  /** Capacity belongs to its runtime; API capability donors cannot supply native limits. */
+  allowApiFallback?: boolean;
 }): { entry: ModelCatalogEntry; variants: ModelCatalogEntry[] } {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const key = keyOf(params.entry);
   const observed = params.routeVariants.filter((variant) => keyOf(variant) === key);
   const variants = (observed.length ? observed : [params.entry])
-    .filter((variant) => !variant.nativeRuntime || variant.nativeRuntime === params.runtimeId)
+    .filter((variant) =>
+      variant.nativeRuntime
+        ? variant.nativeRuntime === params.runtimeId
+        : params.allowApiFallback !== false ||
+          ["openclaw", "auto", params.entry.provider].includes(params.runtimeId),
+    )
     .toSorted(
       (a, b) =>
         Number(b.nativeRuntime === params.runtimeId) - Number(a.nativeRuntime === params.runtimeId),
@@ -88,11 +94,9 @@ export function createModelCatalogView(params: {
     variants.push(entry);
     variantsByKey.set(key, variants);
   }
-  // Deferred lookups can follow an await or owner reload; only the initial index shares policy.
-  const variantsOf = (
-    entry: Pick<ModelCatalogEntry, "provider" | "id">,
-    key = resolveModelCatalogIdentityKey(entry),
-  ) => variantsByKey.get(key);
+  // Identity lookups use the same captured policy as this view's physical index.
+  const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
+    variantsByKey.get(key);
   const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
@@ -343,11 +347,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       ) {
         return host;
       }
-      const resolveRegistry = () =>
-        params.observationConfig
-          ? params.pluginRegistry
-          : (params.pluginRegistry ?? getActivePluginRegistry());
-      const registry = resolveRegistry();
+      const registry = params.observationConfig
+        ? params.pluginRegistry
+        : (params.pluginRegistry ?? getActivePluginRegistry());
       const harness = registry?.agentHarnesses.find(
         (registration) => registration.harness.id === runtime,
       )?.harness;
@@ -373,9 +375,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               endpointOverrides: "none",
               requestTransportOverrides: "none",
             },
-          }).supported &&
-          isCurrent() &&
-          resolveRegistry() === registry;
+          }).supported;
         const observation = ready
           ? harness?.readModelCatalogReadiness?.({
               config: params.observationConfig ?? params.cfg,
@@ -386,11 +386,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               modelId: entry.id,
             })
           : undefined;
-        ready =
-          ready &&
-          (!harness?.readModelCatalogReadiness || observation !== undefined) &&
-          isCurrent() &&
-          resolveRegistry() === registry;
+        ready = ready && (!harness?.readModelCatalogReadiness || observation !== undefined);
         authMode = ready ? observation?.authMode : undefined;
       } catch {
         // A failed/disposed owner supplies no account observation; do not infer host readiness.

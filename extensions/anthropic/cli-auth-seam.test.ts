@@ -41,7 +41,7 @@ it("asks Claude CLI for its active account and returns only safe display fields"
 
   expect(runUtf8CommandWithTimeout).toHaveBeenCalledWith(
     ["/test/claude", "auth", "status", "--json"],
-    expect.objectContaining({ timeoutMs: 3_000, killProcessTree: true }),
+    expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
   );
 });
 
@@ -126,10 +126,34 @@ it.each(["unknown-method"])(
   },
 );
 
-it("does not inspect Claude token storage when the CLI reports logout", async () => {
-  runUtf8CommandWithTimeout.mockResolvedValue({ code: 1, termination: "exit", stdout: "" });
+it.each([0, 1])("does not inspect Claude token storage on logout (exit %s)", async (code) => {
+  runUtf8CommandWithTimeout.mockResolvedValue({
+    code,
+    termination: "exit",
+    stdout: JSON.stringify({ loggedIn: false }),
+  });
 
   expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
+});
+
+it.each([
+  { code: 1, stdout: "keychain unavailable" },
+  { code: 0, stdout: "{}" },
+  { code: 0, stdout: '{"loggedIn":"false"}' },
+  { code: 1, stdout: '{"loggedIn":true}' },
+])("keeps an inconclusive status unknown: $code/$stdout", async ({ code, stdout }) => {
+  runUtf8CommandWithTimeout.mockResolvedValue({ code, termination: "exit", stdout });
+  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "unreadable" });
+});
+
+it("distinguishes a timed-out probe even when it already printed authenticated JSON", async () => {
+  runUtf8CommandWithTimeout.mockResolvedValue({
+    code: null,
+    termination: "timeout",
+    stdout: JSON.stringify({ loggedIn: true }),
+  });
+
+  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "timeout", timeoutMs: 10_000 });
 });
 
 it("does not turn a cancelled probe into a logged-out account", async () => {

@@ -73,7 +73,7 @@ function createDispatcher(
   return createDispatchTestHarness({
     connId: "conn-trace-test",
     extraHandlers: { "test.trace": handler },
-    buildRequestContext: () => context,
+    buildRequestContext: () => ({ getRuntimeConfig: () => ({}), ...context }),
   });
 }
 
@@ -250,7 +250,10 @@ describe("authenticated WebSocket request trace dispatch", () => {
     }
     const harness = createDispatchTestHarness({
       getRequiredSharedGatewaySessionGeneration: () => generation,
-      buildRequestContext: () => ({ validateAgentRuntimeApprovalAuthority: () => runtimeActive }),
+      buildRequestContext: () => ({
+        getRuntimeConfig: () => ({}),
+        validateAgentRuntimeApprovalAuthority: () => runtimeActive,
+      }),
       extraHandlers: {
         "test.trace": ({ req, respond }) => {
           pendingStarted ||= req.id === "pending";

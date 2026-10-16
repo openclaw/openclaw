@@ -141,7 +141,7 @@ export function normalizeWorkerSshEndpoint(value: WorkerSshEndpoint): WorkerSshE
     throw new Error("Worker environment SSH port must be an integer from 1 through 65535");
   }
   if (!isValidSecretRef(value.keyRef)) {
-    throw new Error("Worker environment SSH key must be a canonical SecretRef");
+    throw new Error("Worker environment SSH key must be a valid SecretRef");
   }
   if (value.fallbackPorts !== undefined && !Array.isArray(value.fallbackPorts)) {
     throw new Error("Worker environment SSH fallback ports must be an array");

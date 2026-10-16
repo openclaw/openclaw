@@ -19,6 +19,52 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+function mockFullscreen() {
+  let current: Element | null = null;
+  const properties: readonly (readonly [object, string])[] = [
+    [document, "fullscreenElement"],
+    [document, "fullscreenEnabled"],
+    [document, "exitFullscreen"],
+    [Element.prototype, "requestFullscreen"],
+  ];
+  const descriptors = properties.map(([object, property]) => ({
+    object,
+    property,
+    descriptor: Object.getOwnPropertyDescriptor(object, property),
+  }));
+  const change = (element: Element | null) => {
+    current = element;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  const exit = vi.fn(async () => change(null));
+  const request = vi.fn(async function (this: Element) {
+    change(this);
+  });
+  Object.defineProperties(document, {
+    fullscreenElement: { configurable: true, get: () => current },
+    fullscreenEnabled: { configurable: true, value: true },
+    exitFullscreen: { configurable: true, value: exit },
+  });
+  Object.defineProperty(Element.prototype, "requestFullscreen", {
+    configurable: true,
+    value: request,
+  });
+  return {
+    change,
+    exit,
+    request,
+    restore: () => {
+      for (const { object, property, descriptor } of descriptors) {
+        if (descriptor) {
+          Object.defineProperty(object, property, descriptor);
+        } else {
+          Reflect.deleteProperty(object, property);
+        }
+      }
+    },
+  };
+}
+
 describe("desktop panel presentation lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -28,6 +74,170 @@ describe("desktop panel presentation lifecycle", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("receives global toggles only while mounted as a standalone panel", async () => {
+    const request = vi.fn(async () => ({ environments: [] }));
+    const panel = createPanel();
+    updatePanel(panel, { available: true, client: createGatewayClient(request).client });
+    mountPanel(panel);
+    const toggle = (detail: { open: boolean; environmentId?: string }) =>
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail }));
+    try {
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).not.toBeNull();
+
+      updatePanel(panel, { embedded: true, presented: true });
+      await panel.updateComplete;
+      request.mockClear();
+      toggle({ open: true, environmentId: "ignored-global-target" });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+
+      updatePanel(panel, { embedded: false });
+      await panel.updateComplete;
+      toggle({ open: false });
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
+
+      unmountPanel(panel);
+      request.mockClear();
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      unmountPanel(panel);
+    }
+  });
+
+  it("admits one same-turn launch and retires pending feedback with the panel", async () => {
+    let launch = createDeferred();
+    const environment = {
+      ...desktopEnvironment,
+      worker: { ...desktopEnvironment.worker, desktopApps: ["browser"] },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.status") {
+        return environment;
+      }
+      if (method === "desktop.observe") {
+        return {
+          transport: "rfb",
+          wsPath: "/desktop/observe?token=launch-test",
+          expiresAtMs: 60_000,
+          control: false,
+        };
+      }
+      if (method === "desktop.launch") {
+        return launch.promise;
+      }
+      throw new Error(`Unexpected Desktop request: ${method}`);
+    });
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return createConnectionHandle();
+    });
+    const panel = createPanel();
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: environment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
+    try {
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-app-button")!;
+      button.click();
+      button.click();
+      expect(request.mock.calls.filter(([method]) => method === "desktop.launch")).toHaveLength(1);
+      await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("true"));
+      launch.reject(new Error("App launch unavailable"));
+      await waitForSolid(() => {
+        expect(panel.renderRoot.textContent).toContain("App launch unavailable");
+        expect(button.disabled).toBe(false);
+      });
+
+      launch = createDeferred();
+      button.click();
+      await waitForSolid(() => {
+        expect(button.getAttribute("aria-busy")).toBe("true");
+        expect(panel.renderRoot.textContent).not.toContain("App launch unavailable");
+      });
+      unmountPanel(panel);
+      launch.reject(new Error("Retired launch failure"));
+      await launch.promise.catch(() => {});
+      await waitForSolid(() => expect(panel.element.childElementCount).toBe(0));
+    } finally {
+      launch.resolve();
+      unmountPanel(panel);
+    }
+  });
+
+  it("preserves the desktop panel and returns focus after native fullscreen exits", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const section = panel.renderRoot.querySelector("section.bp");
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(
+        ".desktop-fullscreen-button",
+      )!;
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(document.fullscreenElement).toBe(section);
+      expect(panel.renderRoot.querySelector("section.bp")).toBe(section);
+      expect(panel.renderRoot.querySelector("resizable-divider")).toBeNull();
+
+      button.blur();
+      await document.exitFullscreen();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("false"));
+      expect(document.activeElement).toBe(button);
+      expect(panel.renderRoot.querySelector("resizable-divider")).not.toBeNull();
+
+      fullscreen.change(button);
+      await panel.updateComplete;
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+    } finally {
+      unmountPanel(panel);
+      fullscreen.restore();
+    }
+  });
+
+  it("reports fullscreen failures and exits owned fullscreen when unmounted", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(
+        ".desktop-fullscreen-button",
+      )!;
+      fullscreen.request.mockRejectedValueOnce(new Error("Fullscreen permission denied"));
+      button.click();
+      await waitForSolid(() =>
+        expect(panel.renderRoot.textContent).toContain("Fullscreen permission denied"),
+      );
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(panel.renderRoot.textContent).not.toContain("Fullscreen permission denied");
+      unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+      expect(document.fullscreenElement).toBeNull();
+    } finally {
+      unmountPanel(panel);
+      fullscreen.restore();
+    }
   });
 
   it("does not claim fullscreen while its section is unrendered", async () => {

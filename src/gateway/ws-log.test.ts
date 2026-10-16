@@ -1,12 +1,24 @@
 /**
  * Gateway WebSocket log formatting tests.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import fs from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { testApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
-import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import {
+  formatForLog,
+  logWs,
+  summarizeAgentEventForWsLog,
+  summarizeSessionListForWsLog,
+} from "./ws-log.js";
 import { setGatewayWsLogStyle } from "./ws-logging.js";
+
+const logPaths = createSuiteLogPathTracker("openclaw-ws-log-");
+beforeAll(() => logPaths.setup());
+afterAll(() => logPaths.cleanup());
 
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
   let admitted = false;
@@ -27,12 +39,73 @@ afterEach(() => {
 });
 
 describe("gateway ws log helpers", () => {
+  test("keeps failures and one-second responses at info while retaining successful traffic at debug", async () => {
+    const output = vi.fn();
+    loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+    const clock = vi.spyOn(Date, "now");
+    for (const level of ["info", "debug"] as const) {
+      const file = logPaths.nextPath();
+      resetLogger();
+      setLoggerOverride({ level, consoleLevel: "info", file });
+      output.mockClear();
+      const respond = (id: string, elapsed: number, ok = true, bytes = 1) => {
+        const frame = { connId: "log-levels", id, method: "sessions.list" };
+        clock.mockReturnValue(10_000);
+        logWs("in", "req", frame);
+        clock.mockReturnValue(10_000 + elapsed);
+        logWs("out", "res", {
+          ...frame,
+          ok,
+          bytes,
+          ...(!ok ? { errorMessage: "synthetic failure" } : {}),
+        });
+      };
+      respond("fast", 0);
+      respond("former-slow", 50);
+      respond("large", 999, true, 300 * 1024);
+      respond("slow", 1_000);
+      respond("failure", 0, false);
+      logWs("out", "res", { connId: "log-levels", id: "unmatched", method: "health", ok: true });
+      logWs("out", "parse-error", { connId: "log-levels", error: "synthetic invalid frame" });
+      await testApi.flushFileLogQueueForTests();
+      const records = fs
+        .readFileSync(file, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { message: string; _meta: { logLevelName: string } });
+      expect(output).toHaveBeenCalledTimes(3);
+      expect(records.map((record) => record._meta.logLevelName)).toEqual(
+        level === "info"
+          ? ["INFO", "INFO", "WARN"]
+          : ["DEBUG", "DEBUG", "DEBUG", "INFO", "INFO", "DEBUG", "WARN"],
+      );
+      expect(records.find((record) => record.message.includes("synthetic failure"))).toBeDefined();
+      expect(records.find((record) => record.message.includes("1000ms"))).toBeDefined();
+      if (level === "debug") {
+        expect(records.find((record) => record.message.includes("bytes=307200"))).toBeDefined();
+      }
+    }
+  });
+
+  test.each([
+    ["compact", "compact"],
+    ["dashboard", "dashboard"],
+    ["sidebar", "sidebar"],
+    [undefined, "full"],
+    ["unrecognized caller value", "full"],
+  ])("reports session row mode %s as %s", (rowMode, expected) => {
+    expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
+      source: "sidebar",
+      rowMode: expected,
+    });
+  });
+
   test.each(["optimized", "compact", "full"] as const)(
     "bounds unanswered timing and preserves request identity across %s log changes",
     (style) => {
       setVerbose(style !== "optimized");
       setGatewayWsLogStyle(style === "optimized" ? "auto" : style);
-      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      setLoggerOverride({ level: "silent", consoleLevel: "debug" });
       const output = vi.fn();
       loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -172,11 +245,6 @@ describe("gateway ws log helpers", () => {
 
   test.each([
     {
-      name: "formats Error instances",
-      input: Object.assign(new Error("boom"), { name: "TestError" }),
-      expected: "TestError: boom",
-    },
-    {
       name: "formats message-like objects with codes",
       input: { name: "Oops", message: "failed", code: "E1" },
       expected: "Oops: failed: code=E1",
@@ -233,7 +301,7 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
   });
 
-  test.each(["assistant", "tool", "lifecycle", "other"])(
+  test.each(["lifecycle"])(
     "keeps Incognito %s content out of verbose event logs while retaining routing metadata",
     (stream) => {
       setVerbose(true);
@@ -262,67 +330,66 @@ describe("gateway ws log helpers", () => {
     },
   );
 
-  test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
-    const summary = summarizeAgentEventForWsLog({
-      runId: "12345678-1234-1234-1234-123456789abc",
-      sessionKey: "agent:main:main",
-      stream: "assistant",
-      seq: 2,
-      data: {
-        text: "hello\n\nworld ".repeat(20),
-        mediaUrls: ["a", "b"],
-      },
-    });
+  test.each(["assistant", "tool", "lifecycle", "compaction"])(
+    "keeps %s content out of verbose event logs",
+    (stream) => {
+      setVerbose(true);
+      setGatewayWsLogStyle("full");
+      setLoggerOverride({ level: "silent", consoleLevel: "info" });
+      const output = vi.fn();
+      loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
+      const marker = "synthetic-private-content";
+      const summary = summarizeAgentEventForWsLog({
+        runId: "12345678-1234-1234-1234-123456789abc",
+        sessionKey: "agent:main:thread-1",
+        stream,
+        seq: 2,
+        data: {
+          text: marker,
+          meta: marker,
+          error: marker,
+          reason: marker,
+          outcome: "failed",
+          aborted: true,
+          phase: "start",
+          name: "fetch",
+          toolCallId: "12345678-1234-1234-1234-123456789abc",
+          mediaUrls: ["a", "b"],
+        },
+      });
 
-    expect(summary.agent).toBe("main");
-    expect(summary.run).toBe("12345678…9abc");
-    expect(summary.session).toBe("main");
-    expect(summary.stream).toBe("assistant");
-    expect(summary.aseq).toBe(2);
-    expect(summary.media).toBe(2);
-    expect(summary.text).toBeTypeOf("string");
-    expect(summary.text).not.toContain("\n");
-  });
+      logWs("out", "event", { event: "agent", ...summary });
 
-  test.each([
-    { name: "Unicode whitespace", text: "\u00a0hello\u2028world\ufeff", expected: "hello world" },
-    { name: "blank text", text: "\u00a0\n ".repeat(200), expected: undefined },
-    { name: "long leading whitespace", text: `${" ".repeat(512)}hello`, expected: "hello" },
-    {
-      name: "long interior whitespace",
-      text: `hello${" ".repeat(512)}world`,
-      expected: "hello world",
+      expect(output).toHaveBeenCalled();
+      expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
+      expect(summary).toMatchObject({
+        run: "12345678…9abc",
+        agent: "main",
+        session: "thread-1",
+        stream,
+        aseq: 2,
+        ...(stream === "assistant"
+          ? { media: 2, textChars: 25 }
+          : stream === "tool"
+            ? { tool: "start:fetch", call: "12345678…9abc" }
+            : {
+                phase: "start",
+                aborted: true,
+                err: true,
+                ...(stream === "compaction" ? { outcome: "failed" } : {}),
+              }),
+      });
+      expect(summary).not.toHaveProperty("text");
+      expect(summary).not.toHaveProperty("error");
+      if (stream === "assistant" || stream === "tool") {
+        expect(output).toHaveBeenLastCalledWith(
+          expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
+        );
+      }
     },
-    {
-      name: "trailing whitespace at the limit",
-      text: `${"a".repeat(160)}${" ".repeat(512)}`,
-      expected: "a".repeat(160),
-    },
-    {
-      name: "emoji at the limit",
-      text: `${"a".repeat(158)}😀tail`,
-      expected: `${"a".repeat(158)}…`,
-    },
-    { name: "long text", text: "a".repeat(8192), expected: `${"a".repeat(159)}…` },
-  ])("summarizeAgentEventForWsLog preserves $name", ({ text, expected }) => {
-    const summary = summarizeAgentEventForWsLog({ stream: "assistant", data: { text } });
-    expect(summary.text).toBe(expected);
-    expect(Object.hasOwn(summary, "text")).toBe(expected !== undefined);
-  });
+  );
 
-  test("summarizeAgentEventForWsLog includes tool metadata", () => {
-    const summary = summarizeAgentEventForWsLog({
-      runId: "run-1",
-      stream: "tool",
-      data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
-    });
-    expect(summary.run).toBe("run-1");
-    expect(summary.stream).toBe("tool");
-    expect(summary.tool).toBe("start:fetch");
-    expect(summary.call).toBe("12345678…9abc");
-  });
-
-  test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {
+  test("summarizeAgentEventForWsLog marks lifecycle errors without error content", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "run-2",
       sessionKey: "agent:main:thread-1",
@@ -339,8 +406,8 @@ describe("gateway ws log helpers", () => {
     expect(summary.stream).toBe("lifecycle");
     expect(summary.phase).toBe("abort");
     expect(summary.aborted).toBe(true);
-    expect(summary.error).toBeTypeOf("string");
-    expect((summary.error as string).length).toBeLessThanOrEqual(120);
+    expect(summary.err).toBe(true);
+    expect(summary).not.toHaveProperty("error");
   });
 
   test("summarizeAgentEventForWsLog preserves invalid session keys and unknown-stream reasons", () => {

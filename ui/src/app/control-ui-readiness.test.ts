@@ -1,17 +1,20 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
+import { createComponent, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import type { SolidRouteProps } from "../app-route-types.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
+import { ControlUiReadiness, type ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
 import {
-  ControlUiReadiness,
-  type ControlUiCommittedPresentation,
-  type ControlUiReadinessOutlet,
-} from "./control-ui-readiness.ts";
-import "./router-outlet.ts";
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+} from "./router-outlet.test-support.tsx";
 
 const owners: ControlUiReadiness[] = [];
 afterEach(() => {
+  disposeRouterOutlets();
   for (const owner of owners.splice(0)) {
     owner.disconnect();
   }
@@ -57,31 +60,32 @@ it("publishes the new generation only after the retiring MCP route releases its 
   destination.dataset.destination = "";
   destination.textContent = "Debug";
   type RouteData = { ready: boolean };
-  type RouteModule = { render: (data: RouteData | undefined) => Node | null };
+  type RouteModule = { renderSolid: (props: SolidRouteProps<RouteData>) => JSX.Element };
   const router = createRouter<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
     routes: [
       definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "about",
         path: "/about",
         component: () => ({
-          render: (data) => (data ? previousView : null),
+          renderSolid: (props) =>
+            createComponent(Show, {
+              get when() {
+                return props.data;
+              },
+              children: () => previousView,
+            }),
         }),
         loader: () => ({ ready: true }),
       }),
       definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "debug",
         path: "/debug",
-        component: () => ({ render: () => destination }),
+        component: () => ({ renderSolid: () => destination }),
         loader: () => ({ ready: true }),
       }),
     ],
   });
-  const outlet = document.createElement("openclaw-router-outlet") as ControlUiReadinessOutlet & {
-    router: typeof router;
-    updateComplete: Promise<boolean>;
-  };
-  outlet.router = router;
-  document.body.append(outlet);
+  const outlet = mountRouterOutlet({ router });
   let observer: MutationObserver | undefined;
   try {
     await router.navigate("about", {});
@@ -92,7 +96,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
     }));
     owner.commitRoot();
     await router.navigate("debug", {});
-    await settleLitElement(outlet);
+    await settleRouterOutlet(outlet);
     expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
     expect(outlet.querySelector("[data-destination]")).toBeNull();
     expect(outlet.presentationSettled).toBe(false);
@@ -117,7 +121,7 @@ it("publishes the new generation only after the retiring MCP route releases its 
   } finally {
     observer?.disconnect();
     teardown.resolve();
-    outlet.remove();
+    outlet.dispose();
     router.stop();
   }
 });

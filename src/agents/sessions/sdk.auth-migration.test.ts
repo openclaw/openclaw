@@ -10,12 +10,18 @@ import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import { inspectLegacyAgentDir } from "../../infra/state-migrations.legacy-sessions.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   inspectOpenClawAgentDatabaseOwner,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  noteAuthProfileFileWrite,
+  refreshAuthProfileFileState,
+} from "../auth-profiles/file-state.js";
+import * as migrationDiagnostics from "../auth-profiles/legacy-source-diagnostic.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
@@ -64,7 +70,7 @@ afterEach(() => {
 
 it("keeps a legacy SDK store when Doctor's configured owner differs", async () => {
   await withOpenClawTestState(
-    { label: "sdk-legacy-owner", layout: "split", agentEnv: "clear" },
+    { label: "sdk-legacy-owner", layout: "home", agentEnv: "clear" },
     async (state) => {
       vi.spyOn(os, "homedir").mockReturnValue(state.home);
       const legacyDir = path.join(state.home, ".openclaw", "agent");
@@ -73,6 +79,8 @@ it("keeps a legacy SDK store when Doctor's configured owner differs", async () =
       await writeFile(path.join(legacyDir, "bin", "fd"), "installed SDK tool");
       openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      // The legacy standalone SDK fixture predates registry enrollment.
+      unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
       expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
         status: "owned",
         agentId: "main",
@@ -317,6 +325,7 @@ describe("SDK migration guard endpoint context", () => {
           // A raw write plus archive models another process's Doctor; this process keeps its fence.
           writePersistedAuthProfileStoreRaw(legacy, ownerDir);
           await rename(legacyFile, `${legacyFile}.migrated`);
+          await refreshAuthProfileFileState();
           storage.reload();
           await expect(storage.getApiKey("arcee", { baseUrl })).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
@@ -339,6 +348,7 @@ describe("SDK migration guard endpoint context", () => {
             });
             writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
             await state.writeJson(legacyPath, legacy);
+            await refreshAuthProfileFileState();
             expect(() => assertAuthProfileMigrationReady()).toThrow(
               "requires legacy credential migration",
             );
@@ -413,14 +423,25 @@ describe("SDK migration guard endpoint context", () => {
         });
         const fallback = vi.fn(() => "synthetic-other-account-key");
         storage.setFallbackResolver(fallback);
+        let reloadedSelectedCredential = false;
+        const assertSelected =
+          migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
+        vi.spyOn(
+          migrationDiagnostics,
+          "assertAuthProfileCredentialMigrationStateAtDatabasePath",
+        ).mockImplementationOnce((...args) => {
+          writePersistedAuthProfileStoreRaw(
+            apiKeyStore("arcee", {
+              keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
+            }),
+          );
+          storage.reload();
+          reloadedSelectedCredential = true;
+          assertSelected(...args);
+        });
         const pending = storage.getApiKey("arcee", { baseUrl });
-        writePersistedAuthProfileStoreRaw(
-          apiKeyStore("arcee", {
-            keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
-          }),
-        );
-        storage.reload();
         await expect(pending).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
+        expect(reloadedSelectedCredential).toBe(true);
         expect(fallback).not.toHaveBeenCalled();
       },
     );
@@ -439,15 +460,27 @@ describe("SDK migration guard endpoint context", () => {
         const storage = AuthStorage.forAgent(agentDir, {
           models: { providers: { arcee: { baseUrl, models: [] } } },
         });
-        const pending = storage.getApiKey("arcee", { baseUrl });
-        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
-        expect(() => assertAuthProfileMigrationReady()).toThrow(
-          "requires legacy credential migration",
-        );
         const localKey = "synthetic-new-local-key";
-        writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
-        storage.reload();
+        let reloadedSelectedCredential = false;
+        const assertSelected =
+          migrationDiagnostics.assertAuthProfileCredentialMigrationStateAtDatabasePath;
+        vi.spyOn(
+          migrationDiagnostics,
+          "assertAuthProfileCredentialMigrationStateAtDatabasePath",
+        ).mockImplementationOnce((...args) => {
+          assertSelected(...args);
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+          expect(() => assertAuthProfileMigrationReady()).toThrow(
+            "requires legacy credential migration",
+          );
+          writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
+          noteAuthProfileFileWrite(path.join(agentDir, "openclaw-agent.sqlite"));
+          storage.reload();
+          reloadedSelectedCredential = true;
+        });
+        const pending = storage.getApiKey("arcee", { baseUrl });
         await expect(pending).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
+        expect(reloadedSelectedCredential).toBe(true);
         expect(
           (await storage.getApiKey("arcee", { baseUrl })) === localKey,
           "new requests retain the local owner",

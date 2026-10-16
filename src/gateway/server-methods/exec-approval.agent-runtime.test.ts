@@ -8,6 +8,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -15,6 +16,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -257,6 +259,7 @@ describe("exec approval signed agent runtime", () => {
         env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
       },
       async () => {
+        setRuntimeConfigSnapshot({});
         clearSubagentRunsReadCacheForTest();
         const child = "agent:main:subagent:incognito-approval-child";
         const parent = "agent:main:dashboard:incognito-approval-parent";
@@ -279,7 +282,7 @@ describe("exec approval signed agent runtime", () => {
           },
         );
         const hostRegistryReads = trackSqliteStatementExecutions(
-          openOpenClawStateDatabase().db,
+          requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
           ["registryPayload"],
           (sql) =>
             /\bfrom\s+"?subagent_runs\b/iu.test(sql) && /\bpayload_json\b/iu.test(sql)

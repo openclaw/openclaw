@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
-import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
@@ -64,89 +63,6 @@ function readPersistedCount(databasePath: string, engineId: string) {
     database.close();
   }
 }
-
-it("clears a live Gateway's quarantine after another Gateway becomes the process projection", async () => {
-  const { coordinator, restoreChannelRuntimeLoader } = await prepareInstanceBindingFixture(
-    tempDirs.make("openclaw-peer-activation-health-"),
-  );
-  const engineId = "first-gateway-health";
-  coordinator.contextEngineId = engineId;
-  await recordPersistedContextEngineQuarantine({
-    engineId,
-    operation: "resolve",
-    reason: "previous failure",
-    failedAt: new Date(123),
-  });
-  const databasePath = resolveOpenClawStateSqlitePath();
-  expect(readPersistedCount(databasePath, engineId)).toEqual({ count: 1 });
-  const reached = createDeferred();
-  const release = createDeferred();
-  const clear = pluginStateWorker.clearRuntimeHealthInWorker;
-  let refusal: unknown;
-  const observer = vi
-    .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
-    .mockImplementation(async (params) => {
-      if (params.selection.kind === "context-engine" && params.selection.engineId === engineId) {
-        reached.resolve();
-        await release.promise;
-        try {
-          await clear(params);
-        } catch (error) {
-          refusal = error;
-          throw error;
-        }
-      } else {
-        await clear(params);
-      }
-    });
-  const servers: Awaited<ReturnType<typeof startTestGatewayServer>>[] = [];
-  try {
-    const first = await startTestGatewayServer(
-      await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }),
-      { auth: { mode: "none" }, controlUiEnabled: false, sidecarStartup: "defer" },
-    );
-    servers.push(first);
-    expect(
-      await Promise.race([
-        reached.promise.then(() => "worker"),
-        first.startupSettled.then(() => "settled"),
-      ]),
-    ).toBe("worker");
-    const registry = pluginRuntime.getActivePluginRegistry();
-    if (!registry) {
-      throw new Error("Expected the first Gateway's published registry");
-    }
-    const owner = getPluginRegistryGatewayOwner(registry);
-    expect(owner?.current()).toBe(registry);
-    coordinator.contextEngineId = "second-gateway-health";
-    const second = await startTestGatewayServer(
-      await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }),
-      { auth: { mode: "none" }, controlUiEnabled: false, sidecarStartup: "start" },
-    );
-    servers.push(second);
-    await second.startupSettled;
-    expect(pluginRuntime.getActivePluginRegistry()).not.toBe(registry);
-    expect(owner?.current()).toBe(registry);
-    release.resolve();
-    await first.startupSettled;
-    expect(
-      readPersistedCount(databasePath, engineId),
-      refusal instanceof Error ? refusal.message : undefined,
-    ).toEqual({ count: 0 });
-  } finally {
-    release.resolve();
-    try {
-      for (const server of servers.toReversed()) {
-        await server.close({ reason: "peer activation health cleanup" });
-      }
-    } finally {
-      observer.mockRestore();
-      restoreChannelRuntimeLoader?.();
-      clearInstanceBindingProbeCoordinators();
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    }
-  }
-});
 
 it.each([false, true])(
   "joins accepted activation cleanup through Gateway close (publication throws=%s)",

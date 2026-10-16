@@ -15,6 +15,7 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
@@ -202,12 +203,12 @@ assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "mis
       const result = await lifetime.track(
         runNodeScript(
           [entry],
-          {
-            ...process.env,
+          testRunnerFixtureEnv({
             PATH: bin,
+            OPENCLAW_BUN_PATH: process.versions.bun ? process.execPath : undefined,
             OPENCLAW_LIVE_USE_REAL_HOME: "0",
             TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
-          },
+          }),
           30_000,
           { cwd: root, signal, requireProcessTreeExit: process.platform !== "win32" },
         ),

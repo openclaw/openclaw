@@ -1,5 +1,9 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
@@ -8,6 +12,8 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 
 function summaryFixture() {
   vi.useFakeTimers();
+  const cfg = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
   const target = {
     key: "agent:main:summary",
     agentId: "main",
@@ -21,7 +27,7 @@ function summaryFixture() {
     label: "first",
   };
   const projection = createSessionRowProjectionFixture({
-    cfg: { agents: { entries: { main: {} } } },
+    cfg,
     store: { first: initial, second: { ...initial, label: "other store" } },
     targetsBySessionKey: new Map(
       [target, other].map((row, index) => [
@@ -63,6 +69,7 @@ function summaryFixture() {
     await Promise.allSettled(publications);
     await drainSessionEventPublications(projection);
     projection.dispose();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });

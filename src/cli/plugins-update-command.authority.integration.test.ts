@@ -11,7 +11,7 @@ import {
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../plugins/install-transaction.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
@@ -177,9 +177,9 @@ describe("plugin update metadata refusal and retained package settlement", () =>
           await expect(command).resolves.toBeUndefined();
           expect(failedReads).toBe(0);
         }
-        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-          nextRecords,
-        );
+        expect(
+          await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+        ).toEqual(nextRecords);
         expect(
           fs.existsSync(nextPath),
           "the retained inventory must not point at a rolled-back package",

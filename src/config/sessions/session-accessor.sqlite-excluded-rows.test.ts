@@ -8,6 +8,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
@@ -20,6 +21,7 @@ import {
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -55,17 +57,23 @@ function insertEntry(
   id: string,
   json?: string | Buffer,
 ) {
+  const entryJson = json ?? JSON.stringify({ sessionId: id, updatedAt: 1 });
+  const columns = deriveSessionPredicateColumns(
+    typeof entryJson === "string" ? entryJson : entryJson.toString("utf8"),
+  );
   database.db
     .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, CAST(? AS TEXT), ?)",
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at,
+        session_started_at, has_optional_references) VALUES (?, ?, CAST(? AS TEXT), ?, ?, ?)`,
     )
-    .run(key, id, json ?? JSON.stringify({ sessionId: id, updatedAt: 1 }), 1);
+    .run(key, id, entryJson, 1, columns.session_started_at, columns.has_optional_references);
 }
 
 function trackMaterializedKeys(database: OpenClawAgentDatabase) {
   const materializedKeys: string[] = [];
-  const prepare = database.db.prepare.bind(database.db);
-  vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+  const nativeDb = requireNativeSqliteDatabase(database.db);
+  const prepare = nativeDb.prepare.bind(nativeDb);
+  vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
@@ -88,9 +96,11 @@ function capCandidates(
 ) {
   return readSessionMaintenanceCapCandidates({
     database,
+    activeSessionKeys: [],
     overflow: Number.MAX_SAFE_INTEGER,
     excludedKeys,
-  });
+    readPreserveKeys: () => undefined,
+  }).store;
 }
 
 describe("SQLite cap candidate exclusions", () => {

@@ -86,6 +86,8 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     });
   const options = {
     runs,
+    getChildSessionCandidates: (key) =>
+      [...runs.values()].filter((row) => row.childSessionKey === key),
     getRunsForChildSession: (key) =>
       [...runs.values()].filter((row) => row.childSessionKey === key),
     resumedRuns: new Set<object>(),
@@ -112,6 +114,8 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
   const registration: RegisterSubagentRunParams = {
     runId: "queued-original",
     childSessionKey: "agent:main:subagent:synthetic",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "synthetic-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "synthetic queued work",

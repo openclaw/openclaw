@@ -195,6 +195,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     params.prompt = "continue after the scheduled ownership transition";
     params.trigger = "cron";
     params.toolsAllow = ["*"];
+    params.pluginHarnessToolPolicyScope = "conversation";
     params.scheduledToolPolicy = { version: 1, mode: "trusted" };
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/start") {

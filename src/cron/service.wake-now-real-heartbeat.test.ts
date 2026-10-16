@@ -328,10 +328,11 @@ async function runMainCronCase(
     runBody,
     async () => {
       cron.stop();
-      // Keep the heartbeat alive until its Cron waiter and owning lane settle.
+      // Keep the heartbeat alive until its Cron waiter and launcher settle.
       await expect(waitForActiveCronJobs(5_000)).resolves.toEqual({ drained: true, active: 0 });
       await scheduledTick;
-      await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
+      await cron.waitForIdle();
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
     },
     () => heartbeatRunner.stop(),
   );
@@ -545,7 +546,7 @@ describe("main cron with the real heartbeat runner", () => {
         "real heartbeat did not reach the reply gate",
       );
       expect(getActiveCronJobCount()).toBe(1);
-      expect(getQueueSize(CommandLane.Cron)).toBe(1);
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
       throw bodyError;
     }).catch((error: unknown) => error);
     const fixtureFailure = outcome.then((error) => {

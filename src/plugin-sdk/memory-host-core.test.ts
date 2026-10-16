@@ -304,71 +304,6 @@ describe("memory-host-core helpers", () => {
     }
   });
 
-  it("does not claim a hash-only pending event export after interruption", async () => {
-    const fixtureRoot = await createFixtureRoot("memory-host-pending-owner-");
-    const stateDir = path.join(fixtureRoot, "state");
-    const workspaceDir = path.join(fixtureRoot, "workspace");
-    const firstEvent = {
-      type: "memory.recall.recorded" as const,
-      timestamp: "2026-05-18T12:00:00.000Z",
-      query: "pending export",
-      resultCount: 0,
-      results: [],
-    };
-    try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      await fs.mkdir(workspaceDir);
-      await appendMemoryHostEvent(workspaceDir, firstEvent);
-      const stateHash = await directoryHash(stateDir);
-      const workspaceHash = await directoryHash(workspaceDir);
-      const exportDir = path.join(workspaceDir, "memory", "events", stateHash);
-      const exportPath = path.join(exportDir, "memory-host-events.jsonl");
-      const ownerPath = path.join(exportDir, ".openclaw-memory-host-events-owner.json");
-      const pendingContent = `${JSON.stringify(firstEvent)}\n`;
-      await fs.mkdir(exportDir, { recursive: true });
-      await fs.writeFile(exportPath, pendingContent, "utf8");
-      await fs.writeFile(
-        ownerPath,
-        `${JSON.stringify({
-          schemaVersion: 3,
-          kind: "openclaw-memory-host-events-export",
-          stateHash,
-          workspaceHash,
-          pendingContentSha256: createHash("sha256").update(pendingContent).digest("hex"),
-        })}\n`,
-        "utf8",
-      );
-      await appendMemoryHostEvent(workspaceDir, {
-        ...firstEvent,
-        timestamp: "2026-05-18T12:01:00.000Z",
-        query: "after interruption",
-      });
-
-      const listed = await listMemoryHostPublicArtifacts({
-        cfg: workspaceConfig(workspaceDir),
-      });
-
-      expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);
-      await expect(fs.readFile(exportPath, "utf8")).resolves.toBe(pendingContent);
-      const owner = JSON.parse(await fs.readFile(ownerPath, "utf8")) as {
-        contentSha256?: string;
-        fileDev?: string;
-        fileIno?: string;
-        pendingContentSha256?: string;
-      };
-      expect(owner.pendingContentSha256).toBe(
-        createHash("sha256")
-          .update(await fs.readFile(exportPath))
-          .digest("hex"),
-      );
-      expect(owner.contentSha256).toBeUndefined();
-      expect(owner.fileDev).toBeUndefined();
-      expect(owner.fileIno).toBeUndefined();
-    } finally {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
-
   it("omits the event export when a workspace path component is a file", async () => {
     const fixtureRoot = await createFixtureRoot("memory-host-blocked-export-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
@@ -492,7 +427,7 @@ describe("memory-host-core helpers", () => {
           results: [],
         })}\n`,
       );
-      const exportStat = await fs.stat(eventExportPath);
+      const exportStat = await fs.stat(eventExportPath, { bigint: true });
       const exportOwner = JSON.parse(
         await fs.readFile(
           path.join(path.dirname(eventExportPath), ".openclaw-memory-host-events-owner.json"),

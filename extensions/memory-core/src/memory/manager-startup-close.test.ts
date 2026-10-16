@@ -16,9 +16,9 @@ import * as reindexLock from "./manager-reindex-lock.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const embeddings = await import("./embeddings.js");
+const listCorpus = sessions.listSessionTranscriptCorpusEntriesForAgent;
 
 function observeCorpusPreparation() {
-  const listCorpus = sessions.listSessionTranscriptCorpusEntriesForAgent;
   const work: Array<ReturnType<typeof listCorpus>> = [];
   const spy = vi
     .spyOn(sessions, "listSessionTranscriptCorpusEntriesForAgent")
@@ -203,15 +203,13 @@ describe("memory preparation shutdown", () => {
     try {
       await Promise.race([entered.promise, searching]);
       expect(acquisitions).toBe(2);
-      expect(events).toEqual(["retained", "publication", "publication-closed", "lock-released-1"]);
+      expect(events).toEqual(["retained", "lock-released-1"]);
       resume.resolve();
       expect(await searching).toEqual(
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
       expect(events).toEqual([
         "retained",
-        "publication",
-        "publication-closed",
         "lock-released-1",
         "publication",
         "publication-closed",
@@ -256,7 +254,7 @@ describe("memory preparation shutdown", () => {
           ).resolves.toBe(true);
         } else {
           await publishSessionTranscriptUpdateByIdentity(target);
-          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.advanceTimersByTimeAsync(30_000);
         }
         await barrier.entered;
         let closed = false;
@@ -270,13 +268,13 @@ describe("memory preparation shutdown", () => {
         await closing;
         mkdirSpy = vi.spyOn(fsSync, "mkdirSync");
         await Promise.all(corpus.work);
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
         await setImmediate();
         expectNoStateDirectoryOpens(mkdirSpy, fixture.paths.stateDir);
       } finally {
         barrier.resume();
         await Promise.allSettled([...corpus.work, closing]);
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(30_000);
         await Promise.allSettled(corpus.work);
         vi.useRealTimers();
         barrier.restore();

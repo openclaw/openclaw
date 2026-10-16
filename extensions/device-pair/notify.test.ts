@@ -256,21 +256,31 @@ describe("device-pair notify persistence", () => {
     },
   );
 
-  it("counts unrelated corrupt subscriber rows but still validates the selected chat", async () => {
+  it.each([false, true])("validates subscriber corruption (selected: %s)", async (selected) => {
     const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1 };
-    const subscriberStore = openSubscriberStore();
-    await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-    await subscriberStore.register("unrelated", subscriber);
     const { db } = openOpenClawStateDatabase({ env });
-    const corrupt = db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    // Corruption is a cold-storage fixture, not an external update to a live cached row.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, NULL)",
     );
-    corrupt.run("{", "device-pair", DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated");
+    insert.run(
+      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+      notifySubscriberStoreKey(subscriber),
+      selected ? "{" : JSON.stringify(subscriber),
+    );
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated", "{");
     const command = {
       api: createApi(),
       ctx: { channel: "telegram", senderId: "chat-123" },
       action: "status",
     };
+    if (selected) {
+      await expect(handleNotifyCommand(command)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_CORRUPT",
+        operation: "lookup",
+      });
+      return;
+    }
     const status = await handleNotifyCommand(command);
     expect(status.text).toContain("Mode: once");
     expect(status.text).toContain("Subscribers: 2");
@@ -281,16 +291,6 @@ describe("device-pair notify persistence", () => {
     await expect(handleNotifyCommand({ ...command, api: olderApi })).rejects.toMatchObject({
       code: "PLUGIN_STATE_CORRUPT",
       operation: "entries",
-    });
-    corrupt.run(
-      "{",
-      "device-pair",
-      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-      notifySubscriberStoreKey(subscriber),
-    );
-    await expect(handleNotifyCommand(command)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation: "lookup",
     });
   });
 
@@ -314,66 +314,66 @@ describe("device-pair notify persistence", () => {
     expect(entries).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "subscriber command",
-    "subscriber command from another API",
-    "persisted seen receipt on restart",
-  ] as const)("reuses empty notifier state and observes a later %s", async (addition) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const clock = createGatewaySchedulerClock(1_000);
-    const gatewayScheduler = createTestGatewayScheduler(clock.clock);
-    let scheduler = createTestPluginServiceScheduler(gatewayScheduler);
-    const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
-    const storage = observeNotifyStorage();
-    const api = createApi(sendText, storage.openKeyedStore);
-    const warn = vi.spyOn(api.logger, "warn");
-    const seenStore = openStore<NotifySeenRequest>({
-      namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
-      maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
-      defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
-    });
-    try {
-      startPairingNotifier(api, scheduler);
-      await clock.advanceBy(10_000);
-      expect(warn).not.toHaveBeenCalled();
-      await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
-      expect(listDevicePairingMock).not.toHaveBeenCalled();
-      await clock.advanceBy(20_000);
-      expect(storage.takeStoreReads()).toEqual([]);
-
-      const isSubscriberCommand = addition !== "persisted seen receipt on restart";
-      if (isSubscriberCommand) {
-        const writerApi =
-          addition === "subscriber command" ? api : createApi(undefined, storage.openKeyedStore);
-        await notifyCommand(writerApi, "once");
-        setPendingRequests({});
-      } else {
-        await scheduler.stop();
-        await seenStore.register(notifyRequestStoreKey("request-1"), {
-          requestId: "request-1",
-          notifiedAtMs: 1_000,
-        });
-        scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+  it.each(["subscriber command from another API", "persisted seen receipt on restart"] as const)(
+    "sleeps with empty notifier state and observes a later %s",
+    async (addition) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const clock = createGatewaySchedulerClock(1_000);
+      const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+      let scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+      const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
+      const storage = observeNotifyStorage();
+      const api = createApi(sendText, storage.openKeyedStore);
+      const warn = vi.spyOn(api.logger, "warn");
+      const seenStore = openStore<NotifySeenRequest>({
+        namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+        maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+        defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+      });
+      try {
         startPairingNotifier(api, scheduler);
-      }
+        await clock.advanceBy(10_000);
+        expect(warn).not.toHaveBeenCalled();
+        await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
+        expect(listDevicePairingMock).not.toHaveBeenCalled();
+        expect(gatewayScheduler.nextWakeAtMs).toBeNull();
+        await clock.advanceBy(20_000);
+        expect(storage.takeStoreReads()).toEqual([]);
+        expect(gatewayScheduler.nextWakeAtMs).toBeNull();
 
-      await clock.advanceBy(10_000);
+        const isSubscriberCommand = addition !== "persisted seen receipt on restart";
+        if (isSubscriberCommand) {
+          const writerApi = createApi(undefined, storage.openKeyedStore);
+          await notifyCommand(writerApi, "once");
+          setPendingRequests({});
+        } else {
+          await scheduler.stop();
+          await seenStore.register(notifyRequestStoreKey("request-1"), {
+            requestId: "request-1",
+            notifiedAtMs: 1_000,
+          });
+          scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+          startPairingNotifier(api, scheduler);
+        }
 
-      expect(warn).not.toHaveBeenCalled();
-      expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
-      expect(sendText).toHaveBeenCalledTimes(isSubscriberCommand ? 1 : 0);
-      if (isSubscriberCommand) {
-        expect(sendText).toHaveBeenCalledWith(
-          expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
-        );
-      } else {
-        await expect(seenStore.entries()).resolves.toEqual([]);
+        await clock.advanceBy(10_000);
+
+        expect(warn).not.toHaveBeenCalled();
+        expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+        expect(sendText).toHaveBeenCalledTimes(isSubscriberCommand ? 1 : 0);
+        if (isSubscriberCommand) {
+          expect(sendText).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
+          );
+        } else {
+          await expect(seenStore.entries()).resolves.toEqual([]);
+        }
+      } finally {
+        await scheduler.stop();
       }
-    } finally {
-      await scheduler.stop();
-    }
-  });
+    },
+  );
 
   it.each([false, true])(
     "does not cache an empty read across another API's committed arm (lost reply: %s)",

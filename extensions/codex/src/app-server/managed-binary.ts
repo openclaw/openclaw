@@ -378,7 +378,6 @@ export async function runCodexVersionCommand(
 ): Promise<string> {
   const result = await runUtf8CommandWithTimeout([nativeCommand, "--version"], {
     baseEnv: env,
-    input: "",
     timeoutMs,
     maxOutputBytes: CODEX_VERSION_MAX_OUTPUT_BYTES,
     outputCapture: "head",

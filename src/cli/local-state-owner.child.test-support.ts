@@ -110,7 +110,7 @@ try {
       method: "worktrees.create",
       params: { repoRoot, name: "settled" },
       target: repoRoot,
-      runLocal: async ({ env, signal, assertCurrent }) => {
+      runLocal: async ({ env, config, signal, assertCurrent }) => {
         const scope = getOpenClawDatabaseMaintenanceScope();
         if (!scope) {
           throw new Error("Offline operation has no retained resource scope");
@@ -122,7 +122,7 @@ try {
         void scope.run(async () => {
           process.stdout.write(`pending:${scope.ownsSchemaMaintenance}\n`);
           await once(process.stdin, "data");
-          await new ManagedWorktreeService({ env }).create({
+          await new ManagedWorktreeService({ env, getConfig: () => config }).create({
             repoRoot,
             name: "settled",
             ownerKind: "manual",

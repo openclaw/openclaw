@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -13,28 +13,55 @@ import {
   recordUpdateDoctorConfigWrite,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "./update-doctor-result.js";
 
 const resultPaths: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(resultPaths.splice(0).map((resultPath) => fs.rm(resultPath, { force: true })));
 });
 
 describe("post-install doctor result IPC", () => {
-  it.each([
-    {
-      status: "error" as const,
-      failureFacts: [
-        { check: "doctor", code: "doctor-failed", message: "Required migration failed" },
-      ],
-    },
-    {
-      ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
-      configHash: "b".repeat(64),
-      warnings: ["plugin/example: version probe timed out"],
-    },
-  ])("round-trips $status results and consumes the file", async (result) => {
+  it.each(
+    [
+      {
+        status: "error" as const,
+        failureFacts: [
+          { check: "doctor", code: "doctor-failed", message: "Required migration failed" },
+        ],
+      },
+      {
+        ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
+        configHash: "b".repeat(64),
+        warnings: ["plugin/example: version probe timed out"],
+        deferredInspectionCheckIds: [
+          "core/doctor/new-target-inspection",
+          "target:Inspection_Check",
+        ],
+      },
+    ].flatMap((result) => ["file", "stdout"].map((destination) => ({ result, destination }))),
+  )("round-trips $result.status results over $destination", async ({ result, destination }) => {
+    if (destination === "stdout") {
+      const output: string[] = [];
+      vi.stubEnv("VITEST", "false");
+      const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+        return true;
+      });
+      try {
+        await writeUpdatePostInstallDoctorResult({ resultPath: "-", result });
+      } finally {
+        write.mockRestore();
+      }
+      expect(output.join("")).toMatch(
+        new RegExp(`^${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}=`),
+      );
+      expect(JSON.parse(output.join("").split("=").slice(1).join("="))).toEqual(result);
+      return;
+    }
     const resultPath = createUpdatePostInstallDoctorResultPath();
     resultPaths.push(resultPath);
     await writeUpdatePostInstallDoctorResult({ resultPath, result });
@@ -43,7 +70,7 @@ describe("post-install doctor result IPC", () => {
     await expect(fs.access(resultPath)).rejects.toThrow();
   });
 
-  it("bounds warning count and length before writing and after reading", async () => {
+  it("bounds distinct warnings before writing and after reading", async () => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
     resultPaths.push(resultPath);
     const warnings = [
@@ -51,8 +78,12 @@ describe("post-install doctor result IPC", () => {
       ...Array.from({ length: 40 }, (_, index) => `${index}: ${"x".repeat(600)}`),
     ];
     const expected = warnings.slice(1, 33).map((warning) => warning.slice(0, 500));
+    const repeatedWarnings = warnings.flatMap((warning) => [warning, ` ${warning} `]);
 
-    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok", warnings } });
+    await writeUpdatePostInstallDoctorResult({
+      resultPath,
+      result: { status: "ok", warnings: repeatedWarnings },
+    });
     expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual({
       status: "ok",
       warnings: expected,
@@ -62,7 +93,7 @@ describe("post-install doctor result IPC", () => {
       warnings: expected,
     });
 
-    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings }));
+    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings: repeatedWarnings }));
     await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
       status: "ok",
       warnings: expected,
@@ -79,6 +110,29 @@ describe("post-install doctor result IPC", () => {
       "y".repeat(500),
     ]);
   });
+
+  it.each(
+    [
+      "missing-array",
+      [" "],
+      Array.from({ length: 129 }, () => "core/doctor/example"),
+      [`core/doctor/${"x".repeat(256)}`],
+    ].map((ids) => ({ ids })),
+  )(
+    "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
+    async ({ ids }) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      resultPaths.push(resultPath);
+      await fs.writeFile(
+        resultPath,
+        JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
+      );
+      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+      expect(result?.status).toBe("ok");
+      expect(result?.deferredInspectionCheckIds).toBeUndefined();
+      await expect(fs.access(resultPath)).rejects.toThrow();
+    },
+  );
 
   it("keeps committed migration notes and the first refusal scoped to one Doctor run", async () => {
     const refusal = {

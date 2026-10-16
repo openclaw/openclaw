@@ -9,6 +9,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
@@ -258,11 +259,6 @@ it.each([
                           sandboxMode: change === "persist-generation" ? "off" : undefined,
                         },
                       );
-                      if (change === "persist-generation") {
-                        expect(snapshot.project(caller, run.run)).toBe(fingerprint);
-                      } else {
-                        expect(snapshot.project(caller, run.run)).not.toBe(fingerprint);
-                      }
                     }
                   : undefined,
               })
@@ -320,8 +316,11 @@ it.each([
       resume.resolve();
       await settled;
       question.dispose();
+      snapshot.close();
       manager.close();
       await manager.drain();
     }
+    // Non-isolated workers share retained sharing facts with the next test file.
+    assertNoRetainedSessionSharingReads();
   });
 });

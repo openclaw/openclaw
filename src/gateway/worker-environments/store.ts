@@ -14,6 +14,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import {
   isPreparedReservationWithinCapacity,
   preparedCapacityFromReservations,
@@ -161,6 +162,15 @@ export async function createWorkerEnvironmentStore(
         publishSqliteCommittedState({
           installFacts() {
             owner.install(facts, revision, false);
+            for (const placement of facts.placements ?? []) {
+              stagePlacementTurnClaimWorkerPublication(
+                context.admission.identity,
+                placement,
+                undefined,
+                undefined,
+                placement,
+              ).commit();
+            }
             owner.release(token);
             installed = true;
           },

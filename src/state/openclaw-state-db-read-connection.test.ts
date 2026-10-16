@@ -35,7 +35,8 @@ vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabaseResult: () => ({ status: "available", database: mocks.openTracked() }),
 }));
-vi.mock("./openclaw-state-db-schema-version.js", () => ({
+vi.mock("./openclaw-state-db-schema-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-schema-version.js")>()),
   assertSupportedStateSchemaVersion: mocks.schema,
 }));
 vi.mock("./openclaw-state-db-schema-policy.js", () => ({

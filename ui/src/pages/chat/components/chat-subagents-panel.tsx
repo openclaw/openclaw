@@ -6,7 +6,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
 import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
@@ -15,7 +15,7 @@ import {
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
@@ -26,18 +26,16 @@ type Props = SessionPanelProps & {
   showRequest?: () => string | null | undefined;
   onSessionSelect?: (sessionKey: string, options?: PaneSessionChangeOptions) => boolean | void;
 };
-type Methods = { refresh(): Promise<void> };
-export type ChatSubagentsPanel = SolidBridgeElement<Props, Methods>;
+export type ChatSubagentsPanel = SolidBridgeElement<Props>;
 let panelSequence = 0;
 
-export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
+export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
-  (props, host) => {
+  (props) => {
     const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
     const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
-    host.refresh = () => data().refresh();
     const subagentAgentId = (key: string) =>
       data().rows.find((row) => row.session.key === key)?.session.agentId ??
       parseAgentSessionKey(key)?.agentId ??
@@ -185,10 +183,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
                           {row().callCount !== undefined && (
                             <span class="chat-subagents__calls">
                               {t(
-                                row().callCount === 1
-                                  ? "chat.subagentsPanel.callsOne"
-                                  : "chat.subagentsPanel.callsMany",
-                                { count: String(row().callCount) },
+                                !row().callCount?.exact
+                                  ? "chat.subagentsPanel.callsAtLeast"
+                                  : row().callCount?.count === 1
+                                    ? "chat.subagentsPanel.callsOne"
+                                    : "chat.subagentsPanel.callsMany",
+                                { count: String(row().callCount?.count) },
                               )}
                             </span>
                           )}
@@ -253,7 +253,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
       showRequest: { default: undefined, attribute: false },
       onSessionSelect: { default: undefined, attribute: false },
     },
-    methods: { refresh: () => Promise.resolve() },
   },
 );
 

@@ -12,12 +12,12 @@ import {
   runActivePluginPayloadSmokeCheck,
 } from "../../../plugins/active-payload-verification.js";
 import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
@@ -137,7 +137,9 @@ describe("post-core convergence on source checkouts", () => {
   });
 
   it.each([
-    { version: "2026.9.3", selector: true, corrupt: false, flow: "doctor" },
+    { version: "2026.9.3", selector: true, corrupt: false, packaged: false, flow: "doctor" },
+    { version: "2026.9.3", selector: false, corrupt: false, packaged: true, flow: "doctor" },
+    { version: HOST_VERSION, selector: false, corrupt: false, packaged: true, flow: "cli all" },
     { version: HOST_VERSION, selector: false, corrupt: true, flow: "doctor" },
     ...["cli named", "cli all", "stable"].map((flow) => ({
       version: HOST_VERSION,
@@ -147,7 +149,7 @@ describe("post-core convergence on source checkouts", () => {
     })),
   ])(
     "keeps the rebuilt plugin with npm $version (selector=$selector, corrupt=$corrupt, flow=$flow)",
-    async ({ version, selector, corrupt, flow }) => {
+    async ({ version, selector, corrupt, flow, packaged = false }) => {
       const root = tempDirs.make("openclaw-source-convergence-");
       const hostRoot = path.join(root, "host");
       const stateDir = path.join(root, "state");
@@ -162,9 +164,16 @@ describe("post-core convergence on source checkouts", () => {
             "./dist/plugin-sdk/native-hook-relay-runtime.js",
         },
       });
-      fs.mkdirSync(path.join(hostRoot, "src"), { recursive: true });
-      fs.mkdirSync(path.join(hostRoot, "extensions"), { recursive: true });
-      fs.writeFileSync(path.join(hostRoot, "pnpm-workspace.yaml"), "packages: []\n");
+      if (packaged) {
+        writeJson(path.join(hostRoot, "dist", "build-info.json"), {
+          commit: "a".repeat(40),
+          stagedOfficialPlugins: { commit: "a".repeat(40), pluginIds: ["codex"] },
+        });
+      } else {
+        fs.mkdirSync(path.join(hostRoot, "src"), { recursive: true });
+        fs.mkdirSync(path.join(hostRoot, "extensions"), { recursive: true });
+        fs.writeFileSync(path.join(hostRoot, "pnpm-workspace.yaml"), "packages: []\n");
+      }
       const sdkDir = path.join(hostRoot, "dist", "plugin-sdk");
       fs.mkdirSync(sdkDir, { recursive: true });
       fs.writeFileSync(
@@ -276,7 +285,9 @@ describe("post-core convergence on source checkouts", () => {
           expect
             .soft(fs.readFileSync(path.join(npmDir, "package.json"), "utf8"))
             .toBe(npmPackageBefore);
-          expect.soft(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+          expect
+            .soft(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env }))
+            .toEqual(records);
           const registry = loadPluginManifestRegistryCore({ config: cfg, env });
           const selected = registry.plugins.find((plugin) => plugin.id === "codex");
           expect.soft(selected).toMatchObject({ origin: "bundled", rootDir: bundledDir });
@@ -341,7 +352,7 @@ describe("post-core convergence on source checkouts", () => {
           }
         });
       } finally {
-        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
       }
     },
   );

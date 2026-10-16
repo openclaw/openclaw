@@ -176,9 +176,6 @@ export function createProfileAvatarReader(
         ),
       );
       captured.admission.assertCurrent();
-      if (reply && (!reply.ok || reply.type !== "userProfiles.avatar.inspect")) {
-        throw new Error("Unexpected profile avatar inspection result");
-      }
       if (revision !== readUserProfileVersion()) {
         continue;
       }
@@ -212,9 +209,6 @@ export function createProfileAvatarReader(
             { context: captured, current: true, signal },
           ),
         );
-        if (result && (!result.ok || result.type !== "userProfiles.avatar.read")) {
-          throw new Error("Unexpected profile avatar materialization result");
-        }
         return isCurrent() ? result?.avatar : undefined;
       };
       const prepared: PreparedProfileAvatar = {

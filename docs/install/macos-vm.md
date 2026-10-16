@@ -236,12 +236,12 @@ For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosti
 
 ## Troubleshooting
 
-| Problem                  | Solution                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                         |
-| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                            |
-| Lume command not found   | Add `~/.local/bin` to your PATH                                                     |
-| WhatsApp QR not scanning | Ensure you are logged into the VM (not host) when running `openclaw channels login` |
+| Problem                  | Solution                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                             |
+| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                                |
+| Lume command not found   | Add `~/.local/bin` to your PATH                                                         |
+| WhatsApp QR not scanning | Check that you are logged into the VM (not host) when running `openclaw channels login` |
 
 ## Related docs
 

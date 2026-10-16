@@ -526,6 +526,10 @@ describe("tui session actions", () => {
         model: "old-model",
         modelProvider: "ollama",
         updatedAt: 100,
+        fastMode: true,
+        verboseLevel: "full",
+        traceLevel: "off",
+        reasoningLevel: "stream",
       },
     });
 
@@ -542,6 +546,7 @@ describe("tui session actions", () => {
         model: "new-model",
         modelProvider: "openai",
         updatedAt: 200,
+        traceLevel: "raw",
       },
     });
 
@@ -553,6 +558,12 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.model).toBe("new-model");
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(200);
+    expect(state.sessionInfo).toMatchObject({
+      fastMode: true,
+      verboseLevel: "full",
+      traceLevel: "raw",
+      reasoningLevel: "stream",
+    });
   });
 
   it("applies the runtime-aware thinking projection returned by session patches", () => {
@@ -657,7 +668,7 @@ describe("tui session actions", () => {
 
   it("clears the footer goal when the current session has no row yet", async () => {
     const describeSession = vi.fn().mockResolvedValue({
-      defaults: {},
+      defaults: { model: "gpt-5.4", modelProvider: "openai", contextTokens: 272000 },
       session: null,
     });
     const state = createBaseState({
@@ -685,141 +696,85 @@ describe("tui session actions", () => {
     await refreshSessionInfo();
 
     expect(state.sessionInfo.goal).toBeUndefined();
+    expect(state.sessionInfo).toMatchObject({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      contextTokens: 272000,
+    });
   });
 
-  it("preserves an authoritative user received while same-session history is loading", async () => {
-    const deferredHistory = createDeferred<unknown>();
-    const chatLog = new ChatLog();
-    const state = createBaseState({ currentSessionId: "session-main" });
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn(() => deferredHistory.promise),
-      }),
-      chatLog,
-      state,
-    });
+  it.each([
+    { snapshot: "stale", included: false, scrollback: false, userSeq: 3, replySeq: 4 },
+    { snapshot: "includes live user", included: true, scrollback: false, userSeq: 1, replySeq: 2 },
+    { snapshot: "full scrollback", included: false, scrollback: true, userSeq: 19, replySeq: 20 },
+  ])(
+    "reconciles an authoritative live user against $snapshot history",
+    async ({ included, scrollback, userSeq, replySeq }) => {
+      const deferredHistory = createDeferred<unknown>();
+      const chatLog = new ChatLog(scrollback ? 20 : undefined);
+      chatLog.addUser("Deleted prompt from an earlier branch", {
+        messageId: "deleted-history-user",
+      });
+      const state = createBaseState({ currentSessionId: "session-main" });
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({
+          describeSession: vi.fn(),
+          loadHistory: vi.fn(() => deferredHistory.promise),
+        }),
+        chatLog,
+        state,
+      });
 
-    const loading = loadHistory();
-    persistLiveUser(state, {
-      text: "Browser prompt received during refresh",
-      messageId: "shared-user-1",
-      messageSeq: 1,
-      runId: "shared-run-1",
-    });
-    deferredHistory.resolve({
-      sessionId: "session-main",
-      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-      messages: [
-        {
-          role: "assistant",
-          content: "History completed",
-          __openclaw: { id: "shared-assistant-1", seq: 2 },
-        },
-      ],
-    });
+      const loading = loadHistory();
+      persistLiveUser(state, {
+        text: "Browser prompt received during refresh",
+        messageId: "live-user",
+        messageSeq: userSeq,
+        runId: "live-run",
+      });
+      deferredHistory.resolve({
+        sessionId: "session-main",
+        sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+        messages: [
+          ...(scrollback
+            ? Array.from({ length: 18 }, (_, index) => ({
+                role: "user",
+                content: `Earlier history ${index + 1}`,
+                __openclaw: { id: `history-user-${index + 1}`, seq: index + 1 },
+              }))
+            : [
+                {
+                  role: "user",
+                  content: included
+                    ? "Browser prompt received during refresh"
+                    : "Current branch prompt",
+                  __openclaw: {
+                    id: included ? "live-user" : "current-history-user",
+                    seq: included ? userSeq : 2,
+                  },
+                },
+              ]),
+          {
+            role: "assistant",
+            content: "Current branch reply",
+            __openclaw: { id: "current-assistant", seq: replySeq },
+          },
+        ],
+      });
 
-    await expect(loading).resolves.toMatchObject({ loaded: true });
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered).toContain("Browser prompt received during refresh");
-    expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
-    expect(rendered).toContain("History completed");
-    expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
-      rendered.indexOf("History completed"),
-    );
-  });
-
-  it("does not restore deleted history while recovering an in-flight authoritative live user", async () => {
-    const deferredHistory = createDeferred<unknown>();
-    const chatLog = new ChatLog();
-    chatLog.addUser("Deleted prompt from an earlier branch", {
-      messageId: "deleted-history-user",
-    });
-    const state = createBaseState({ currentSessionId: "session-main" });
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn(() => deferredHistory.promise),
-      }),
-      chatLog,
-      state,
-    });
-
-    const loading = loadHistory();
-    persistLiveUser(state, {
-      text: "Browser prompt received during refresh",
-      messageId: "live-user",
-      messageSeq: 3,
-      runId: "live-run",
-    });
-    deferredHistory.resolve({
-      sessionId: "session-main",
-      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-      messages: [
-        {
-          role: "user",
-          content: "Current branch prompt",
-          __openclaw: { id: "current-history-user", seq: 2 },
-        },
-        {
-          role: "assistant",
-          content: "Current branch reply",
-          __openclaw: { id: "current-assistant", seq: 4 },
-        },
-      ],
-    });
-
-    await expect(loading).resolves.toMatchObject({ loaded: true });
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered).not.toContain("Deleted prompt from an earlier branch");
-    expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
-    expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
-      rendered.indexOf("Current branch reply"),
-    );
-  });
-
-  it("deduplicates an authoritative live user already included in same-session history", async () => {
-    const deferredHistory = createDeferred<unknown>();
-    const chatLog = new ChatLog();
-    const state = createBaseState({ currentSessionId: "session-main" });
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn(() => deferredHistory.promise),
-      }),
-      chatLog,
-      state,
-    });
-
-    const loading = loadHistory();
-    persistLiveUser(state, {
-      text: "Persisted browser prompt",
-      messageId: "shared-user-2",
-      messageSeq: 1,
-      runId: "shared-run-2",
-    });
-    deferredHistory.resolve({
-      sessionId: "session-main",
-      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-      messages: [
-        {
-          role: "user",
-          content: "Persisted browser prompt",
-          __openclaw: { id: "shared-user-2", seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: "Persisted reply",
-          __openclaw: { id: "shared-assistant-2", seq: 2 },
-        },
-      ],
-    });
-
-    await expect(loading).resolves.toMatchObject({ loaded: true });
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered.match(/Persisted browser prompt/g)).toHaveLength(1);
-    expect(rendered).toContain("Persisted reply");
-  });
+      await expect(loading).resolves.toMatchObject({ loaded: true });
+      const rendered = chatLog.render(120).join("\n");
+      expect(rendered).not.toContain("Deleted prompt from an earlier branch");
+      expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
+      expect(rendered).toContain("Current branch reply");
+      expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
+        rendered.indexOf("Current branch reply"),
+      );
+      if (scrollback) {
+        expect(chatLog.children).toHaveLength(20);
+      }
+    },
+  );
 
   it("preserves distinct imported live users through a stale history snapshot", async () => {
     const deferredHistory = createDeferred<unknown>();
@@ -994,52 +949,6 @@ describe("tui session actions", () => {
     expect(rendered).not.toContain("Private prompt from previous session");
   });
 
-  it("keeps a recovered authoritative user ahead of its reply at full scrollback", async () => {
-    const deferredHistory = createDeferred<unknown>();
-    const chatLog = new ChatLog(20);
-    const state = createBaseState({ currentSessionId: "session-main" });
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn(() => deferredHistory.promise),
-      }),
-      chatLog,
-      state,
-    });
-
-    const loading = loadHistory();
-    persistLiveUser(state, {
-      text: "Browser prompt at the scrollback limit",
-      messageId: "scrollback-user",
-      messageSeq: 19,
-      runId: "scrollback-run",
-    });
-    deferredHistory.resolve({
-      sessionId: "session-main",
-      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-      messages: [
-        ...Array.from({ length: 18 }, (_, index) => ({
-          role: "user",
-          content: `Earlier history ${index + 1}`,
-          __openclaw: { id: `history-user-${index + 1}`, seq: index + 1 },
-        })),
-        {
-          role: "assistant",
-          content: "Reply at the scrollback limit",
-          __openclaw: { id: "scrollback-assistant", seq: 20 },
-        },
-      ],
-    });
-
-    await expect(loading).resolves.toMatchObject({ loaded: true });
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered.match(/Browser prompt at the scrollback limit/g)).toHaveLength(1);
-    expect(rendered.indexOf("Browser prompt at the scrollback limit")).toBeLessThan(
-      rendered.indexOf("Reply at the scrollback limit"),
-    );
-    expect(chatLog.children).toHaveLength(20);
-  });
-
   it("discards old live users when a same-key history response rotates the session id", async () => {
     const deferredHistory = createDeferred<unknown>();
     const chatLog = new ChatLog();
@@ -1088,6 +997,8 @@ describe("tui session actions", () => {
         sessionId: "session-2",
         model: "session-model",
         modelProvider: "openai",
+        thinkingLevel: "medium",
+        contextTokens: 120_000,
         updatedAt: 50,
       },
       messages: [],
@@ -1099,6 +1010,9 @@ describe("tui session actions", () => {
       sessionInfo: {
         model: "previous-model",
         modelProvider: "anthropic",
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
         updatedAt: 500,
       },
     });
@@ -1125,47 +1039,14 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.model).toBe("session-model");
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
-    expect(describeSession).not.toHaveBeenCalled();
-    expect(btw.clear).toHaveBeenCalled();
-  });
-
-  it("clears stale token counts when history supplies lightweight session metadata", async () => {
-    const describeSession = vi.fn().mockResolvedValue({ session: null });
-    const loadHistory = vi.fn().mockResolvedValue({
-      sessionId: "session-2",
-      sessionInfo: {
-        key: "agent:main:other",
-        sessionId: "session-2",
-        model: "session-model",
-        modelProvider: "openai",
-        updatedAt: 50,
-      },
-      messages: [],
-    });
-    const state = createBaseState({
-      historyLoaded: true,
-      sessionInfo: {
-        inputTokens: 1,
-        outputTokens: 2,
-        totalTokens: 3,
-        updatedAt: 500,
-      },
-    });
-
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession,
-        loadHistory,
-      }),
-      state,
-    });
-
-    await setSession("agent:main:other");
-
+    expect(state.currentSessionId).toBe("session-2");
+    expect(state.sessionInfo.thinkingLevel).toBe("medium");
+    expect(state.sessionInfo.contextTokens).toBe(120_000);
     expect(state.sessionInfo.inputTokens).toBeNull();
     expect(state.sessionInfo.outputTokens).toBeNull();
     expect(state.sessionInfo.totalTokens).toBeNull();
     expect(describeSession).not.toHaveBeenCalled();
+    expect(btw.clear).toHaveBeenCalled();
   });
 
   it("renders a fresh session total as 0 (not '?') when totalTokensFresh is set", async () => {
@@ -1204,38 +1085,6 @@ describe("tui session actions", () => {
 
     expect(state.sessionInfo.totalTokens).toBe(0);
     expect(state.sessionInfo.totalTokensFresh).toBe(true);
-  });
-
-  it("restores an in-flight run reported by chat.history on switch-back", async () => {
-    const loadHistory = vi.fn().mockResolvedValue({
-      sessionId: "session-bg",
-      messages: [],
-      inFlightRun: { runId: "run-bg", text: "still working in the background" },
-    });
-    const updateAssistant = vi.fn();
-    const setActivityStatus = vi.fn();
-    const chatLog = makeChatLog({
-      addSystem: vi.fn(),
-      clearAll: vi.fn(),
-      addUser: vi.fn(),
-      finalizeAssistant: vi.fn(),
-      updateAssistant,
-      startTool: vi.fn(),
-    });
-    const state = createBaseState({ currentSessionKey: "agent:main:other" });
-
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      chatLog,
-      state,
-      setActivityStatus,
-    });
-
-    await setSession("agent:main:main");
-
-    expect(updateAssistant).toHaveBeenCalledWith("still working in the background", "run-bg");
-    expect(state.activeChatRunId).toBe("run-bg");
-    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
   it.each([
@@ -1463,177 +1312,57 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
-  it("stays idle when chat.history reports no in-flight run", async () => {
-    const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-x", messages: [] });
-    const updateAssistant = vi.fn();
-    const setActivityStatus = vi.fn();
-    const chatLog = makeChatLog({
-      addSystem: vi.fn(),
-      clearAll: vi.fn(),
-      addUser: vi.fn(),
-      finalizeAssistant: vi.fn(),
-      updateAssistant,
-      startTool: vi.fn(),
-    });
-    const state = createBaseState({ currentSessionKey: "agent:main:other" });
+  it.each(["success", "failure"] as const)(
+    "ignores a superseded switch whose history settles with %s",
+    async (outcome) => {
+      const historyA = createDeferred<unknown>();
+      const historyB = createDeferred<unknown>();
+      const loadHistory = vi
+        .fn()
+        .mockImplementationOnce(() => historyA.promise)
+        .mockImplementationOnce(() => historyB.promise);
+      const { chatLog, addSystem, addUser } = createHistoryChatLog();
+      const state = createBaseState({ currentSessionKey: "agent:main:home" });
+      const setActivityStatus = vi.fn();
 
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      chatLog,
-      state,
-      setActivityStatus,
-    });
+      const { setSession } = createTestSessionActions({
+        client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
+        chatLog,
+        state,
+        setActivityStatus,
+      });
 
-    await setSession("agent:main:main");
+      const firstSwitch = setSession("agent:main:A");
+      const secondSwitch = setSession("agent:main:B");
 
-    expect(updateAssistant).not.toHaveBeenCalled();
-    expect(state.activeChatRunId).toBeNull();
-    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
-  });
+      historyB.resolve({
+        sessionId: "session-b",
+        sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
+        messages: [{ role: "user", content: "message from B" }],
+      });
+      if (outcome === "failure") {
+        historyA.reject(new Error("history rpc aborted"));
+      } else {
+        historyA.resolve({
+          sessionId: "session-a",
+          sessionInfo: { key: "agent:main:A", sessionId: "session-a", updatedAt: 10 },
+          messages: [{ role: "user", content: "message from A" }],
+          inFlightRun: { runId: "run-a", text: "stale A run" },
+        });
+      }
 
-  it("replaces session-scoped modes when switching to a session without overrides", async () => {
-    const state = createBaseState({
-      currentSessionKey: "agent:main:source",
-      sessionInfo: {
-        displayName: "Production incident",
-        fastMode: true,
-        verboseLevel: "full",
-        traceLevel: "raw",
-        reasoningLevel: "stream",
-      },
-    });
-    const loadHistory = vi.fn().mockResolvedValue({
-      sessionInfo: {
-        key: "agent:main:target",
-        sessionId: "session-target",
-      },
-      messages: [],
-    });
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      state,
-    });
+      await Promise.all([firstSwitch, secondSwitch]);
 
-    await setSession("agent:main:target");
-
-    for (const key of [
-      "displayName",
-      "fastMode",
-      "verboseLevel",
-      "traceLevel",
-      "reasoningLevel",
-    ] as const) {
-      expect(state.sessionInfo[key]).toBeUndefined();
-    }
-  });
-
-  it("merges a same-session mode patch without clearing untouched modes", () => {
-    const state = createBaseState({
-      sessionInfo: {
-        fastMode: true,
-        verboseLevel: "full",
-        traceLevel: "off",
-        reasoningLevel: "stream",
-      },
-    });
-    const { applySessionInfoFromPatch } = createTestSessionActions({ state });
-
-    applySessionInfoFromPatch({
-      ok: true,
-      path: "/sessions/patch",
-      key: "agent:main:main",
-      entry: { traceLevel: "raw" },
-    });
-
-    expect(state.sessionInfo).toMatchObject({
-      fastMode: true,
-      verboseLevel: "full",
-      traceLevel: "raw",
-      reasoningLevel: "stream",
-    });
-  });
-
-  it("keeps the newer session when an earlier switch's history resolves last", async () => {
-    const historyA = createDeferred<unknown>();
-    const historyB = createDeferred<unknown>();
-    const loadHistory = vi
-      .fn()
-      .mockImplementationOnce(() => historyA.promise)
-      .mockImplementationOnce(() => historyB.promise);
-    const { chatLog, addUser } = createHistoryChatLog();
-    const state = createBaseState({ currentSessionKey: "agent:main:home" });
-    const setActivityStatus = vi.fn();
-
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      chatLog,
-      state,
-      setActivityStatus,
-    });
-
-    const firstSwitch = setSession("agent:main:A");
-    const secondSwitch = setSession("agent:main:B");
-
-    historyB.resolve({
-      sessionId: "session-b",
-      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
-      messages: [{ role: "user", content: "message from B" }],
-    });
-    historyA.resolve({
-      sessionId: "session-a",
-      sessionInfo: { key: "agent:main:A", sessionId: "session-a", updatedAt: 10 },
-      messages: [{ role: "user", content: "message from A" }],
-      inFlightRun: { runId: "run-a", text: "stale A run" },
-    });
-
-    await Promise.all([firstSwitch, secondSwitch]);
-
-    expect(state.currentSessionKey).toBe("agent:main:B");
-    expect(state.currentSessionId).toBe("session-b");
-    expect(state.activeChatRunId).toBeNull();
-    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
-    expect(renderedUsers).toContain("message from B");
-    expect(renderedUsers).not.toContain("message from A");
-  });
-
-  it("ignores a superseded switch whose history request rejects", async () => {
-    const historyA = createDeferred<unknown>();
-    const historyB = createDeferred<unknown>();
-    const loadHistory = vi
-      .fn()
-      .mockImplementationOnce(() => historyA.promise)
-      .mockImplementationOnce(() => historyB.promise);
-    const { chatLog, addSystem, addUser } = createHistoryChatLog();
-    const state = createBaseState({ currentSessionKey: "agent:main:home" });
-    const setActivityStatus = vi.fn();
-
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      chatLog,
-      state,
-      setActivityStatus,
-    });
-
-    const firstSwitch = setSession("agent:main:A");
-    const secondSwitch = setSession("agent:main:B");
-
-    historyB.resolve({
-      sessionId: "session-b",
-      sessionInfo: { key: "agent:main:B", sessionId: "session-b", updatedAt: 20 },
-      messages: [{ role: "user", content: "message from B" }],
-    });
-    historyA.reject(new Error("history rpc aborted"));
-
-    await Promise.all([firstSwitch, secondSwitch]);
-
-    expect(state.currentSessionKey).toBe("agent:main:B");
-    expect(state.currentSessionId).toBe("session-b");
-    expect(state.activeChatRunId).toBeNull();
-    const systemMessages = addSystem.mock.calls.map((call) => String(call[0]));
-    expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
-    const renderedUsers = addUser.mock.calls.map((call) => call[0]);
-    expect(renderedUsers).toContain("message from B");
-  });
+      expect(state.currentSessionKey).toBe("agent:main:B");
+      expect(state.currentSessionId).toBe("session-b");
+      expect(state.activeChatRunId).toBeNull();
+      const renderedUsers = addUser.mock.calls.map((call) => call[0]);
+      expect(renderedUsers).toContain("message from B");
+      expect(renderedUsers).not.toContain("message from A");
+      const systemMessages = addSystem.mock.calls.map((call) => String(call[0]));
+      expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
+    },
+  );
 
   it.each([
     {
@@ -1782,64 +1511,6 @@ describe("tui session actions", () => {
     expect(state.currentSessionKey).toBe("agent:main:A");
     expect(state.currentSessionId).toBe("session-a-new");
     expect(state.sessionInfo.model).toBe("new-model");
-  });
-
-  it("applies default model info when the current session has no persisted entry yet", async () => {
-    const describeSession = vi.fn().mockResolvedValue({
-      defaults: {
-        model: "gpt-5.4",
-        modelProvider: "openai",
-        contextTokens: 272000,
-      },
-      session: null,
-    });
-
-    const state = createBaseState({ currentSessionKey: "agent:main:brand-new" });
-
-    const { refreshSessionInfo } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession }),
-      chatLog: makeChatLog({ addSystem: vi.fn() }),
-      state,
-    });
-
-    await refreshSessionInfo();
-
-    expect(state.sessionInfo.model).toBe("gpt-5.4");
-    expect(state.sessionInfo.modelProvider).toBe("openai");
-    expect(state.sessionInfo.contextTokens).toBe(272000);
-  });
-
-  it("resets activity status to idle when switching sessions after streaming", async () => {
-    const describeSession = vi.fn().mockResolvedValue({
-      defaults: {},
-      session: null,
-    });
-    const loadHistory = vi.fn().mockResolvedValue({
-      sessionId: "session-b",
-      messages: [],
-    });
-    const setActivityStatus = vi.fn();
-
-    const state = createBaseState({
-      activeChatRunId: "run-1",
-      historyLoaded: true,
-      activityStatus: "streaming",
-    });
-
-    const { setSession } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession,
-        loadHistory,
-      }),
-      state,
-      setActivityStatus,
-    });
-
-    await setSession("agent:main:other");
-
-    expect(setActivityStatus).toHaveBeenCalledWith("idle");
-    expect(state.activeChatRunId).toBeNull();
-    expect(describeSession).toHaveBeenCalled();
   });
 
   it("adopts a reset mutation's replacement key without reloading gateway history", () => {
@@ -2135,24 +1806,10 @@ describe("tui session actions", () => {
     },
   );
 
-  it("does not clear the selected session for another session's reset result", () => {
-    const addSystem = vi.fn();
-    const clearAll = vi.fn();
-    const updateHeader = vi.fn();
-    const state = createBaseState({
-      currentSessionKey: "agent:main:current",
-      currentSessionId: "current-session",
-      historyLoaded: true,
-      sessionInfo: { model: "current-model", modelProvider: "openai" },
-    });
-    const { applySessionMutationResult } = createTestSessionActions({
-      chatLog: makeChatLog({ addSystem, clearAll }),
-      state,
-      updateHeader,
-    });
-
-    const applied = applySessionMutationResult(
-      {
+  it.each([
+    {
+      reason: "another selection",
+      result: {
         ok: true,
         key: "agent:main:previous",
         entry: {
@@ -2161,45 +1818,45 @@ describe("tui session actions", () => {
           modelProvider: "anthropic",
         },
       },
-      { sessionKey: "agent:main:previous", agentId: "main" },
-    );
-
-    expect(applied).toBe(false);
-    expect(state.currentSessionKey).toBe("agent:main:current");
-    expect(state.currentSessionId).toBe("current-session");
-    expect(state.sessionInfo.model).toBe("current-model");
-    expect(state.historyLoaded).toBe(true);
-    expect(clearAll).not.toHaveBeenCalled();
-    expect(addSystem).not.toHaveBeenCalled();
-    expect(updateHeader).not.toHaveBeenCalled();
-  });
-
-  it("does not fast-clear reset results without a replacement entry", () => {
-    const addSystem = vi.fn();
-    const clearAll = vi.fn();
-    const state = createBaseState({
-      currentSessionKey: "agent:main:old",
-      currentSessionId: "old-session",
+      requestSelection: { sessionKey: "agent:main:previous", agentId: "main" },
+      historyLoaded: true,
+    },
+    {
+      reason: "no replacement entry",
+      result: { ok: true },
+      requestSelection: undefined,
       historyLoaded: false,
-    });
+    },
+  ])(
+    "does not fast-clear a reset result with $reason",
+    ({ result, requestSelection, historyLoaded }) => {
+      const addSystem = vi.fn();
+      const clearAll = vi.fn();
+      const updateHeader = vi.fn();
+      const state = createBaseState({
+        currentSessionKey: "agent:main:current",
+        currentSessionId: "current-session",
+        historyLoaded,
+        sessionInfo: { model: "current-model", modelProvider: "openai" },
+      });
+      const { applySessionMutationResult } = createTestSessionActions({
+        chatLog: makeChatLog({ addSystem, clearAll }),
+        state,
+        updateHeader,
+      });
 
-    const { applySessionMutationResult } = createTestSessionActions({
-      chatLog: makeChatLog({
-        addSystem,
-        clearAll,
-      }),
-      state,
-    });
+      const applied = applySessionMutationResult(result, requestSelection);
 
-    const applied = applySessionMutationResult({ ok: true });
-
-    expect(applied).toBe(false);
-    expect(state.currentSessionKey).toBe("agent:main:old");
-    expect(state.currentSessionId).toBe("old-session");
-    expect(state.historyLoaded).toBe(false);
-    expect(clearAll).not.toHaveBeenCalled();
-    expect(addSystem).not.toHaveBeenCalled();
-  });
+      expect(applied).toBe(false);
+      expect(state.currentSessionKey).toBe("agent:main:current");
+      expect(state.currentSessionId).toBe("current-session");
+      expect(state.sessionInfo.model).toBe("current-model");
+      expect(state.historyLoaded).toBe(historyLoaded);
+      expect(clearAll).not.toHaveBeenCalled();
+      expect(addSystem).not.toHaveBeenCalled();
+      expect(updateHeader).not.toHaveBeenCalled();
+    },
+  );
 
   it("remembers the selected session after history loads", async () => {
     const describeSession = vi.fn().mockResolvedValue({
@@ -2249,6 +1906,7 @@ describe("tui session actions", () => {
       clearAll: vi.fn(),
     });
     const state = createBaseState({ currentSessionId: "session-main" });
+    const requestRender = vi.fn();
     sendPendingUser(state, "optimistic-run", "optimistic prompt");
 
     const { loadHistory: runLoadHistory } = createTestSessionActions({
@@ -2258,6 +1916,7 @@ describe("tui session actions", () => {
       }),
       chatLog,
       state,
+      tui: makeTui({ requestRender }),
     });
 
     const result = await runLoadHistory();
@@ -2266,6 +1925,7 @@ describe("tui session actions", () => {
     expect(chatLog.addUser).toHaveBeenCalledWith("persisted", { images: [] });
     expect(chatLog.addPendingUser).toHaveBeenCalledWith("optimistic-run", "optimistic prompt");
     expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("reply", undefined, []);
+    expect(requestRender).toHaveBeenCalledWith(true);
     expect(result).toEqual({
       loaded: true,
       runOutcome: { state: "completed" },
@@ -2377,178 +2037,141 @@ describe("tui session actions", () => {
     ]);
   });
 
-  it("releases a pending submit only when its canonical persisted run appears in history", async () => {
-    const chatLog = new ChatLog(40);
-    const state = createBaseState({
-      currentSessionId: "session-main",
-      pendingSubmit: acceptedSubmit("run-pending", "persisted"),
-    });
-    sendPendingUser(state, "run-pending", "persisted");
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn().mockResolvedValue({
-          sessionId: "session-main",
-          sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-          messages: [
-            {
-              role: "user",
-              content: "persisted",
-              __openclaw: {
-                id: "persisted-pending-user",
-                idempotencyKey: "run-pending:user",
-                runId: "execution-run",
-                seq: 1,
-              },
-            },
-          ],
-        }),
-      }),
-      chatLog,
-      state,
-    });
-
-    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
-
-    expect(state.pendingSubmit).toBeNull();
-    expect(chatLog.countPendingUsers()).toBe(0);
-    expect(
-      chatLog
-        .render(120)
-        .join("\n")
-        .match(/persisted/g),
-    ).toHaveLength(1);
-  });
-
-  it("preserves a pending submit when another client persists the identical prompt", async () => {
-    const chatLog = new ChatLog(40);
-    const state = createBaseState({
-      currentSessionId: "session-main",
-      pendingSubmit: acceptedSubmit("local-run", "continue"),
-    });
-    sendPendingUser(state, "local-run", "continue");
-    const { loadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
-        loadHistory: vi.fn().mockResolvedValue({
-          sessionId: "session-main",
-          sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
-          messages: [
-            {
-              role: "user",
-              content: "continue",
-              timestamp: Date.now(),
-              __openclaw: {
-                id: "remote-user",
-                idempotencyKey: "remote-client-run:user",
-                seq: 1,
-              },
-            },
-          ],
-        }),
-      }),
-      chatLog,
-      state,
-    });
-
-    await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
-
-    expect(getPendingSubmitAcceptedRunId(state)).toBe("local-run");
-    expect(chatLog.countPendingUsers()).toBe(1);
-    expect(
-      chatLog
-        .render(120)
-        .join("\n")
-        .match(/continue/g),
-    ).toHaveLength(2);
-  });
-
-  it("keeps a pending submit when reconnect history has not accepted it", async () => {
-    const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-main", messages: [] });
-    const chatLog = makeChatLog({
-      addSystem: vi.fn(),
-      addUser: vi.fn(),
-      addPendingUser: vi.fn(),
-      finalizeAssistant: vi.fn(),
-      clearAll: vi.fn(),
-    });
-    const state = createBaseState({
-      pendingSubmit: acceptedSubmit("run-pending", "not persisted"),
-    });
-    sendPendingUser(state, "run-pending", "not persisted");
-
-    const { loadHistory: runLoadHistory } = createTestSessionActions({
-      client: makeTuiBackend({ describeSession: vi.fn(), loadHistory }),
-      chatLog,
-      state,
-    });
-
-    await runLoadHistory();
-
-    expect(getPendingSubmitAcceptedRunId(state)).toBe("run-pending");
-    expect(getPendingSubmitDraft(state)).toEqual({
-      runId: "run-pending",
-      text: "not persisted",
-    });
-  });
-
-  it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
-    const loadHistory = vi.fn().mockResolvedValue({
-      sessionId: "session-main",
-      messages: [{ role: "assistant", content: [{ type: "text", text: "reply" }] }],
-    });
-    const requestRender = vi.fn();
-
-    const { loadHistory: runLoadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession: vi.fn(),
+  it.each(["active", "accepted", "concurrent", "superseded"] as const)(
+    "settles a delivered %s turn through real history reconciliation",
+    async (phase) => {
+      const runId = "run-delivered";
+      const history = createDeferred<Awaited<ReturnType<TuiBackend["loadHistory"]>>>();
+      const state = createBaseState({
+        currentSessionId: "session-main",
+        activeChatRunId: phase === "active" ? runId : null,
+        pendingSubmit: phase === "active" ? null : acceptedSubmit(runId),
+        activityStatus: "waiting",
+      });
+      sendPendingUser(state, runId, "question");
+      const chatLog = new ChatLog();
+      const tui = makeTui();
+      const setActivityStatus = (value: string) => {
+        state.activityStatus = value;
+      };
+      const { loadHistory } = createTestSessionActions({
+        state,
+        chatLog,
+        tui,
+        setActivityStatus,
+        client: makeTuiBackend({ loadHistory: vi.fn(() => history.promise) }),
+      });
+      const handlers = createEventHandlers({
+        state,
+        chatLog,
+        tui,
         loadHistory,
-      }),
-      tui: makeTui({ requestRender }),
-    });
+        setActivityStatus,
+        updateFooter: vi.fn(),
+        btw: createBtwPresenter(),
+      });
 
-    await runLoadHistory();
+      handlers.handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        clientRunId: runId,
+        runId: "runtime-run",
+        phase: "end",
+      });
+      if (phase === "superseded") {
+        state.pendingSubmit = acceptedSubmit("run-new");
+      }
+      history.resolve({
+        sessionInfo: {
+          key: state.currentSessionKey,
+          sessionId: "session-main",
+          activeRunIds: phase === "concurrent" ? ["run-other"] : [],
+        },
+        ...(phase === "concurrent"
+          ? { inFlightRun: { runId: "run-other", text: "Still running" } }
+          : {}),
+        messages: [
+          {
+            role: "user",
+            content: "question",
+            __openclaw: { id: "user", idempotencyKey: `${runId}:user`, seq: 1 },
+          },
+          { role: "assistant", content: "Delivered reply" },
+        ],
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
-    expect(requestRender).toHaveBeenCalledWith(true);
-  });
+      expect(state.activeChatRunId).toBe(phase === "concurrent" ? "run-other" : null);
+      expect(getPendingSubmitAcceptedRunId(state)).toBe(phase === "superseded" ? "run-new" : null);
+      expect(state.activityStatus).toBe(
+        phase === "concurrent" ? "streaming" : phase === "superseded" ? "waiting" : "idle",
+      );
+      expect(chatLog.render(120).join("\n")).toContain("Delivered reply");
+      handlers.dispose();
+    },
+  );
 
-  it("hydrates session info from chat history without listing sessions", async () => {
-    const describeSession = vi.fn();
-    const loadHistory = vi.fn().mockResolvedValue({
-      messages: [],
-      sessionInfo: {
-        key: "agent:main:main",
-        sessionId: "session-main",
-        modelProvider: "openai",
-        model: "gpt-5",
-        contextTokens: 120_000,
-        thinkingLevel: "medium",
-        updatedAt: 200,
-      },
-      defaults: {
-        modelProvider: "openai",
-        model: "gpt-5",
-        contextTokens: 120_000,
-      },
-    });
-    const state = createBaseState();
+  it.each([
+    { persistedRunId: "local-run", pendingRunId: null, pendingUsers: 0, copies: 1 },
+    { persistedRunId: "remote-client-run", pendingRunId: "local-run", pendingUsers: 1, copies: 2 },
+    { persistedRunId: undefined, pendingRunId: "local-run", pendingUsers: 1, copies: 1 },
+  ])(
+    "reconciles a pending submit against $persistedRunId history",
+    async ({ persistedRunId, pendingRunId, pendingUsers, copies }) => {
+      const chatLog = new ChatLog(40);
+      const state = createBaseState({
+        currentSessionId: persistedRunId ? "session-main" : null,
+        pendingSubmit: acceptedSubmit("local-run", "continue"),
+      });
+      sendPendingUser(state, "local-run", "continue");
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({
+          describeSession: vi.fn(),
+          loadHistory: vi.fn().mockResolvedValue({
+            sessionId: "session-main",
+            ...(persistedRunId
+              ? { sessionInfo: { key: "agent:main:main", sessionId: "session-main" } }
+              : {}),
+            messages: persistedRunId
+              ? [
+                  {
+                    role: "user",
+                    content: "continue",
+                    timestamp: Date.now(),
+                    __openclaw: {
+                      id: "persisted-pending-user",
+                      idempotencyKey: `${persistedRunId}:user`,
+                      runId: "execution-run",
+                      seq: 1,
+                    },
+                  },
+                ]
+              : [],
+          }),
+        }),
+        chatLog,
+        state,
+      });
 
-    const { loadHistory: runLoadHistory } = createTestSessionActions({
-      client: makeTuiBackend({
-        describeSession,
-        loadHistory,
-      }),
-      state,
-    });
+      await expect(loadHistory()).resolves.toMatchObject({ loaded: true });
 
-    await runLoadHistory();
-
-    expect(describeSession).not.toHaveBeenCalled();
-    expect(state.currentSessionId).toBe("session-main");
-    expect(state.sessionInfo.model).toBe("gpt-5");
-    expect(state.sessionInfo.contextTokens).toBe(120_000);
-    expect(state.sessionInfo.thinkingLevel).toBe("medium");
-  });
+      if (pendingRunId === null) {
+        expect(state.pendingSubmit).toBeNull();
+      }
+      expect(getPendingSubmitAcceptedRunId(state)).toBe(pendingRunId);
+      expect(getPendingSubmitDraft(state)).toEqual(
+        pendingRunId ? { runId: pendingRunId, text: "continue" } : null,
+      );
+      expect(chatLog.countPendingUsers()).toBe(pendingUsers);
+      expect(
+        chatLog
+          .render(120)
+          .join("\n")
+          .match(/continue/g),
+      ).toHaveLength(copies);
+    },
+  );
 
   it("uses top-level chat history thinking level when session info inherits it", async () => {
     const describeSession = vi.fn();

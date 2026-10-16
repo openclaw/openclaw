@@ -1,4 +1,5 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-image-renditions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -18,6 +19,7 @@ import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 export type ImageBlock = {
   factIndex?: number;
   fileName?: string;
+  mimeType?: string;
   openUrl?: string;
   alt?: string;
   sizeBytes?: number;
@@ -26,14 +28,23 @@ export type ImageBlock = {
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
 export type ArtifactDownloadResolver = (
-  params: { sessionKey: string; artifactId: string; variant?: "full" | "thumbnail" },
+  params: {
+    sessionKey: string;
+    artifactId: string;
+    variant?: "full" | "thumbnail";
+    previewWidth?: ChatImageRenditionWidth;
+  },
   signal?: AbortSignal,
 ) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];
-  galleryVideos?: (item: AttachmentItem) => { index: number; items: readonly AttachmentItem[] };
+  galleryVideos?: (item: AttachmentItem) => {
+    index: number;
+    items: readonly (AttachmentItem & { messageId?: string })[];
+  };
   sessionKey?: string;
+  messageId?: string;
   agentId?: string;
   policyKey?: string;
   canonicalMessageKey?: string;
@@ -271,7 +282,7 @@ export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<u
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
-  chatMediaRenderVersion = (chatMediaRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
+  chatMediaRenderVersion += 1;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {
@@ -304,9 +315,6 @@ export function scheduleChatMediaResourceRefresh(
     at: refreshAt,
     timer: setTimeout(
       () => {
-        if (!isChatMediaResourceCurrent(resource) || resource.refresh !== refresh) {
-          return;
-        }
         resource.refresh = undefined;
         onRefresh();
       },
@@ -400,26 +408,18 @@ export function retainManagedImageBlobUrl(cacheKey: string): (() => void) | unde
       return;
     }
     released = true;
-    const current = managedImageBlobUrls.get(cacheKey);
-    if (current && current.retainCount > 0) {
-      current.retainCount -= 1;
-    }
+    cached.retainCount -= 1;
     trimManagedImageBlobUrlCache();
   };
 }
 
 export function cacheManagedImageBlob(cacheKey: string, blob: Blob): string {
   const blobUrl = URL.createObjectURL(blob);
-  const previous = managedImageBlobUrls.get(cacheKey);
-  managedImageBlobUrls.delete(cacheKey);
   managedImageBlobUrls.set(cacheKey, {
     blob,
     url: blobUrl,
-    retainCount: previous?.retainCount ?? 0,
+    retainCount: 0,
   });
-  if (previous && previous.url !== blobUrl) {
-    URL.revokeObjectURL(previous.url);
-  }
 
   // Blob URLs retain browser-managed image data. Keep recent previews reusable,
   // but protect an image while its lightbox still uses that object URL.
@@ -579,7 +579,7 @@ export function projectMessageMedia(
     const blockImages: ImageBlock[] = [];
     const blockAttachments = new Set<string>();
     for (const source of item.sources) {
-      const { url: sourceUrl, dataUrl, preferData, mimeType: _mimeType, ...metadata } = source;
+      const { url: sourceUrl, dataUrl, preferData, ...metadata } = source;
       if (sourceUrl !== undefined) {
         positionedSources.add(sourceUrl);
       }
@@ -638,7 +638,10 @@ export function projectMessageMedia(
       const projected: ImageBlock = {
         url: mediaPath,
         fileName,
+        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
         sizeBytes,
+        width,
+        height,
         ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
       };
       if (appendImageBlock(images, projected) && !positionedSources.has(mediaPath)) {

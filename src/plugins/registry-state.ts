@@ -108,7 +108,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     if (!gate) {
       gate = createNativeSessionCatalogGate({
         pluginId: record.id,
-        getConfig: () => registryParams.runtime.config.current(),
+        getConfig: registryParams.runtime.config.current,
       });
       nativeCatalogGates.set(record, gate);
     }

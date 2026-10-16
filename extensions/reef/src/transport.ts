@@ -1,6 +1,6 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -319,9 +319,7 @@ export class ReefTransportClient {
     secrets: readonly string[] = [],
     assertCurrent?: () => void,
   ): Promise<T> {
-    // Preserve the namespace in bundled output: supported older hosts omit this export.
-    const { captureEffectAuthority } = { ...fetchRuntime };
-    const effect = captureEffectAuthority === undefined ? null : captureEffectAuthority();
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -348,7 +346,7 @@ export class ReefTransportClient {
             signal: timeout.signal,
           });
         };
-        response = await (effect === null ? initiate() : effect.initiate(initiate));
+        response = await effect.initiate(initiate);
       } catch (error) {
         if (!initiated) {
           throw error;

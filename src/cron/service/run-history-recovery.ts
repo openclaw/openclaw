@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
@@ -111,7 +111,7 @@ function finalizedCronRun(
 
 /** Re-reads record recovery facts on the caller's exact SQLite transaction. */
 export function findCronRunRecoveryInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   jobId: string;
   startedAt: number;
   storeKey: string;

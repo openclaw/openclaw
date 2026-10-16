@@ -1,6 +1,7 @@
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../../../packages/gateway-protocol/src/session-row-fields.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -95,8 +96,15 @@ export function createSessionRowProvenance() {
     // Compact rows and optional enrichment omit fields rather than clearing them.
     for (const field of [
       ...enrichmentFields,
-      ...(newer.rowMode === "dashboard"
-        ? Object.keys(older).filter((name) => !SESSION_DASHBOARD_ROW_FIELDS.has(name))
+      ...(newer.rowMode === "dashboard" || newer.rowMode === "sidebar"
+        ? Object.keys(older).filter(
+            (name) =>
+              !(
+                newer.rowMode === "sidebar"
+                  ? SESSION_SIDEBAR_ROW_FIELDS
+                  : SESSION_DASHBOARD_ROW_FIELDS
+              ).has(name),
+          )
         : newer.rowMode === "compact"
           ? SESSION_ROW_DETAIL_FIELDS
           : []),

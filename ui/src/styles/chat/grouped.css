@@ -239,7 +239,7 @@
 
 .chat-group.user.chat-group--peer
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):focus-visible {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):focus-visible {
   opacity: 1;
 }
 
@@ -356,10 +356,20 @@
   pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
+/* Rest at the sibling footer actions' revealed opacity so the row reads as one
+   color; the trigger itself owns the accent hover color. */
 .chat-group:hover .chat-reaction-action,
 .chat-group:focus-within .chat-reaction-action {
-  opacity: 1;
+  opacity: 0.6;
   pointer-events: auto;
+}
+
+.chat-group .chat-reaction-action:hover {
+  opacity: 1;
+}
+
+.chat-group .chat-reaction-action:has(.trigger[aria-expanded="true"]) {
+  opacity: 1;
 }
 
 /* Keep long configurable sender names compact while footer actions retain
@@ -432,6 +442,7 @@
   vertical-align: middle;
 }
 
+.chat-author-avatar .channel-avatar,
 .chat-author-avatar__image,
 .chat-author-avatar__initials {
   width: 100%;
@@ -439,6 +450,7 @@
   border-radius: inherit;
 }
 
+.chat-author-avatar .channel-avatar,
 .chat-author-avatar__image {
   display: block;
   object-fit: cover;
@@ -475,7 +487,7 @@
 }
 
 :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action,
 .chat-comment-preview__actions button {
   background: none;
@@ -494,7 +506,8 @@
   justify-content: center;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+.chat-group-footer-actions
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action {
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
@@ -502,7 +515,8 @@
 
 /* Inline rows belong to earlier messages in a group, so the latest footer's
    resting disclosure must not reveal them before hover or touch. */
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+.chat-message-actions-row
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   min-height: var(--chat-message-action-size);
   opacity: var(--chat-message-action-opacity, 0);
   pointer-events: var(--chat-message-action-pointer-events, none);
@@ -510,14 +524,14 @@
 
 .chat-group:hover
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
 
 .chat-group.user.chat-group--peer
   :is(.chat-message-actions-row, .chat-group-footer-actions)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0;
   pointer-events: none;
 }
@@ -527,21 +541,21 @@
 .chat-group.user.chat-group--peer
   :is(.chat-bubble, .chat-message--reply):hover
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message-actions-row:hover
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   :is(.chat-bubble, .chat-message--reply):is(:focus-within, .chat-bubble--actions-revealed)
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-message-actions-row:focus-within
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -573,7 +587,7 @@
 .chat-group.user.chat-group--peer
   > .chat-group-footer
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: var(--chat-peer-final-action-opacity, 0);
   pointer-events: var(--chat-peer-final-action-pointer-events, none);
 }
@@ -581,11 +595,11 @@
 .chat-group.user.chat-group--peer
   .chat-group-footer:hover
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
 .chat-group.user.chat-group--peer
   .chat-group-footer:focus-within
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -593,7 +607,7 @@
 @media (hover: hover) {
   .chat-group:focus-within
     :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     opacity: 0.6;
     pointer-events: auto;
   }
@@ -608,7 +622,7 @@
 
 .chat-group:hover
   .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):disabled,
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):disabled,
 .chat-reply-context-menu button:disabled,
 .chat-comment-preview__actions button:disabled {
   opacity: 0.3;
@@ -616,7 +630,7 @@
 }
 
 :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind):hover,
 .chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
@@ -624,7 +638,7 @@
 }
 
 :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)
   svg,
 .chat-comment-preview__actions button svg {
   width: 14px;
@@ -741,6 +755,13 @@
   text-align: center;
 }
 
+.chat-notice .chat-divider__label {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: center;
+  overflow-wrap: anywhere;
+}
+
 .chat-notice .chat-text {
   color: inherit;
   font-size: inherit;
@@ -782,7 +803,6 @@
 
 .chat-notice__collapse .chat-notice__body {
   margin-top: 7px;
-  text-align: start;
 }
 
 .chat-notice--danger {
@@ -806,6 +826,11 @@
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.chat-avatar .channel-avatar {
+  width: 100%;
+  height: 100%;
 }
 
 /* Attributed sender initials carry their stable identity color inline. */
@@ -1197,7 +1222,7 @@ button.chat-reply-attribution__target:disabled {
   }
 
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     position: relative;
     margin-inline: 10px;
   }
@@ -1207,7 +1232,7 @@ button.chat-reply-attribution__target:disabled {
      into the turn gap; inline margins keep neighboring targets apart. It
      inherits the button’s pointer policy during disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
     inset-block-end: 0;
@@ -1258,7 +1283,12 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-group
   :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)[data-copy-state="copied"] {
+  :is(
+    .chat-copy-btn,
+    .chat-reply-btn,
+    .chat-read-aloud-btn,
+    .chat-group-rewind
+  )[data-copy-state="copied"] {
   opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
@@ -1600,9 +1630,7 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-group.user.chat-group--peer
   .chat-bubble--with-images
-  > .chat-message-avatar-anchor:not(
-    :has(.chat-text, .chat-message-disclosure, .chat-json-collapse)
-  ) {
+  > .chat-message-avatar-anchor:not(:has(.chat-text, .chat-message-disclosure)) {
   display: contents;
 }
 
@@ -1845,7 +1873,7 @@ button.chat-reply-attribution__target:disabled {
   .chat-group.user.chat-group--peer
     .chat-message-footer
     .chat-group-footer-actions
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     opacity: var(--chat-footer-action-opacity);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
   }
@@ -1931,12 +1959,29 @@ button.chat-reply-attribution__target:disabled {
   --chat-message-column-max: 88%;
 }
 
-.chat--bubbles .chat-group.user .chat-bubble {
-  border-radius: 18px 18px 4px 18px;
+.chat--bubbles .chat-group-messages {
+  --chat-message-gap: 8px;
 }
 
-.chat--bubbles .chat-group.user.chat-group--peer .chat-bubble {
-  border-radius: 18px 18px 18px 4px;
+/* The renderer marks the first visible message across native and interop ranges.
+   Activity and reasoning-only rows never own the avatar-facing corner. */
+.chat--bubbles .chat-bubble {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 18px;
+}
+
+.chat--bubbles .chat-bubble--first {
+  --chat-bubble-top-left: 4px;
+}
+
+.chat--bubbles .chat-group.user:not(.chat-group--peer) .chat-bubble--first {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 4px;
+}
+
+.chat--bubbles .chat-group:is(.user, .chat-group--forwarded) .chat-bubble,
+.chat--bubbles .chat-group.user .chat-bubble--with-images .chat-text {
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
 }
 
 .chat.chat--bubbles
@@ -1944,7 +1989,7 @@ button.chat-reply-attribution__target:disabled {
   .chat-bubble:not(.chat-bubble--tool-shell) {
   padding: 14px 18px;
   border: 1px solid var(--border);
-  border-radius: 18px 18px 18px 4px;
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
   background: var(--bg-elevated);
   box-shadow: none;
 }
@@ -1972,17 +2017,36 @@ button.chat-reply-attribution__target:disabled {
 .chat-activity-group--bubble > .chat-activity-group__summary {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 6px;
   width: auto;
-  min-width: 60px;
-  min-height: 44px;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: 18px 18px 18px 4px;
-  background: var(--bg-elevated);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
+  font-size: 12px;
   list-style: none;
   cursor: var(--cursor-action);
+}
+
+.chat-bubble-activity--working > .chat-bubble-activity__summary {
+  min-width: 60px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+}
+
+.chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .chat-bubble-activity__summary::-webkit-details-marker {

@@ -13,7 +13,11 @@ import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { getHeader } from "../http-header-value.js";
-import type { GatewayIngressAttribution } from "../ingress-attribution.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+  type GatewayIngressAttribution,
+} from "../ingress-attribution.js";
 import { isLoopbackAddress } from "../net.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
 import {
@@ -118,6 +122,7 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
 };
 
 export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.request);
   const {
     socket,
     connectionKind,
@@ -137,7 +142,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     logWsControl,
     buildRequestContext,
   } = params;
-  if (connectionWork.isClosing) {
+  if (connectionWork.isClosing || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
     socket.terminate();
     return;
   }
@@ -254,12 +259,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     closeGatewayTransportWithGrace(socket, code, reason ?? "");
   };
   const close = closeWithGrace;
+  const closeRemoteIngress = () => closeWithGrace(1008, "remote Control UI ingress closed");
+  remoteIngress?.signal.addEventListener("abort", closeRemoteIngress, { once: true });
+  socket.once("close", () =>
+    remoteIngress?.signal.removeEventListener("abort", closeRemoteIngress),
+  );
 
   const releaseConnection = connectionWork.registerConnection(() => {
     closeWithGrace(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
   });
 
   const send = (obj: unknown) => {
+    if (!hasCurrentRemoteControlUiIngress(remoteIngress)) {
+      closeRemoteIngress();
+      return { kind: "unavailable" } as const;
+    }
     if (closed) {
       return { kind: "unavailable" } as const;
     }
@@ -494,7 +508,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
 
   const setClient = (next: GatewayWsClient) => {
     // Keep one socket owner when concurrent connect frames finish out of order.
-    if (closed || client) {
+    if (closed || client || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
       return false;
     }
     if (
@@ -551,7 +565,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     isStartupPending,
     send,
     close,
-    isClosed: () => closed,
+    isClosed: () => closed || !hasCurrentRemoteControlUiIngress(remoteIngress),
     clearHandshakeTimer: () => clearTimeout(handshakeTimer),
     getClient: () => client,
     setClient,

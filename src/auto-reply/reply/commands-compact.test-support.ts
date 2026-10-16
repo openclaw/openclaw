@@ -9,6 +9,7 @@ import {
 } from "./commands-agent-scope.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+// mock-isolation: Command fixtures control compaction settlement without running an agent or writing storage.
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),
@@ -16,10 +17,11 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
-  resolveCurrentSessionEntry: vi.fn(
-    ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
-      updatedAt: 1,
-      ...expected,
+  prepareCurrentSessionEntry: vi.fn(
+    async ({ expected }: { expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> }) => ({
+      entry: { updatedAt: 1, ...expected },
+      assertCurrent() {},
+      release() {},
     }),
   ),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
@@ -33,7 +35,7 @@ export const {
   enqueueSystemEvent,
   formatContextUsageShort,
   incrementCompactionCount,
-  resolveCurrentSessionEntry,
+  prepareCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,
   waitForEmbeddedAgentRunEnd,
 } = await import("./commands-compact.runtime.js");
@@ -69,9 +71,10 @@ export function buildCompactParams(
 export function resetCompactCommandMocks() {
   vi.clearAllMocks();
   vi.mocked(incrementCompactionCount).mockResolvedValue(1);
-  vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) => ({
-    updatedAt: 1,
-    ...expected,
+  vi.mocked(prepareCurrentSessionEntry).mockImplementation(async ({ expected }) => ({
+    entry: { updatedAt: 1, ...expected },
+    assertCurrent() {},
+    release() {},
   }));
   resolveAgentDirMock.mockImplementation(
     (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,

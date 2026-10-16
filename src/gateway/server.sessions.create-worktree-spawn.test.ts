@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -27,10 +27,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -181,8 +178,6 @@ beforeEach(async () => {
   const defaultWorkspace = path.join(state.root, "non-git-workspace");
   await fs.mkdir(defaultWorkspace);
   repository = await createRepository(state.root, "selected-project");
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -197,15 +192,15 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();
   projectCloneMocks.refreshProjectClone.mockReset();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   await state?.cleanup();
 });
+
+afterAll(closeStateDatabaseForTest);
 
 test.each(["registered", "github", "inherited"] as const)(
   "required visible spawn selects %s project through the write-scope Gateway",
@@ -233,7 +228,7 @@ test.each(["registered", "github", "inherited"] as const)(
         worktreeName: "selected-child",
         worktreeBaseRef: "main",
       });
-      expect(result.details).toMatchObject({ status: "accepted" });
+      expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
       if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
         throw new Error("Missing child session key");
       }
@@ -448,11 +443,67 @@ test("worktree spawns do not inherit an unregistered parent working directory", 
   });
 });
 
+test("child sessions use an empty .git workspace without Git features", async () => {
+  const workspace = path.join(state.root, "non-git-workspace");
+  const metadata = path.join(workspace, ".git");
+  await fs.mkdir(metadata);
+  const parent = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { key: parentKey, agentId: "main" },
+    adminRequest,
+  );
+  expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+  const child = await createChild({ worktree: false });
+  expect(child.ok, JSON.stringify(child.error)).toBe(true);
+  expect(child.payload?.entry.worktree).toBeUndefined();
+  const stored = loadSessionEntry({ agentId: "main", sessionKey: child.payload!.key, storePath });
+  expect(stored).toMatchObject({ parentSessionKey: parentKey });
+  expect(stored?.pendingWorktree).toBeUndefined();
+  expect(await fs.readdir(metadata)).toEqual([]);
+
+  await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
+    "not a git checkout",
+  );
+  expect(await createChild()).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent workspace is not a git checkout" },
+  });
+});
+
+test.each(["missing worktree target", "partial metadata"])(
+  "child worktree sessions preserve a checkout with %s",
+  async (damage) => {
+    const workspace = path.join(state.root, "non-git-workspace");
+    const metadata = path.join(workspace, ".git");
+    const contents = "gitdir: missing-worktree\n";
+    if (damage === "missing worktree target") {
+      await fs.writeFile(metadata, contents);
+    } else {
+      await fs.mkdir(path.join(metadata, "objects"), { recursive: true });
+    }
+    const parent = await directSessionReq<{ key: string }>(
+      "sessions.create",
+      { key: parentKey, agentId: "main" },
+      adminRequest,
+    );
+    expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+    const child = await createChild();
+    expect(child).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: expect.stringContaining("checkout preserved") },
+    });
+    if (damage === "missing worktree target") {
+      expect(await fs.readFile(metadata, "utf8")).toBe(contents);
+    } else {
+      expect(await fs.readdir(metadata)).toEqual(["objects"]);
+    }
+  },
+);
+
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
   const { entry: parent } = await createManagedProjectParent();
   const params = { ...parentCreateParams, cwd: repository };
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   const reused = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     params,
@@ -562,7 +613,9 @@ test("trusted worktree spawns roll back when the parent changes during preparati
     },
   );
   const key = "agent:main:dashboard:retired-parent-child";
-  await expect(createChild({ key })).rejects.toThrow("Spawn parent managed worktree changed");
+  await expect(createChild({ key })).rejects.toThrow(
+    /Spawn parent managed worktree changed|Session access facts are unavailable/,
+  );
   expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });

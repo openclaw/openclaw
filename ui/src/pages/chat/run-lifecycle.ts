@@ -55,6 +55,17 @@ export type ChatRunError = {
   runId?: string;
 };
 
+/** Only the latest terminal failure owns the visible recovery actions. */
+export function chatFailureRunId(
+  error: ChatRunError | null | undefined,
+  session: GatewaySessionRow | undefined,
+) {
+  return (
+    error?.runId ??
+    (session?.status === "failed" || session?.status === "timeout" ? session.lastRunId : undefined)
+  );
+}
+
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";
   runId: string | null;
@@ -71,6 +82,7 @@ export type LocalTerminalReconcile = {
   phase: ChatRunUiStatus["phase"];
   sessionStatus: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
 };
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
@@ -93,12 +105,12 @@ type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
   sessionStatus?: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   runId?: string | null;
   sessionKey?: string | null;
   agentId?: string;
   sessionKeys?: readonly (string | null | undefined)[];
   clearLocalRun?: boolean;
-  clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
   clearToolStreamForRun?: boolean;
@@ -476,7 +488,9 @@ function reconcileSessionRows(
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
+    ...(options.outcome
+      ? { errorMessage: options.errorMessage, suppressErrorNotice: options.suppressErrorNotice }
+      : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -495,11 +509,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);
   }
-  if (options.clearChatStream) {
+  if (options.clearLocalRun) {
     host.chatStream = null;
     host.chatStreamStartedAt = null;
-  }
-  if (options.clearLocalRun) {
     if (!runId || host.chatReasoning?.runId === runId) {
       host.chatReasoning = null;
     }
@@ -532,6 +544,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         phase: options.outcome,
         sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
         errorMessage: options.errorMessage,
+        suppressErrorNotice: options.suppressErrorNotice,
       };
     }
     if (options.publishRunStatus !== false) {
@@ -600,6 +613,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
       outcome: recent.phase,
       sessionStatus: recent.sessionStatus,
       errorMessage: recent.errorMessage,
+      suppressErrorNotice: recent.suppressErrorNotice,
       sessionKey: recent.sessionKey,
       agentId: recent.agentId,
       runId: recent.runId,
@@ -673,14 +687,18 @@ export function reconcileChatRunFromSessionRow(
     reconcileChatRunLifecycle(host, {
       runId,
       clearLocalRun: true,
-      clearChatStream: true,
       clearToolStreamForRun: true,
       clearRunStatus: true,
     });
     return true;
   }
   let errorMessage: string | undefined;
-  if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
+  if (
+    runId &&
+    row.lastRunId === runId &&
+    !row.suppressErrorNotice &&
+    (row.status === "failed" || row.status === "timeout")
+  ) {
     // Session publication can beat (or replace) chat.error. Show its diagnostic
     // before retiring the run, without freezing the bounded row summary into the
     // terminal reducer: a later live/history diagnostic can contain more detail.
@@ -701,11 +719,11 @@ export function reconcileChatRunFromSessionRow(
     outcome: row.status === "done" ? "done" : "interrupted",
     sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
     errorMessage,
+    suppressErrorNotice: row.suppressErrorNotice,
     runId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],
     clearLocalRun: true,
-    clearChatStream: true,
     clearToolStreamForRun: true,
     publishRunStatus: options.publishRunStatus,
     // Shared rows can finish this run before its persisted reply event arrives.

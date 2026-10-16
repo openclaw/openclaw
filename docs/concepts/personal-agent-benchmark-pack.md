@@ -67,7 +67,7 @@ inspect and file in issues.
 
 Add new `.yaml` cases under `qa/scenarios/personal/`, declare the exact primary
 coverage ID they prove, and add that semantic ID to the taxonomy profile when
-it belongs in this benchmark. Keep each case small, local, deterministic in
+it belongs in this benchmark. Keep each case small, local, repeatable in
 `mock-openai`, and focused on one personal assistant behavior.
 
 Good follow-up candidates: redacted trajectory export checks, local-only

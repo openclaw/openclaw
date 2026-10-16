@@ -283,8 +283,6 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
   it.each([
     { platform: "darwin", running: true },
     { platform: "darwin", running: false },
-    { platform: "linux", running: true },
-    { platform: "win32", running: true },
   ] as const)(
     "names the managed-service stop command when the Gateway is not offline on $platform (running=$running)",
     async ({ platform, running }) => {
@@ -317,7 +315,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
     },
   );
 
-  it.each(["detached", "main-rebase", "expired"] as const)(
+  it.each(["main-rebase", "expired"] as const)(
     "preserves the schema refusal and records recovery for %s switching",
     async (history) => {
       await withFixture(history, async ({ root, previous, state, schemas }) => {

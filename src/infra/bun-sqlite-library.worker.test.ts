@@ -284,9 +284,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
             await runSessionBranchSummaryWorkerRequest(
               {
                 database: { agentId: target.agentId, path: storePath },
-                databaseIdentity: "absent-database",
                 sessionKey: target.sessionKey,
-                sessionId: target.sessionId,
               },
               new AbortController().signal,
             ),

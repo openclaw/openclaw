@@ -25,7 +25,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
 async function seedTranscript(state: OpenClawTestState) {
   const target = {
@@ -194,6 +194,38 @@ it.each(["UTF-16le", "UTF-16be"] as const)(
     });
   },
 );
+
+it("hydrates events below, on, and above byte-slice boundaries without dropping their successors", async () => {
+  await withOpenClawTestState({ label: "session-hydration-stream-boundaries" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "boundary-hydration",
+      sessionKey: "agent:main:boundary-hydration",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const entries = SessionManager.open(target).getPersistedEntries();
+    let parentId: string | null = null;
+    for (const size of [65_535, 65_536, 65_537, 131_072]) {
+      const event: SessionMessageEntry = {
+        type: "message",
+        id: `boundary-${size}`,
+        parentId,
+        timestamp: new Date(size).toISOString(),
+        message: makeUserMessage("", size),
+      };
+      event.message = makeUserMessage(
+        "x".repeat(size - Buffer.byteLength(JSON.stringify(event))),
+        size,
+      );
+      expect(Buffer.byteLength(JSON.stringify(event))).toBe(size);
+      entries.push(event);
+      parentId = event.id;
+    }
+    expect(replaceTranscriptEventsSync(target, entries)).toBe(true);
+    expect((await SessionManager.openAsync(target)).getPersistedEntries()).toEqual(entries);
+  });
+});
 
 it("hydrates one complete UTF-8 snapshot while a writer replaces rows between chunks", async () => {
   await withOpenClawTestState({ label: "session-hydration-stream-snapshot" }, async (state) => {

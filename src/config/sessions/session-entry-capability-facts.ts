@@ -4,6 +4,7 @@ import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js"
 export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFacts) {
   return {
     sessionId: entry.sessionId,
+    createdVia: entry.createdVia,
     incognito: entry.incognito,
     lifecycleRevision: entry.lifecycleRevision,
     modelSelectionLocked: entry.modelSelectionLocked,
@@ -13,6 +14,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     initializationPending: entry.initializationPending,
     execHost: entry.execHost,
     execNode: entry.execNode,
+    deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
     sandbox: entry.sandbox,
     sandboxMode: entry.sandboxMode,
     permissionMode: entry.permissionMode,

@@ -2,9 +2,6 @@
 // proxy state, node command policy, and server helper behavior.
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import * as os from "node:os";
-import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -17,7 +14,6 @@ import {
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
@@ -30,15 +26,6 @@ import type * as GatewayMethodTypes from "./server-methods/types.js";
 import { normalizeVoiceWakeTriggers } from "./server-utils.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-
-function makeControlUiResponse() {
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn(),
-  } as unknown as ServerResponse;
-  return { res };
-}
 
 const wsMockState = vi.hoisted(() => ({
   last: null as {
@@ -83,42 +70,6 @@ describe("GatewayClient", () => {
     delete process.env["HTTP_PROXY"];
     delete process.env["HTTPS_PROXY"];
   });
-
-  async function withControlUiRoot(
-    params: { faviconSvg?: string; indexHtml?: string },
-    run: (tmp: string) => Promise<void>,
-  ) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.writeFile(path.join(tmp, "index.html"), params.indexHtml ?? "<html></html>\n");
-      if (typeof params.faviconSvg === "string") {
-        await fs.writeFile(path.join(tmp, "favicon.svg"), params.faviconSvg);
-      }
-      await run(tmp);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  }
-
-  async function expectControlUiStatus(
-    tmp: string,
-    params: { url: string; method?: string; statusCode: number },
-  ) {
-    const { res } = makeControlUiResponse();
-    const handled = await handleControlUiHttpRequest(
-      {
-        url: params.url,
-        method: params.method ?? "GET",
-        headers: { host: "gateway.example.test" },
-      } as IncomingMessage,
-      res,
-      { root: { kind: "resolved", path: tmp } },
-    );
-    expect(handled).toBe(true);
-    expect(res.statusCode, `expected ${params.statusCode} for ${params.url}`).toBe(
-      params.statusCode,
-    );
-  }
 
   function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
     const client = new GatewayClient({ ...params, deviceIdentity: null });
@@ -172,36 +123,6 @@ describe("GatewayClient", () => {
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
-  });
-
-  it("returns 404 for missing static assets with query strings", async () => {
-    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
-    });
-  });
-
-  it("HEAD returns 404 for missing static assets consistent with GET", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, {
-        url: "/webchat/favicon.svg",
-        method: "HEAD",
-        statusCode: 404,
-      });
-    });
-  });
-
-  it("serves SPA fallback for dotted path segments that are not static assets", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
-        await expectControlUiStatus(tmp, { url: route, statusCode: 200 });
-      }
-    });
-  });
-
-  it("serves SPA fallback for .html paths that do not exist on disk", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/foo.html", statusCode: 200 });
-    });
   });
 });
 

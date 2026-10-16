@@ -55,6 +55,8 @@ vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
 vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", { spy: true });
 
+vi.mock("./subagent-registry-persistence.js", { spy: true });
+
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
 const fixture = useSubagentControlFixture();
@@ -78,6 +80,10 @@ const nativeCleanup = await vi.importActual<typeof announceCleanup>(
   "./subagent-registry-lifecycle-announce-cleanup.js",
 );
 
+const nativePersistence = await vi.importActual<
+  typeof import("./subagent-registry-persistence.js")
+>("./subagent-registry-persistence.js");
+
 async function registerCompletion(
   runId: string,
   options: { holdForRequester?: boolean; cleanup?: "keep" | "delete" } = {},
@@ -95,6 +101,11 @@ async function registerCompletion(
   await registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: {
+      sessionId: "ordinary-child-session",
+      lifecycleRevision: "ordinary-child-revision",
+    },
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -198,6 +209,14 @@ it.each(["not-committed", "unknown", "successor"] as const)(
     };
     const ready = createDeferredCore();
     const release = createDeferredCore();
+    const successorQueued = createDeferredCore();
+    const mutation = vi.mocked(mutateSubagentRuns).mockImplementation((runIds, plan, options) => {
+      const pending = nativePersistence.mutateSubagentRuns(runIds, plan, options);
+      if (runIds.includes(`${run.runId}-successor`)) {
+        successorQueued.resolve();
+      }
+      return pending;
+    });
     let intercepted = false;
     let committedBeforeLoss = false;
     let cleanupContext:
@@ -273,6 +292,8 @@ it.each(["not-committed", "unknown", "successor"] as const)(
         registration = registerSubagentRun({
           runId: `${run.runId}-successor`,
           childSessionKey: run.childSessionKey,
+          childAgentId: "main",
+          sessionEntry: entry.childSessionIdentity,
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",
@@ -280,6 +301,7 @@ it.each(["not-committed", "unknown", "successor"] as const)(
           cleanup: "keep",
           expectsCompletionMessage: false,
         });
+        await successorQueued.promise;
       }
       release.resolve();
       await registration;
@@ -329,6 +351,7 @@ it.each(["not-committed", "unknown", "successor"] as const)(
       }
     } finally {
       release.resolve();
+      mutation.mockRestore();
       worker.mockRestore();
       start.mockRestore();
       await registration;
@@ -390,6 +413,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: "suspended-child-session",
+      lifecycleRevision: "suspended-child-revision",
     });
     const waitResult = createDeferredCore<Record<string, unknown>>();
     const waitStarted = createDeferredCore();
@@ -406,6 +430,11 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "suspended-child-session",
+        lifecycleRevision: "suspended-child-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -513,13 +542,28 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
       }
       release.resolve();
       const outcome = await sweepOutcome;
-      await fixture.settle();
+      await fixture.settle().catch(async (error: unknown) => {
+        if (change !== "source switched" || !(error instanceof AggregateError)) {
+          throw error;
+        }
+        // Queued cleanup can observe the same source change as the suspended hook.
+        expect(error.errors.length).toBeGreaterThan(0);
+        for (const failure of error.errors) {
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure).toMatchObject({
+            message: "Queued registry write lost its original database",
+          });
+        }
+        await fixture.settle();
+      });
       expect(ended).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
       if (change === "source switched") {
-        expect(outcome).toMatchObject({
-          completed: false,
-          error: { message: "Queued registry write lost its original database" },
-        });
+        // Hook preparation handles authority loss best-effort; an earlier loss rejects the sweep.
+        if (!outcome.completed) {
+          expect(outcome.error).toMatchObject({
+            message: "Queued registry write lost its original database",
+          });
+        }
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       } else if (change === "yielded") {
         expect(outcome).toEqual({ completed: true });
@@ -642,6 +686,8 @@ it.each([false, true])(
           registerSubagentRun({
             runId: run.runId,
             childSessionKey: run.childSessionKey,
+            childAgentId: "main",
+            sessionEntry: entry.childSessionIdentity,
             requesterSessionKey: "agent:main:main",
             requesterAgentId: "main",
             requesterDisplayKey: "main",

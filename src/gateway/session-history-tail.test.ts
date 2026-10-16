@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   waitForSessionTranscriptProjection,
@@ -44,6 +45,7 @@ it.each([
   "stops a byte-full history page before reading the remaining rows ($offset, $hiddenHead)",
   async ({ offset, hiddenHead }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = historyTarget(state, "byte-full-history");
       const events = Array.from({ length: 400 }, (_, index) => ({
         type: "message",
@@ -112,6 +114,7 @@ it.each([
 
 it("applies the head byte budget before loading an older malformed row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const readScope = historyTarget(state, "head-cursor-byte-budget");
     const newestText = "x".repeat(1024 * 1024 + 1);
     await replaceTranscriptEvents(readScope, [
@@ -157,6 +160,7 @@ it("applies the head byte budget before loading an older malformed row", async (
 
 it("keeps a sparse tail below its first snapshot when messages append between pages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const readScope = historyTarget(state, "sparse-tail-append");
     const ids = Array.from({ length: 101 }, (_, index) => `row-${index + 1}`);
     await replaceTranscriptEvents(readScope, [
@@ -205,6 +209,7 @@ it("keeps a sparse tail below its first snapshot when messages append between pa
 
 it("fills sparse pages without repeatedly projecting scanned transcript rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const readScope = historyTarget(state, "sparse-tail-projection-work");
     const events = Array.from({ length: 1_500 }, (_, index) => ({
       type: "message",
@@ -253,6 +258,7 @@ it("fills sparse pages without repeatedly projecting scanned transcript rows", a
 
 it("does not serialize transcript batches when the extended sparse byte guard is unused", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const sessionId = "history-byte-accounting";
     const readScope = historyTarget(state, sessionId);
     // Wide records exceed the initial 1 MiB byte cap, so the ordinary window
@@ -301,6 +307,7 @@ it.each(["offset", "sparse"] as const)(
   "preserves ordered %s history while bounding each wide transcript read",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const readScope = historyTarget(state, `bounded-wide-${kind}`);
       // Stay below the 4 MiB asynchronous rebuild threshold; this fixture tests reader chunking.
       const ids = Array.from({ length: 18 }, (_, index) => `row-${index}`);

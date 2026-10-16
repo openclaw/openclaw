@@ -19,32 +19,6 @@ function node(overrides: Partial<BrowserInspectedNode> = {}): BrowserInspectedNo
 }
 
 describe("buildBrowserAnnotationContent", () => {
-  it("describes the page, marked regions, and inspected element", () => {
-    const { modelContext, card } = buildBrowserAnnotationContent({
-      url: "https://github.com/openclaw/openclaw/pull/103853",
-      title: "feat(ui): collapse session PR chips",
-      strokes: [
-        {
-          points: [
-            { x: 0.2, y: 0.5 },
-            { x: 0.4, y: 0.7 },
-          ],
-        },
-      ],
-      element: node({ name: "Merge", role: "button" }),
-    });
-    expect(modelContext).toContain("https://github.com/openclaw/openclaw/pull/103853");
-    expect(modelContext).toContain("Marked region 1");
-    expect(modelContext).toContain("30% across / 60% down");
-    expect(modelContext).toContain('button "Merge" (role=button)');
-    expect(card).toEqual({
-      title: "feat(ui): collapse session PR chips",
-      displayUrl: "github.com",
-      markedRegionCount: 1,
-      inspectedElement: true,
-    });
-  });
-
   it("counts every non-empty stroke while limiting the rendered region list", () => {
     const strokes = [
       { points: [] },

@@ -4,6 +4,10 @@ import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
@@ -31,6 +35,7 @@ vi.mock("./tmp-openclaw-dir.js", () => ({
   },
 }));
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   fixture.handoff = undefined;
   fixture.stream.mockReset();
@@ -91,6 +96,7 @@ it("settles the real repair handoff without closing a parent lease before Doctor
       },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     fixture.stream.mockImplementation((model, context) => {
       expect(context.tools?.map((tool) => tool.name)).toContain("request_update_maintenance");
       const stream = createAssistantMessageEventStream();

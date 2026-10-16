@@ -8,7 +8,6 @@ export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
 type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
 
-/** Reads are replayable; subscription acquisition first settles its coordinator's compensation. */
 export function isRetryableChatReadError(
   err: unknown,
   method: string,

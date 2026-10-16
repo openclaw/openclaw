@@ -47,6 +47,7 @@ export async function applyStagedWorkerWorkspace(params: {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
   acceptance:
@@ -123,6 +124,7 @@ export async function applyStagedWorkerWorkspace(params: {
     const includePaths = params.current.baseCommit
       ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
       : undefined;
+    params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
     const inspectPaths = () =>
       preflightWorkspaceApply({ root, base: params.base, current: params.current });
     const preflight = await inspectPaths();

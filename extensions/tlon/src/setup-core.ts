@@ -180,7 +180,7 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   validateInput: createSetupInputPresenceValidator({
     validate: ({ cfg, accountId, input }) => {
       const setupInput = input as TlonSetupInput;
-      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
+      const resolved = resolveTlonAccount(cfg, accountId);
       const ship = normalizeOptionalString(setupInput.ship ?? resolved.ship);
       const url = normalizeOptionalString(setupInput.url ?? resolved.url);
       const code = normalizeOptionalString(setupInput.code ?? resolved.code);

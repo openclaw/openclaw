@@ -1,10 +1,15 @@
+import path from "node:path";
 import { ClientEvent, type MatrixClient as MatrixJsClient } from "matrix-js-sdk/lib/matrix.js";
 import { Room } from "matrix-js-sdk/lib/models/room.js";
 import { SyncState } from "matrix-js-sdk/lib/sync.js";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { MatrixClient } from "../sdk.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 
 const fixture = vi.hoisted(() => ({
   sdk: undefined as MatrixJsClient | undefined,
@@ -28,6 +33,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", async (importOriginal) => {
 });
 vi.mock("./joined-room-encryption.js", () => ({
   reconcileJoinedRoomEncryption: async () => undefined,
+}));
+vi.mock("./idb-persistence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./idb-persistence.js")>()),
+  persistIdbToDisk: vi.fn(async () => undefined),
+  restoreIdbFromDisk: vi.fn(async () => false),
 }));
 vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("matrix-js-sdk/lib/matrix.js")>();
@@ -71,6 +81,7 @@ describe("Matrix live encrypted room ownership", () => {
   const liveSync = () => sdk.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Syncing);
 
   beforeEach(async () => {
+    installMatrixTestRuntime();
     vi.useFakeTimers();
     fixture.init.mockReset().mockResolvedValue(undefined);
     fixture.probe.mockReset().mockResolvedValue(true);
@@ -81,6 +92,7 @@ describe("Matrix live encrypted room ownership", () => {
       deviceId: "BOT",
       encryption: true,
       autoBootstrapCrypto: false,
+      idbSnapshotPath: path.join(tempDirs.make("matrix-live-room-"), "snapshot.json"),
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     sdk = fixture.sdk!;
@@ -148,6 +160,7 @@ describe("Matrix live encrypted room ownership", () => {
       userId: "@bot:matrix.test",
       encryption: true,
       autoBootstrapCrypto: false,
+      idbSnapshotPath: path.join(tempDirs.make("matrix-live-room-"), "snapshot.json"),
     });
     sdk = fixture.sdk!;
     fixture.room = makeRoom();

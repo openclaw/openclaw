@@ -12,8 +12,8 @@ import {
 import {
   parseSessionTranscriptAuthorityReceipts,
   retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
 } from "../../config/sessions/session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "../../config/sessions/session-transcript-authority.types.js";
 import type { InitialSessionTranscriptWriter } from "../../config/sessions/transcript-write-context.js";
 import {
   observeSqliteWorkerCommittedFacts,
@@ -99,6 +99,14 @@ export function createSessionManagerPublicationHooks(params: {
           entryPublication.flatMap((receipt) => Array.from(receipt.facts.keys())),
           new Map(),
           unchanged,
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+              ),
+            ),
+          ),
         );
       }
       pending.transcript.begin(transcriptPublication);

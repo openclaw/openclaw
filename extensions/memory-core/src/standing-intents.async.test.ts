@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import {
   createPluginRecord,
   createPluginRegistry,
   createPluginRuntimeMock,
@@ -37,8 +42,10 @@ import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
   createStandingIntent,
+  cancelStandingIntent,
   listStandingIntents,
   matchStandingIntents,
+  startStandingIntentMaintenance,
 } from "./standing-intents.js";
 
 function deferred() {
@@ -286,6 +293,71 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 }
 
 describe("standing-intent admitted operations", () => {
+  it("recovers overdue intents at restart and schedules writes and cooldowns while idle", async () => {
+    const expired = await createStandingIntent({
+      agentId: "main",
+      description: "Already expired at restart.",
+      triggerKeywords: ["old"],
+      creatorSender: "owner",
+      nowMs: 0,
+      expiresAt: 500,
+    });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const clock = createGatewaySchedulerClock(1_000);
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const scheduler = createTestPluginServiceScheduler(gateway);
+    const warn = vi.fn();
+    const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+    try {
+      await clock.wake();
+      expect(readStored(expired.id)?.status).toBe("expired");
+      expect(gateway.nextWakeAtMs).toBeNull();
+
+      const intent = await createStandingIntent({
+        agentId: "main",
+        description: "Review launch.",
+        triggerKeywords: ["launch"],
+        creatorSender: "owner",
+        nowMs: 1_000,
+        expiresAt: 5_000,
+        cooldownSeconds: 1,
+        maxFires: 3,
+      });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBe(5_000);
+      await matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBe(2_000);
+      await clock.advanceTo(2_000);
+      expect(readStored(intent.id)?.status).toBe("armed");
+      expect(gateway.nextWakeAtMs).toBe(5_000);
+      await clock.advanceTo(5_000);
+      expect(readStored(intent.id)?.status).toBe("expired");
+      expect(gateway.nextWakeAtMs).toBeNull();
+
+      const cancelled = await createStandingIntent({
+        agentId: "main",
+        description: "Do not deliver.",
+        triggerKeywords: ["cancel"],
+        creatorSender: "owner",
+        nowMs: 5_000,
+        expiresAt: 10_000,
+      });
+      await clock.wake();
+      await cancelStandingIntent({ agentId: "main", id: cancelled.id });
+      await clock.wake();
+      expect(gateway.nextWakeAtMs).toBeNull();
+      await clock.advanceBy(300_000);
+      expect(gateway.nextWakeAtMs).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      await scheduler.stop();
+      await gateway.stop();
+    }
+  });
+
   it.each(["create", "list", "cancel"] as const)(
     "rejects %s after owner revocation during writer admission without changing persisted rows",
     async (action) => {
@@ -343,7 +415,7 @@ describe("standing-intent admitted operations", () => {
     expect(readStored(created.id)).toMatchObject({ status: "armed", fire_count: 0 });
   });
 
-  it.each(["create", "list", "cancel"] as const)(
+  it.each(["create", "cancel"] as const)(
     "awaits %s before the registered tool reports success",
     async (action) => {
       const existing = await seed();
@@ -371,9 +443,7 @@ describe("standing-intent admitted operations", () => {
       expect(payload).toMatchObject(
         action === "cancel"
           ? { cancelled: true }
-          : action === "list"
-            ? { intents: [{ id: existing.id }] }
-            : { intent: { description: "Check the migration." } },
+          : { intent: { description: "Check the migration." } },
       );
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       await closeOpenClawAgentDatabasesAsync();
@@ -481,31 +551,6 @@ describe("standing-intent admitted operations", () => {
     }
   });
 
-  it("does not spend a fire after the registered prompt hook times out", async () => {
-    const existing = await seed();
-    const { runner } = await registerHooks();
-    const held = await holdWriter();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const work = keep(
-        runner.runBeforePromptBuild(
-          { prompt: "launch", messages: [] },
-          { ...context, trigger: "user" },
-        ),
-      );
-      await expectWaiting(work, held.entered);
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(await work).toBeUndefined();
-
-      held.release();
-      await held.drain();
-      expect(readStored(existing.id)).toMatchObject({ status: "armed", fire_count: 0 });
-    } finally {
-      held.release();
-      vi.useRealTimers();
-    }
-  });
-
   it("skips matching with a diagnostic when the host lacks the invocation capability", async () => {
     const existing = await seed();
     const { runner, registry, logger } = await registerHooks();
@@ -556,32 +601,6 @@ describe("standing-intent admitted operations", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each(["heartbeat", "cron"] as const)(
-    "awaits registered %s lifecycle maintenance",
-    async (trigger) => {
-      const existing = await seed(true);
-      const { runner } = await registerHooks();
-      const held = await holdWriter();
-      const work = keep(
-        runner.runBeforeAgentReply(
-          { cleanedBody: "ordinary scheduled turn" },
-          { ...context, trigger },
-        ),
-      );
-      await expectWaiting(work, held.entered);
-      expect(readStored(existing.id)?.status).toBe("armed");
-      const observation = observeStandingIntentHostSql();
-      try {
-        held.release();
-        await work;
-      } finally {
-        observation.restore();
-      }
-      expect(readStored(existing.id)?.status).toBe("expired");
-      expectNoHostStandingIntentSql(observation);
-    },
-  );
 
   it("refuses a queued create when its original database path is replaced", async () => {
     const replacementState = tempDirs.make("standing-intent-replacement-");

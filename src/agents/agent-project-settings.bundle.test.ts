@@ -75,7 +75,11 @@ const bundleTestDeps = await vi.hoisted(async () => {
       },
     };
   };
-  return { fsSync, loadBundleRegistry, loadEmbeddedAgentMcpConfig };
+  return {
+    fsSync,
+    loadBundleRegistry,
+    loadEmbeddedAgentMcpConfig: vi.fn(loadEmbeddedAgentMcpConfig),
+  };
 });
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
@@ -110,6 +114,9 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 
 const { loadEnabledBundleAgentSettingsSnapshot } =
   await import("./agent-project-settings-snapshot.js");
+const { createPreparedEmbeddedAgentSettingsManager, clearPreparedEmbeddedAgentSettings } =
+  await import("./agent-project-settings.js");
+const { prepareAgentProviderRetryCount } = await import("./agent-project-settings-prepared.js");
 
 const tempDirs = createTrackedTempDirs();
 
@@ -118,6 +125,7 @@ afterEach(async () => {
   pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReset();
   pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
+  bundleTestDeps.loadEmbeddedAgentMcpConfig.mockClear();
 });
 
 async function createWorkspaceBundle(params: {
@@ -185,7 +193,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {
+  it("loads settings without MCP discovery and enriches only the embedded snapshot", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     const resolvedPluginRoot = await fs.realpath(pluginRoot);
@@ -231,7 +239,17 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     expect(snapshot.hideThinkingBlock).toBe(true);
     expect(snapshot.shellPath).toBeUndefined();
     expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
-    expect((snapshot as Record<string, unknown>).mcpServers).toEqual({
+    expect(snapshot.mcpServers).toBeUndefined();
+    const prepared = {
+      sessionId: workspaceDir,
+      cwd: workspaceDir,
+      agentDir: path.join(workspaceDir, "agent"),
+      cfg: { plugins: { entries: { "claude-bundle": { enabled: true } } } },
+    };
+    expect(prepareAgentProviderRetryCount(prepared)).toBeUndefined();
+    expect(bundleTestDeps.loadEmbeddedAgentMcpConfig).not.toHaveBeenCalled();
+    const embedded = createPreparedEmbeddedAgentSettingsManager(prepared).getGlobalSettings();
+    expect((embedded as Record<string, unknown>).mcpServers).toEqual({
       bundleProbe: {
         command: "node",
         args: [path.join(resolvedServerPath, "probe.mjs")],
@@ -244,8 +262,8 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
       },
     });
 
-    const overridden = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
+    const overridden = createPreparedEmbeddedAgentSettingsManager({
+      ...prepared,
       cfg: {
         mcp: {
           servers: {
@@ -260,7 +278,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
           },
         },
       },
-    });
+    }).getGlobalSettings();
 
     expect((overridden as Record<string, unknown>).mcpServers).toEqual({
       bundleProbe: {
@@ -272,6 +290,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
         url: "https://example.com/mcp",
       },
     });
+    clearPreparedEmbeddedAgentSettings([workspaceDir]);
   });
 
   it("ignores disabled bundle plugins", async () => {

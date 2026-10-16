@@ -20,21 +20,21 @@ export function reclaimHubTabFocus(hubId: string, tab: string, element: Element 
     pendingFocus = null;
     return;
   }
-  // Refs can run before connecting; let the renderer and Web Awesome settle first.
-  window.setTimeout(() => {
+  // Wait for the destination DOM commit without overriding newer user focus.
+  queueMicrotask(() => {
     if (pendingFocus !== pending) {
       return;
     }
     pendingFocus = null;
-    const currentFocus = document.activeElement;
+    const currentFocus = element.ownerDocument.activeElement;
     if (
       element.isConnected &&
       Date.now() - pending.at <= PENDING_FOCUS_WINDOW_MS &&
       (currentFocus === pending.source ||
-        currentFocus === document.body ||
-        currentFocus === document.documentElement)
+        currentFocus === element.ownerDocument.body ||
+        currentFocus === element.ownerDocument.documentElement)
     ) {
       element.focus();
     }
-  }, 0);
+  });
 }

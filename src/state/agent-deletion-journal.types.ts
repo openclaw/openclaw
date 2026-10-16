@@ -1,8 +1,15 @@
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
 
-export type RetainedAgentDeletion = { agentId: string; agentDir: string; databasePaths: string[] };
+export type RetainedAgentDeletion = {
+  agentId: string;
+  agentDir: string;
+  databasePaths: string[];
+  cleanupCompleted: boolean;
+  manualClawRemoval?: true;
+};
 export type HeldAgentDatabase = { agentId: string; path: string };
 export type AgentDeletionJournalPurpose = "runtime" | "maintenance";
+type AgentDeletionJournalPhase = "draining" | "retiring";
 
 type KnownAgentDeletionFacts = {
   entries: RetainedAgentDeletion[];
@@ -41,8 +48,9 @@ export type AgentDeletionJournalCleanupPath = {
   parentPath: string;
   kind: "target" | "symlink";
   sourcePaths: string[];
-  dev: number | null;
-  ino: number | null;
+  // Numbers are legacy, possibly rounded IDs; current writes use exact decimal strings.
+  dev: string | number | null;
+  ino: string | number | null;
   coversDescendants: boolean;
   done: boolean;
   note?: string;
@@ -51,6 +59,7 @@ export type AgentDeletionJournalCleanupPath = {
 export type AgentDeletionJournalEntry = {
   agentId: string;
   operationId: string;
+  phase: AgentDeletionJournalPhase;
   agentDir: string;
   workspaceDir: string;
   sessionsDir: string;
@@ -63,8 +72,9 @@ export type AgentDeletionJournalEntry = {
 
 export type AgentDeletionJournalInput = Omit<
   AgentDeletionJournalEntry,
-  "createdAt" | "cleanupCompleted" | "databasePaths" | "cleanupPaths"
+  "createdAt" | "cleanupCompleted" | "databasePaths" | "cleanupPaths" | "phase"
 > & {
+  phase?: AgentDeletionJournalPhase;
   databasePaths?: string[];
   cleanupPaths?: AgentDeletionJournalCleanupPath[];
 };

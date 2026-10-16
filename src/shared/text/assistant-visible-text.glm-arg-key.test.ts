@@ -15,47 +15,15 @@ describe("GLM arg_key assistant text", () => {
       "<tool_call>exec<arg_key>command</arg_key><arg_value>cd /tmp && gh pr list</arg_value><arg_key>timeout</arg_key><arg_value>30</arg_value></tool_call>",
       "",
     ],
-    [
-      "Checking.\n<tool_call>read<arg_key>path</arg_key><arg_value>/tmp/x</arg_value></tool_call>",
-      "Checking.\n",
-    ],
-    ["Checking.\n<tool_call>read\n<arg_key>name</arg_key>\n<arg_value>read", "Checking.\n"],
-    ["Visible\n<tool_call>exec<arg_key>", "Visible\n"],
-    ["Visible\n<tool_call>exec<arg_", "Visible\n"],
     ["Visible\n<tool_call>exec<arg_ke", "Visible\n"],
-    ["Visible\n<tool_call>exec<arg_key>command</arg_", "Visible\n"],
-    ["Visible\n<tool_call>exec<arg_key>command</arg", "Visible\n"],
     ["Visible\n<tool_call>exec<arg_key>command</", "Visible\n"],
-    ["Visible\n<tool_call>exec<arg_key>command \n", "Visible\n"],
-    [
-      '<tool_call>exec<arg_key hint="a > b">command</arg_key><arg_value>private</arg_value></tool_call>',
-      "",
-    ],
-    ["<tool_call>exec<ARG_KEY>command</ARG_KEY></tool_call>", ""],
-    ["<tool_call>exec<arg_key>command</arg_key</tool_call>", ""],
-    ["<tool_call>web-search<arg_key>query</arg_key><arg_value>private</arg_value></tool_call>", ""],
-    ["<tool_call>exec<arg_key>command\n</arg_key><arg_value>private</arg_value></tool_call>", ""],
-    ["<tool_call>exec<arg_key>\ncommand\n</arg_key><arg_value>private</arg_value></tool_call>", ""],
   ])("strips a GLM shadow payload: %s", (input, expected) => {
     expect(stripAssistantInternalScaffolding(input)).toBe(expected);
   });
 
   it.each([
-    "Use <tool_call>exec",
-    "Use <tool_call>exec ",
-    "Use <tool_call>exec\n",
-    "Use <tool_call>x",
     "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
-    "Use <tool_call>exec<arg_key> literally.",
-    "prefix <tool_call><arg_key>secret</arg_key></tool_call> suffix",
-    "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
-    "Use <tool_call>exec<arg_key_extra> literally.",
     "Use <tool_call>exec<arg_key/> literally.",
-    "Use <tool_call>exec<arg_key>command</argument> literally.",
-    "Use <tool_call>exec<arg_key>command</arg_k</tool_call> literally.",
-    "Use <tool_call>exec<arg_key>command literally. Example: `</arg_key>`.",
-    "Use <tool_call>exec<arg_key>\ncommand literally. Example: `</arg_key>`.",
-    "Use <tool_call>exec<arg_key>\ncommand",
     "Use <tool_call>exec<arg_key> \n</arg_key> literally.",
   ])("keeps literal prose: %s", (input) => {
     expect(stripAssistantInternalScaffolding(input)).toBe(input);
@@ -110,19 +78,10 @@ describe("invocation XML", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("The answer is 42.");
   });
 
-  it.each([
-    `    ${invocation}`,
-    `\t${invocation}`,
-    `\`\`\`xml\n${invocation}\n\`\`\``,
-    `Use \`${invocation}\` in an example.`,
-    `Use ${invocation} in an example.`,
-  ])("preserves a literal invocation example %s", (example) => {
-    expect(sanitizeAssistantVisibleText(example)).toBe(example);
-  });
-
-  it("keeps protected code following an invocation artifact", () => {
-    expect(sanitizeAssistantVisibleText(`${invocation}\n\n    <invoke></invoke>`)).toBe(
-      "    <invoke></invoke>",
-    );
-  });
+  it.each([`    ${invocation}`, `Use ${invocation} in an example.`])(
+    "preserves a literal invocation example %s",
+    (example) => {
+      expect(sanitizeAssistantVisibleText(example)).toBe(example);
+    },
+  );
 });

@@ -192,12 +192,6 @@ type AgentRuntimeToolPlan = {
 };
 
 export type AgentRuntimeDeliveryPlan = {
-  isSilentPayload(
-    payload: Pick<
-      AgentRuntimeReplyPayload,
-      "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
-    >,
-  ): boolean;
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;
     originatingChannel?: string;
@@ -250,6 +244,8 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
+  /** Current transport/auth config; prompt and tool policy retain the admitted config. */
+  transportConfig?: unknown;
   model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;

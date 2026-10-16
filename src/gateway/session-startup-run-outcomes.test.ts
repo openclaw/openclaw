@@ -1,6 +1,10 @@
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -15,7 +19,12 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { prepareGatewayStartupSessions } from "./server-startup-session-migration.js";
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-startup-run-outcomes-");
+const tempDirs = useSessionStoreTempDirs((cleanup) => {
+  afterAll(async () => {
+    await cleanup();
+    clearRuntimeConfigSnapshot();
+  });
+}, "openclaw-startup-run-outcomes-");
 
 it("settles legacy liveness once before startup returns, preserving recovery claims and history", async () => {
   const stateDir = tempDirs.make();
@@ -29,6 +38,7 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
       const env = { ...process.env };
       const databaseOptions = { agentId: "main", env };
       const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const log = { info: vi.fn(), warn: vi.fn() };
       const recovery: Partial<InternalSessionEntry> = {
         mainRestartRecovery: { cycleId: "original-cycle", revision: 3, chargedAttempts: 1 },
@@ -114,7 +124,7 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
         history.set(fixture.sessionKey, await loadTranscriptEvents(scope));
       }
       const database = openOpenClawAgentDatabase(databaseOptions);
-      // Model a previous release's bytes; canonical writers accept outcomes only.
+      // Retain legacy bytes alongside certification; current writers accept outcomes only.
       const update = database.db.prepare(
         "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
       );
@@ -123,7 +133,7 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
       );
       for (const fixture of legacy) {
         update.run(fixture.status, fixture.sessionKey);
-        // The previous release's canonical writer certified these rows; raw fixture edits revoke it.
+        // Preserve row certification so startup must discover the legacy outcomes itself.
         certify.run(fixture.sessionKey);
       }
       await closeOpenClawAgentDatabasesAsync(stateDir);

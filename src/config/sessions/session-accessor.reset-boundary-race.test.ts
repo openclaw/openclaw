@@ -17,44 +17,50 @@ import {
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
 
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: (command, commandOptions) => {
+                if (
+                  command.type === "session.lifecycle.reset" ||
+                  command.type === "session.lifecycle.project"
+                ) {
+                  // The snapshot is prepared, but the worker has not begun its transaction.
+                  const inject = transactionInjection.run;
+                  transactionInjection.run = null;
+                  inject?.();
+                }
+                return worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: (command, commandOptions) => {
-                  if (
-                    command.type === "session.lifecycle.reset" ||
-                    command.type === "session.lifecycle.project"
-                  ) {
-                    // The snapshot is prepared, but the worker has not begun its transaction.
-                    const inject = transactionInjection.run;
-                    transactionInjection.run = null;
-                    inject?.();
-                  }
-                  return worker.execute(command, commandOptions);
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 
@@ -236,10 +242,10 @@ describe("reset boundary concurrency", () => {
       ["opaque"],
       JSON.parse(`{"type":"opaque","body":${"[".repeat(1_001)}0${"]".repeat(1_001)}}`) as unknown,
     ];
-    const insert = database.db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    const insert = createTranscriptEventInserter(database.db, sessionId);
+    events.forEach((event, seq) =>
+      insert({ seq, eventJson: JSON.stringify(event), createdAt: seq }),
     );
-    events.forEach((event, seq) => insert.run(sessionId, seq, JSON.stringify(event), seq));
 
     const projected = loadTranscriptEventsFromDatabase(database, sessionId, {
       projection: "reset-boundary",
@@ -260,7 +266,7 @@ describe("reset boundary concurrency", () => {
       events.slice(0, 2),
     );
 
-    insert.run(sessionId, events.length, "{", events.length);
+    insert({ seq: events.length, eventJson: "{", createdAt: events.length });
     for (const projection of [undefined, "reset-boundary"] as const) {
       expect(() => loadTranscriptEventsFromDatabase(database, sessionId, { projection })).toThrow(
         SyntaxError,

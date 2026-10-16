@@ -38,7 +38,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
@@ -261,28 +260,11 @@ class CameraCaptureManager(
             val maxEncodedBytes = (maxPayloadBytes / 4) * 3
             val result =
               JpegSizeLimiter.compressToLimit(
-                initialWidth = scaled.width,
-                initialHeight = scaled.height,
+                bitmap = scaled,
                 startQuality = (quality * 100.0).roundToInt().coerceIn(10, 100),
                 minQuality = (quality * 100.0).roundToInt().coerceIn(10, 20),
                 maxBytes = maxEncodedBytes,
-                encode = { width, height, q ->
-                  val bitmap =
-                    if (width == scaled.width && height == scaled.height) {
-                      scaled
-                    } else {
-                      scaled.scale(width, height)
-                    }
-                  val out = ByteArrayOutputStream()
-                  if (!bitmap.compress(Bitmap.CompressFormat.JPEG, q, out)) {
-                    if (bitmap !== scaled) bitmap.recycle()
-                    throw IllegalStateException("UNAVAILABLE: failed to encode JPEG")
-                  }
-                  if (bitmap !== scaled) {
-                    bitmap.recycle()
-                  }
-                  out.toByteArray()
-                },
+                errorMessage = "UNAVAILABLE: failed to encode JPEG",
               )
             val base64 = Base64.encodeToString(result.bytes, Base64.NO_WRAP)
             """{"format":"jpg","base64":"$base64","width":${result.width},"height":${result.height}}"""

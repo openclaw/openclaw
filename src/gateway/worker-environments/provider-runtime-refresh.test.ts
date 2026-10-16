@@ -138,9 +138,9 @@ describe("worker environment runtime upgrades", () => {
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     };
-    const bindService = (store: typeof placements, restarting = false) => {
+    const bindService = async (store: typeof placements, restarting = false) => {
       const gate = createWorkerSessionPlacementGate(store, {
-        rejectExistingWorkerClaims: restarting,
+        recoveryPlacements: restarting ? await store.listAsync() : [],
       });
       const service = support.createService(
         support.createProvider({
@@ -157,7 +157,7 @@ describe("worker environment runtime upgrades", () => {
       );
       return { gate, service };
     };
-    const { service } = bindService(placements);
+    const { service } = await bindService(placements);
     return {
       environment,
       placement,
@@ -179,8 +179,8 @@ describe("worker environment runtime upgrades", () => {
           now: () => support.testState.nowMs,
         });
         await restarted.recoverWorkerSessionToolOperationsAfterRestart();
-        restarted.clearLocalTurnClaimsAfterRestart();
-        return { placements: restarted, ...bindService(restarted, true) };
+        await restarted.clearLocalTurnClaimsAfterRestartAsync();
+        return { placements: restarted, ...(await bindService(restarted, true)) };
       },
     };
   }
@@ -265,7 +265,7 @@ describe("worker environment runtime upgrades", () => {
         WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
       ],
     });
-    const recovery = createRecoveryService(h.placements, h.service);
+    const recovery = await createRecoveryService(h.placements, h.service);
     h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
 
     await recovery.reconcile("startup");
@@ -356,7 +356,7 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
-      const fixture = createHarness(support.testState.stateDb, restarted.placements, {
+      const fixture = await createHarness(support.testState.stateDb, restarted.placements, {
         workspacePath: support.testState.root,
       });
       const openWorkspace = async () => {
@@ -424,7 +424,7 @@ describe("worker environment runtime upgrades", () => {
           await reconcileEnvironment(environmentId);
         },
       );
-      const recovery = createHarness(support.testState.stateDb, restarted.placements, {
+      const recovery = await createHarness(support.testState.stateDb, restarted.placements, {
         workspacePath: support.testState.root,
         environmentService: restarted.service,
       });

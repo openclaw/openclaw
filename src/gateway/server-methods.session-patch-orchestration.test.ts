@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
+import * as sessionPatchPreflight from "./server-methods/sessions-shared.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
 describe("sessions.patchMany orchestration", () => {
   const context = (overrides: Record<string, unknown> = {}) =>
@@ -23,6 +26,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("preserves request-order outcomes while isolating expected-identity failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:batch-${index}` },
@@ -92,6 +96,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("projects non-archive patches in request order against prior successes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 2; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:label-${index}` },
@@ -127,6 +132,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("does not reserve a projected label when target authorization fails", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
       for (const [index, sessionKey] of sessionKeys.entries()) {
         await upsertSessionEntryCore(
@@ -187,12 +193,15 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("rejects an alias conflict introduced after preflight without blocking siblings", async () => {
+  it("rejects an alias conflict introduced after preflight without blocking siblings", async ({
+    signal,
+  }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       const siblingKeys = ["agent:main:alias-race-before", "agent:main:alias-race-after"];
@@ -207,10 +216,12 @@ describe("sessions.patchMany orchestration", () => {
         );
       }
 
-      const storePath = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: conflictingAlias,
-      }).storePath;
+      const storePath = (
+        await resolveGatewaySessionStoreTargetWithStoreAsync({
+          cfg,
+          key: conflictingAlias,
+        })
+      ).storePath;
       const writerStarted = createDeferredCore();
       const insertConflictingAlias = createDeferredCore();
       const writer = applySessionEntryCanonicalReplacements({
@@ -232,9 +243,23 @@ describe("sessions.patchMany orchestration", () => {
           };
         },
       });
-      await writerStarted.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(writerStarted.promise, writer, "Writer skipped preparation"),
+        signal,
+      );
 
       const preflightCompleted = createDeferredCore();
+      const preparePlacementValidation =
+        sessionPatchPreflight.prepareSessionWorkerPlacementPatchValidation;
+      using _ = vi
+        .spyOn(sessionPatchPreflight, "prepareSessionWorkerPlacementPatchValidation")
+        .mockImplementation(async (params) => {
+          const validation = await preparePlacementValidation(params);
+          if (params.entry?.sessionId === "session-alias-race-canonical") {
+            preflightCompleted.resolve();
+          }
+          return validation;
+        });
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patchMany"]!({
         params: {
@@ -242,21 +267,22 @@ describe("sessions.patchMany orchestration", () => {
           patch: { unread: false },
         },
         respond,
-        context: context({
-          getRuntimeConfig: () => cfg,
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-alias-race-canonical")) {
-                preflightCompleted.resolve();
-              }
-              return new Map();
-            },
-          },
-        }),
+        context: context({ getRuntimeConfig: () => cfg }),
       } as never);
 
-      await preflightCompleted.promise;
-      insertConflictingAlias.resolve();
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            preflightCompleted.promise,
+            Promise.resolve(request),
+            "Patch settled before preparing its target",
+          ),
+          signal,
+        );
+      } finally {
+        insertConflictingAlias.resolve();
+        await Promise.allSettled([writer, request]);
+      }
       await writer;
       await request;
 
@@ -291,12 +317,15 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("rejects an alias inserted after single-patch preflight while waiting for the writer", async () => {
+  it("rejects an alias inserted after single-patch preflight while waiting for the writer", async ({
+    signal,
+  }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       await upsertSessionEntryCore(
@@ -304,10 +333,12 @@ describe("sessions.patchMany orchestration", () => {
         { sessionId: "session-single-alias-race-canonical", updatedAt: 1 },
       );
 
-      const storePath = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: conflictingAlias,
-      }).storePath;
+      const storePath = (
+        await resolveGatewaySessionStoreTargetWithStoreAsync({
+          cfg,
+          key: conflictingAlias,
+        })
+      ).storePath;
       const writerStarted = createDeferredCore();
       const insertConflictingAlias = createDeferredCore();
       const writer = applySessionEntryCanonicalReplacements({
@@ -329,28 +360,43 @@ describe("sessions.patchMany orchestration", () => {
           };
         },
       });
-      await writerStarted.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(writerStarted.promise, writer, "Writer skipped preparation"),
+        signal,
+      );
 
       const preflightCompleted = createDeferredCore();
+      const preparePlacementValidation =
+        sessionPatchPreflight.prepareSessionWorkerPlacementPatchValidation;
+      using _ = vi
+        .spyOn(sessionPatchPreflight, "prepareSessionWorkerPlacementPatchValidation")
+        .mockImplementation(async (params) => {
+          const validation = await preparePlacementValidation(params);
+          if (params.entry?.sessionId === "session-single-alias-race-canonical") {
+            preflightCompleted.resolve();
+          }
+          return validation;
+        });
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patch"]!({
         params: { key: conflictingAlias, pinned: true },
         respond,
-        context: context({
-          getRuntimeConfig: () => cfg,
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-single-alias-race-canonical")) {
-                preflightCompleted.resolve();
-              }
-              return new Map();
-            },
-          },
-        }),
+        context: context({ getRuntimeConfig: () => cfg }),
       } as never);
 
-      await preflightCompleted.promise;
-      insertConflictingAlias.resolve();
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            preflightCompleted.promise,
+            Promise.resolve(request),
+            "Patch settled before preparing its target",
+          ),
+          signal,
+        );
+      } finally {
+        insertConflictingAlias.resolve();
+        await Promise.allSettled([writer, request]);
+      }
       await writer;
       await request;
 
@@ -376,6 +422,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const targets = [0, 1, 2].map((index) => ({
         key: `agent:main:archive-auth-${index}`,
         expectedSessionId: `session-archive-auth-${index}`,
@@ -413,9 +460,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(targets.map(({ key }) => key));
+      expect(new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey))).toEqual(
+        new Set(targets.map(({ key }) => key)),
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -451,12 +498,23 @@ describe("sessions.patchMany orchestration", () => {
 
   it("converts an unexpected target exception into an ordered isolated failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:throw-${index}` },
           { sessionId: `session-throw-${index}`, updatedAt: 1 },
         );
       }
+      const preparePlacementValidation =
+        sessionPatchPreflight.prepareSessionWorkerPlacementPatchValidation;
+      using _ = vi
+        .spyOn(sessionPatchPreflight, "prepareSessionWorkerPlacementPatchValidation")
+        .mockImplementation(async (params) => {
+          if (params.entry?.sessionId === "session-throw-1") {
+            throw new Error("private placement detail");
+          }
+          return preparePlacementValidation(params);
+        });
       const respond = vi.fn();
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: {
@@ -464,16 +522,7 @@ describe("sessions.patchMany orchestration", () => {
           patch: { category: "Batch" },
         },
         respond,
-        context: context({
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-throw-1")) {
-                throw new Error("private placement detail");
-              }
-              return new Map();
-            },
-          },
-        }),
+        context: context(),
       } as never);
 
       expect(respond).toHaveBeenCalledWith(

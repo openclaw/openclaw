@@ -111,8 +111,10 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
-vi.mock("../../../config/sessions/paths.js", () => ({
+vi.mock("../../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: hoisted.resolveStorePathMock,
+  resolveSessionStorePathWithContext: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async () => {
@@ -743,13 +745,6 @@ describe("spawnAcpDirect", () => {
     },
     { name: "explicit max", thinking: "max", inherited: "low", expectedThinking: "max" },
     {
-      name: "inherited max",
-      model: "openai/gpt-5.6-sol",
-      inherited: "max",
-      expectedModel: "openai/gpt-5.6-sol",
-      expectedThinking: "max",
-    },
-    {
       name: "configured model with global thinking default",
       model: "anthropic/claude-sonnet-4-6",
       globalThinking: "off",
@@ -760,15 +755,6 @@ describe("spawnAcpDirect", () => {
       name: "opaque harness model",
       model: "harness-only[context=272k,reasoning=medium,fast=false]",
       expectedModel: "harness-only[context=272k,reasoning=medium,fast=false]",
-    },
-    {
-      name: "owner thinking before model and global defaults",
-      model: "anthropic/claude-sonnet-4-6",
-      ownerThinking: "off",
-      modelThinking: "adaptive",
-      globalThinking: "high",
-      expectedModel: "anthropic/claude-sonnet-4-6",
-      expectedThinking: "off",
     },
     {
       name: "owner thinking without model override",
@@ -1180,7 +1166,7 @@ describe("spawnAcpDirect", () => {
     expect(gatewayRequest("agent")?.params?.accountId).toBe("work");
   });
 
-  it.each(["bot-alpha", "reviewer", undefined])(
+  it.each(["bot-alpha", undefined])(
     "uses the owner's bound account for ACP thread spawn (%s)",
     async (agentId) => {
       const boundRoom = "!room:example.org";
@@ -1372,7 +1358,7 @@ describe("spawnAcpDirect", () => {
         {
           requesterSessionKey: "global",
           childSessionKey: expect.stringMatching(/^agent:research:acp:/),
-          agentId: "research",
+          childAgentId: "research",
           requesterAgentId: "research",
         },
         { assertCurrent: undefined },

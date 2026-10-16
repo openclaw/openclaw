@@ -12,7 +12,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig, transformConfigFile } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -103,7 +103,7 @@ async function loadHooksReport<T>(
   agentId: string | undefined,
   consume: (report: HookStatusReport) => T,
 ): Promise<T> {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const target = resolveHooksReportTarget(config, agentId);
   const { callGateway } = await import("../gateway/call.js");
   let report: HookStatusReport;

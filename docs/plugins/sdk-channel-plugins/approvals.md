@@ -36,8 +36,8 @@ should use the nested request payload.
 ### Approval auth
 
 - `approvalCapability.authorizeActorAction` and
-  `approvalCapability.getActionAvailabilityState` are the canonical
-  approval-auth seam.
+  `approvalCapability.getActionAvailabilityState` are the shared
+  approval-auth interface.
 - A channel that enforces host-configured, request-scoped plugin reviewer lists
   for native cards, forwarded prompts, and final decisions sets
   `approvalCapability.supportsScopedPluginApprovalApprovers: true`. When a
@@ -111,7 +111,7 @@ target normalization plus transport/presentation facts. Use
 handler and own request filtering, routing, dedupe, expiry, gateway
 subscription, and routed-elsewhere notices.
 
-`nativeRuntime` is split into a few smaller seams:
+`nativeRuntime` is split into a few smaller interfaces:
 
 - `availability` - whether the account is configured and whether a request
   should be handled
@@ -198,17 +198,17 @@ Other approval helpers:
   matcher by default for `{ to, accountId, threadId }` targets. Pass
   `targetsMatch` only when a channel has provider-specific equivalence rules,
   such as Slack timestamp prefix matching. Pass `normalizeTargetForMatch` when
-  the channel needs to canonicalize provider ids before the default route
+  the channel needs to normalize provider ids before the default route
   matcher or a custom `targetsMatch` callback runs, while preserving the
   original target for delivery. Use `normalizeTarget` only when the resolved
-  delivery target itself should be canonicalized.
+  delivery target itself should be normalized.
 - If the channel needs runtime-owned objects such as a client, token, Bolt
   app, or webhook receiver, register them through
   `openclaw/plugin-sdk/channel-runtime-context`. The generic runtime-context
   registry lets core bootstrap capability-driven handlers from channel
   startup state without adding approval-specific wrapper glue.
 - Reach for the lower-level `createChannelApprovalHandler` or
-  `createChannelNativeApprovalRuntime` only when the capability-driven seam is
+  `createChannelNativeApprovalRuntime` only when the capability-driven interface is
   not expressive enough yet.
 - Native approval channels must route both `accountId` and `approvalKind`
   through those helpers. `accountId` keeps multi-account approval policy
@@ -225,7 +225,7 @@ Other approval helpers:
   not guess or rewrite exec vs plugin approval routing from channel-local
   state.
 - Pass that explicit `approvalKind` to `resolveApprovalOverGateway`. This uses
-  the canonical `approval.resolve` service and returns the recorded winner when
+  the shared `approval.resolve` service and returns the recorded winner when
   another surface answers first. The older explicit `resolveMethod` input
   remains for command-backed controls; new native actions must not use it or
   infer kind from an ID.

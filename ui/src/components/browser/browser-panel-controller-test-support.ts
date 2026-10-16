@@ -77,6 +77,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
+  readonly stage = document.createElement("div");
   readonly resourceBasePath = "";
   readonly authToken = null;
   sessionKey = "";
@@ -87,7 +88,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   open = true;
 
   constructor(public client: GatewayBrowserClient | null) {
-    const stage = document.createElement("div");
+    const stage = this.stage;
     stage.className = "bp-stage";
     vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -104,6 +105,9 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   }
 
   addController(controller: PanelLifecycleController): void {
+    if (controller instanceof BrowserPanelController) {
+      controller.input.elements.stage = this.stage;
+    }
     this.controllers.push(controller);
   }
 

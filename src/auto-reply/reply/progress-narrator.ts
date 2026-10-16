@@ -22,7 +22,6 @@ import {
 
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
-const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
 const NARRATION_MAX_CHARS = 280;
 const NARRATION_NOTE_MAX_CHARS = 160;
@@ -176,27 +175,12 @@ function createProgressNarrator(params: {
     }
   };
 
-  const shouldRunNow = (immediate: boolean): boolean => {
-    const newNotes = activity.noteSequence - Math.max(0, noteSequenceAtLastRun);
-    return (
-      newNotes > 0 &&
-      (immediate ||
-        noteSequenceAtLastRun < 0 ||
-        newNotes >= MIN_EVENTS_PER_NARRATION ||
-        Date.now() - lastRunAt >= MIN_INTERVAL_MS)
-    );
-  };
-
   // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
   const scheduleRetry = (delayMs: number, immediate: boolean) => {
     retryImmediate ||= immediate;
     if (retryTimer !== undefined) {
       clearTimeout(retryTimer);
       retryTimer = undefined;
-    }
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
-      retryImmediate = false;
-      return;
     }
     retryTimer = setTimeout(
       () => {
@@ -236,7 +220,14 @@ function createProgressNarrator(params: {
       pendingImmediate ||= runImmediately;
       return;
     }
-    if (!shouldRunNow(runImmediately)) {
+    if (activity.noteSequence <= Math.max(0, noteSequenceAtLastRun)) {
+      return;
+    }
+    const remainingInterval = MIN_INTERVAL_MS - (Date.now() - lastRunAt);
+    if (!runImmediately && noteSequenceAtLastRun >= 0 && remainingInterval > 0) {
+      // Coalesce ordinary tool bursts, but flush the latest notes even if no
+      // further event arrives. First updates and failures keep their urgency.
+      scheduleRetry(remainingInterval, false);
       return;
     }
     if (narrationCount >= MAX_NARRATIONS_PER_TURN) {

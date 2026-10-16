@@ -9,7 +9,7 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
@@ -24,6 +24,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   recovery?: true;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
+  markPhase?: (phase: string) => void;
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
@@ -56,15 +57,17 @@ export async function syncSessionRepositoryWorkspace(params: {
   params.assertCurrent();
   const github = prepared
     ? undefined
-    : await prepareWorkerGitHubBinding({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        assertCurrent: () => {
-          params.assertCurrent();
-          return true;
-        },
-      });
+    : (
+        await prepareGitHubPublicationFact({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          assertCurrent: () => {
+            params.assertCurrent();
+            return true;
+          },
+        })
+      )?.github;
   params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",
@@ -91,6 +94,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       authorize: params.assertCurrent,
     });
   };
+  params.markPhase?.("repositorySync");
   const synced = repository.checkpointRef
     ? await withSessionRepositoryCheckpoint(
         { workspaceId: repository.workspaceId, includePublication: true },
@@ -130,15 +134,18 @@ export async function syncSessionRepositoryWorkspace(params: {
     }
     return synced;
   }
+  params.markPhase?.("repositoryQuiesce");
   const quiescence = await params.tunnel.quiesceWorkspace(synced.remoteWorkspaceDir);
   let reconciliation: Awaited<ReturnType<WorkerTunnelHandle["reconcileWorkspace"]>> | undefined;
   try {
     params.assertCurrent();
+    params.markPhase?.("repositoryReconcile");
     reconciliation = await params.tunnel.reconcileWorkspace({
       remoteWorkspaceDir: synced.remoteWorkspaceDir,
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        markPhase: params.markPhase,
         authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
@@ -150,14 +157,19 @@ export async function syncSessionRepositoryWorkspace(params: {
           }),
       },
     });
+    params.markPhase?.("repositoryQuiescenceRenewal");
     await quiescence.assertActive();
+    params.markPhase?.("repositoryVerification");
     await reconciliation.verifyStable();
+    params.markPhase?.("repositoryLocalVerification");
     await reconciliation.verifyLocalStable();
     params.assertCurrent();
+    params.markPhase?.("repositoryAcceptance");
     await reconciliation.publishStagedResult();
     params.assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
+    params.markPhase?.("repositoryCleanup");
     try {
       await reconciliation?.discardPreparedStagedResult();
     } finally {

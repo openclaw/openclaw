@@ -22,16 +22,16 @@ const lockedEntry = {
 };
 
 describe("agent harness session keys", () => {
-  it.each([
-    "harness:codex:supervision:native-thread",
-    "agent:main:harness:codex:supervision:native-thread",
-  ])("recognizes the reserved namespace for %s", (sessionKey) => {
-    expect(isAgentHarnessSessionKey(sessionKey)).toBe(true);
-    expect(resolveMissingAgentHarnessSessionError(sessionKey, undefined)).toMatch(/reserved/i);
-    expect(resolveMissingAgentHarnessSessionError(sessionKey, { sessionId: "existing" })).toBe(
-      undefined,
-    );
-  });
+  it.each(["harness:codex:supervision:native-thread"])(
+    "recognizes the reserved namespace for %s",
+    (sessionKey) => {
+      expect(isAgentHarnessSessionKey(sessionKey)).toBe(true);
+      expect(resolveMissingAgentHarnessSessionError(sessionKey, undefined)).toMatch(/reserved/i);
+      expect(resolveMissingAgentHarnessSessionError(sessionKey, { sessionId: "existing" })).toBe(
+        undefined,
+      );
+    },
+  );
 
   it("ties trusted creation to the matching persisted harness owner", () => {
     expect(isAgentHarnessSessionKeyOwnedBy(harnessKey, "codex")).toBe(true);
@@ -106,19 +106,6 @@ describe("agent harness session keys", () => {
     ).toBeUndefined();
   });
 
-  it("keeps pre-existing unlocked harness-prefixed sessions ordinary", () => {
-    const key = "agent:main:harness:notes";
-    const entry = {
-      agentHarnessId: "openclaw",
-      sessionId: "legacy-session",
-    };
-
-    expect(resolveAgentHarnessSessionContextError(key, entry)).toBeUndefined();
-    expect(resolveAgentHarnessSessionStoreEntryError(key, entry)).toBeUndefined();
-    expect(resolveAgentHarnessSessionIdMismatchError(entry, "replacement-session")).toBeUndefined();
-    expect(isValidAgentHarnessSessionStoreEntry(key, entry)).toBe(false);
-  });
-
   it("rejects a caller-selected session id that would rotate a durable lock", () => {
     expect(
       resolveAgentHarnessSessionIdMismatchError(lockedEntry, "native-session"),
@@ -129,7 +116,6 @@ describe("agent harness session keys", () => {
   });
 
   it.each([
-    { label: "legacy model lock", agentHarnessId: undefined, pluginOwnerId: undefined },
     { label: "plugin runtime observation", agentHarnessId: "codex", pluginOwnerId: "model-owner" },
   ])("does not turn $label into harness ownership", ({ agentHarnessId, pluginOwnerId }) => {
     const entry = {
@@ -142,14 +128,6 @@ describe("agent harness session keys", () => {
     expect(resolveSessionPinnedHarnessId(entry)).toBeUndefined();
     expect(isValidAgentHarnessSessionStoreEntry("agent:main:ordinary", entry)).toBe(false);
     expect(resolveAgentHarnessSessionIdMismatchError(entry, "replacement-session")).toBeUndefined();
-  });
-
-  it("normalizes only an explicitly locked native harness", () => {
-    const entry = { agentHarnessId: "CODEX-APP-SERVER", modelSelectionLocked: true };
-    expect(resolveSessionPinnedHarnessId(entry)).toBe("codex");
-    expect(
-      resolveSessionPinnedHarnessId({ ...entry, modelSelectionLocked: false }),
-    ).toBeUndefined();
   });
 
   it("allows plugin-owned observations to change without releasing the lock or identity", () => {

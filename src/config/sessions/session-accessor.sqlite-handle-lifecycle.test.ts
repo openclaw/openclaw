@@ -14,6 +14,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   applySessionEntryLifecycleMutation,
   appendTranscriptMessage,
@@ -75,6 +77,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKey: "agent:main:handle-session",
       storePath: path.join(tempDirs.make("openclaw-session-handle-"), "sessions.json"),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
   });
@@ -83,6 +86,7 @@ describe("SQLite session handle lifecycle", () => {
     archiveMaterializationHook.afterMaterialize = undefined;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("releases a transcript read after JSON parsing fails mid-stream", async () => {
@@ -139,8 +143,10 @@ describe("SQLite session handle lifecycle", () => {
         withTranscriptWriteLock(scope, async (transcript) => {
           const count = messages.length;
           const keys = messages.map(({ message }) => message.idempotencyKey);
-          const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
-            query.startsWith("select ") ? "reads" : null,
+          const counter = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(database.db),
+            ["reads"],
+            (query) => (query.startsWith("select ") ? "reads" : null),
           );
           try {
             const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
@@ -186,6 +192,49 @@ describe("SQLite session handle lifecycle", () => {
       }
     },
   );
+
+  it("reads assistant run candidates alongside older idempotency keys", async () => {
+    const messages = [
+      {
+        eventId: "old-key",
+        message: { role: "assistant", content: "old answer", idempotencyKey: "old-delivery" },
+      },
+      {
+        eventId: "run-input",
+        message: { role: "user", content: "question", idempotencyKey: "source-run:user" },
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        eventId: `tool-${index}`,
+        message: {
+          role: "toolResult",
+          content: "Unneeded tool output ".repeat(128),
+          __openclaw: { runId: "source-run" },
+        },
+      })),
+      {
+        eventId: "run-answer",
+        message: {
+          role: "assistant",
+          content: "delivered answer",
+          __openclaw: { runId: "source-run" },
+        },
+      },
+    ];
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    const facts = await withTranscriptWriteLock(scope, (transcript) =>
+      transcript.readMessageFacts({
+        idempotencyKeys: ["old-delivery"],
+        sourceRunId: "source-run",
+      }),
+    );
+    expect(facts.sourceEvents).toMatchObject([{ id: "run-answer" }]);
+    expect(facts.messagesByIdempotencyKey.get("old-delivery")).toEqual({
+      role: "assistant",
+      content: "old answer",
+      idempotencyKey: "old-delivery",
+    });
+    expect(facts.anchorsByIdempotencyKey.get("old-delivery")?.entryId).toBe("old-key");
+  });
   it.each([
     ["missing projection", "DELETE FROM session_transcript_index_state"],
     ["ahead projection", "UPDATE session_transcript_index_state SET indexed_seq = 100"],
@@ -219,7 +268,7 @@ describe("SQLite session handle lifecycle", () => {
 
       await withTranscriptWriteLock(scope, async (transcript) => {
         const before = await transcript.readEvents();
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         if (kind === "events") {
           await expect(transcript.readEvents()).resolves.toEqual(before);
@@ -289,7 +338,7 @@ describe("SQLite session handle lifecycle", () => {
     );
     expect(drains).not.toHaveLength(0);
 
-    closeCachedOpenClawAgentDatabase(database, { eviction: true });
+    closeCachedOpenClawAgentDatabase(database);
     expect(database.db.isOpen).toBe(false);
     const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     writerRelease.resolve();
@@ -314,7 +363,7 @@ describe("SQLite session handle lifecycle", () => {
               if (closure === "database retirement") {
                 expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
               } else {
-                closeCachedOpenClawAgentDatabase(planningDatabase, { eviction: true });
+                closeCachedOpenClawAgentDatabase(planningDatabase);
                 expect(planningDatabase.db.isOpen).toBe(false);
               }
               return { ...currentEntry!, label: "built after close" };
@@ -439,7 +488,7 @@ describe("SQLite session handle lifecycle", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const closeHandle = vi.fn(() => {
       expect(database.db.isOpen).toBe(true);
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
     });
     archiveMaterializationHook.afterMaterialize = closeHandle;

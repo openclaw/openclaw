@@ -76,12 +76,6 @@ export async function readBackupRuns(env: NodeJS.ProcessEnv): Promise<BackupRunR
   if (!result) {
     return [];
   }
-  if (!result.ok) {
-    throw new Error(result.message);
-  }
-  if (result.type !== "backup.runs") {
-    throw new Error("Unexpected backup ledger read result");
-  }
   return result.runs;
 }
 

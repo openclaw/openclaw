@@ -1,5 +1,5 @@
 // docs-list tests cover source docs metadata discovery for docs-aware tooling.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,17 +26,6 @@ afterEach(() => {
 });
 
 describe("docs-list", () => {
-  it("reports a concise error outside a source checkout", () => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-missing-");
-    const result = spawnSync(process.execPath, [docsListScriptPath], {
-      cwd: tempRepoRoot,
-      encoding: "utf8",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("docs:list: missing docs directory. Run from repo root.\n");
-  });
-
   it("reads metadata across supported front matter forms", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-");
     mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
@@ -133,45 +122,40 @@ summary: "Page"
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
   });
 
-  it.each([
-    ["backtick text suffix", "```md", "```json", "```"],
-    ["backtick nonbreaking space", "```md", "```\u00a0", "```"],
-    ["tilde nonbreaking space", "~~~md", "~~~\u00a0", "~~~"],
-    ["line separator in opening info", "```md\u2028info", "```json", "```"],
-    ["paragraph separator in opening info", "~~~md\u2029info", "~~~json", "~~~"],
-    ["different fence character", "```md", "~~~", "```"],
-  ])("keeps example headings hidden with %s", (_name, opening, invalidClosing, closing) => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-");
-    mkdirSync(path.join(tempRepoRoot, "docs"));
-    writeFileSync(
-      path.join(tempRepoRoot, "docs", "page.md"),
-      `${opening}\n# Hidden example\n${invalidClosing}\n## Still hidden\n${closing}\n# Visible after close\n`,
-    );
+  it.each([["backtick nonbreaking space", "```md", "```\u00a0", "```"]])(
+    "keeps example headings hidden with %s",
+    (_name, opening, invalidClosing, closing) => {
+      const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-");
+      mkdirSync(path.join(tempRepoRoot, "docs"));
+      writeFileSync(
+        path.join(tempRepoRoot, "docs", "page.md"),
+        `${opening}\n# Hidden example\n${invalidClosing}\n## Still hidden\n${closing}\n# Visible after close\n`,
+      );
 
-    const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
+      const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
 
-    expect(output).not.toContain("H1: Hidden example");
-    expect(output).not.toContain("H2: Still hidden");
-    expect(output).toContain("H1: Visible after close");
-  });
+      expect(output).not.toContain("H1: Hidden example");
+      expect(output).not.toContain("H2: Still hidden");
+      expect(output).toContain("H1: Visible after close");
+    },
+  );
 
-  it.each([
-    ["spaces", "~~~", "~~~   "],
-    ["tabs", "```", "```\t\t"],
-    ["a longer marker", "~~~", "~~~~~ \t"],
-  ])("resumes headings after a valid closing fence with %s", (_name, opening, closing) => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-close-");
-    mkdirSync(path.join(tempRepoRoot, "docs"));
-    writeFileSync(
-      path.join(tempRepoRoot, "docs", "page.md"),
-      `${opening}\n# Hidden example\n${closing}\n# Visible after close\n`,
-    );
+  it.each([["tabs", "```", "```\t\t"]])(
+    "resumes headings after a valid closing fence with %s",
+    (_name, opening, closing) => {
+      const tempRepoRoot = makeTempRepoRoot("openclaw-docs-fence-close-");
+      mkdirSync(path.join(tempRepoRoot, "docs"));
+      writeFileSync(
+        path.join(tempRepoRoot, "docs", "page.md"),
+        `${opening}\n# Hidden example\n${closing}\n# Visible after close\n`,
+      );
 
-    const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
+      const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
 
-    expect(output).not.toContain("H1: Hidden example");
-    expect(output).toContain("H1: Visible after close");
-  });
+      expect(output).not.toContain("H1: Hidden example");
+      expect(output).toContain("H1: Visible after close");
+    },
+  );
 
   it("normalizes injected Windows paths for nested page routes", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-windows-");

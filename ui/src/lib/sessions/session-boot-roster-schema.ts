@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 
 const text = z.string().optional();
 const actor = z.object({ type: z.enum(["human", "agent", "system"]), id: text, label: text });
@@ -30,6 +31,7 @@ const row = z.object({
   spawnedCwd: text,
   execNode: text,
   execCwd: text,
+  deviceFolder: z.object({ deviceId: z.string(), path: z.string() }).optional(),
   worktree: z.object({ id: z.string(), branch: z.string(), repoRoot: z.string() }).optional(),
   repository: z.object({ url: z.string(), ref: text, branch: z.string() }).optional(),
   thinkingLevel: text,
@@ -48,7 +50,7 @@ export const bootRosterSchema = z.object({
       modelProvider: z.string().nullable(),
       contextTokens: z.number().nullable(),
     }),
-    sessions: row.array().max(200),
+    sessions: row.array().max(SIDEBAR_SESSION_ROSTER_LIMIT),
   }),
   groups: z.string().array(),
   groupSettings: z.object({ name: z.string(), position: z.number() }).array(),

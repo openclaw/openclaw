@@ -12,7 +12,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { executeSharedStateCommand } from "../state/openclaw-state-worker-runtime.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -23,7 +22,7 @@ import {
   resolveRememberedTuiSessionKey,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
-import { clearRetiredTuiPointers } from "./tui-last-session.kernel.js";
+import { clearRetiredTuiPointers, tuiLastSessionOperations } from "./tui-last-session.kernel.js";
 
 const tempDirs: string[] = [];
 
@@ -40,6 +39,31 @@ afterEach(async () => {
 });
 
 describe("tui last session state", () => {
+  it("the worker confines a credential-shaped scope to the TUI namespace", async () => {
+    const stateDir = await makeTempStateDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const context = captureOpenClawStateWorkerContext(options);
+    const open = () => database;
+    const unused = () => {
+      throw new Error("Unexpected writer route");
+    };
+    runWithSqliteWorkerStateContext(context, () =>
+      tuiLastSessionOperations["tui.lastSession.write"](
+        { scopeKey: "authProfiles.store", sessionKey: "agent:main:scoped" },
+        {
+          open,
+          write: unused,
+          writeAdmitted: unused,
+          stateOptions: () => ({ ...options, path: database.path }),
+        },
+      ),
+    );
+    expect(readConfigMachineStateWithMetadata("authProfiles.store", options)).toBeUndefined();
+    expect(
+      readConfigMachineStateWithMetadata("tui.lastSession.authProfiles.store", options)?.value,
+    ).toBe("agent:main:scoped");
+  });
   it("reads and clears remembered sessions without creating state on a fresh install", async () => {
     const stateDir = await makeTempStateDir();
 
@@ -230,13 +254,17 @@ describe("tui last session state", () => {
     });
     expect(
       runWithSqliteWorkerStateContext(context, () =>
-        executeSharedStateCommand(
-          { type: "tui.lastSession.clear", input: { retiredSessionKeys: ["agent:main:retired"] } },
-          { databasePath: context.admission.databasePath },
-          open,
-          open,
-          open,
-          open,
+        tuiLastSessionOperations["tui.lastSession.clear"](
+          { retiredSessionKeys: ["agent:main:retired"] },
+          {
+            open,
+            write: open,
+            writeAdmitted: open,
+            stateOptions: () => ({
+              path: context.admission.databasePath,
+              env: context.environment,
+            }),
+          },
         ),
       ),
     ).toBe(0);

@@ -1,7 +1,6 @@
 // Cron observations use the registry's worker snapshot and existing query policies.
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   listDescendantRunsForRequesterFromRuns,
 } from "../../agents/subagents/registry/subagent-registry-queries.js";
@@ -32,17 +31,6 @@ function withCronDescendantRuns<T>(
   );
 }
 
-export function readDescendantExecutionState(sessionKey: string, runStartedAt: number) {
-  return withCronDescendantRuns(sessionKey, (runs) => ({
-    hasFreshDescendants: listDescendantRunsForRequesterFromRuns(runs, sessionKey).some((entry) => {
-      const descendantStartedAt =
-        typeof entry.execution.startedAt === "number" ? entry.execution.startedAt : entry.createdAt;
-      return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-    }),
-    hasActiveDescendants: countActiveDescendantRunsFromRuns(runs, sessionKey) > 0,
-  }));
-}
-
 export function listDescendantRunsForRequester(sessionKey: string): Promise<SubagentRunRecord[]> {
   return withCronDescendantRuns(sessionKey, (runs) =>
     listDescendantRunsForRequesterFromRuns(runs, sessionKey),
@@ -59,8 +47,6 @@ export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean
 export async function prepareCronDescendantDeletion(sessionKeys: readonly string[]) {
   const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
   return {
-    basis: prepared.basis,
-    dispose: () => prepared.dispose(),
     hasUnsettled(sessionKey: string) {
       const current = prepared.consume((runs) =>
         hasDescendantRunAwaitingSettleFromRuns(new Map(runs), sessionKey),

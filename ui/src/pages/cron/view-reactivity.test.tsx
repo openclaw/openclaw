@@ -1,4 +1,3 @@
-import WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -124,17 +123,17 @@ it("retains history controls and forwards the current transcript target after re
   const button = getElement(view.container, ".cron-run-entry button", HTMLButtonElement);
   const option = getElement(
     view.container,
-    '[data-filter="status"] wa-dropdown-item[value="option:ok"]',
-    WaDropdownItem,
+    '[data-filter="status"] [data-value="option:ok"]',
+    HTMLButtonElement,
   );
   const refreshed = { ...first, summary: "Updated summary" };
   setProps((previous) => ({ ...previous, runs: [refreshed], runsStatuses: ["ok"] }));
   flush();
   expect(view.container.querySelector(".cron-run-entry button")).toBe(button);
-  expect(
-    view.container.querySelector('[data-filter="status"] wa-dropdown-item[value="option:ok"]'),
-  ).toBe(option);
-  expect(option.checked).toBe(true);
+  expect(view.container.querySelector('[data-filter="status"] [data-value="option:ok"]')).toBe(
+    option,
+  );
+  expect(option.getAttribute("aria-checked")).toBe("true");
   expect(view.container.querySelector(".cron-run-entry__body")?.textContent).toContain(
     "Updated summary",
   );

@@ -111,6 +111,9 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       session: {
         resolveStorePath: vi.fn(() => testTempPath("sessions.json")),
         getSessionEntry,
+        getSessionEntryAsync: vi.fn(
+          async (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+        ),
         prepareSessionEntryPatch,
       },
       runEmbeddedAgent,

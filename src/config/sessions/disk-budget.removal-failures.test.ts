@@ -391,12 +391,17 @@ describe("session artifact deletion failures", () => {
       }
       const rmSpy = rejectRemoval(blocked, "EACCES");
       try {
+        const preview = await runSessionsCleanup({
+          cfg,
+          opts: { dryRun: true, enforce: true },
+          targets: [{ agentId: "main", storePath }],
+        });
         const result = await runSessionsCleanup({
           cfg,
           opts: { enforce: true },
           targets: [{ agentId: "main", storePath }],
         });
-        expect(result.previewResults[0]?.summary.unreferencedArtifacts).toMatchObject({
+        expect(preview.previewResults[0]?.summary.unreferencedArtifacts).toMatchObject({
           removedFiles: 2,
           freedBytes: 160,
         });

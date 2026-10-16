@@ -1,20 +1,24 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
+import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
+import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
+import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
 import {
-  CommandPaletteLoadingState,
-  renderCommandPaletteLoading,
-} from "../app/app-shell-command-palette-loading.ts";
+  COMMAND_PALETTE_ELEMENT,
+  createLazyCustomElementRequests,
+} from "../app/lazy-custom-element.ts";
 import { createWebPushCapability } from "../app/web-push.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 let restoreDialog: () => void;
 let readers: FileReader[];
@@ -35,6 +39,26 @@ afterEach(() => {
   sessionStorage.clear();
   vi.restoreAllMocks();
 });
+
+function createLoading(
+  host: Pick<ConstructorParameters<typeof ShellCommandPaletteOwner>[0], "context"> = {},
+) {
+  const { state, dispose } = createRoot((disposeRoot) => ({
+    state: new ShellCommandPaletteOwner(
+      {
+        ...host,
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      },
+      { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
+    ).loading,
+    dispose: disposeRoot,
+  }));
+  onTestFinished(dispose);
+  return state;
+}
 
 function paste(input: HTMLTextAreaElement, files: File[] = [], text = "") {
   const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -123,10 +147,10 @@ describe("command palette paste-only images", () => {
       ).toBe(false);
       if (!uploadsEnabled) {
         expect(paste(input, [image()]).defaultPrevented).toBe(true);
-        const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
+        const loading = createLoading({ context });
         loading.begin();
         const loadingInput = document.createElement("textarea");
-        loadingInput.addEventListener("paste", loading.handlePaste);
+        loadingInput.addEventListener("paste", (event) => loading.handlePaste(event));
         expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
         expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
       }
@@ -266,7 +290,7 @@ describe("command palette paste-only images", () => {
   ] as const)("settles a cold submit exactly once after %s preparation", async (outcome) => {
     const delayedPolicy = outcome === "policy-delayed" || outcome === "text-policy-delayed";
     const policy = createDeferred<{ sessionPlacement: Record<string, never> }>();
-    const { palette, context } = await mount(
+    const { palette, context, publish } = await mount(
       delayedPolicy ? { placementPolicy: () => policy.promise } : {},
     );
     palette.togglePalette();
@@ -279,13 +303,18 @@ describe("command palette paste-only images", () => {
         },
       });
     }
-    const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
+    const state = createLoading();
     const loader = document.body.appendChild(document.createElement("div"));
     state.begin();
-    render(
-      renderCommandPaletteLoading(state, () => state.clear()),
-      loader,
+    const loadingView = mountSolid(
+      () =>
+        createComponent(CommandPaletteLoading, {
+          state,
+          onClose: () => state.clear(),
+        }),
+      { container: loader },
     );
+    flush();
     const coldInput = loader.querySelector("textarea")!;
     if (outcome !== "ready" && outcome !== "policy-delayed") {
       coldInput.value = "Keep every image";
@@ -326,6 +355,8 @@ describe("command palette paste-only images", () => {
     if (delayedPolicy) {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       policy.resolve({ sessionPlacement: {} });
+      await context.agents.refreshList();
+      publish();
     }
     if (outcome === "oversized" || outcome === "partial") {
       // A valid text/remaining-image prompt could be sent explicitly, but the
@@ -336,7 +367,10 @@ describe("command palette paste-only images", () => {
         ),
       );
       expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-        outcome === "partial" ? 1 : 0,
+        outcome === "partial" ? 2 : 1,
+      );
+      expect(palette.querySelector(".chat-attachment-failures")?.textContent).toContain(
+        "oversized.gif",
       );
     }
     if (outcome === "ready" || delayedPolicy) {
@@ -362,6 +396,6 @@ describe("command palette paste-only images", () => {
     } else {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
     }
-    render(nothing, loader);
+    loadingView.unmount();
   });
 });

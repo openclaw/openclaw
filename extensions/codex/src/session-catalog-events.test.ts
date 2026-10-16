@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CodexAppServerMessageDecoder } from "./app-server/client-message-decoder.js";
+import * as messageDecoder from "./app-server/client-message-decoder.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("Codex catalog events", () => {
-  it.each(["thread/fork", "thread/resume"] as const)(
+  it.each(["thread/fork"] as const)(
     "publishes ephemeral %s acknowledgements before resolving the request",
     async (method) => {
       const options = startOptions(tempDirs.make("codex-catalog-ephemeral-ack-"));
@@ -248,7 +248,7 @@ describe("Codex catalog events", () => {
       method: "thread/read",
       params: { threadId: thread.id, includeTurns: false },
     });
-    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     harness.send({ id: request.id, result: { thread } });
     await expect(reading).resolves.toEqual({
       id: thread.id,

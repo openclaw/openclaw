@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } fr
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { YouTubeVideo } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import "./youtube-video-card.css";
 
 type YouTubeVideoProps = { video?: YouTubeVideo; videoTitle: string; enabled: boolean };
@@ -17,6 +17,7 @@ function YouTubeVideoContent(
   const [wideEnough, setWideEnough] = createSignal(true);
   const canPlay = () => props.enabled && wideEnough();
   const title = () => props.videoTitle.trim() || t("chat.youtube.video");
+  const sourceUrl = createMemo(() => props.video?.watchUrl);
   const playerUrl = createMemo(() => {
     if (!props.video) {
       return undefined;
@@ -39,13 +40,10 @@ function YouTubeVideoContent(
     activePlayers.set(host.ownerDocument, stopPlayback);
     setPlaying(true);
   };
-  createEffect(
-    () => props.video?.watchUrl,
-    () => {
-      stopPlayback();
-      setThumbnailFailed(false);
-    },
-  );
+  createEffect(sourceUrl, () => {
+    stopPlayback();
+    setThumbnailFailed(false);
+  });
   createEffect(canPlay, (enabled) => {
     if (!enabled) {
       stopPlayback();

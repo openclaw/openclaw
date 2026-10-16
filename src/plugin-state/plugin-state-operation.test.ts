@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -112,16 +113,6 @@ describe("plugin state worker operations", () => {
     }
   });
 
-  it("keeps namespace scans coherent with eviction and deletion", async () => {
-    const store = open("cache", { maxEntries: 1, overflowPolicy: "evict-oldest" });
-    await store.register("old", "old");
-    const operation = store.createOperation<FixtureOperations>([store], handler);
-    expect(
-      (await operation.execute({ type: "cache", input: undefined }, { writeStores: [0] })).value,
-    ).toEqual([["old"], ["new"], undefined, []]);
-    expect(await store.entries()).toEqual([]);
-  });
-
   it("keeps read-only absent sources noncreating and uses only an explicit missing value", async () => {
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("absent") };
     const store = open("absent", { env });
@@ -146,8 +137,6 @@ describe("plugin state worker operations", () => {
     const read = () =>
       operation.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] });
     const before = await read();
-    before.assertCurrent();
-    await workerClient.sweepExpiredPluginStateEntriesInWorker({ env: state.env });
     before.assertCurrent();
     const pending = store.register("key", "revoked");
     expect(before.assertCurrent).toThrow("no longer current");
@@ -396,11 +385,20 @@ describe("plugin state worker operations", () => {
     const second = open("receipt-second");
     await first.register("key", "original");
     const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const guard = await preparePluginStateRead(first, "key");
+    if (!guard) {
+      throw new Error("Expected an owner-published state guard");
+    }
     vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(() => {});
-    await expect(
-      operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
-    ).rejects.toThrow("no committed receipt");
-    expect(await first.lookup("key")).toBeUndefined();
-    expect(await second.lookup("key")).toBe("committed");
+    try {
+      await expect(
+        operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
+      ).rejects.toThrow("no committed receipt");
+      expect(await first.lookup("key")).toBeUndefined();
+      expect(await second.lookup("key")).toBe("committed");
+      expect(() => guard.read()).toThrow("unavailable");
+    } finally {
+      guard.release();
+    }
   });
 });

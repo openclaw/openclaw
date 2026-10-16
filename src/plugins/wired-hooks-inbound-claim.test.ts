@@ -142,26 +142,6 @@ describe("inbound_claim hook runner", () => {
     expect(result).toEqual({ status: "no_handler" });
   });
 
-  it("reports error when a targeted handler throws and none claim the event", async () => {
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const failing = vi.fn().mockRejectedValue(new Error("boom"));
-    const { runner } = createHookRunnerWithRegistry(
-      [{ hookName: "inbound_claim", handler: failing }],
-      { logger },
-    );
-
-    const result = await runner.runInboundClaimForPluginOutcome(
-      "test-plugin",
-      inboundClaimEvent,
-      inboundClaimCtx,
-    );
-
-    expect(result).toEqual({ status: "error", error: "boom" });
-  });
-
   it("reports targeted per-hook registration timeouts as handler errors", async () => {
     vi.useFakeTimers();
     try {

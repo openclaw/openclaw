@@ -58,7 +58,7 @@ function resolveOriginTarget(
 
 describe("createDiscordNativeApprovalAdapter", () => {
   it("subscribes the native runtime to system-agent approval events", () => {
-    expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
+    expect(getDiscordApprovalCapability().nativeRuntimeAsync?.eventKinds).toContain("system-agent");
   });
 
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
@@ -110,9 +110,9 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
   });
 
-  it("honors ownerAllowFrom fallback when gating approval requests", () => {
+  it("honors ownerAllowFrom fallback when gating approval requests", async () => {
     expect(
-      shouldHandleDiscordApprovalRequest({
+      await shouldHandleDiscordApprovalRequest({
         cfg: {
           commands: {
             ownerAllowFrom: ["discord:123"],
@@ -133,6 +133,55 @@ describe("createDiscordNativeApprovalAdapter", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("lets only the current typed Discord owner approve owner-derived exec requests", async () => {
+    const capability = getDiscordApprovalCapability();
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:user:555555555"] },
+      channels: {
+        discord: {
+          execApprovals: { enabled: "auto" },
+          accounts: { main: {}, ops: { execApprovals: { approvers: ["777777777"] } } },
+        },
+      },
+    } as OpenClawConfig;
+    const authorize = (
+      senderId: string,
+      options: { cfg?: OpenClawConfig; accountId?: string } = {},
+    ) =>
+      capability.authorizeActorAction?.({
+        cfg: options.cfg ?? cfg,
+        accountId: options.accountId ?? "main",
+        senderId,
+        action: "approve",
+        approvalKind: "exec",
+      }).authorized;
+    const request = {
+      id: "approval-1",
+      request: { command: "pwd", turnSourceChannel: "discord", turnSourceAccountId: "main" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    };
+
+    expect(
+      await createDiscordNativeApprovalAdapter().native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "main",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual([{ to: "555555555" }]);
+    expect(authorize("555555555")).toBe(true);
+    expect(authorize("666666666")).toBe(false);
+    // Explicit account approvers still replace the global owner fallback.
+    expect(authorize("555555555", { accountId: "ops" })).toBe(false);
+    // Authority is read from the config current at decision time.
+    expect(
+      authorize("555555555", {
+        cfg: { ...cfg, commands: { ownerAllowFrom: ["discord:user:888888888"] } },
+      }),
+    ).toBe(false);
   });
 
   it("describes the correct Discord exec-approval setup path", () => {

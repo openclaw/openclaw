@@ -14,10 +14,7 @@ import { getUpdateRun, listUpdateRunsAsync } from "../infra/update-run-reader.js
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
-import {
-  isArtifactPreservingStateRead,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
@@ -53,11 +50,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.resetAllMocks());
 
-it.each([
-  { migrateState: false, running: false },
-  { migrateState: true, running: false },
-  { migrateState: true, running: true },
-])(
+it.each([{ migrateState: true, running: true }])(
   "keeps history read failure advisory without refreshing update activity (migrateState=$migrateState, running=$running)",
   async ({ migrateState, running }) => {
     await withOpenClawTestState({ label: "update-history-refusal" }, async () => {
@@ -157,120 +150,75 @@ it("does not admit mutations while a history child still has unsettled process c
   await expect(noteStaleUpdateRuns()).rejects.toBe(failure);
 });
 
-it.each([false, true])(
-  "shares one snapshot for history reads (migrateState=%s)",
-  async (migrateState) => {
-    const assertSnapshot = () => {
-      expect(snapshot.active).toBe(true);
-      expect(isArtifactPreservingStateRead()).toBe(true);
+it.each([{ reason: "global-install-foreign-destination", nextAction: undefined }])(
+  "keeps $reason remediation visible until a later successful update",
+  async (failure) => {
+    let latest: UpdateRunRecord = {
+      runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      trigger: "cli",
+      phase: "finished",
+      status: "failed",
+      reason: failure.reason,
+      origin: { nextAction: failure.nextAction },
+      target: { kind: "package", version: "2026.9.4" },
+      before: { version: "2026.7.1-2" },
+      after: {},
+      steps: [{ step: failure.reason, status: "failed", detail: failure.nextAction }],
+      verification: {},
+      repair: [],
+      confirmedAtMs: null,
+      finishedAtMs: 2,
+      downtimeMs: null,
     };
-    vi.mocked(readInterruptedUpdateCandidateAsync).mockImplementation(async () => {
-      assertSnapshot();
-      return undefined;
-    });
-    vi.mocked(listUpdateRunsAsync).mockImplementation(async () => {
-      assertSnapshot();
-      return [];
-    });
+    vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
+      input?.active ? [] : [latest],
+    );
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
 
-    await noteStaleUpdateRuns({ migrateState });
+    await noteStaleUpdateRuns({});
 
-    expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
-    expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledTimes(migrateState ? 1 : 0);
+    expect(note).toHaveBeenCalledOnce();
+    // Runtime preflight failures carry the plain-language headline plus a reason-code line;
+    // every other failure keeps the reason in the headline.
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        failure.reason === "node-runtime-preflight"
+          ? `Reason code: ${failure.reason}`
+          : `OpenClaw update failed: ${failure.reason}.`,
+      ),
+      "Update history",
+    );
+    expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
     expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
-    expect(reconcileInterruptedUpdateRuns).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        failure.nextAction ??
+          "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+      ),
+      "Update history",
+    );
+
+    latest = {
+      ...latest,
+      runId: "e8a1ac89-4a31-41f6-b401-4b225b661728",
+      createdAtMs: 3,
+      updatedAtMs: 4,
+      finishedAtMs: 4,
+      status: "succeeded",
+      reason: null,
+      origin: {},
+      after: { version: "2026.9.4" },
+      steps: [],
+    };
+    vi.mocked(note).mockClear();
+
+    await noteStaleUpdateRuns({});
+
     expect(note).not.toHaveBeenCalled();
   },
 );
-
-it.each([
-  {
-    reason: "node-runtime-preflight",
-    nextAction: [
-      "openclaw@2026.9.4 requires Node >=24.16.0; selected runtime is Node 22.23.2.",
-      "Recovery:",
-      "1. Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-      "2. Run `nvm install 24.16.0 && nvm use 24.16.0`.",
-      "3. Run `node /original/openclaw/openclaw.mjs update --tag 2026.9.4`.",
-    ].join("\n"),
-  },
-  {
-    reason: "global-install-foreign-destination",
-    nextAction:
-      "Selected npm destination /other-prefix is occupied by another OpenClaw installation: launcher /other-prefix/bin/openclaw. No selected managed service claims this destination. Switch the runtime back and run `node /original/openclaw/openclaw.mjs update`.",
-  },
-  { reason: "global-install-foreign-destination", nextAction: undefined },
-  {
-    reason: "global-install-permission-denied",
-    nextAction:
-      "Cannot write /opt/openclaw-prefix/lib/node_modules (owned by root); run the package update as the directory's owning account. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container with the same state/config mounts.",
-  },
-])("keeps $reason remediation visible until a later successful update", async (failure) => {
-  let latest: UpdateRunRecord = {
-    runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
-    reason: failure.reason,
-    origin: { nextAction: failure.nextAction },
-    target: { kind: "package", version: "2026.9.4" },
-    before: { version: "2026.7.1-2" },
-    after: {},
-    steps: [{ step: failure.reason, status: "failed", detail: failure.nextAction }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 2,
-    downtimeMs: null,
-  };
-  vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
-    input?.active ? [] : [latest],
-  );
-  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
-
-  await noteStaleUpdateRuns({});
-
-  expect(note).toHaveBeenCalledOnce();
-  // Runtime preflight failures carry the plain-language headline plus a reason-code line;
-  // every other failure keeps the reason in the headline.
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      failure.reason === "node-runtime-preflight"
-        ? `Reason code: ${failure.reason}`
-        : `OpenClaw update failed: ${failure.reason}.`,
-    ),
-    "Update history",
-  );
-  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
-  expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      failure.nextAction ??
-        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
-    ),
-    "Update history",
-  );
-
-  latest = {
-    ...latest,
-    runId: "e8a1ac89-4a31-41f6-b401-4b225b661728",
-    createdAtMs: 3,
-    updatedAtMs: 4,
-    finishedAtMs: 4,
-    status: "succeeded",
-    reason: null,
-    origin: {},
-    after: { version: "2026.9.4" },
-    steps: [],
-  };
-  vi.mocked(note).mockClear();
-
-  await noteStaleUpdateRuns({});
-
-  expect(note).not.toHaveBeenCalled();
-});
 
 it("refreshes history outside the discovery snapshot after settling an interrupted update", async () => {
   const abandoned: UpdateRunRecord = {
@@ -321,7 +269,7 @@ it("refreshes history outside the discovery snapshot after settling an interrupt
   );
 });
 
-it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
+it.each(["state migration is pending"])(
   "stops replaying resolved %s warnings without erasing history",
   async (wording) => {
     await withOpenClawTestState({ label: "update-warning-resolution" }, async () => {

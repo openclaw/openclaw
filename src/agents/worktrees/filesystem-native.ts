@@ -11,9 +11,11 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
+import { setWorktreePreparationTemplate } from "./preparation-timing.js";
 
 type ReadRuntime = {
   pool?: WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>;
@@ -81,9 +83,8 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
   assertActive(options);
   // A process owns its descriptor table. Never terminate a JS worker while
   // fs-safe's native task still borrows descriptors opened by that worker.
-  const result = await runCommandBuffersWithTimeout(
-    [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())],
-    {
+  const result = await withChildProcessOperation("worktree.filesystem", () =>
+    runCommandBuffersWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())], {
       input: JSON.stringify(command),
       beforeInput: () => assertActive(options),
       signal: options.signal,
@@ -92,7 +93,7 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
       killProcessTree: true,
       requireProcessTreeExtinction: true,
       maxOutputBytes: 64 * 1024,
-    },
+    }),
   );
   assertActive(options);
   if (result.code !== 0 || result.termination !== "exit") {
@@ -112,6 +113,14 @@ export const nativeWorktreeFilesystem = {
     if (reply.type !== "probe") {
       throw new Error("Native worktree check returned an invalid reply");
     }
+    setWorktreePreparationTemplate("unavailable", {
+      backend: reply.backend ?? "none",
+      reason: reply.backend
+        ? "filesystem-supported"
+        : reply.nativeMode === "off"
+          ? "native-disabled"
+          : "filesystem-unsupported-or-native-unavailable",
+    });
     return reply.backend;
   },
   async readAcl(this: void, path: string, options: WorktreeFilesystemOptions) {

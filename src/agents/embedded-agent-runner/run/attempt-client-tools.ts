@@ -1,4 +1,5 @@
 import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -178,7 +179,13 @@ export function prepareEmbeddedAttemptClientTools(params: {
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {
-      log.info(
+      emitTrustedDiagnosticEvent({
+        type: "tool.catalog",
+        source: "client",
+        mode: params.codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
+        toolCount: clientToolSearch.catalogToolCount,
+      });
+      log.debug(
         params.codeModeControlsEnabledForRun
           ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
           : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,

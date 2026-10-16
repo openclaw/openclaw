@@ -72,40 +72,66 @@ function createHandler(cfg: OpenClawConfig, createDebouncer = createInboundDebou
   return createMSTeamsMessageHandler(deps);
 }
 
+function createClockedDebounce() {
+  vi.useFakeTimers();
+  let drain = async () => {};
+  const createDebouncer: typeof createInboundDebouncer = (options) => {
+    const debouncer = createInboundDebouncer(options);
+    drain = debouncer.drain;
+    return debouncer;
+  };
+  const flush = async (milliseconds: number) => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+    await drain();
+  };
+  return {
+    createDebouncer,
+    flush,
+    async close() {
+      try {
+        await flush(40);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  };
+}
+
 describe("Microsoft Teams drain claim ownership", () => {
   beforeEach(() => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
   it("fans merged-flush adoption to every constituent claim", async () => {
-    const handler = createHandler({
-      messages: { inbound: { debounceMs: 40 } },
-      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const clock = createClockedDebounce();
+    const handler = createHandler(
+      {
+        messages: { inbound: { debounceMs: 40 } },
+        channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
+      },
+      clock.createDebouncer,
+    );
     const first = createLifecycle();
     const second = createLifecycle();
+    try {
+      const results = [
+        await handler(context(directActivity("activity-first", "part one")), first),
+        await handler(context(directActivity("activity-second", "part two")), second),
+      ];
 
-    const results = [
-      await handler(context(directActivity("activity-first", "part one")), first),
-      await handler(context(directActivity("activity-second", "part two")), second),
-    ];
-
-    expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
-    await vi.waitFor(
-      () => {
-        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-          1,
-        );
-        expect(first.onAdopted).toHaveBeenCalledTimes(1);
-        expect(second.onAdopted).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000 },
-    );
-    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
-      .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
-    expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
-    expect(first.onAbandoned).not.toHaveBeenCalled();
-    expect(second.onAbandoned).not.toHaveBeenCalled();
+      expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
+      await clock.flush(40);
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(first.onAdopted).toHaveBeenCalledTimes(1);
+      expect(second.onAdopted).toHaveBeenCalledTimes(1);
+      const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
+        .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
+      expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
+      expect(first.onAbandoned).not.toHaveBeenCalled();
+      expect(second.onAbandoned).not.toHaveBeenCalled();
+    } finally {
+      await clock.close();
+    }
   });
 
   it("dispatches HTML-only text through the immediate debounce flush without double stripping", async () => {
@@ -145,6 +171,7 @@ describe("Microsoft Teams drain claim ownership", () => {
   });
 
   it("completes a gated no-dispatch turn instead of stalling its claim", async () => {
+    const clock = createClockedDebounce();
     const { deps } = createMessageHandlerDeps(
       {
         channels: {
@@ -155,7 +182,7 @@ describe("Microsoft Teams drain claim ownership", () => {
         },
       } as OpenClawConfig,
       {
-        createInboundDebouncer,
+        createInboundDebouncer: clock.createDebouncer,
         resolveInboundDebounceMs: vi.fn(() => 20),
       },
     );
@@ -167,14 +194,17 @@ describe("Microsoft Teams drain claim ownership", () => {
       entities: [],
     }) as MSTeamsTurnContext["activity"];
 
-    const result = await handler(context(gatedActivity), lifecycle);
+    try {
+      const result = await handler(context(gatedActivity), lifecycle);
 
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: "deferred" });
+      await clock.flush(20);
+      expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1);
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+    } finally {
+      await clock.close();
+    }
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {

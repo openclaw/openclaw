@@ -18,7 +18,7 @@ import {
   addChannelAllowFromStoreEntry,
   createPluginStateKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -85,28 +85,6 @@ describe("registered native command routing through the message pipeline", () =>
       CommandBody: "/export-session",
       RawBody: "/export_session",
     });
-  });
-
-  it("authorizes paired DMs without marking the sender as an owner", async () => {
-    await addChannelAllowFromStoreEntry({
-      channel: "telegram",
-      entry: from.id,
-      accountId: "default",
-    });
-    const bot = await createBot(true, true, {
-      commands: { native: true },
-      channels: { telegram: { dmPolicy: "pairing", allowFrom: [], streaming: { mode: "off" } } },
-    });
-
-    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/status") });
-
-    expect(harness.replySpy).toHaveBeenCalledOnce();
-    const context = harness.replySpy.mock.calls[0]?.[0];
-    expect(context).toMatchObject({
-      CommandAuthorized: true,
-      CommandTurn: { kind: "native", body: "/status", authorized: true },
-    });
-    expect(context).not.toHaveProperty("OwnerAllowFrom");
   });
 
   it("routes /reset to the topic agent and chat session", async () => {
@@ -224,8 +202,8 @@ describe("registered native command routing through the message pipeline", () =>
         ...runtime,
         state: {
           ...runtime.state,
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-            const store = runtime.state.openKeyedStore<T>(options);
+          openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const store = runtime.state.openKeyedStoreV2<T>(options);
             if (options.namespace !== TELEGRAM_THREAD_BINDINGS_NAMESPACE) {
               return store;
             }
@@ -394,8 +372,8 @@ describe("registered native command routing through the message pipeline", () =>
           },
         },
       };
-      harness.listSkillCommandsForAgents.mockImplementation((params) => {
-        const commands = listSkillCommandsForAgents(params);
+      harness.prepareSkillCommandsForAgents.mockImplementation(async (params) => {
+        const commands = await prepareSkillCommandsForAgents(params);
         const beta = commands.find(({ skillName }) => skillName === "beta-skill");
         if (beta) {
           beta.descriptionLocalizations = { ko: "베타 스킬" };

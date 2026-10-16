@@ -1,8 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
@@ -17,7 +19,6 @@ import {
   peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 import {
-  diagnosticLogger,
   logMessageQueued,
   logSessionStateChange,
   logWebhookReceived,
@@ -28,17 +29,17 @@ import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticStateForTest();
   setDiagnosticsEnabledForProcess(true);
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-it("reports the shared next wake and coalesces diagnostic heartbeats after sleep", async () => {
+it("coalesces diagnostic heartbeats after sleep", async () => {
   const startedAt = Date.now();
   const clock = createGatewaySchedulerClock(startedAt);
   const scheduler = createTestGatewayScheduler(clock.clock);
-  const debug = vi.spyOn(diagnosticLogger, "debug");
   const heartbeats: DiagnosticEventPayload[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "diagnostic.heartbeat") {
@@ -50,9 +51,6 @@ it("reports the shared next wake and coalesces diagnostic heartbeats after sleep
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
     logMessageQueued({ sessionKey: "diagnostic-schedule", source: "test" });
     await clock.advanceBy(30_000);
-    expect(debug).toHaveBeenCalledWith(
-      expect.stringContaining(`nextWakeAtMs=${startedAt + 60_000}`),
-    );
     await clock.advanceBy(120_000);
     await waitForDiagnosticEventsDrained();
     expect(heartbeats).toHaveLength(2);
@@ -64,6 +62,43 @@ it("reports the shared next wake and coalesces diagnostic heartbeats after sleep
     unsubscribe();
     await scheduler.stop();
   }
+});
+
+// Mirrors the private per-field budget in src/infra/diagnostic-content.ts; the
+// production constant stays unexported because only tests would consume it.
+const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
+
+it("bounds captured message content before diagnostic dispatch", () => {
+  setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+  const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+  const captured: Array<{ userPrompt?: string; finalResponse?: string }> = [];
+  const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type === "message.processed" && privateData.messageContent) {
+      captured.push(privateData.messageContent);
+    }
+  });
+  try {
+    const lifecycle = createDiagnosticMessageLifecycle({
+      enabled: true,
+      channel: "test",
+      source: "test",
+      trackSessionState: false,
+      userPrompt: oversizedContent,
+    });
+    lifecycle.markProcessed("completed", { finalResponse: oversizedContent });
+  } finally {
+    unsubscribe();
+  }
+
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.userPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.finalResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.userPrompt?.charCodeAt((captured[0]?.userPrompt?.length ?? 0) - 1)).not.toBe(
+    0xd83d,
+  );
+  expect(
+    captured[0]?.finalResponse?.charCodeAt((captured[0]?.finalResponse?.length ?? 0) - 1),
+  ).not.toBe(0xd83d);
 });
 
 it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {

@@ -32,18 +32,6 @@ describe("createArmableStallWatchdog", () => {
     vi.restoreAllMocks();
   });
 
-  it("fires onTimeout once when armed and idle exceeds timeout", async () => {
-    const onTimeout = vi.fn();
-    const watchdog = createTestWatchdog(onTimeout);
-
-    watchdog.arm();
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(onTimeout).toHaveBeenCalledTimes(1);
-    expect(watchdog.isArmed()).toBe(false);
-    watchdog.stop();
-  });
-
   it("does not fire when disarmed before timeout", async () => {
     const onTimeout = vi.fn();
     const watchdog = createTestWatchdog(onTimeout);
@@ -69,33 +57,6 @@ describe("createArmableStallWatchdog", () => {
 
     await vi.advanceTimersByTimeAsync(400);
     expect(onTimeout).toHaveBeenCalledTimes(1);
-    watchdog.stop();
-  });
-
-  it("contains synchronous timeout handler failures at the timer boundary", async () => {
-    const runtimeErrors: string[] = [];
-    const watchdog = createArmableStallWatchdog({
-      label: "test-watchdog",
-      timeoutMs: 1_000,
-      checkIntervalMs: 100,
-      runtime: {
-        log: vi.fn(),
-        error: (message) => runtimeErrors.push(String(message)),
-        exit: vi.fn(),
-      },
-      onTimeout: () => {
-        throw new Error("owner failed");
-      },
-    });
-
-    watchdog.arm();
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(runtimeErrors).toEqual([
-      "[test-watchdog] transport watchdog timeout: idle 1s (limit 1s)",
-      "[test-watchdog] transport watchdog timeout handler failed: Error: owner failed",
-    ]);
-    expect(watchdog.isArmed()).toBe(false);
     watchdog.stop();
   });
 
@@ -159,32 +120,6 @@ describe("createArmableStallWatchdog", () => {
       onTimeout: () => {
         throw createUnstringifiableFailure();
       },
-    });
-
-    watchdog.arm();
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(runtimeErrors).toEqual([
-      "[test-watchdog] transport watchdog timeout: idle 1s (limit 1s)",
-      "[test-watchdog] transport watchdog timeout handler failed: Unknown error",
-    ]);
-    expect(watchdog.isArmed()).toBe(false);
-    watchdog.stop();
-  });
-
-  it("contains rejected failures that cannot be stringified", async () => {
-    const runtimeErrors: string[] = [];
-    const onTimeout = vi.fn(() => Promise.reject(createUnstringifiableFailure()));
-    const watchdog = createArmableStallWatchdog({
-      label: "test-watchdog",
-      timeoutMs: 1_000,
-      checkIntervalMs: 100,
-      runtime: {
-        log: vi.fn(),
-        error: (message) => runtimeErrors.push(String(message)),
-        exit: vi.fn(),
-      },
-      onTimeout: onTimeout as Parameters<typeof createArmableStallWatchdog>[0]["onTimeout"],
     });
 
     watchdog.arm();

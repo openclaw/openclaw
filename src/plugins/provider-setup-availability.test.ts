@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
 
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn());
 const enablePluginInConfig = vi.hoisted(() => vi.fn());
 const enablePluginWithCapabilityConsent = vi.hoisted(() => vi.fn());
 const resolvePluginProvidersCore = vi.hoisted(() => vi.fn());
 const debug = vi.hoisted(() => vi.fn());
+
+// mock-isolation: The fixture supplies the inventory instead of discovering installed plugins.
+vi.mock("./manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot,
+}));
 
 vi.mock("./provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices,
@@ -80,6 +86,27 @@ describe("detectAvailableSetupProviderIds", () => {
       env: process.env,
       workspaceDir: undefined,
     });
+  });
+
+  it("loads providers from the inventory that selected their choices", async () => {
+    const metadataSnapshot = { manifestRegistry: { plugins: [] } };
+    loadManifestMetadataSnapshot.mockReturnValue(metadataSnapshot);
+    resolvePluginProvidersCore.mockReturnValue([]);
+
+    await detectAvailableSetupProviderIds({ config: {}, workspaceDir: "/workspace" });
+
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataSnapshot, workspaceDir: "/workspace" }),
+    );
+    expect(resolvePluginProvidersCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "setup",
+        onlyPluginIds: ["ollama"],
+        pluginMetadataSnapshot: metadataSnapshot,
+        workspaceDir: "/workspace",
+      }),
+    );
   });
 
   it("treats failed availability probes as an intentional non-match", async () => {

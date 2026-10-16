@@ -375,6 +375,7 @@ describe("Claude CLI node command", () => {
   ])(
     "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
     async ({ rawEnv, value }) => {
+      setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
       const { executable, runArgv } = await nativeCliFixture(`
 const fs = require("node:fs");
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR ?? process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR;
@@ -463,6 +464,7 @@ process.stdout.write(JSON.stringify({
   );
 
   it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
+    setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
     const { executable, runArgv } = await nativeCliFixture(`
 process.stdout.write(JSON.stringify({
   type: "result",

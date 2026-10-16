@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
@@ -19,6 +19,8 @@ import {
   enqueueCommandInLane,
   getQueueSize,
 } from "../../process/command-queue.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -41,6 +43,8 @@ afterEach(() => {
 });
 
 async function setup() {
+  ensureUserProfilesSchema({});
+  onTestFinished((await prepareUserProfileCatalog()).release);
   const client = roleClient("view", "queued-stop-owner");
   client.connId = "queued-stop-connection";
   client.connect.scopes = ["operator.sessions.write"];
@@ -298,23 +302,17 @@ it.each([true, false])(
   },
 );
 
-it.each(["session", "queue", "new-source", "source"] as const)(
+it.each(["session", "source"] as const)(
   "narrow clearQueued does not adopt %s changed by an earlier Stop callback",
   async (change) => {
     const fixture = await setup();
     const original = followup("original");
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "captured queue");
-    let successor: ReturnType<typeof followup> | undefined;
     fixture.queued.controller.signal.addEventListener(
       "abort",
       () => {
         if (change === "session") {
           original.run.run.sessionId = "successor-session";
-        } else if (change === "queue") {
-          FOLLOWUP_QUEUES.delete(key);
-          successor = followup("successor queue");
-        } else if (change === "new-source") {
-          successor = followup("later source");
         } else {
           fixture.revoke();
         }
@@ -328,9 +326,8 @@ it.each(["session", "queue", "new-source", "source"] as const)(
     }
     expect(fixture.queued.controller.signal.aborted).toBe(true);
     expect(fixture.active.controller.signal.aborted).toBe(change !== "source");
-    expect(original.settled).toHaveBeenCalledTimes(change === "new-source" ? 1 : 0);
-    expect(successor?.settled.mock.calls ?? []).toHaveLength(0);
-    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([successor?.run ?? original.run]);
+    expect(original.settled).not.toHaveBeenCalled();
+    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([original.run]);
     expect(queue.abortController.signal.aborted).toBe(false);
     if (change === "source") {
       expect(fixture.respond).not.toHaveBeenCalled();
@@ -354,6 +351,6 @@ it("settles detached pending sources after revocation and preserves later active
   expect(fixture.active.controller.signal.aborted).toBe(false);
   expect(first.settled).toHaveBeenCalledOnce();
   expect(second.settled).toHaveBeenCalledOnce();
-  expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([]);
+  expect(FOLLOWUP_QUEUES.get(key)).toBeUndefined();
   expect(fixture.respond).not.toHaveBeenCalled();
 });

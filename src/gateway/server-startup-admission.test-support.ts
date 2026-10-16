@@ -150,7 +150,6 @@ export function registerGatewayStartupAdmissionTests(params: {
         ),
       );
       let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
-      let closing: Promise<void> | undefined;
       const admissionParked = createDeferred();
       const runWithAdmission = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
       const admissionSpy = vi
@@ -179,17 +178,9 @@ export function registerGatewayStartupAdmissionTests(params: {
         releaseHookLoad.resolve();
         // Dynamic imports can outlive a turn; close only after the real admission waiter parks.
         await admissionParked.promise;
-        let drained = false;
         connectionWork.beginClose();
-        closing = connectionWork.drain().then(() => {
-          drained = true;
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(drained, "startup admission retires without reopening suspension").toBe(true);
-        suspension?.release();
-        await closing;
+        // Close retains admitted imports, but must retire parked admission without reopening it.
+        await connectionWork.drain();
         expect(gatewayStart).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledTimes(stage === "subagent" ? 0 : 1);
       } finally {
@@ -199,7 +190,6 @@ export function registerGatewayStartupAdmissionTests(params: {
         releaseHookLoad.resolve();
         await runtime.startupSettled;
         await connectionWork.drain();
-        await closing;
       }
     },
   );

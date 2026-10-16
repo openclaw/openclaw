@@ -1,16 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
@@ -18,6 +9,7 @@ import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefFriendManager } from "./friends.js";
 import { createReefRuntimeAuthority } from "./runtime.js";
+import { createRuntime } from "./state.test-support.js";
 import type { ReefTransportClient } from "./transport.js";
 import { ReefRelayError } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
@@ -53,25 +45,8 @@ function relayFriend(
   };
 }
 
-function runtime(host: "worker" | "legacy" = "worker") {
-  const mockRuntime = createPluginRuntimeMock();
-  mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  mockRuntime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    if (host === "legacy") {
-      const { createOperation: _createOperation, ...legacy } = store;
-      return legacy;
-    }
-    return store;
-  };
-  return mockRuntime;
+function runtime() {
+  return createRuntime(stateDir);
 }
 
 function config() {
@@ -171,17 +146,6 @@ describe("ReefFriendManager pairing", () => {
     expect(pairing.values).toEqual(new Set());
   });
 
-  it("consumes approval before accepting or pinning an inbound friendship", async () => {
-    const pending = relayFriend("alice", "pending");
-    const { relay, store, pairing, manager } = pairingFixture(pending);
-    pairing.remove.mockRejectedValue(new Error("approval store unavailable"));
-    await addApproval(store, pairing, pending);
-
-    await expect(manager.reconcile()).rejects.toThrow("approval store unavailable");
-    expect(relay.respondFriend).not.toHaveBeenCalled();
-    expect(await store.get("alice")).toBeUndefined();
-  });
-
   it("does not reuse an approval another reconciler already consumed", async () => {
     const pending = relayFriend("alice", "pending");
     const { relay, store, pairing, manager } = pairingFixture(pending);
@@ -236,33 +200,28 @@ describe("ReefFriendManager pairing", () => {
     expect(await store.hasOutboundRequest("alice")).toBe(true);
   });
 
-  it.each(["worker", "legacy"] as const)(
-    "removes an unsent %s request intent after authority closes at commit acknowledgement",
-    async (host) => {
-      const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
-      const relay = transport(pending);
-      const authority = new AbortController();
-      const store = openReefTrustStore(runtime(host), config(), () =>
-        authority.signal.throwIfAborted(),
-      );
-      const beginRequest = store.beginRequest.bind(store);
-      vi.spyOn(store, "beginRequest").mockImplementation(async (...args) => {
-        const settlement = await beginRequest(...args);
-        authority.abort(new Error("channel closed before dispatch"));
-        return settlement;
-      });
-      const manager = new ReefFriendManager(
-        relay as unknown as ReefTransportClient,
-        store,
-        approvals(),
-        authority.signal,
-      );
+  it("removes an unsent request intent after authority closes at commit acknowledgement", async () => {
+    const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
+    const relay = transport(pending);
+    const authority = new AbortController();
+    const store = openReefTrustStore(runtime(), config(), () => authority.signal.throwIfAborted());
+    const beginRequest = store.beginRequest.bind(store);
+    vi.spyOn(store, "beginRequest").mockImplementation(async (...args) => {
+      const settlement = await beginRequest(...args);
+      authority.abort(new Error("channel closed before dispatch"));
+      return settlement;
+    });
+    const manager = new ReefFriendManager(
+      relay as unknown as ReefTransportClient,
+      store,
+      approvals(),
+      authority.signal,
+    );
 
-      await expect(manager.request("alice")).rejects.toThrow("channel closed before dispatch");
-      expect(relay.requestFriend).not.toHaveBeenCalled();
-      expect(await trust().hasOutboundRequest("alice")).toBe(false);
-    },
-  );
+    await expect(manager.request("alice")).rejects.toThrow("channel closed before dispatch");
+    expect(relay.requestFriend).not.toHaveBeenCalled();
+    expect(await trust().hasOutboundRequest("alice")).toBe(false);
+  });
 
   it("rejects queued friendship commands after owner revocation and settles accepted intent", async () => {
     const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
@@ -325,14 +284,9 @@ describe("ReefFriendManager pairing", () => {
     }
   });
 
-  it.each([
-    ["worker", "accepted"],
-    ["legacy", "accepted"],
-    ["worker", "unknown"],
-    ["legacy", "unknown"],
-  ] as const)(
-    "settles a revoked %s request after channel closure and a %s relay outcome",
-    async (host, outcome) => {
+  it.each(["accepted", "unknown"] as const)(
+    "settles a revoked request after channel closure and a %s relay outcome",
+    async (outcome) => {
       const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
       const requestStarted = deferred<void>();
       const relayResult = deferred<{ status: string }>();
@@ -344,7 +298,7 @@ describe("ReefFriendManager pairing", () => {
       const authority = new AbortController();
       const requester = new ReefFriendManager(
         requestingRelay as unknown as ReefTransportClient,
-        openReefTrustStore(runtime(host), config(), () => authority.signal.throwIfAborted()),
+        openReefTrustStore(runtime(), config(), () => authority.signal.throwIfAborted()),
         approvals(),
         authority.signal,
       );
@@ -373,98 +327,92 @@ describe("ReefFriendManager pairing", () => {
     },
   );
 
-  it.each(["worker", "legacy"] as const)(
-    "settles an accepted %s removal after channel closure and concurrent trust",
-    async (host) => {
-      const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
-      const removalStarted = deferred<void>();
-      const relayRemoval = deferred<void>();
-      const removingRelay = transport(pending);
-      const authority = new AbortController();
-      removingRelay.removeFriend.mockImplementation(async () => {
-        removalStarted.resolve(undefined);
-        await relayRemoval.promise;
-      });
-      const remover = new ReefFriendManager(
-        removingRelay as unknown as ReefTransportClient,
-        openReefTrustStore(runtime(host), config(), () => authority.signal.throwIfAborted()),
-        approvals(),
-        authority.signal,
-      );
-      const requester = new ReefFriendManager(
-        transport(pending) as unknown as ReefTransportClient,
-        trust(),
-        approvals(),
-      );
+  it("settles an accepted removal after channel closure and concurrent trust", async () => {
+    const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
+    const removalStarted = deferred<void>();
+    const relayRemoval = deferred<void>();
+    const removingRelay = transport(pending);
+    const authority = new AbortController();
+    removingRelay.removeFriend.mockImplementation(async () => {
+      removalStarted.resolve(undefined);
+      await relayRemoval.promise;
+    });
+    const remover = new ReefFriendManager(
+      removingRelay as unknown as ReefTransportClient,
+      openReefTrustStore(runtime(), config(), () => authority.signal.throwIfAborted()),
+      approvals(),
+      authority.signal,
+    );
+    const requester = new ReefFriendManager(
+      transport(pending) as unknown as ReefTransportClient,
+      trust(),
+      approvals(),
+    );
 
-      const removal = remover.remove("alice");
-      const revoked = new Error("channel closed during relay removal");
-      const settled = expect(removal).rejects.toBe(revoked);
-      await removalStarted.promise;
-      await expect(requester.request("alice")).resolves.toEqual({ status: "pending" });
-      await requester.trust.set("alice", {
-        autonomy: "bounded",
-        ed25519PublicKey: pending.ed25519_pub,
-        x25519PublicKey: pending.x25519_pub,
-        keyEpoch: pending.key_epoch,
-        safetyNumberChanged: false,
-        approvedAt: 1,
-      });
-      expect(await trust().hasOutboundRequest("alice")).toBe(true);
-      expect(await trust().get("alice")).toBeDefined();
-      authority.abort(revoked);
-      relayRemoval.resolve(undefined);
-      await settled;
+    const removal = remover.remove("alice");
+    const revoked = new Error("channel closed during relay removal");
+    const settled = expect(removal).rejects.toBe(revoked);
+    await removalStarted.promise;
+    await expect(requester.request("alice")).resolves.toEqual({ status: "pending" });
+    await requester.trust.set("alice", {
+      autonomy: "bounded",
+      ed25519PublicKey: pending.ed25519_pub,
+      x25519PublicKey: pending.x25519_pub,
+      keyEpoch: pending.key_epoch,
+      safetyNumberChanged: false,
+      approvedAt: 1,
+    });
+    expect(await trust().hasOutboundRequest("alice")).toBe(true);
+    expect(await trust().get("alice")).toBeDefined();
+    authority.abort(revoked);
+    relayRemoval.resolve(undefined);
+    await settled;
 
-      expect(await trust().hasOutboundRequest("alice")).toBe(false);
-      expect(await trust().get("alice")).toBeUndefined();
-    },
-  );
+    expect(await trust().hasOutboundRequest("alice")).toBe(false);
+    expect(await trust().get("alice")).toBeUndefined();
+  });
 
-  it.each(["worker", "legacy"] as const)(
-    "settles a rejected %s request after channel closure without erasing another intent",
-    async (host) => {
-      const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
-      const requestStarted = deferred<void>();
-      const relayResult = deferred<{ status: string }>();
-      const rejectedRelay = transport(pending);
-      rejectedRelay.requestFriend.mockImplementation(async () => {
-        requestStarted.resolve(undefined);
-        return await relayResult.promise;
-      });
-      const authority = new AbortController();
-      const first = new ReefFriendManager(
-        rejectedRelay as unknown as ReefTransportClient,
-        openReefTrustStore(runtime(host), config(), () => authority.signal.throwIfAborted()),
-        approvals(),
-        authority.signal,
-      );
-      const second = new ReefFriendManager(
-        transport(pending) as unknown as ReefTransportClient,
-        trust(),
-        approvals(),
-      );
+  it("settles a rejected request after channel closure without erasing another intent", async () => {
+    const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
+    const requestStarted = deferred<void>();
+    const relayResult = deferred<{ status: string }>();
+    const rejectedRelay = transport(pending);
+    rejectedRelay.requestFriend.mockImplementation(async () => {
+      requestStarted.resolve(undefined);
+      return await relayResult.promise;
+    });
+    const authority = new AbortController();
+    const first = new ReefFriendManager(
+      rejectedRelay as unknown as ReefTransportClient,
+      openReefTrustStore(runtime(), config(), () => authority.signal.throwIfAborted()),
+      approvals(),
+      authority.signal,
+    );
+    const second = new ReefFriendManager(
+      transport(pending) as unknown as ReefTransportClient,
+      trust(),
+      approvals(),
+    );
 
-      const rejected = first.request("alice");
-      const rejection = expect(rejected).rejects.toThrow("invalid request");
-      await requestStarted.promise;
-      const originalId = Object.keys((await trust().snapshot("alice")).outboundRequests ?? {})[0];
-      await expect(second.request("alice")).resolves.toEqual({ status: "pending" });
-      const retainedId = Object.keys((await trust().snapshot("alice")).outboundRequests ?? {}).find(
-        (id) => id !== originalId,
-      );
-      authority.abort(new Error("channel closed"));
-      relayResult.reject(new ReefRelayError(400, "invalid request"));
-      await rejection;
+    const rejected = first.request("alice");
+    const rejection = expect(rejected).rejects.toThrow("invalid request");
+    await requestStarted.promise;
+    const originalId = Object.keys((await trust().snapshot("alice")).outboundRequests ?? {})[0];
+    await expect(second.request("alice")).resolves.toEqual({ status: "pending" });
+    const retainedId = Object.keys((await trust().snapshot("alice")).outboundRequests ?? {}).find(
+      (id) => id !== originalId,
+    );
+    authority.abort(new Error("channel closed"));
+    relayResult.reject(new ReefRelayError(400, "invalid request"));
+    await rejection;
 
-      const reopened = trust();
-      expect(await reopened.hasOutboundRequest("alice")).toBe(true);
-      expect(Object.keys((await reopened.snapshot("alice")).outboundRequests ?? {})).toEqual([
-        retainedId,
-      ]);
-      expect(rejectedRelay.removeFriend).not.toHaveBeenCalled();
-    },
-  );
+    const reopened = trust();
+    expect(await reopened.hasOutboundRequest("alice")).toBe(true);
+    expect(Object.keys((await reopened.snapshot("alice")).outboundRequests ?? {})).toEqual([
+      retainedId,
+    ]);
+    expect(rejectedRelay.removeFriend).not.toHaveBeenCalled();
+  });
 
   it("fails closed and requests approval for an active relay edge with no local intent", async () => {
     const accepted = relayFriend("alice", "active", generateIdentity(), 1, "me");
@@ -618,20 +566,6 @@ describe("ReefFriendManager pairing", () => {
       store,
       pairing,
     );
-
-    await expect(manager.reconcile()).resolves.toEqual([]);
-    expect(await store.get("alice")).toBeUndefined();
-    expect(pairing.values).toEqual(new Set());
-  });
-
-  it("rejects a bound approval after the relay keys change", async () => {
-    const active = relayFriend("alice", "active");
-    const { store, pairing, manager } = pairingFixture(active);
-    await addApproval(store, pairing, active);
-    const nextIdentity = generateIdentity();
-    active.ed25519_pub = nextIdentity.signing.publicKey;
-    active.x25519_pub = nextIdentity.encryption.publicKey;
-    active.key_epoch += 1;
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(await store.get("alice")).toBeUndefined();

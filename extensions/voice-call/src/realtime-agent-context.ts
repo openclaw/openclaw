@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as realtimeBootstrapSdk from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
-
-const contextSdk: Partial<
-  Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
-> = realtimeBootstrapSdk;
 
 /** Build final realtime instructions from base instructions, consult policy, and agent context. */
 export async function buildRealtimeVoiceInstructions(params: {
@@ -21,28 +17,16 @@ export async function buildRealtimeVoiceInstructions(params: {
     params.baseInstructions,
     buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime),
   ];
-  if (contextSdk.resolveRealtimeVoiceAgentContextInstructions) {
-    sections.push(
-      await contextSdk.resolveRealtimeVoiceAgentContextInstructions({
-        config: params.coreConfig,
-        agentId: params.agentId,
-        files:
-          contextConfig.enabled && contextConfig.includeWorkspaceFiles ? contextConfig.files : [],
-        includeIdentity: contextConfig.enabled && contextConfig.includeIdentity,
-        maxChars: contextConfig.maxChars,
-        warn: params.warn,
-      }),
-    );
-  } else {
-    const { buildLegacyRealtimeVoiceAgentContext } =
-      await import("./realtime-agent-context.legacy.js");
-    sections.push(
-      await buildLegacyRealtimeVoiceAgentContext({
-        config: contextConfig,
-        coreConfig: params.coreConfig,
-        agentId: params.agentId,
-      }),
-    );
-  }
+  sections.push(
+    await resolveRealtimeVoiceAgentContextInstructions({
+      config: params.coreConfig,
+      agentId: params.agentId,
+      files:
+        contextConfig.enabled && contextConfig.includeWorkspaceFiles ? contextConfig.files : [],
+      includeIdentity: contextConfig.enabled && contextConfig.includeIdentity,
+      maxChars: contextConfig.maxChars,
+      warn: params.warn,
+    }),
+  );
   return sections.filter(Boolean).join("\n\n");
 }

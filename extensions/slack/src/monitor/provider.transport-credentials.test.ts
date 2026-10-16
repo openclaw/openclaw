@@ -12,7 +12,10 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { handleSlackHttpRequest } from "../http/index.js";
+import {
+  createSlackHttpTestDispatcher,
+  installSlackHttpTestRegistry,
+} from "../http/route.test-helpers.js";
 import { setSlackRuntime } from "../runtime.js";
 import { monitorSlackProvider } from "./provider.js";
 
@@ -20,6 +23,8 @@ const inactiveSecret = { source: "env", provider: "default", id: "SLACK_UNUSED_S
 const signingSecret = "loopback-signing-secret";
 
 async function startSlackLoopback() {
+  const registry = installSlackHttpTestRegistry();
+  const handleSlackHttpRequest = createSlackHttpTestDispatcher(registry);
   const requests: string[] = [];
   const connections: Array<{ url?: string; authorization?: string }> = [];
   const server = createServer((request, response) => {
@@ -29,6 +34,7 @@ async function startSlackLoopback() {
       }
       request.resume();
       requests.push(request.url ?? "");
+      response.statusCode = request.url?.startsWith("/api/") ? 200 : 404;
       response.setHeader("content-type", "application/json");
       response.end(
         JSON.stringify(
@@ -60,6 +66,7 @@ async function startSlackLoopback() {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
     connections,
+    registry,
     close: async () => {
       for (const socket of sockets.clients) {
         socket.terminate();
@@ -103,6 +110,10 @@ describe("Slack transport credential activation", () => {
                 botToken: "xoxb-loopback",
                 appToken: mode === "socket" ? "xapp-1-ATEST-loopback" : inactiveSecret,
                 signingSecret: mode === "http" ? signingSecret : inactiveSecret,
+                accounts: {
+                  default: {},
+                  duplicate: { signingSecret: "duplicate-signing-secret" },
+                },
                 relay: {
                   url: `${loopback.url}/relay`,
                   authToken: mode === "relay" ? "loopback-relay-token" : inactiveSecret,
@@ -126,6 +137,7 @@ describe("Slack transport credential activation", () => {
           });
           try {
             await Promise.race([connected.promise, run]);
+            expect(loopback.registry.httpRoutes).toHaveLength(mode === "http" ? 1 : 0);
             expect(loopback.requests).toContain("/api/auth.test");
             if (mode === "socket") {
               expect(loopback.requests).toContain("/api/apps.connections.open");
@@ -144,8 +156,8 @@ describe("Slack transport credential activation", () => {
               const signature = createHmac("sha256", signingSecret)
                 .update(`v0:${timestamp}:${body}`)
                 .digest("hex");
-              const postChallenge = (signatureValue: string) =>
-                fetch(`${loopback.url}/slack/events`, {
+              const postChallenge = (signatureValue: string, path = "/slack/events") =>
+                fetch(`${loopback.url}${path}`, {
                   method: "POST",
                   headers: {
                     "content-type": "application/json",
@@ -158,10 +170,38 @@ describe("Slack transport credential activation", () => {
               expect(valid.status).toBe(200);
               expect(await valid.text()).toContain("connected");
               expect((await postChallenge("v0=invalid")).status).toBe(401);
+              expect((await postChallenge(`v0=${signature}`, "/slack/%65vents")).status).toBe(404);
+              const duplicateController = new AbortController();
+              const duplicateConnected = createDeferred<void>();
+              const duplicateRun = monitorSlackProvider({
+                scheduler: createTestPluginServiceScheduler(),
+                config,
+                accountId: "duplicate",
+                abortSignal: duplicateController.signal,
+                runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+                setStatus: (next) => {
+                  if (next.connected === true) {
+                    duplicateConnected.resolve();
+                  }
+                },
+              });
+              try {
+                await Promise.race([duplicateConnected.promise, duplicateRun]);
+                expect((await postChallenge(`v0=${signature}`)).status).toBe(200);
+                const duplicateSignature = createHmac("sha256", "duplicate-signing-secret")
+                  .update(`v0:${timestamp}:${body}`)
+                  .digest("hex");
+                expect((await postChallenge(`v0=${duplicateSignature}`)).status).toBe(401);
+              } finally {
+                duplicateController.abort();
+                await duplicateRun;
+              }
+              expect((await postChallenge(`v0=${signature}`)).status).toBe(200);
             }
           } finally {
             controller.abort();
             await run;
+            expect(loopback.registry.httpRoutes).toHaveLength(0);
           }
         });
       } finally {

@@ -12,6 +12,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   expandPluginSdkApiDiffSet,
+  decodePluginSdkApiArtifact,
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
@@ -322,8 +323,10 @@ if (process.argv.includes("--render-root")) {
     ]);
 
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(jsonPath, "utf8"))).toEqual(emptyDiff);
-    expect(JSON.parse(readFileSync(evidencePath, "utf8"))).toEqual({
+    expect(decodePluginSdkApiArtifact(JSON.parse(readFileSync(jsonPath, "utf8")))).toEqual(
+      emptyDiff,
+    );
+    expect(decodePluginSdkApiArtifact(JSON.parse(readFileSync(evidencePath, "utf8")))).toEqual({
       schema: "openclaw.plugin-sdk-api-release-evidence/v1",
       status: "checked",
       baseRef: "same-commit",
@@ -551,7 +554,9 @@ if (process.argv.includes("--render-root")) {
         ).toSorted(),
       );
       const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
-      expect(bundle.schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
+      expect(decodePluginSdkApiArtifact(bundle).schema).toBe(
+        "openclaw.plugin-sdk-api-release-evidence-set/v2",
+      );
       const reports = expandPluginSdkApiDiffSet(JSON.parse(readFileSync(jsonPath, "utf8")));
       for (const [selector, ref] of Object.entries(bases)) {
         const evidence = selectPluginSdkApiReleaseEvidence({

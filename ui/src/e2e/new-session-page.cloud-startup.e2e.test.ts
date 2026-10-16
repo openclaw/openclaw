@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -62,7 +63,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       const trigger = page.locator("#new-session-where-trigger");
@@ -83,7 +84,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .locator('[data-value="cloud:aws"]')
             .isDisabled(),
         )
@@ -93,7 +94,7 @@ suite.define(() => {
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Local" })
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
@@ -161,7 +162,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.evaluate(() => {
@@ -191,24 +192,11 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      const startupError = await page.evaluate(
-        (key) =>
-          new Promise<string>((resolve, reject) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  placementStartup: {
-                    get: (sessionKey: string) => { error?: string; phase: string } | null;
-                    subscribe: (listener: () => void) => () => void;
-                  };
-                };
-              };
-            };
-            const placementStartup = app.runtime?.context.placementStartup;
-            if (!placementStartup) {
-              reject(new Error("session placement startup unavailable"));
-              return;
-            }
+      const startupError = await evaluateControlUiContext(
+        page,
+        (application, key) =>
+          new Promise<string>((resolve) => {
+            const placementStartup = application.placementStartup;
             let settled = false;
             const subscription: { stop?: () => void } = {};
             const resolveFailed = () => {
@@ -243,12 +231,7 @@ suite.define(() => {
       await expect.poll(() => recoveryRuntimeRequested).toBe(true);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
+          evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
@@ -349,18 +332,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const recoveryIdentity = await page.evaluate(async () => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-              };
-            };
-          };
-        };
-        const gatewaySnapshot = app.runtime?.context.gateway;
-        const gatewayUrl = gatewaySnapshot?.connection.gatewayUrl ?? "";
+      const recoveryIdentity = await evaluateControlUiContext(page, async (application) => {
+        const gatewaySnapshot = application.gateway;
+        const gatewayUrl = gatewaySnapshot.connection.gatewayUrl;
         if (!gatewayUrl) {
           throw new Error("Gateway recovery identity is unavailable");
         }
@@ -382,12 +356,10 @@ suite.define(() => {
       await gateway.setOnline(false);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase === "connected";
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.gateway.snapshot.phase === "connected",
+          ),
         )
         .toBe(false);
       await page.evaluate(({ gatewayUrl, legacyScope, storageKey }) => {
@@ -424,7 +396,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
       await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator(".oc-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
       await page.locator(".new-session-page__message").fill("start another cloud task");

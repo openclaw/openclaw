@@ -1,8 +1,10 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -112,6 +114,12 @@ type TrimBootstrapResult = {
   maxChars: number;
   originalLength: number;
 };
+
+// Rendered text is bounded; compact warning identities live for the process so
+// cache eviction or a session reset cannot re-emit the same truncation warning.
+const trimmedBootstrapCache = new Map<string, TrimBootstrapResult>();
+const MAX_TRIMMED_BOOTSTRAP_ENTRIES = 256;
+const warnedBootstrapTruncations = new Set<string>();
 
 type PolicyDigestCandidate = { text: string; highPriority: boolean };
 
@@ -372,7 +380,11 @@ function clampToBudget(content: string, budget: number): string {
 
 export function buildBootstrapContextFiles(
   files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string, dedupeKey?: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
@@ -425,17 +437,30 @@ export function buildBootstrapContextFiles(
       opts?.warn?.("Personal USER.md exceeds the bootstrap budget; using shared defaults.");
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
-    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
-    if (!contentWithinBudget) {
+    const content = file.content ?? "";
+    const contentHash = content.length > fileMaxChars ? sha256Hex(content) : undefined;
+    const cacheKey = contentHash && JSON.stringify([file.name, contentHash, fileMaxChars]);
+    const cached = cacheKey ? trimmedBootstrapCache.get(cacheKey) : undefined;
+    const trimmed = cached ?? trimBootstrapContent(content, file.name, fileMaxChars);
+    if (cacheKey) {
+      trimmedBootstrapCache.delete(cacheKey);
+      trimmedBootstrapCache.set(cacheKey, trimmed);
+      pruneMapToMaxSize(trimmedBootstrapCache, MAX_TRIMMED_BOOTSTRAP_ENTRIES);
+    }
+    if (!trimmed.content) {
       continue;
     }
-    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
-      opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
-      );
+    if (trimmed.truncated && opts?.warn) {
+      const warningKey = sha256Hex(JSON.stringify([pathValue, contentHash, fileMaxChars]));
+      if (!warnedBootstrapTruncations.has(warningKey)) {
+        warnedBootstrapTruncations.add(warningKey);
+        opts.warn(
+          `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+          warningKey,
+        );
+      }
     }
-    appendContext(contentWithinBudget, true);
+    appendContext(trimmed.content, true);
   }
   return result;
 }

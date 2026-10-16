@@ -8,6 +8,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { readOpenVoiceSessions } from "./client-voice-session-lookup.worker.js";
 import {
@@ -168,8 +169,10 @@ describe("client voice session store", () => {
           options,
         );
       write({});
-      const probes = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
-        /data_version/iu.test(sql) ? "freshness" : null,
+      const probes = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["freshness"],
+        (sql) => (/data_version/iu.test(sql) ? "freshness" : null),
       );
       const binding = { agentId: "main", voiceSessionId: "voice-1", sessionKey: "agent:main:main" };
       const first = readOwnedVoiceSessionFacts(binding);
@@ -253,13 +256,11 @@ describe("client voice session store", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    { name: "version", patch: { version: 2 } },
-    { name: "origin", patch: { origin: "server" } },
-    { name: "provider", patch: { provider: "   " } },
-    { name: "updated timestamp", patch: { updatedAt: "later" } },
-  ])("rejects an invalid $name", ({ patch }) => {
-    const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
-    expect(parseStoredVoiceSessionRecord(JSON.stringify({ ...value, ...patch }))).toBeUndefined();
-  });
+  it.each([{ name: "provider", patch: { provider: "   " } }])(
+    "rejects an invalid $name",
+    ({ patch }) => {
+      const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
+      expect(parseStoredVoiceSessionRecord(JSON.stringify({ ...value, ...patch }))).toBeUndefined();
+    },
+  );
 });

@@ -1,10 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -54,7 +52,7 @@ export type TranscriptReportWorkerTarget = {
 export function bindSqliteWorkerBackend(
   target: TranscriptReportWorkerTarget,
   context: {
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
     admit(
       stage: "transaction" | "commit",
@@ -66,7 +64,7 @@ export function bindSqliteWorkerBackend(
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  const sameOwner = context.database.location()
+  const sameOwner = sqlPublicationAnchor(context.database).location()
     ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
     : pathname === context.databasePath &&
       getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;
@@ -88,34 +86,27 @@ export function bindSqliteWorkerBackend(
         dispatch,
       ),
     );
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !database.db.isOpen) {
-      throw new Error("Transcript report domain is closed");
-    }
-    assertTransactionUsable(database.db);
+  const readCurrentEntry = () => {
+    const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
+    return {
+      entry,
+      refusal: resolveTranscriptAppendRefusal(entry, resolved, { ...resolved, ...fence }),
+    };
   };
-  const readRefusal = () =>
-    resolveTranscriptAppendRefusal(
-      readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-      resolved,
-      { ...resolved, ...fence },
-    );
   let prepared:
     | {
         facts: PreparedTranscriptReport;
         version: SessionTranscriptContextVersion;
       }
     | undefined;
-  return {
+  return bindSqliteWorkerDatabase<TranscriptReportWorkerOperations>(database.db, {
     execute(command) {
-      assertOpen();
       if (command.type === "prepare") {
         return runSqliteDeferredTransactionSync<
           Result<PreparedTranscriptReport, TranscriptAppendRefusal>
         >(database.db, () => {
           prepared = undefined;
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             return err(refusal);
           }
@@ -134,7 +125,7 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             admit("commit");
             return err(refusal);
@@ -218,7 +209,7 @@ export function bindSqliteWorkerBackend(
                   authorizeCommit,
                 )
               : false;
-          const rebound = readRefusal();
+          const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -227,6 +218,10 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
+            ...((cliHistoryChanged ||
+              (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
+              entry,
+            }),
             ...(abortedPartial
               ? {
                   abortedPartial,
@@ -239,15 +234,8 @@ export function bindSqliteWorkerBackend(
         { operationLabel: "session.transcript.report" },
       );
     },
-    assertSettled() {
-      assertOpen();
-      if (database.db.isTransaction) {
-        throw new Error("Transcript report command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

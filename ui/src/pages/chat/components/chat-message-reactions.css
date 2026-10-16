@@ -1,12 +1,9 @@
 openclaw-message-reaction-picker {
   display: inline-flex;
 }
-openclaw-message-reaction-picker button,
-openclaw-message-reaction-picker input {
+openclaw-message-reaction-picker button {
   font: inherit;
   color: var(--text);
-}
-openclaw-message-reaction-picker button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -17,10 +14,6 @@ openclaw-message-reaction-picker button {
 openclaw-message-reaction-picker button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-openclaw-message-reaction-picker input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 openclaw-message-reaction-picker .trigger {
   width: 24px;
@@ -51,10 +44,8 @@ openclaw-message-reaction-picker[compact] .trigger[aria-expanded="true"] {
   border-color: var(--accent);
   background: var(--accent-subtle);
 }
-openclaw-message-reaction-picker wa-popover {
-  --arrow-size: 0;
-}
-openclaw-message-reaction-picker wa-popover::part(body) {
+openclaw-message-reaction-picker .chat-reaction-picker {
+  pointer-events: auto;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -64,7 +55,7 @@ openclaw-message-reaction-picker wa-popover::part(body) {
     0 1px 2px rgba(0, 0, 0, 0.08),
     0 12px 32px rgba(0, 0, 0, 0.16);
 }
-openclaw-message-reaction-picker wa-popover.custom::part(body) {
+openclaw-message-reaction-picker .chat-reaction-picker.custom {
   border-radius: var(--radius-md);
 }
 openclaw-message-reaction-picker .palette {
@@ -115,13 +106,8 @@ openclaw-message-reaction-picker .more svg {
   height: 16px;
 }
 openclaw-message-reaction-picker .custom {
-  width: 236px;
-  padding: 2px;
-}
-openclaw-message-reaction-picker .custom-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  width: min(292px, calc(100vw - 32px));
+  padding: 4px;
 }
 openclaw-message-reaction-picker .back {
   flex: 0 0 auto;
@@ -131,30 +117,6 @@ openclaw-message-reaction-picker .back {
 openclaw-message-reaction-picker .back svg {
   width: 14px;
   height: 14px;
-}
-openclaw-message-reaction-picker input {
-  flex: 1;
-  min-width: 0;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  font-size: 18px;
-  line-height: 1;
-}
-openclaw-message-reaction-picker input::placeholder {
-  font-size: 13px;
-  color: var(--muted);
-}
-openclaw-message-reaction-picker input[aria-invalid="true"] {
-  border-color: var(--accent);
-}
-openclaw-message-reaction-picker .hint {
-  margin: 6px 4px 2px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
 }
 @media (prefers-reduced-motion: reduce) {
   openclaw-message-reaction-picker .trigger,

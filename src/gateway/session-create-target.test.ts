@@ -1,8 +1,14 @@
 import { expect, it } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { prepareSessionEntryReplacementDatabase } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -73,13 +79,10 @@ it("rechecks creation authority after queued reader admission", async () => {
     const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const writer = runOpenClawAgentWriteAdmission(
-      { agentId: target.agentId, path: target.storePath, env },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-    );
+    const writer = runOpenClawAgentWriteAdmission({ agentId: target.agentId, env }, async () => {
+      entered.resolve();
+      await release.promise;
+    });
     await entered.promise;
     let current = true;
     const revoked = new Error("creation caller revoked");
@@ -103,3 +106,53 @@ it("rechecks creation authority after queued reader admission", async () => {
     await Promise.all([writer, refused]);
   });
 });
+
+it.for(["metadata", "database"] as const)(
+  "prepares creation %s while an unrelated writer remains admitted",
+  async (preparation, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const key = "agent:main:create-target-unblocked";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key, env },
+        { sessionId: "original", updatedAt: 1 },
+      );
+      const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
+      const database = {
+        agentId: target.agentId,
+        path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env }),
+        env,
+      };
+      const execution = captureOpenClawAgentDatabaseExecution(database);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let writer: Promise<void> | undefined;
+      try {
+        await prepareSessionEntryReplacementDatabase(database, () => {}, execution);
+        writer = runOpenClawAgentWriteAdmission(database, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await withinTest(entered.promise, signal);
+        if (preparation === "database") {
+          await withinTest(
+            prepareSessionEntryReplacementDatabase(database, () => {}, execution),
+            signal,
+          );
+        } else {
+          expect(
+            await withinTest(
+              readSessionCreateTarget({ cfg: {}, commandSource: "test" }, target, "original", [
+                key,
+              ]),
+              signal,
+            ),
+          ).toMatchObject({ ok: true, value: { sessionId: "original", updatedAt: 1 } });
+        }
+      } finally {
+        release.resolve();
+        await writer;
+        await execution.release();
+      }
+    });
+  },
+);

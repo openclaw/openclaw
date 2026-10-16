@@ -1,4 +1,3 @@
-import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   MaterializedSessionStateDeletePlan,
@@ -29,7 +28,6 @@ export type SessionAgentPurgeCommit = SessionAgentPurgeSelection & {
   entryRemovals: SessionEntryRemovalPlan[];
   materializedPlans: MaterializedSessionStateDeletePlan[];
   maintenance: SessionEntryMaintenanceInput;
-  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   nativeBindings?: SessionNativeBindingParticipants;
 };
 

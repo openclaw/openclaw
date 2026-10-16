@@ -39,7 +39,15 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message, options.composer)
+      ? new InstantThreadHandoff(
+          context,
+          key,
+          agentId,
+          draft,
+          options.message,
+          options.composer,
+          params.displayName,
+        )
       : undefined;
   };
 }
@@ -74,6 +82,7 @@ export class InstantThreadHandoff {
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
     composer?: CreationComposer,
+    displayName?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -103,15 +112,18 @@ export class InstantThreadHandoff {
     const target = { pathname: options.pathname, search: "", hash: "" };
     // The route renders the provisional key, but saved/global selection stays
     // on the last admitted session until StartedSessionNavigation adopts it.
-    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    // A cached preview can notify the shell synchronously on reconnect. Publish
+    // its admission owner first so that navigation cannot select an unadmitted key.
     this.clearPendingCreate = context.chatSubmissions.beginCreate({
       creation: this.creation,
       message,
       composer,
+      displayName,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
     });
+    this.transition = beginInstantThreadNavigation(context, "chat", target);
     this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;

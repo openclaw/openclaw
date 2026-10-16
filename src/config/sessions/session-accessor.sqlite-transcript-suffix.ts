@@ -21,11 +21,7 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  canonicalizeTranscriptEventMedia,
-  insertTranscriptRowsWithoutProjectionInTransaction,
-  scheduleTranscriptProjectionReconcile,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { insertTranscriptRowsWithoutProjectionInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "./session-accessor.sqlite-transcript-suffix-idempotency.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
@@ -35,6 +31,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
   type SessionTranscriptIndexProjection,
 } from "./session-transcript-index.js";
+import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import {
   projectTranscriptRetainedDataSql,
   stageRetainedTranscriptData,
@@ -43,6 +40,7 @@ import {
   prepareFullTranscriptSuffixMutation,
   prepareTranscriptIndexProjection,
 } from "./session-transcript-suffix-projection.js";
+import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
@@ -82,6 +80,7 @@ function readTranscriptSuffixStorageRows(
       .select([
         "created_at",
         projectTranscriptRetainedDataSql(
+          database.db,
           transcriptEventJsonSql(database.db),
           retainedCustomDataIds,
         ).as("event_json"),
@@ -514,7 +513,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select([transcriptEventNavigationSql("event").as("event_json"), "identity.event_id"])
+        .select([
+          transcriptEventNavigationSql(database.db, "event").as("event_json"),
+          "identity.event_id",
+        ])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.seq", "<", plan.startSeq)
         .where("identity.message_idempotency_key", "is", null)

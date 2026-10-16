@@ -2,6 +2,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
 
@@ -51,6 +52,17 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     },
   );
 
+  it("preserves repetition-stop guidance instead of provider diagnostics", () => {
+    expect(
+      formatUserFacingAssistantErrorText({
+        ...makeAssistantError("HTTP 503 temporary failure"),
+        errorCode: "openclaw_repetitive_output",
+      }),
+    ).toBe(
+      "Repetitive output stopped. Try a larger model or shorten your request before retrying.",
+    );
+  });
+
   it.each(["request timed out", "LLM request timed out."])(
     "preserves safe user-facing timeout copy for provider error %j",
     (errorMessage) => {
@@ -93,11 +105,16 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
         },
       };
       const msg = makeAssistantError("unknown tool: browser");
+      const sandboxRuntime = resolvePreparedSandboxRuntimeStatus({
+        cfg,
+        sessionKey,
+        agentId,
+        preparedSessionEntry: null,
+      });
+      const options = { cfg, sessionKey, agentId, sandboxRuntime };
 
-      expect(formatAssistantErrorText(msg, { cfg, sessionKey, agentId })).toContain(
-        `--agent ${agentId}`,
-      );
-      expect(formatAssistantErrorText(msg, { cfg, sessionKey, agentId })).toContain(
+      expect(formatAssistantErrorText(msg, options)).toContain(`--agent ${agentId}`);
+      expect(formatAssistantErrorText(msg, options)).toContain(
         'Tool "browser" blocked by sandbox tool policy',
       );
 

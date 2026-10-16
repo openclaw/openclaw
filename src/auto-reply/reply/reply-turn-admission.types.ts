@@ -2,6 +2,7 @@ import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/sessio
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { ReplyOperation, ReplyTurnKind } from "./reply-run-registry.js";
 
 export type ReplyTurnAdmission =
@@ -14,6 +15,7 @@ export type ReplyTurnAdmission =
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
+      error?: unknown;
       activeOperation?: ReplyOperation;
       sessionEntry?: SessionEntry;
       lifecycleAdmission?: SessionWorkAdmissionLease;
@@ -21,6 +23,7 @@ export type ReplyTurnAdmission =
 
 export type ReplyTurnAdmissionParams = {
   assertRequestCurrent?: () => void;
+  onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Capture caller-owned selection during admission checks, including the writer-ordered recheck. */
   captureRunSelection?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;

@@ -166,7 +166,10 @@ function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
   const { DatabaseSync } = require("node:sqlite");
   const database = new DatabaseSync(databasePath);
   try {
-    database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL); BEGIN IMMEDIATE");
+    database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; BEGIN IMMEDIATE");
+    if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_leases'").get()) {
+      database.exec("CREATE TABLE IF NOT EXISTS workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL)");
+    }
     database
       .prepare("DELETE FROM workspace_leases WHERE json_extract(lease_json, '$.expiresAtMs') <= ?")
       .run(Date.now());

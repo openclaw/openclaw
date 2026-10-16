@@ -42,11 +42,10 @@ export const discordProviderTestSupport = {
   ) {
     discordProviderRuntime.listNativeCommandSpecsForConfig = mock;
   },
-  setListSkillCommandsForAgents(mock: typeof discordProviderRuntime.listSkillCommandsForAgents) {
-    discordProviderRuntime.listSkillCommandsForAgents = mock;
-  },
-  setIsVerbose(mock: typeof discordProviderRuntime.isVerbose) {
-    discordProviderRuntime.isVerbose = mock;
+  setPrepareSkillCommandsForAgents(
+    mock: typeof discordProviderRuntime.prepareSkillCommandsForAgents,
+  ) {
+    discordProviderRuntime.prepareSkillCommandsForAgents = mock;
   },
   setShouldLogVerbose(mock: typeof discordProviderRuntime.shouldLogVerbose) {
     discordProviderRuntime.shouldLogVerbose = mock;

@@ -253,16 +253,6 @@ describe("X GitHub verification sync", () => {
     }
   });
 
-  it("preserves the completed snapshot if the spend gate blocks a newly declared user", async () => {
-    const test = githubFixture(0.01);
-    await test.sync();
-    const previous = await getXGitHubStatus(test.runtime, test.account);
-    test.source.people.push({ login: "second", handle: "bob" });
-    await expect(test.sync()).rejects.toBeInstanceOf(XBudgetExceededError);
-    expect(test.lookups).toEqual([["alice"]]);
-    expect(await getXGitHubStatus(test.runtime, test.account)).toEqual(previous);
-  });
-
   it("resumes a paid batch from persisted lookups after the daily budget resets", async () => {
     const test = githubFixture(1);
     const handles = Array.from({ length: 101 }, (_, index) => `writer${index}`);

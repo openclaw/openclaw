@@ -1,3 +1,4 @@
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import { beginContextEngineLogicalTurn } from "../../harness/context-engine-turn-begin.js";
@@ -11,6 +12,9 @@ export async function admitEmbeddedContextEngine(
   harness: Pick<AgentHarness, "id" | "contextEngineHostCapabilities">,
 ) {
   const params = input.runParams;
+  const assertCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
+    : undefined;
   const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
   const contextEngineLogicalTurnLease =
     params.contextEngineLogicalTurnLease ??
@@ -22,6 +26,13 @@ export async function admitEmbeddedContextEngine(
           config: params.config,
           agentDir: input.agentDir,
           workspaceDir: input.workspaceDir,
+          awaitSessionDiffBaseline: params.awaitSessionDiffBaseline
+            ? async () => {
+                await params.awaitSessionDiffBaseline?.();
+                params.abortSignal?.throwIfAborted();
+                assertCurrent?.();
+              }
+            : undefined,
         }),
       { config: params.config },
     ));

@@ -4,6 +4,8 @@ import type {
   SessionParticipantIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import {
@@ -11,13 +13,13 @@ import {
   projectPresenceViewers,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { useIdentityApplication } from "./identity-application.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
 
@@ -38,26 +40,13 @@ export type ViewerAvatarProps = {
 };
 
 export function ViewerAvatarContent(props: ViewerAvatarProps) {
-  const application = useIdentityApplication();
-  const gateway = application ? projectGateway(application.gateway) : undefined;
-  const selfAvatarUrl = () => {
-    const identity = props.identity ?? props.user?.identity;
-    const self = gateway?.read().snapshot.selfUser;
-    return identity?.type === "profile" &&
-      self?.identity?.type === "profile" &&
-      identity.id === self.identity.id
-      ? self.avatarUrl
-      : undefined;
-  };
-  const view = createMemo(() =>
-    resolveIdentityAvatarView({
-      identity: props.identity ?? props.user?.identity,
-      id: props.user?.id,
-      name: props.user?.name,
-      username: props.user?.email,
-      profileAvatarUrl: props.user?.avatarUrl?.trim() || selfAvatarUrl(),
-    }),
-  );
+  const view = useIdentityAvatarView(() => ({
+    identity: props.identity ?? props.user?.identity,
+    id: props.user?.id,
+    name: props.user?.name,
+    username: props.user?.email,
+    profileAvatarUrl: props.user?.avatarUrl,
+  }));
   return (
     <Show when={props.user}>
       <span
@@ -171,59 +160,86 @@ function FacepilePerson(props: {
       ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
       : null,
   );
-  const avatar = () =>
-    props.user.identity?.type === "agent" ? (
-      <AgentViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-      />
-    ) : (
-      <ViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-        variant="session"
-      />
-    );
+  const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
   return (
-    <Show when={link()} fallback={avatar()}>
+    <Show when={link()} fallback={avatar}>
       {(target) => (
         <a
           class="person-activity-avatar-link"
           href={target().href}
           onClick={(event) => target().open(event)}
         >
-          {avatar()}
+          {avatar}
         </a>
       )}
     </Show>
   );
 }
 
-export function AgentViewerAvatar(props: {
-  user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">;
-  identity: Extract<SessionParticipantIdentity, { type: "agent" }>;
+export function ParticipantAvatar(props: {
+  user: FacepileUser;
   markAsViewer?: boolean;
   label?: string;
+  "aria-hidden"?: "true";
 }) {
-  const avatar = createMemo(() => {
-    const resolved = resolveAvatar({
-      identity: props.identity,
-      id: props.user.id,
-      name: props.user.name,
-      profileAvatarUrl: props.user.avatarUrl,
-    });
-    return resolved.kind === "profile" ? resolved.url : null;
-  });
+  const agent = () => {
+    const identity = props.user.identity;
+    return identity?.type === "agent" ? identity : undefined;
+  };
   return (
-    <span
-      class="viewer-avatar viewer-avatar--session"
-      aria-label={props.label ?? presenceViewerLabel(props.user)}
-      data-viewer-id={props.markAsViewer ? props.user.id : undefined}
+    <Show
+      when={agent()}
+      fallback={
+        <ViewerAvatar
+          user={props.user}
+          markAsViewer={props.markAsViewer}
+          variant="session"
+          aria-hidden={props["aria-hidden"]}
+        />
+      }
     >
-      <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />
-    </span>
+      {(identity) => {
+        const app = useOptionalApplication();
+        const agents = app ? projectAgents(app.agents) : undefined;
+        const agentIdentity = app
+          ? projectAgentIdentity({
+              identities: app.agentIdentity,
+              get agentId() {
+                return identity().id;
+              },
+            })
+          : undefined;
+        const avatar = createMemo(() => {
+          const rosterAgent = agents
+            ?.read()
+            .agentsList?.agents.find((entry) => entry.id === identity().id);
+          const hydrated = agentIdentity?.read();
+          const resolved = resolveAvatar({
+            identity: identity(),
+            id: props.user.id,
+            name: props.user.name,
+            profileAvatarUrl: props.user.avatarUrl,
+          });
+          return {
+            id: identity().id,
+            avatar: hydrated
+              ? resolveAgentAvatarUrl(rosterAgent ?? {}, hydrated)
+              : (resolveAgentAvatarUrl(rosterAgent ?? {}) ??
+                (resolved.kind === "profile" ? resolved.url : null)),
+            textAvatar: resolveAgentTextAvatar(rosterAgent ?? {}, hydrated),
+          };
+        });
+        return (
+          <span
+            class="viewer-avatar viewer-avatar--session"
+            aria-label={props.label ?? presenceViewerLabel(props.user)}
+            data-viewer-id={props.markAsViewer ? props.user.id : undefined}
+          >
+            <AgentIdentityAvatar agent={avatar()} />
+          </span>
+        );
+      }}
+    </Show>
   );
 }
 

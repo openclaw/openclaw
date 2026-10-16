@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 const codexClient = vi.hoisted(() => ({
   resolveCodexClientVersion: vi.fn(async (): Promise<string | undefined> => undefined),
 }));
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
+// mock-isolation: Discovery fixtures supply synthetic credentials and account metadata.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
+  resolveProviderAuthProfileMetadataAsync: mocks.resolveProviderAuthProfileMetadata,
+}));
 // mock-isolation: the real facade loads the Codex plugin, which probes the host PATH for codex.
 vi.mock("openclaw/plugin-sdk/codex-client-version-runtime", () => codexClient);
 const codexPackage = JSON.parse(
@@ -92,9 +96,18 @@ describe("OpenAI discovered subscription models", () => {
       agentDir: "/tmp/openai-agent",
     });
   });
-  it.each(["gpt-5.4", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])(
-    "maps discovered %s into a ChatGPT response model",
-    async (modelId) => {
+  it.each([
+    { modelId: "gpt-5.4", contextWindow: 272_000, contextTokens: 272_000 },
+    { modelId: "gpt-6-astra", contextWindow: 272_000, contextTokens: 272_000 },
+    { modelId: "gpt-6-sol", contextWindow: 272_000, contextTokens: 272_000 },
+    { modelId: "gpt-6-luna", contextWindow: 272_000, contextTokens: 272_000 },
+    { modelId: "gpt-6.1-sol", contextWindow: 500_000, contextTokens: 500_000 },
+    { modelId: "gpt-6.1-sol", contextWindow: 128_000, contextTokens: 128_000 },
+    { modelId: "gpt-6.1-sol", contextWindow: 700_000, contextTokens: 700_000 },
+    { modelId: "gpt-6.1-sol", contextWindow: undefined, contextTokens: 500_000 },
+  ])(
+    "maps discovered $modelId with active window $contextWindow into a ChatGPT response model",
+    async ({ modelId, contextWindow, contextTokens }) => {
       const release = vi.fn(async () => undefined);
       const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
         response: Response.json({
@@ -107,7 +120,7 @@ describe("OpenAI discovered subscription models", () => {
                 { effort: "medium", description: "medium" },
                 { effort: "high", description: "high" },
               ],
-              context_window: 272_000,
+              context_window: contextWindow,
               max_context_window: 1_050_000,
               max_output_tokens: 128_000,
             },
@@ -141,7 +154,7 @@ describe("OpenAI discovered subscription models", () => {
         input: ["text", "image"],
         reasoning: true,
         contextWindow: 1_050_000,
-        contextTokens: 272_000,
+        contextTokens,
         maxTokens: 128_000,
       });
       if (modelId === "gpt-6.1-sol") {

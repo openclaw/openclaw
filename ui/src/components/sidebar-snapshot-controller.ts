@@ -129,6 +129,7 @@ export class SidebarSnapshotController {
     if (this.pending && this.host.sidebarSnapshotSettled()) {
       this.generation += 1;
       this.pending = false;
+      this.notify();
     }
     if (snapshot.client?.offlineRecoveryRetired || snapshot.hello === this.retiredHello) {
       if (this.scope) {

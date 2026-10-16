@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   mergeLocalAuthProfileStoreWithInheritedStore,
   updateRuntimeAuthProfileStoreInheritedCredentials,
@@ -23,6 +24,10 @@ import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("runtime auth snapshot publication", () => {
+  beforeEach(() => {
+    prepareSharedAuthStoreOwnershipForNative();
+  });
+
   it("keeps locally shadowed snapshots unchanged when shared credentials rotate", () => {
     const sharedPath = "/tmp/openclaw-auth-incremental/shared.sqlite";
     const owner = {
@@ -188,6 +193,7 @@ describe("runtime auth snapshot publication", () => {
   it("publishes one shared credential generation before notifying any derived snapshot reader", () => {
     const sharedPath = "/tmp/openclaw-auth-atomic/shared.sqlite";
     const owner = {
+      env: {},
       databasePath: sharedPath,
       sharedDatabasePath: sharedPath,
       location: "state-db" as const,

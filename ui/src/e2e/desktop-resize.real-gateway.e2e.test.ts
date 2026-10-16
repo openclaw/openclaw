@@ -23,7 +23,10 @@ import {
   type GatewayReadinessDiagnostic,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createDesktopResizeGuest,
@@ -413,6 +416,7 @@ suite.define(() => {
           await page.goto(new URL("activity", baseUrl).href);
           phase("ui-ready");
           await waitForControlUiGatewayReady(page);
+          await waitForControlUiRoute(page, { routeId: "activity" });
           await page.evaluate(() => {
             window.dispatchEvent(
               new CustomEvent("openclaw:desktop-toggle", {

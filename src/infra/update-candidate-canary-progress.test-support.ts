@@ -494,9 +494,7 @@ export function registerCanaryUncertainReceiptTests({
           targetStateDir: string;
         };
         expect((await fs.stat(request.targetStateDir)).isDirectory()).toBe(true);
-        await expect(
-          fs.access(path.join(request.targetStateDir, "openclaw.json")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(request.targetStateDir, "openclaw.json"));
       } finally {
         const request = mocks.snapshot.mock.calls.at(-1)?.[1].input;
         if (request) {
@@ -531,11 +529,11 @@ export function registerCanaryUncertainReceiptTests({
         targetStateDir: string;
       });
       expect(remove.mock.calls.some(([target]) => target === targetStateDir)).toBe(false);
-      await expect(fs.access(targetStateDir)).resolves.toBeUndefined();
+      await fs.access(targetStateDir);
       receipt.reject(uncertain);
       await rejected;
       expect(remove.mock.calls.some(([target]) => target === targetStateDir)).toBe(false);
-      await expect(fs.access(targetStateDir)).resolves.toBeUndefined();
+      await fs.access(targetStateDir);
     } finally {
       receipt.reject(uncertain);
       await pending.catch(() => undefined);

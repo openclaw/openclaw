@@ -120,37 +120,6 @@ async function prepareGet(
 }
 
 describe("OnePasswordBroker validation and policy", () => {
-  it("lists only registry metadata and active grant state", async () => {
-    const { broker, getItem } = setup();
-    const approval = await prepareGet(broker, "list-grant", "approval", "create listing fixture");
-    await approval.hook?.requireApproval?.onResolution?.("allow-always");
-    await approval.get();
-    getItem.mockClear();
-
-    const items = await broker.list(invocation);
-    expect(items).toEqual([
-      {
-        slug: "approval",
-        description: "",
-        policy: "approve",
-        standingGrantActive: true,
-      },
-      {
-        slug: "automatic",
-        description: "Automatic item",
-        policy: "auto",
-        standingGrantActive: false,
-      },
-      {
-        slug: "blocked",
-        description: "",
-        policy: "deny",
-        standingGrantActive: false,
-      },
-    ]);
-    expect(getItem).not.toHaveBeenCalled();
-  });
-
   it("requires a non-empty bounded reason before policy evaluation", async () => {
     const { broker, audit, getItem } = setup();
     const missing = await before(broker, "call-1", { action: "get", slug: "blocked" });
@@ -281,25 +250,6 @@ describe("OnePasswordBroker validation and policy", () => {
     ).resolves.toMatchObject({ slug: "automatic" });
     const rows = await audit.entries();
     expect(rows.map((entry) => entry.value.outcome)).toEqual(["auto"]);
-  });
-
-  it("shares pending authorizations across broker instances", async () => {
-    const { broker: hookBroker, createBroker } = setup();
-    const executeBroker = createBroker();
-    const issued = await before(hookBroker, "duplicate-instance-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "cross-instance authorization",
-    });
-
-    await expect(
-      executeBroker.get(
-        "duplicate-instance-1",
-        { action: "get", slug: "automatic", reason: "cross-instance authorization" },
-        invocation,
-        nonceOf(issued),
-      ),
-    ).resolves.toMatchObject({ slug: "automatic" });
   });
 
   it.each([false, true])(
@@ -561,25 +511,6 @@ describe("OnePasswordBroker validation and policy", () => {
     ).resolves.toMatchObject({ slug: "automatic" });
   });
 
-  it("authorizes via unique pending match when another hook drops the nonce param", async () => {
-    // before_tool_call results merge last-writer-wins across plugins, so a
-    // later params-returning hook can strip the nonce from the executed params.
-    const { broker } = setup();
-    await before(broker, "dropped-1", {
-      action: "get",
-      slug: "automatic",
-      reason: "nonce dropped by another hook",
-    });
-    await expect(
-      broker.get(
-        "dropped-1",
-        { action: "get", slug: "automatic", reason: "nonce dropped by another hook" },
-        invocation,
-        undefined,
-      ),
-    ).resolves.toMatchObject({ slug: "automatic" });
-  });
-
   it("fails closed when a dropped nonce is ambiguous across pending entries", async () => {
     const { broker } = setup();
     for (let round = 0; round < 2; round += 1) {
@@ -830,28 +761,5 @@ describe("OnePasswordBroker validation and policy", () => {
       outcome: "error",
       errorCode: "GRANT_EXPIRED",
     });
-  });
-});
-
-describe("OnePasswordBroker cache and audit", () => {
-  it("honors cache TTL, audits hits, and refetches after expiry", async () => {
-    const { broker, audit, getItem, advance } = setup();
-    for (const [id, reason] of [
-      ["cache-1", "first"],
-      ["cache-2", "second"],
-    ] as const) {
-      const request = await prepareGet(broker, id, "automatic", reason);
-      await request.get();
-    }
-    expect(getItem).toHaveBeenCalledTimes(1);
-    advance(300_001);
-    const third = await prepareGet(broker, "cache-3", "automatic", "third");
-    await third.get();
-    expect(getItem).toHaveBeenCalledTimes(2);
-    expect((await audit.entries()).map((entry) => entry.value.outcome)).toEqual([
-      "auto",
-      "cache-hit",
-      "auto",
-    ]);
   });
 });

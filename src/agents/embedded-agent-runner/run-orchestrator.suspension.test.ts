@@ -4,6 +4,10 @@ import { createAssistantMessageEventStream, type Context } from "openclaw/plugin
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly as loadSessionEntry,
@@ -119,6 +123,7 @@ afterEach(async () => {
     );
   }
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   expect(
@@ -147,6 +152,7 @@ async function createRun(agentId: string, sessionPersistence?: "durable" | "deta
     entries: { main: {}, research: {} },
     defaults: { model: { primary: "openai/mock-1", fallbacks: ["openai/mock-2"] } },
   };
+  setRuntimeConfigSnapshot(config);
   const sessionId = "setup-inference-probe";
   const sessionKey = `agent:${agentId}:setup-inference:incognito-probe`;
   const params = {
@@ -462,6 +468,7 @@ describe("embedded run detached session metadata", () => {
     async (trigger, existing, owner) => {
       const { params, scope, stateDir, database } = await createRun("research", "detached");
       params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
+      setRuntimeConfigSnapshot(params.config);
       const manager = params.sessionManager;
       manager.appendMessage(makeUserMessage("Remember the memory-only project.", 1));
       manager.appendMessage(

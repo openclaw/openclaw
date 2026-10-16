@@ -225,7 +225,7 @@ describe("AgentSession runtime and transcript projections", () => {
     },
   );
 
-  it("preserves execution correlation IDs through redacted transcript persistence", async () => {
+  it("preserves execution correlation IDs and argument bytes through transcript persistence", async () => {
     const dir = tempDirs.make("openclaw-correlation-projection-");
     const scope = {
       agentId: "main",
@@ -279,21 +279,21 @@ describe("AgentSession runtime and transcript projections", () => {
       content: ids.map((id) => ({
         type: "toolCall",
         id,
-        arguments: { value: expect.not.stringContaining(id) },
+        arguments: { value: id },
       })),
     });
     expect(stored.filter((message) => message.role === "toolResult")).toMatchObject(
       ids.map((toolCallId) => ({
         toolCallId,
-        content: [{ type: "text", text: expect.not.stringContaining(toolCallId) }],
-        details: { value: expect.not.stringContaining(toolCallId) },
+        content: [{ type: "text", text: toolCallId }],
+        details: { value: toolCallId },
         isError: false,
       })),
     );
   });
 
   it.each(["apiKey", "account"])(
-    "executes original %s arguments while preserving redacted storage and delivery facts",
+    "executes and persists original %s arguments while preserving delivery facts",
     async (field) => {
       const dir = tempDirs.make("openclaw-runtime-projection-");
       const scope = {
@@ -415,7 +415,7 @@ describe("AgentSession runtime and transcript projections", () => {
             { type: "text", text: "Extension: Looking up both records." },
             ...values.map((value) => ({
               type: "toolCall",
-              arguments: { [field]: field === "account" ? value : "***" },
+              arguments: { [field]: value },
             })),
           ],
           openclawDelivery: { replyToCurrent: true },

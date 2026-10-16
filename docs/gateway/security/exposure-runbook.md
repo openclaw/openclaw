@@ -169,7 +169,7 @@ After each exposure change:
 1. Re-run `openclaw security audit --deep`.
 2. Confirm a successful authorized connection succeeds.
 3. Confirm an unauthorized sender or browser session is denied.
-4. Confirm logs redact secrets.
+4. Confirm log tails, console output, and exports redact secrets; keep raw log files private.
 5. Confirm DM/group routing reaches only the intended agent.
 6. Confirm high-impact tools ask for approval or are denied.
 7. Document the accepted residual warnings.
@@ -218,6 +218,6 @@ Then:
 - Shared channels do not reach personal credentials.
 - Non-main sessions run in sandbox mode.
 - Host exec and elevated tools are denied or approval-gated.
-- Logs redact secrets.
+- Log tails, console output, and exports redact secrets; raw log files stay private.
 - Critical audit findings are resolved.
 - Rollback steps are tested and documented.

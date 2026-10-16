@@ -6,9 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
+import type { EngineConnection } from "../sql-connection.js";
+import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   createSqliteCommitReceipt,
-  hasSqliteCommitReceiptCoverage,
+  readSqliteCommitReceipt,
   type SqliteCommitReceipt,
   type SqliteCommitSource,
   type SqliteCommittedFact,
@@ -59,20 +61,21 @@ const state = resolveGlobalSingleton(
   }),
 );
 
-function sourceFor(database: DatabaseSync): SqliteCommitSource {
-  let source = state.sources.get(database);
+function sourceFor(database: EngineConnection): SqliteCommitSource {
+  const anchor = sqlPublicationAnchor(database);
+  let source = state.sources.get(anchor);
   if (!source) {
     source = {
       identity:
-        readTrackedStateDatabaseIdentity(database)?.key ?? Symbol("untracked-binding-database"),
+        readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-binding-database"),
       incarnation: randomUUID(),
     };
-    state.sources.set(database, source);
+    state.sources.set(anchor, source);
   }
   return source;
 }
 
-function capturePublication(database: DatabaseSync, changes: readonly BindingChange[]) {
+function capturePublication(database: EngineConnection, changes: readonly BindingChange[]) {
   const current = new Map(changes.map((change) => [change.key, change.current]));
   const receipt = createSqliteCommitReceipt({
     source: sourceFor(database),
@@ -80,7 +83,7 @@ function capturePublication(database: DatabaseSync, changes: readonly BindingCha
     keys: [...current.keys()],
     readFact(key): SqliteCommittedFact<SessionBindingRecord> {
       const record = current.get(key);
-      return record ? { kind: "postimage", value: structuredClone(record) } : { kind: "absent" };
+      return record ? { kind: "postimage", value: record } : { kind: "absent" };
     },
   });
   return {
@@ -149,7 +152,7 @@ export const currentConversationBindingPublication = {
 
 /** Called inside the owning write transaction using rows already read by its kernel. */
 function stageCurrentConversationBindingChanges(
-  database: DatabaseSync,
+  database: EngineConnection,
   changes: readonly BindingChange[],
 ): void {
   if (!changes.length) {
@@ -170,7 +173,7 @@ function stageCurrentConversationBindingChanges(
 
 /** One receipt covers every changed row in this worker transaction, including mutating reads. */
 export function withCurrentConversationBindingWorkerReceipt<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   update: () => T,
 ): T {
   return state.capture.run([], () => {
@@ -193,41 +196,25 @@ export function withCurrentConversationBindingWorkerReceipt<T>(
 function readPublication(value: unknown): CurrentConversationBindingPublication {
   if (
     !isRecord(value) ||
-    !isRecord(value.receipt) ||
-    !isRecord(value.receipt.source) ||
-    typeof value.receipt.source.identity !== "string" ||
-    typeof value.receipt.source.incarnation !== "string" ||
-    !(value.receipt.facts instanceof Map) ||
     !Array.isArray(value.sessionKeys) ||
     !value.sessionKeys.every((key) => typeof key === "string")
   ) {
     throw new Error("Conversation binding receipt is invalid");
   }
-  const source = {
-    identity: value.receipt.source.identity,
-    incarnation: value.receipt.source.incarnation,
-  };
-  if (
-    !hasSqliteCommitReceiptCoverage(value.receipt, {
-      source,
+  return {
+    receipt: readSqliteCommitReceipt<SessionBindingRecord>(value.receipt, {
       domain: "current-conversation-bindings",
-      keys: [...value.receipt.facts.keys()],
-    }) ||
-    ![...value.receipt.facts].every(
-      ([key, fact]) =>
-        typeof key === "string" &&
-        (fact.kind === "absent" ||
-          (fact.kind === "postimage" &&
-            isRecord(fact.value) &&
-            typeof fact.value.bindingId === "string" &&
-            typeof fact.value.targetSessionKey === "string" &&
-            isRecord(fact.value.conversation))),
-    )
-  ) {
-    throw new Error("Conversation binding receipt has incomplete facts");
-  }
-  // SAFETY: The private worker owns this shape; envelope, source, and routing fields were checked above.
-  return value as CurrentConversationBindingPublication;
+      invalidReceiptMessage: "Conversation binding receipt has incomplete facts",
+      isFact: (_key, fact) =>
+        fact.kind === "absent" ||
+        (fact.kind === "postimage" &&
+          isRecord(fact.value) &&
+          typeof fact.value.bindingId === "string" &&
+          typeof fact.value.targetSessionKey === "string" &&
+          isRecord(fact.value.conversation)),
+    }),
+    sessionKeys: value.sessionKeys,
+  };
 }
 
 /** Retain supersession until native settlement, independent of ordinary reply delivery. */

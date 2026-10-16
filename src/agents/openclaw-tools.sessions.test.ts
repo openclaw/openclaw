@@ -9,9 +9,14 @@ import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
+  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -110,6 +115,29 @@ async function seedSession(sessionKey: string, sessionId = sessionKey) {
   );
 }
 
+async function writeFinal(sessionKey: string, runId: string, text: string, sessionId = sessionKey) {
+  await persistSessionTranscriptTurn(
+    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey, sessionId },
+    {
+      config: TEST_CONFIG,
+      runId,
+      expectedSessionId: sessionId,
+      touchSessionEntry: false,
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text }],
+          },
+        },
+      ],
+    },
+  );
+}
+
 function cloneTestConfig() {
   return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
 }
@@ -150,6 +178,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     installMessagingTestRegistry();
+    setRuntimeConfigSnapshot(TEST_CONFIG);
     await seedSession("agent:main:main");
   });
   afterEach(() =>
@@ -158,6 +187,7 @@ describe("sessions tools", () => {
       resetGatewayWorkAdmission,
       resetSystemEventsForTest,
       resetAdjustedParamsByToolCallIdForTests,
+      clearRuntimeConfigSnapshot,
     ),
   );
   afterAll(() =>
@@ -429,20 +459,20 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_history sets contentRedacted independently of contentTruncated", async () => {
+  it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
     mockGatewayResponses({
       "chat.history": { messages: [textAssistant(`${secret} ${"safe text ".repeat(420)}`)] },
     });
-    const result = await getSessionTool("sessions_history").execute("redacted", {
+    const result = await getSessionTool("sessions_history").execute("preserved", {
       sessionKey: "main",
     });
     expect(result.details).toMatchObject({
-      contentRedacted: true,
+      contentRedacted: false,
       contentTruncated: true,
       truncated: true,
     });
-    expect(JSON.stringify(result.details)).not.toContain(secret);
+    expect(JSON.stringify(result.details)).toContain(secret);
   });
 
   it("sessions_send does not redeliver a source reply when history lacks its message-tool result", async () => {
@@ -459,6 +489,7 @@ describe("sessions tools", () => {
       if (request.method === "agent.wait") {
         waitObserved = true;
         deliveredMessages.push(marker);
+        await writeFinal(sessionKey, "run-source-reply", marker, "source-session");
         return {
           runId: "run-source-reply",
           status: "ok",
@@ -478,7 +509,7 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         return {
-          messages: waitObserved ? [{ role: "assistant", content: marker, timestamp: 20 }] : [],
+          messages: [],
         };
       }
       if (request.method === "send") {
@@ -620,7 +651,10 @@ describe("sessions tools", () => {
           return { runId: "inline-result", status: "accepted" };
         }
         if (request.method === "agent.wait") {
-          return { status: "ok", terminalReply: { disposition: "visible", text: "initial" } };
+          return {
+            status: "ok",
+            terminalReply: { disposition: "visible", text: "initial" },
+          };
         }
         return {};
       });

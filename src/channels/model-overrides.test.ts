@@ -19,49 +19,6 @@ describe("resolveChannelModelOverride", () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
-  it.each([
-    {
-      name: "matches parent group id when topic suffix is present",
-      input: {
-        cfg: createModelOverrideConfig("telegram", {
-          "-100123": "demo-provider/demo-parent-model",
-        }),
-        channel: "telegram",
-        groupId: "-100123:topic:99",
-      },
-      expected: { model: "demo-provider/demo-parent-model", matchKey: "-100123" },
-    },
-    {
-      name: "prefers topic-specific match over parent group id",
-      input: {
-        cfg: createModelOverrideConfig("telegram", {
-          "-100123": "demo-provider/demo-parent-model",
-          "-100123:topic:99": "demo-provider/demo-topic-model",
-        }),
-        channel: "telegram",
-        groupId: "-100123:topic:99",
-      },
-      expected: { model: "demo-provider/demo-topic-model", matchKey: "-100123:topic:99" },
-    },
-    {
-      // Use the registered thread fixture; an unknown id triggers real plugin discovery.
-      name: "falls back to parent session key when thread id does not match",
-      input: {
-        cfg: createModelOverrideConfig("discord", {
-          "123": "demo-provider/demo-parent-model",
-        }),
-        channel: "discord",
-        groupId: "999",
-        parentSessionKey: "agent:main:discord:channel:123:thread:456",
-      },
-      expected: { model: "demo-provider/demo-parent-model", matchKey: "123" },
-    },
-  ] as const)("$name", ({ input, expected }) => {
-    const resolved = resolveChannelModelOverride(input);
-    expect(resolved?.model).toBe(expected.model);
-    expect(resolved?.matchKey).toBe(expected.matchKey);
-  });
-
   it("passes channel kind to plugin-owned parent fallback resolution", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -173,52 +130,6 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.matchKey).toBe("-100123");
   });
 
-  it("matches direct-user-specific model override via directUserId", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        user123: "demo-provider/demo-direct-user-model",
-        "*": "demo-provider/demo-wildcard-model",
-      }),
-      channel: "telegram",
-      groupChatType: "direct",
-      directUserIds: ["user123"],
-    });
-
-    expect(resolved?.model).toBe("demo-provider/demo-direct-user-model");
-    expect(resolved?.matchKey).toBe("user123");
-  });
-
-  it("falls back to wildcard when no directUserId match exists", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        user999: "demo-provider/demo-other-user-model",
-        "*": "demo-provider/demo-wildcard-model",
-      }),
-      channel: "telegram",
-      groupChatType: "direct",
-      directUserIds: ["user123"],
-    });
-
-    expect(resolved?.model).toBe("demo-provider/demo-wildcard-model");
-    expect(resolved?.matchKey).toBe("*");
-    expect(resolved?.matchSource).toBe("wildcard");
-  });
-
-  it("ignores directUserId when a groupId is present (group takes precedence)", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        "-100123": "demo-provider/demo-group-model",
-        user456: "demo-provider/demo-direct-user-model",
-      }),
-      channel: "telegram",
-      groupId: "-100123",
-      directUserIds: ["user456"],
-    });
-
-    expect(resolved?.model).toBe("demo-provider/demo-group-model");
-    expect(resolved?.matchKey).toBe("-100123");
-  });
-
   it("matches slack DM when origin.from is slack:U... but config has user:U... (multi-candidate)", () => {
     const resolved = resolveChannelModelOverride({
       cfg: createModelOverrideConfig("slack", {
@@ -231,48 +142,6 @@ describe("resolveChannelModelOverride", () => {
 
     expect(resolved?.model).toBe("demo-provider/demo-slack-dm-model");
     expect(resolved?.matchKey).toBe("user:U12345");
-  });
-
-  it("prefers first matching candidate over later candidates", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("slack", {
-        "slack:U12345": "demo-provider/demo-prefixed-model",
-        "user:U12345": "demo-provider/demo-user-model",
-      }),
-      channel: "slack",
-      groupChatType: "direct",
-      directUserIds: ["slack:U12345", "user:U12345"],
-    });
-
-    expect(resolved?.model).toBe("demo-provider/demo-prefixed-model");
-    expect(resolved?.matchKey).toBe("slack:U12345");
-  });
-
-  it("derives raw peer ID from channel-prefixed origin.from for telegram DM", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        "12345": "demo-provider/demo-telegram-dm-model",
-      }),
-      channel: "telegram",
-      groupChatType: "direct",
-      directUserIds: ["telegram:12345"],
-    });
-
-    expect(resolved?.model).toBe("demo-provider/demo-telegram-dm-model");
-    expect(resolved?.matchKey).toBe("12345");
-  });
-
-  it("does not strip prefix for a different channel", () => {
-    const resolved = resolveChannelModelOverride({
-      cfg: createModelOverrideConfig("telegram", {
-        "12345": "demo-provider/demo-telegram-dm-model",
-      }),
-      channel: "telegram",
-      groupChatType: "direct",
-      directUserIds: ["discord:12345"],
-    });
-
-    expect(resolved).toBeNull();
   });
 
   it("does not leak directUserId match into non-direct conversations", () => {

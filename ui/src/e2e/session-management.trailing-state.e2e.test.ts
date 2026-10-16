@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -17,12 +17,10 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 async function seedPullRequestSummary(page: Page, key: string, state: "open" | "merged") {
-  await page.evaluate(
-    (summary) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime: { context: { sessions: SessionCapability } };
-      };
-      app.runtime.context.sessions.setPullRequestSummary(summary.key, {
+  await evaluateControlUiContext(
+    page,
+    (context, summary) => {
+      context.sessions.setPullRequestSummary(summary.key, {
         numbers: [1],
         state: summary.state,
       });
@@ -46,7 +44,7 @@ suite.define(() => {
       const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ ...settings, sidebarEntries: ["session:agent:main:two-line"] }),
+        JSON.stringify({ ...settings, railShortcuts: ["session:agent:main:two-line"] }),
       );
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     await installMockGateway(page, {
@@ -421,49 +419,6 @@ suite.define(() => {
       await codingToggle.focus();
       await pullRequestIcon.waitFor({ state: "visible" });
       await unreadBadge.waitFor({ state: "visible" });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps semantic state beside always-visible touch actions", async () => {
-    const context = await suite.browser.newContext({
-      hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.now()),
-          sessionRow("agent:main:touch-active", "Touch active", Date.now() - 1, {
-            hasActiveRun: true,
-            status: "running",
-          }),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const row = page.locator('[data-session-key="agent:main:touch-active"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
-      const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.locator("[data-sidebar-session-archive]");
-      await expect.poll(() => state.isVisible()).toBe(true);
-      await expect.poll(() => actionOpacity(state)).toBe("1");
-      await expect.poll(() => pin.isVisible()).toBe(true);
-      await expect.poll(() => menu.isVisible()).toBe(true);
-
-      const [stateBounds, pinBounds] = await Promise.all([state.boundingBox(), pin.boundingBox()]);
-      if (!stateBounds || !pinBounds) {
-        throw new Error("Expected visible touch state and action geometry");
-      }
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
     } finally {
       await context.close();
     }

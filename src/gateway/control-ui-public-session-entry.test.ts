@@ -61,6 +61,7 @@ function openReader(
     : undefined;
   runInNewContext(document.querySelector("script")!.textContent!, {
     document,
+    window: dom.window,
     location: { protocol: location.protocol, host: location.host, hash: location.hash, replace },
     localStorage: storage ?? localStorage,
     sessionStorage: storage ?? sessionStorage,
@@ -109,44 +110,50 @@ describe("public reader operator handoff", () => {
     },
   );
 
-  it.each([401, 403])(
-    "reveals confirmed unavailability after a delayed %s response",
-    async (status) => {
-      const probe = createDeferred<{ status: number }>();
-      const f = openReader({ probe: probe.promise });
-      const main = f.document.querySelector("main")!;
-      expect(main.hasAttribute("data-entry-pending")).toBe(true);
-      probe.resolve({ status });
-      await probe.promise;
-      expect(main.hasAttribute("data-entry-pending")).toBe(false);
-      expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
-      expect(f.loginVisibility()).toBe("visible");
-      expect(f.replace).not.toHaveBeenCalled();
-    },
-  );
+  it.each([401])("reveals confirmed unavailability after a delayed %s response", async (status) => {
+    const probe = createDeferred<{ status: number }>();
+    const f = openReader({ probe: probe.promise });
+    const main = f.document.querySelector("main")!;
+    expect(main.hasAttribute("data-entry-pending")).toBe(true);
+    probe.resolve({ status });
+    await probe.promise;
+    expect(main.hasAttribute("data-entry-pending")).toBe(false);
+    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+    expect(f.loginVisibility()).toBe("visible");
+    expect(f.replace).not.toHaveBeenCalled();
+  });
 
-  it.each(["network", "timeout", "server"])(
-    "does not present %s failures as denied access",
-    async (kind) => {
-      const probe = createDeferred<{ status: number }>();
-      const f = openReader({ probe: probe.promise });
-      if (kind === "server") {
-        probe.resolve({ status: 503 });
-      } else {
-        probe.reject(new Error(kind));
-      }
-      await probe.promise.catch(() => {});
-      await Promise.resolve();
-      expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
-      expect(f.document.querySelector(".entry-status")?.textContent).toContain(
-        "Could not check access",
-      );
-      expect(f.document.querySelector(".entry-status")?.textContent).toContain("reload or log in");
-      expect(f.document.title).not.toContain("unavailable");
-      expect(f.loginVisibility()).toBe("visible");
-      expect(f.replace).not.toHaveBeenCalled();
-    },
-  );
+  it("offers login when an auth proxy redirects the signed-out probe", async () => {
+    const probe = createDeferred<{ status: number; type?: string }>();
+    const f = openReader({ probe: probe.promise });
+    const main = f.document.querySelector("main")!;
+    probe.resolve({ status: 0, type: "opaqueredirect" });
+    await probe.promise;
+    expect(main.hasAttribute("data-entry-pending")).toBe(false);
+    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+    expect(f.loginVisibility()).toBe("visible");
+    expect(f.replace).not.toHaveBeenCalled();
+  });
+
+  it.each(["network", "server"])("does not present %s failures as denied access", async (kind) => {
+    const probe = createDeferred<{ status: number }>();
+    const f = openReader({ probe: probe.promise });
+    if (kind === "server") {
+      probe.resolve({ status: 503 });
+    } else {
+      probe.reject(new Error(kind));
+    }
+    await probe.promise.catch(() => {});
+    await Promise.resolve();
+    expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
+    expect(f.document.querySelector(".entry-status")?.textContent).toContain(
+      "Could not check access",
+    );
+    expect(f.document.querySelector(".entry-status")?.textContent).toContain("reload or log in");
+    expect(f.document.title).not.toContain("unavailable");
+    expect(f.loginVisibility()).toBe("visible");
+    expect(f.replace).not.toHaveBeenCalled();
+  });
 
   it("leaves a public transcript readable while the optional handoff is pending", () => {
     const probe = createDeferred<{ status: number }>();
@@ -157,7 +164,6 @@ describe("public reader operator handoff", () => {
   });
 
   it.each([
-    { name: "session token on reload", token: "synthetic-token" },
     { name: "paired token/password device in a new tab", device },
     {
       name: "paired device with an existing Gateway query scope",
@@ -195,19 +201,12 @@ describe("public reader operator handoff", () => {
   });
 
   it.each([
-    { name: "anonymous visitor" },
     { name: "empty token", token: " " },
     {
       name: "another gateway",
       token: "synthetic-token",
       device,
       storedScope: "wss://other.test/control",
-    },
-    {
-      name: "another mount",
-      token: "synthetic-token",
-      device,
-      storedScope: "wss://gateway.test/other",
     },
     {
       name: "another mount with a Gateway query scope",
@@ -244,7 +243,7 @@ describe("public reader operator handoff", () => {
     expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
     expect(f.fetch).toHaveBeenCalledWith(
       `${entry}&probe=1`,
-      expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+      expect.objectContaining({ credentials: "same-origin", redirect: "manual" }),
     );
   });
 

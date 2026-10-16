@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
@@ -54,7 +54,7 @@ export function prepareCronQuarantineRegistration(params: {
 
 /** The caller owns the complete synchronous transaction, including other Cron changes. */
 export function registerCronQuarantineInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: CronQuarantineRegistration,
 ): void {
   if (input.records.length === 0) {
@@ -69,7 +69,7 @@ export function registerCronQuarantineInDatabase(
 
 /** Deletes quarantine rows inside the caller-owned SQLite transaction. */
 export function deleteCronQuarantinedJobsFromDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storePath: string;
   entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
 }): void {
@@ -89,7 +89,7 @@ export function deleteCronQuarantinedJobsFromDatabase(params: {
 }
 
 export function readCronQuarantinedJobsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
 ): CronQuarantinedJob[] {
   return executeSqliteQuerySync(

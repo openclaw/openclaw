@@ -87,7 +87,7 @@ export class WorkerFaultPlacementLifecycle {
   constructor(private readonly options: WorkerFaultPlacementLifecycleOptions) {}
 
   async prepareRun(runId: string, credential: string): Promise<WorkerSessionTurnClaim> {
-    const current = this.options.placementStore.get(this.options.sessionId);
+    const current = await this.options.placementStore.getAsync(this.options.sessionId);
     const placement = current?.state === "active" ? current : await this.activatePlacement();
     const activeClaim = projectWorkerSessionTurnClaim(placement);
     if (activeClaim) {

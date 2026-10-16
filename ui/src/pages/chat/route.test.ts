@@ -7,7 +7,7 @@ import { createApplicationRouter } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { createChatPageSessions } from "./chat-page.test-support.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { pages } from "./route.ts";
 
@@ -97,7 +97,7 @@ describe("loadChatRoute", () => {
       const router = createApplicationRouter();
       onTestFinished(() => router.stop());
       const route = router.getRoute("chat")!;
-      const component = vi.spyOn(route, "component").mockResolvedValue({ render: () => null });
+      const component = vi.spyOn(route, "component").mockResolvedValue({ renderSolid: () => null });
       onTestFinished(() => component.mockRestore());
       const scopedContext = { ...context, router };
       const location = { pathname: "/chat/main/deploy-monitor-12345678", search: "", hash: "" };
@@ -132,7 +132,7 @@ describe("loadChatRoute", () => {
       onTestFinished(() => router.stop());
       const component = vi
         .spyOn(router.getRoute("chat")!, "component")
-        .mockResolvedValue({ render: () => null });
+        .mockResolvedValue({ renderSolid: () => null });
       onTestFinished(() => component.mockRestore());
       const scopedContext = { ...context, router };
       const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };
@@ -162,7 +162,7 @@ describe("loadChatRoute", () => {
       onTestFinished(() => router.stop());
       const component = vi
         .spyOn(router.getRoute("chat")!, "component")
-        .mockResolvedValue({ render: () => null });
+        .mockResolvedValue({ renderSolid: () => null });
       onTestFinished(() => component.mockRestore());
       const scopedContext = { ...context, router };
       const location = { pathname: `/chat/main/${reference}`, search: "", hash: "" };

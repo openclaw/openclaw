@@ -72,7 +72,7 @@ describe("runReplyAgent media delivery ownership", () => {
               meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
             });
             const result = await runReplyAgent(
-              makeRunReplyAgentParams({
+              await makeRunReplyAgentParams({
                 sessionKey,
                 provider,
                 followupRun: createMediaFollowupRun({

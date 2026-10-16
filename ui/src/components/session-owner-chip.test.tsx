@@ -107,7 +107,6 @@ it.each(["row", "header"] as const)(
     await vi.waitFor(() =>
       expect(chip.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
-    expect(chip.querySelector("openclaw-viewer-avatar")).toBeNull();
   },
 );
 

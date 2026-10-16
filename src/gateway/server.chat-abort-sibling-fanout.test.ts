@@ -13,6 +13,7 @@ import {
   writeSubagentSessionEntry,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import {
   activateSwarmRun,
@@ -67,6 +68,8 @@ installGatewayTestHooks({
 });
 
 await import("./server.js");
+// Prepare the lazy handler before the first creation RPC starts its response deadline.
+await import("./server-methods/sessions-create.js");
 
 for (const { name, fault, replaceParent } of [
   {
@@ -80,7 +83,7 @@ for (const { name, fault, replaceParent } of [
     replaceParent: false,
   },
   {
-    name: "typed Stop rejects a replaced parent while child cancellation drains",
+    name: "typed Stop rejects a replaced parent while retaining its accepted child cancellation",
     fault: false,
     replaceParent: true,
   },
@@ -137,6 +140,7 @@ for (const { name, fault, replaceParent } of [
         >
       | undefined;
     let responseSettled = false;
+    let acceptedKillIntent: SubagentRunRecord["killIntent"];
 
     await runQaGatewayFixture(
       async () => {
@@ -182,12 +186,37 @@ for (const { name, fault, replaceParent } of [
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
-          await writeSubagentSessionEntry({
+          const childStorePath = await writeSubagentSessionEntry({
             stateDir,
             agentId: "main",
             sessionKey: sessionKey(runId),
             defaultSessionId: `${runId}-session`,
           });
+          if (running.includes(runId)) {
+            // Recovery must observe the live owner when the run is registered.
+            leases.push(
+              await beginSessionWorkAdmission({
+                scope: storePath,
+                identities: [sessionKey(runId), `${runId}-session`],
+                run: {
+                  runId,
+                  sessionKey: sessionKey(runId),
+                  sessionId: `${runId}-session`,
+                  agentId: "main",
+                },
+                assertAllowed: () => {},
+                onInterrupt: () => {
+                  interrupted.push(runId);
+                  firstInterrupted.resolve();
+                  slotReleaseResults.push(releaseSwarmRun(runId));
+                  if (runId === failedRunId) {
+                    throw new Error("synthetic sibling interruption failure");
+                  }
+                  return { runId };
+                },
+              }),
+            );
+          }
           if (queued.includes(runId)) {
             expect(
               reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
@@ -196,6 +225,11 @@ for (const { name, fault, replaceParent } of [
           await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
+            childAgentId: "main",
+            sessionEntry: loadExactSessionEntryReadOnly({
+              storePath: childStorePath,
+              sessionKey: sessionKey(runId),
+            })?.entry,
             requesterSessionKey: parentKey,
             requesterAgentId: "main",
             requesterTurnRunId: parentRunId,
@@ -223,21 +257,6 @@ for (const { name, fault, replaceParent } of [
         }
         for (const runId of running) {
           expect(isSwarmRunActive(runId)).toBe(true);
-          leases.push(
-            await beginSessionWorkAdmission({
-              scope: storePath,
-              identities: [sessionKey(runId), `${runId}-session`],
-              assertAllowed: () => {},
-              onInterrupt: () => {
-                interrupted.push(runId);
-                firstInterrupted.resolve();
-                slotReleaseResults.push(releaseSwarmRun(runId));
-                if (runId === failedRunId) {
-                  throw new Error("synthetic sibling interruption failure");
-                }
-              },
-            }),
-          );
         }
         for (const runId of queued) {
           expect(
@@ -297,7 +316,9 @@ for (const { name, fault, replaceParent } of [
         expect(responseSettled).toBe(false);
         expect(start).not.toHaveBeenCalled();
         if (replaceParent) {
-          expect(subagentRuns.get(firstRunId)?.killIntent).toBeDefined();
+          acceptedKillIntent = structuredClone(
+            expectDefined(subagentRuns.get(firstRunId)?.killIntent, "accepted child kill intent"),
+          );
           replaceSessionEntrySync(replacementScope, {
             sessionId: replacementScope.sessionId,
             lifecycleRevision: "replacement",
@@ -388,7 +409,10 @@ for (const { name, fault, replaceParent } of [
         expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
         for (const runId of selected) {
           const run = persistedRuns.get(runId)!;
-          if (replaceParent || runId === failedRunId) {
+          if (replaceParent && run.killIntent) {
+            // Bookkeeping may fail after interruption; the exact durable claim remains recoverable.
+            expect(run.killIntent).toEqual(acceptedKillIntent);
+          } else if (runId === failedRunId) {
             expect(run.execution.status).toBe("running");
             expect(run.execution.endedAt).toBeUndefined();
           } else {
@@ -397,12 +421,11 @@ for (const { name, fault, replaceParent } of [
               execution: { status: "terminal" },
             });
           }
-          if (replaceParent) {
-            expect(run.killIntent).toBeUndefined();
-            expect(
-              loadExactSessionEntryReadOnly({ storePath, sessionKey: sessionKey(runId) })?.entry
-                .abortedLastRun,
-            ).not.toBe(true);
+          if (replaceParent && !run.killIntent) {
+            expect(run.killReconciliation).toMatchObject({
+              killedAt: expectDefined(acceptedKillIntent, "accepted child kill intent").requestedAt,
+              taskCancellationAccepted: true,
+            });
           }
           if (queued.includes(runId)) {
             expect(run.execution.startedAt).toBeUndefined();

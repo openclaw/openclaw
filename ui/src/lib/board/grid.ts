@@ -178,11 +178,6 @@ export function nudge(
   return canonical.map(withOrder);
 }
 
-/** CSS grid lines are one-based; engine cells are zero-based. */
-export function toCssPlacement(rect: BoardGridRect): string {
-  return `grid-column: ${rect.x + 1} / span ${rect.w}; grid-row: ${rect.y + 1} / span ${rect.h};`;
-}
-
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
 // board.css keeps a 1px border even when frameless. Reserve both edges so
@@ -284,7 +279,7 @@ type BoardWidgetSizingInput = {
 
 export function boardWidgetGridItems(
   widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
-  contentHeights: ReadonlyMap<string, number>,
+  contentHeights: Pick<ReadonlyMap<string, number>, "get">,
   fitAutoContent = false,
   pageWidgetName = "",
 ): BoardGridItem[] {

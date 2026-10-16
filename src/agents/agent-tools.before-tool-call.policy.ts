@@ -92,6 +92,10 @@ export async function runBeforeToolCallHook(args: {
   };
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
+  if (args.ctx?.awaitSessionDiffBaseline) {
+    await args.ctx.awaitSessionDiffBaseline();
+    args.signal?.throwIfAborted();
+  }
   try {
     if (args.ctx?.sessionKey) {
       if (args.ctx.loopDetection?.enabled === true) {

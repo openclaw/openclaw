@@ -73,6 +73,7 @@ export function collectAgentDatabasePreflightTargets(options: {
     | readonly AgentTarget[]
     | ((registered: readonly AgentTarget[]) => readonly AgentTarget[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
+  inspectHeldAgentDatabaseTargets?: readonly AgentTarget[];
   inspectCandidateOwners: boolean;
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
 }) {
@@ -80,7 +81,11 @@ export function collectAgentDatabasePreflightTargets(options: {
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
   let agentTargets = registeredDatabases;
   let configuredTargets: readonly AgentTarget[] = [];
-  const retainedAgentIds = new Set(retainedDeletions.map((deletion) => deletion.agentId));
+  const retainedAgentIds = new Set(
+    retainedDeletions
+      .filter((deletion) => deletion.cleanupCompleted || deletion.manualClawRemoval)
+      .map((deletion) => deletion.agentId),
+  );
   const retainedPaths = new Set<string>();
   const failures: Array<{ path: string; reason: string }> = [];
   let preparedDiscovery: PreparedAgentDatabaseMigrationDiscovery | undefined;
@@ -105,7 +110,7 @@ export function collectAgentDatabasePreflightTargets(options: {
       registeredAgentDatabases: registeredDatabases,
       discovery,
     };
-    agentTargets = discovery.targets;
+    agentTargets = discovery.schemaTargets;
     for (const retained of [...discovery.retainedTargets, ...discovery.unverifiedTargets]) {
       retainedPaths.add(retained.realPath);
     }
@@ -140,6 +145,7 @@ export function collectAgentDatabasePreflightTargets(options: {
     registeredAgentDatabases: registeredDatabases,
   });
   return {
+    configuredTargets,
     candidates:
       purpose === "runtime"
         ? candidates.filter((row) => typeof classifyDeletion(row.path, row.agentId) !== "object")
@@ -158,7 +164,10 @@ export function collectAgentDatabasePreflightTargets(options: {
                 (row.agentId === undefined || !retainedAgentIds.has(row.agentId)) &&
                 !(
                   deletionJournal.status === "present" &&
-                  deletionJournal.held.some((target) => samePath(target.path, row.path))
+                  deletionJournal.held.some((target) => samePath(target.path, row.path)) &&
+                  !options.inspectHeldAgentDatabaseTargets?.some(
+                    (target) => target.agentId === row.agentId && samePath(target.path, row.path),
+                  )
                 ),
             ),
     isRetainedPath: (pathname: string) =>

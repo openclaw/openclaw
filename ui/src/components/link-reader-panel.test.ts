@@ -398,6 +398,23 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(panel.querySelector(".lr-tab-header")).toBeNull();
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
+    const actions = panel.hostedActions!;
+    const header = document.body.appendChild(document.createElement("header"));
+    header.append(actions);
+    const newTab = actions.querySelector<HTMLButtonElement>("button")!;
+    newTab.focus();
+    panel.available = false;
+    await panel.updateComplete;
+    expect(newTab.disabled).toBe(true);
+    panel.available = true;
+    await panel.updateComplete;
+    expect(panel.hostedActions).toBe(actions);
+    expect(actions.querySelector("button")).toBe(newTab);
+    expect(newTab.disabled).toBe(false);
+    newTab.click();
+    await panel.updateComplete;
+    expect(panel.hostedTabs).toHaveLength(2);
+    await panel.closeHostedTab(panel.activeHostedTabId!);
     panel.tabsInHeader = false;
     await panel.updateComplete;
     expect(panel.querySelector(".lr-tab-header")).not.toBeNull();
@@ -406,6 +423,18 @@ describe("Plugin link reader panel", () => {
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
     expect(localStorage.getItem(storageKey)).toBeNull();
+    panel.remove();
+    await Promise.resolve();
+    expect(header.childElementCount).toBe(0);
+  });
+
+  it("carries only the current session into a session-scoped detail reader", async () => {
+    const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
+    const panel = await mount(request, { sessionKey: "agent:main:private" });
+    panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped: true } }];
+    open(panel);
+    await expectTitle(panel, "Item 1");
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ sessionKey: "agent:main:private" });
   });
 
   it("loads only an explicitly selected item and persists layout, not content or history", async () => {
@@ -472,25 +501,35 @@ describe("Plugin link reader panel", () => {
   });
 
   it("opens, selects, deduplicates, and closes icon-bearing tabs without reloading cached documents", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
+    const request = vi.fn(async (_method: string, params: unknown) => ({
+      ...requestedItem(params),
+      files: [{ path: "src/example.ts", additions: 1, deletions: 1, patch: "-old\n+new" }],
+    }));
     const panel = await mount(request);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
     const firstContent = panel.querySelector(".lr-content");
+    const firstFile = firstContent!.querySelector<HTMLDetailsElement>(".lr-file")!;
+    firstFile.open = true;
     open(panel, itemUrl(2), undefined, true);
     await expectTitle(panel, "Item 2");
-    expect(panel.querySelectorAll("wa-tab")).toHaveLength(2);
+    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
+    const hostedTabs = panel.hostedTabs;
+    expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
+    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
-    expect(panel.querySelectorAll("wa-tab")).toHaveLength(2);
+    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
+    expect(firstContent!.querySelector(".lr-file")).toBe(firstFile);
+    expect(firstFile.open).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(panel.querySelector<HTMLAnchorElement>(".lr-external")?.href).toBe(itemUrl(1));
     panel.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")[1]?.click();
     await panel.updateComplete;
     await expectTitle(panel, "Item 1");
-    expect(panel.querySelectorAll("wa-tab")).toHaveLength(1);
+    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
     panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
     await panel.updateComplete;
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
@@ -520,7 +559,7 @@ describe("Plugin link reader panel", () => {
     const calls = request.mock.calls.length;
     open(panel, itemUrl(11), undefined, true);
     await panel.updateComplete;
-    expect(panel.querySelectorAll("wa-tab")).toHaveLength(10);
+    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(10);
     await expectTitle(panel, "Item 10");
     expect(request).toHaveBeenCalledTimes(calls);
     expect(panel.querySelector<HTMLAnchorElement>('.lr-note[role="alert"] a')?.href).toBe(

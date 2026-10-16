@@ -10,7 +10,10 @@ import {
   omitInternalSessionEffectsEntries,
 } from "../session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { resolveChatReplyTranscriptStart } from "./chat-send-reply-delivery.js";
+import {
+  resolveChatReplyTranscriptStart,
+  resolveLegacyChatReplyTranscriptStart,
+} from "./chat-send-reply-delivery.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 
 export type ChatReplySession = Pick<
@@ -18,10 +21,7 @@ export type ChatReplySession = Pick<
   "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
 > &
   Partial<
-    Pick<
-      PreparedChatSendSession,
-      "entry" | "storePath" | "sessionTarget" | "capturedReadSources" | "assertSessionTargetCurrent"
-    >
+    Pick<PreparedChatSendSession, "entry" | "storePath" | "sessionTarget" | "capturedReadSources">
   >;
 
 /** Initialization owns the start binding; later delivery decisions read fresh stored rows. */
@@ -41,14 +41,11 @@ export function createChatReplySessionReader(
   };
   const target = session.sessionTarget;
   const source = target?.readSource;
-  const assertTargetCurrent = session.assertSessionTargetCurrent;
-  // Other sources or spellings would make qualification's absence checks query SQLite.
   const borrowed =
     target &&
     source &&
     typeof source.databaseIdentity === "string" &&
     assertWorkCurrent &&
-    assertTargetCurrent &&
     target.storeKeys.length === 1 &&
     target.storeKeys[0] === target.storeKey &&
     session.capturedReadSources?.length === 1 &&
@@ -56,15 +53,13 @@ export function createChatReplySessionReader(
       ? {
           target,
           source: { ...source, databaseIdentity: source.databaseIdentity },
-          assertTargetCurrent,
           assertWorkCurrent,
         }
       : undefined;
-  const assertBorrowedRouting = captureSessionMutationRouting(session.cfg);
+  const assertBorrowedRouting = captureSessionMutationRouting(session.cfg, undefined, [session]);
   const assertRetainedSourceCurrent = borrowed
     ? () => {
         borrowed.assertWorkCurrent();
-        borrowed.assertTargetCurrent();
         assertBorrowedRouting(getRuntimeConfig());
       }
     : undefined;
@@ -76,11 +71,14 @@ export function createChatReplySessionReader(
       }
     },
     captureTranscriptStart(this: void, prepared?: PreparedReplyTranscriptStart | null) {
-      const start = resolveChatReplyTranscriptStart(
-        session,
-        { entry: preparedSession, storePath: preparedSession.storePath ?? initialStorePath },
-        prepared,
-      );
+      const current = {
+        entry: preparedSession,
+        storePath: preparedSession.storePath ?? initialStorePath,
+      };
+      const start =
+        prepared === undefined
+          ? resolveLegacyChatReplyTranscriptStart(session, current)
+          : resolveChatReplyTranscriptStart(session, current, prepared);
       return start ? { ...start, lifecycleRevision: preparedSession.lifecycleRevision } : undefined;
     },
     async readCurrentSession(this: void, key = session.sessionKey, agentId = session.agentId) {
@@ -98,7 +96,7 @@ export function createChatReplySessionReader(
           logicalStorePath: initialStorePath,
           preparedSource: { ...borrowed.source, assertCurrent },
           includeMembership: false,
-          readOptions: { projection: "exact", lifecycleSessionKey: undefined },
+          readOptions: { projection: "exact" },
           consume: (selected, _membership, assertSourceCurrent) => {
             assertSourceCurrent();
             assertCurrent();
@@ -113,7 +111,9 @@ export function createChatReplySessionReader(
           },
         });
       }
-      const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+      const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+        { sessionKey: key, agentId },
+      ]);
       return await loadGatewaySessionEntryReadOnlyInWorker({
         ...session.sessionLoadOptions,
         cfg,

@@ -6,6 +6,12 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+
+// mock-isolation: Use fixed discovery policy without opening machine state for snapshot fixtures.
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
 import {
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,

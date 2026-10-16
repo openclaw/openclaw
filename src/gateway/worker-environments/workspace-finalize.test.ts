@@ -1,22 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  runInstrumentedWorkspaceReconcile,
-  verifyReconciledWorkspaceFinal,
-} from "./workspace-finalize.js";
-
-const workspaceDebug = vi.hoisted(() => vi.fn());
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/worker-workspace"
-        ? { ...logger, debug: workspaceDebug }
-        : logger;
-    },
-  };
-});
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 
 const emptyStaging = {
   publishStagedResult: async () => {},
@@ -24,35 +7,6 @@ const emptyStaging = {
 };
 
 describe("final worker workspace fences", () => {
-  it("rechecks remote and local stability after the final quiescence renewal", async () => {
-    const log: string[] = [];
-    workspaceDebug.mockClear();
-    const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
-      ...emptyStaging,
-      manifestRef: "sha256:" + "a".repeat(64),
-      changed: true,
-      verifyStable: async () => {
-        log.push("remote");
-      },
-      verifyLocalStable: async () => {
-        log.push("local");
-      },
-    }));
-    expect(workspaceDebug).not.toHaveBeenCalled();
-    await verifyReconciledWorkspaceFinal(reconciliation, {
-      assertActive: async () => {
-        log.push("quiescence");
-      },
-      resume: async () => {},
-    });
-
-    expect(log).toEqual(["quiescence", "remote", "local", "quiescence", "remote", "local"]);
-    expect(workspaceDebug).toHaveBeenCalledExactlyOnceWith(
-      "worker workspace reconcile completed",
-      expect.objectContaining({ outcome: "succeeded" }),
-    );
-  });
-
   it.each([false, true])(
     "fences unchanged local state during acceptance after renewal (local failure: %s)",
     async (localFailure) => {
@@ -99,49 +53,6 @@ describe("final worker workspace fences", () => {
       }
     },
   );
-
-  it.each([true, false])("publishes under quiescence with local apply %s", async (applyLocally) => {
-    const log: string[] = [];
-    await verifyReconciledWorkspaceFinal(
-      {
-        ...emptyStaging,
-        manifestRef: "sha256:" + "b".repeat(64),
-        changed: true,
-        verifyStable: async () => {
-          log.push("remote");
-        },
-        verifyLocalStable: async () => {
-          log.push("local");
-        },
-        ...(applyLocally
-          ? {
-              applyPreparedStagedResult: async () => {
-                log.push("apply-prepared");
-              },
-            }
-          : {}),
-        publishStagedResult: async () => {
-          log.push("publish");
-        },
-      },
-      {
-        assertActive: async () => {
-          log.push("quiescence");
-        },
-        resume: async () => {},
-      },
-    );
-    expect(log).toEqual([
-      "quiescence",
-      "remote",
-      ...(applyLocally ? ["apply-prepared"] : []),
-      "local",
-      "quiescence",
-      "remote",
-      "local",
-      "publish",
-    ]);
-  });
 
   it("rejects quiescence lost while the staged result is finalized", async () => {
     const log: string[] = [];

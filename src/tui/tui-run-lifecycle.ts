@@ -301,9 +301,10 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     wasActiveRun: boolean;
     status: "idle" | "error";
     displayedFinal?: boolean;
+    reconcileIdle?: boolean;
   }) => {
     runCoordinator.noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
-    settleRunActivity(params, true);
+    settleRunActivity(params, params.reconcileIdle !== false);
   };
 
   const terminateRun = (params: {

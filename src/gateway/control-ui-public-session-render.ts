@@ -1,22 +1,18 @@
 import { createHash } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
-import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaOutput } from "../media/parse-output.js";
-import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import {
   CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
 } from "../shared/control-ui-storage.js";
 import { escapeHtml } from "../shared/html-escape.js";
-import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
-import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
+import {
+  buildPublicSessionMediaUrl,
+  collectPublicSessionAttachments,
+  getPublicSessionEntryId,
+} from "./control-ui-public-session-attachments.js";
+import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 
 /** Public-reader lifecycle only: login probe, live refresh, and copy controls; never the operator app, socket, or roster. */
 const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
@@ -77,38 +73,87 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     pending.querySelector(".entry-status h1").textContent="Could not check access";
     pending.querySelector(".entry-status p").textContent="Check your connection, then reload or log in to try again.";
   }
-  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{
+  /* An auth proxy in front of the Gateway (Cloudflare Access) answers signed-out probes with a login redirect. */
+  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"manual",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{
     if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash);
-    else if(response.status===401||response.status===403)showUnavailable(pending);
+    else if(response.type==="opaqueredirect"||response.status===401||response.status===403)showUnavailable(pending);
     else probeFailed();
   }).catch(probeFailed);
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
-  let timer,etag="",running=false,retryAt=0;
+  let timer,etag="",running=false,retryAt=0,following=false;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
+  const transcript=()=>document.querySelector(".transcript");
+  const controls=document.querySelector(".reader-controls");
+  const status=text=>{for(const node of document.querySelectorAll("[data-public-refresh-status]"))node.textContent=text};
+  function atLatest(){
+    const bounds=transcript()?.getBoundingClientRect();
+    return Boolean(bounds&&bounds.bottom>0&&bounds.bottom<=window.innerHeight+96);
+  }
+  function scrollLatest(){
+    const bounds=transcript()?.getBoundingClientRect();
+    if(bounds)window.scrollTo({top:Math.max(0,window.scrollY+bounds.bottom-window.innerHeight+88),behavior:"instant"});
+  }
+  function updateControls(){
+    if(controls)controls.hidden=!transcript();
+    const top=document.querySelector("[data-public-top]");
+    if(top)top.disabled=window.scrollY<100;
+  }
+  window.addEventListener("scroll",()=>{following=enabled()&&atLatest();updateControls()},{passive:true});
+  // Lazy images and font/layout changes must not leave a live follower behind.
+  const observer=typeof ResizeObserver==="undefined"?null:new ResizeObserver(()=>{if(following&&!document.hidden)scrollLatest()});
+  function observeTranscript(){observer?.disconnect();const node=transcript();if(node)observer?.observe(node);updateControls()}
+  following=enabled()&&atLatest();
+  observeTranscript();
   const jitter=()=>Math.floor(Math.random()*3000);
   const schedule=(delay=15000+jitter())=>{clearTimeout(timer);if(!document.hidden&&enabled())timer=setTimeout(refresh,Math.max(delay,retryAt-Date.now()))};
+  document.addEventListener("click",event=>{
+    if(event.target.closest?.("[data-public-top]")){following=false;window.scrollTo({top:0,behavior:"instant"});updateControls()}
+    if(event.target.closest?.("[data-public-latest]")){following=enabled();scrollLatest();updateControls()}
+    if(event.target.closest?.("[data-public-refresh-now]")&&enabled()&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){event.preventDefault();schedule(0)}
+  });
   async function refresh(){
     if(document.hidden||!enabled()||running)return;
     running=true;
+    status("Checking for updates…");
     let delay;
     try{
       const response=await fetch(location.href,{credentials:"same-origin",redirect:"error",cache:"no-store",headers:etag?{"If-None-Match":etag}:{},signal:AbortSignal.timeout(10000)});
-      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}return}
-      if(response.status===304||document.hidden)return;
-      if(response.status!==200&&response.status!==404)return;
+      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}status("Updates delayed · Retrying automatically");return}
+      if(document.hidden)return;
+      if(response.status===304){status("Up to date");return}
+      if(response.status!==200&&response.status!==404)throw new Error("Refresh failed");
       const next=new DOMParser().parseFromString(await response.text(),"text/html");
       const main=next.querySelector("main[data-public-session]");
       const current=document.querySelector("main[data-public-session]");
-      if(document.hidden||!main||!current)return;
+      if(document.hidden||!current)return;
+      if(!main){
+        // Legacy token links return a plain 404 rather than a reader document.
+        if(response.status===404){current.textContent="This conversation is no longer publicly available.";current.dataset.publicRefresh="false";document.title="Conversation unavailable · OpenClaw";observer?.disconnect();updateControls();return}
+        throw new Error("Refresh failed");
+      }
+      const y=window.scrollY;
+      const rows=[...current.querySelectorAll("[data-public-item]")];
+      const anchor=rows.find(row=>{const bounds=row.getBoundingClientRect();return bounds.bottom>0&&bounds.top<window.innerHeight});
+      const anchorTop=anchor?.getBoundingClientRect().top;
+      const expanded=new Set([...current.querySelectorAll("details[open][data-public-item]")].map(row=>row.dataset.publicItem));
+      for(const row of main.querySelectorAll("details[data-public-item]"))row.open=expanded.has(row.dataset.publicItem);
       current.replaceWith(main);
       enhance(main);
       document.title=next.title;
       // A revoked public read is already resolved; its inert script will not run here.
       showUnavailable(main);
+      observeTranscript();
+      if(following&&enabled())scrollLatest();
+      else if(anchor&&transcript()){
+        const retained=[...main.querySelectorAll("[data-public-item]")].find(row=>row.dataset.publicItem===anchor.dataset.publicItem);
+        window.scrollTo({top:retained?y+retained.getBoundingClientRect().top-anchorTop:y,behavior:"instant"});
+      }
       etag=response.headers.get("ETag")||"";
-    }catch{}finally{running=false;schedule(delay)}
+      status("Up to date");
+    }catch{status("Could not refresh · Retrying automatically")}finally{running=false;schedule(delay)}
   }
   document.addEventListener("visibilitychange",()=>{if(document.hidden)clearTimeout(timer);else schedule(0)});
+  window.addEventListener("online",()=>schedule(0));
   schedule();
 })();`;
 
@@ -117,7 +162,7 @@ const ENTRY_SCRIPT_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIP
  * font stylesheet are the Control UI's own root assets, served under the same mount. */
 export const PUBLIC_SESSION_CONTENT_SECURITY_POLICY = `default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'sha256-${ENTRY_SCRIPT_HASH}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
 
-const MAX_MESSAGES = 100;
+const MAX_ITEMS = 51;
 const MAX_MESSAGE_CHARS = 32_768;
 const MAX_DOCUMENT_CHARS = 262_144;
 
@@ -155,13 +200,14 @@ const PUBLIC_SESSION_PITCH_HTML = `<section class="colophon" aria-labelledby="op
 // Gateway-hosted Control UI face, linked from the same mount.
 const PUBLIC_SESSION_STYLES = `:root{color-scheme:dark;--bg:#0e1015;--bg-muted:#1f2330;--bg-elevated:#191c24;--hover:#1f2330;--panel:#191c24;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--accent:#ff5c5c;--bubble:rgba(255,92,92,.1);--bubble-ink:var(--text);--primary:#d13c3c;--primary-hover:#c22e2e;--link:color-mix(in srgb,#ff7070 85%,#bcbcc0);--ok:#69bf8a;--shell-light:#ff6d5a;--shell-dark:#c2372b;--eye:#050810;--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-family:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-synthesis:none;-webkit-font-smoothing:antialiased}
 @media(prefers-color-scheme:light){:root{color-scheme:light;--bg:#faf9f7;--bg-muted:#efebe4;--bg-elevated:#fff;--hover:#efebe4;--panel:#f4f1ec;--text:#403c35;--text-strong:#211e1a;--muted:#6e6960;--border:#e8e4dc;--border-strong:#d6d0c5;--accent:#bd4531;--bubble:color-mix(in srgb,#bd4531 15%,#faf9f7);--bubble-ink:var(--text-strong);--primary:#bd4531;--primary-hover:#a83c29;--link:color-mix(in srgb,#a83c29 85%,#403c35);--ok:#2f9b5a;--shell-light:#ff4d4d;--shell-dark:#991b1b}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg)}a{color:var(--link);text-underline-offset:3px}a:hover{color:var(--text-strong)}a:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--bg)}a{color:var(--link);text-underline-offset:3px}a:hover{color:var(--text-strong)}a:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .defs{position:absolute;width:0;height:0;overflow:hidden}.mark .shell{fill:url(#openclaw-shell)}.mark .feeler{fill:none;stroke:var(--shell-light);stroke-width:3;stroke-linecap:round}.mark .eye{fill:var(--eye)}.mark .pupil{fill:#00e5cc}.shell-light{stop-color:var(--shell-light)}.shell-dark{stop-color:var(--shell-dark)}
 .page{width:min(720px,calc(100% - 48px));margin:0 auto;padding:0 0 72px}.topbar{display:flex;align-items:center;justify-content:space-between;height:64px}.brand{display:inline-flex;align-items:center;gap:9px;color:var(--text-strong);font-size:15px;font-weight:650;letter-spacing:-.01em;text-decoration:none}.brand:hover{color:var(--text-strong)}.brand .mark{width:22px;height:22px}
 .button{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated);color:var(--text-strong);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background-color .12s ease-out,border-color .12s ease-out}.button:hover{background:var(--hover);border-color:var(--border-strong);color:var(--text-strong)}.button.primary{border-color:transparent;background:var(--primary);color:#fff}.button.primary:hover{background:var(--primary-hover);color:#fff}
 .article-head{padding:56px 0 32px;margin-bottom:40px;border-bottom:1px solid var(--border)}.article-head:last-child{border-bottom:0}.eyebrow{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;margin:0 0 16px;color:var(--muted);font-size:13px;font-weight:500}.eyebrow .sep{color:var(--border-strong)}.live{display:inline-flex;align-items:center;gap:7px;color:var(--ok);font-weight:600}.live::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-weight:650;line-height:1.12;letter-spacing:-.035em;overflow-wrap:anywhere;text-wrap:balance}.intro{max-width:600px;margin:0;color:var(--muted);font-size:14px;line-height:1.65}.intro strong{color:var(--text);font-weight:600}
 .notice,.pagination{position:relative;margin:0 0 28px;color:var(--muted);font-size:13px;line-height:1.6}.notice{padding-left:14px}.notice::before{content:"";position:absolute;top:3px;bottom:3px;left:0;width:3px;border-radius:9999px;background:var(--border-strong)}.pagination a{color:var(--muted);font-weight:500;text-decoration:none}.pagination a:hover{color:var(--text-strong)}.transcript+.pagination{margin:36px 0 0}
+.tools{min-width:0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.tools summary{cursor:pointer;font-weight:600}.tools ul{margin:12px 0 0;padding-left:20px}.tools li{margin:6px 0}.tools code{color:var(--text-strong);font-family:var(--mono)}.image{display:block;margin-top:12px}.image img{display:block;max-width:100%;height:auto;border-radius:8px}.attachment{display:inline-block;max-width:100%;margin:8px 8px 0 0;padding:4px 9px;border:1px solid var(--border-strong);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
 .transcript{display:flex;flex-direction:column;gap:28px}.message.continued{margin-top:-18px}.speaker{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .assistant{display:grid;grid-template-columns:28px minmax(0,1fr);gap:0 12px}.avatar{display:grid;place-items:center;width:28px;height:28px;margin-top:2px;border:1px solid var(--border);border-radius:50%;background:var(--panel)}.avatar .mark{width:17px;height:17px}.assistant .content{grid-column:2}
 .user{display:flex;justify-content:flex-end}.user .content{max-width:min(78%,560px);padding:12px 16px;border-radius:10px;background:var(--bubble);color:var(--bubble-ink);font-size:15px}
@@ -173,80 +219,20 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 .install{margin:24px 0}.install pre{margin:0;padding:12px 48px 12px 16px;overflow:auto;border:1px solid var(--border-strong);border-radius:10px;background:var(--bg-muted);color:var(--text-strong);font:13.5px/1.6 var(--mono)}.install pre::before{content:"$ ";color:var(--accent)}.install code{user-select:all}.links{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;font-size:14px;font-weight:500}.links a{color:var(--text);text-decoration:none}.links a:hover{color:var(--text-strong)}.links .button{padding:9px 16px;font-size:14px}
 .code{position:relative}.copy{position:absolute;top:6px;right:6px;display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--border-strong);border-radius:7px;background:var(--bg-elevated);color:var(--muted);cursor:pointer;opacity:0;transition:opacity .12s ease-out,color .12s ease-out}.copy svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.copy .done{display:none}.copy:hover{color:var(--text-strong)}.copy[data-copied],.copy[data-copied]:hover{color:var(--ok)}.copy[data-copied] svg{display:none}.copy[data-copied] .done{display:block}.code:hover .copy,.copy:focus-visible,.copy[data-copied],.install .copy{opacity:1}.install .copy{top:9px;right:9px}
 @media(hover:none){.copy{opacity:1}}
+.reader-controls{position:fixed;z-index:10;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;max-width:calc(100% - 24px);padding:8px;border:1px solid var(--border-strong);border-radius:14px;background:var(--bg-elevated);box-shadow:0 8px 28px #0003}.reader-controls button{font-family:inherit;cursor:pointer}.reader-controls .button:disabled{opacity:.45;cursor:default}.refresh-status{max-width:230px;padding:0 6px;color:var(--muted);font-size:12px;line-height:1.4}.page{padding-bottom:120px}@media(max-width:640px){.reader-controls{gap:6px}.reader-controls .button{padding:7px 10px}.refresh-status{max-width:100px;font-size:11px}}
 .entry-status{display:none}[data-entry-pending] .entry-result{display:none}[data-entry-pending] .entry-status{display:block}[data-entry-pending] .login{visibility:hidden}
 @media(min-width:840px){.assistant{grid-template-columns:minmax(0,1fr);margin-left:-44px;padding-left:44px}.avatar{position:absolute;margin-left:-44px}.assistant .content{grid-column:1}}
 @media(max-width:640px){.page{width:calc(100% - 36px)}.topbar{height:56px}.article-head{padding-top:36px;margin-bottom:32px}.user .content{max-width:88%}.content{font-size:15.5px}.install pre{white-space:pre-wrap;overflow-wrap:anywhere}.status{display:block}.status a{display:inline-block;margin-top:8px}}`;
 
-function publicMessageText(
-  message: unknown,
-): { role: "user" | "assistant"; text: string } | undefined {
-  const entry = asOptionalRecord(message);
-  if (
-    !entry ||
-    (entry.role !== "user" && entry.role !== "assistant") ||
-    entry.display === false ||
-    entry.customType !== undefined ||
-    entry.senderSession !== undefined ||
-    entry.toolCallId !== undefined ||
-    entry.tool_call_id !== undefined
-  ) {
-    return undefined;
-  }
-  const provenance = asOptionalRecord(entry.provenance);
-  // A user role can also carry private runtime and cross-session input.
-  // Unknown explicit provenance is not an external user's publication grant.
-  if (entry.provenance !== undefined && provenance?.kind !== "external_user") {
-    return undefined;
-  }
-  let text: string | undefined;
-  if (entry.role === "assistant") {
-    if (entry.phase !== undefined && entry.phase !== "final_answer") {
-      return undefined;
-    }
-    text = extractAssistantPhaseText(entry);
-  } else if (typeof entry.content === "string") {
-    text = entry.content;
-  } else if (Array.isArray(entry.content)) {
-    text = entry.content
-      .flatMap((value) => {
-        const block = asOptionalRecord(value);
-        return (block?.type === "text" || block?.type === "input_text") &&
-          typeof block.text === "string"
-          ? [block.text]
-          : [];
-      })
-      .join("\n\n");
-  } else if (typeof entry.text === "string") {
-    text = entry.text;
-  }
-  if (!text || text.includes(INTER_SESSION_PROMPT_PREFIX_BASE)) {
-    return undefined;
-  }
-  text =
-    entry.role === "user"
-      ? stripUserEnvelopeForDisplay(text)
-      : stripInternalMetadataForDisplay(text);
-  if (entry.role === "assistant") {
-    // Live transcripts can end mid-tag. Never recover unfinished reasoning as public prose.
-    text = sanitizeAssistantVisibleTextWithProfile(text, "history", true);
-  }
-  const roleContent = { role: entry.role, content: text };
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) || isHeartbeatOkResponse(roleContent)) {
-    return undefined;
-  }
-  if (entry.role === "assistant") {
-    text = stripSuppressedControlReplyToken(text);
-  }
-  // The canonical parser removes attachment directives while preserving fenced examples.
-  text = splitMediaOutput(text, {
-    extractAudioDirectives: false,
-  }).text;
-  text = redactToolPayloadText(text).trim();
-  return text ? { role: entry.role, text } : undefined;
+export function publicSessionTitle(title: string): string {
+  return (
+    truncateUtf16Safe(stripInternalMetadataForDisplay(title), 200).trim() || "Shared conversation"
+  );
 }
 
 export function renderPublicSessionDocument(params: {
   messages: unknown[];
+  mediaBaseUrl?: string;
   title: string;
   truncated: boolean;
   latestUrl: string;
@@ -265,38 +251,76 @@ export function renderPublicSessionDocument(params: {
   const entryLink = params.entryUrl
     ? `<a class="button login" id="session-login"${params.clientAuthBasePath !== undefined ? ` data-gateway-path="${escapeHtml(params.clientAuthBasePath)}"` : ""} href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
     : "";
-  const title = escapeHtml(
-    truncateUtf16Safe(
-      redactToolPayloadText(stripInternalMetadataForDisplay(params.title)),
-      200,
-    ).trim() || "Shared conversation",
-  );
-  let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
+  const title = escapeHtml(publicSessionTitle(params.title));
+  const projected = projectPublicSessionItems(params.messages);
+  let truncated = params.truncated || projected.length > MAX_ITEMS;
   let remaining = MAX_DOCUMENT_CHARS;
-  const entries: { role: "user" | "assistant"; html: string }[] = [];
-  // Budget newest messages first, then restore conversational order.
-  for (const value of params.messages.slice(-MAX_MESSAGES).toReversed()) {
-    const message = publicMessageText(value);
-    if (!message) {
-      continue;
-    }
+  const entries: { role: "user" | "assistant" | "tools"; html: string; key?: string }[] = [];
+  // Budget newest visible items first, then restore conversational order.
+  for (const item of projected.slice(-MAX_ITEMS).toReversed()) {
     if (remaining <= 0) {
       truncated = true;
       break;
     }
-    const text = truncateUtf16Safe(message.text, Math.min(MAX_MESSAGE_CHARS, remaining));
-    const clipped = text.length < message.text.length;
+    if (item.kind === "tools") {
+      const lines: string[] = [];
+      for (const call of item.calls) {
+        const line = `<li><code>${escapeHtml(call.name)}</code>${call.summary ? ` <span>${escapeHtml(call.summary)}</span>` : ""}</li>`;
+        if (line.length > remaining) {
+          truncated = true;
+          break;
+        }
+        remaining -= line.length;
+        lines.push(line);
+      }
+      entries.push({
+        role: "tools",
+        html: `<details class="tools"><summary>Ran ${item.calls.length} ${item.calls.length === 1 ? "tool" : "tools"}</summary><ul>${lines.join("")}</ul>${lines.length < item.calls.length ? '<p class="omitted">More steps omitted for this public view.</p>' : ""}</details>`,
+      });
+      continue;
+    }
+    const text = truncateUtf16Safe(item.text, Math.min(MAX_MESSAGE_CHARS, remaining));
+    const clipped = text.length < item.text.length;
     truncated ||= clipped;
     remaining -= text.length;
+    const entryId = getPublicSessionEntryId(item.message);
+    const media: string[] = [];
+    for (const attachment of collectPublicSessionAttachments(item.message)) {
+      const name = escapeHtml(truncateUtf16Safe(attachment.name, 200));
+      const url =
+        params.mediaBaseUrl && entryId && attachment.image
+          ? escapeHtml(buildPublicSessionMediaUrl(params.mediaBaseUrl, entryId, attachment.id))
+          : undefined;
+      const html = url
+        ? `<a class="image" href="${url}" target="_blank" rel="noreferrer noopener"><img src="${url}" alt="${name}" loading="lazy"></a>`
+        : `<span class="attachment">${name}</span>`;
+      if (html.length > remaining) {
+        truncated = true;
+        break;
+      }
+      remaining -= html.length;
+      media.push(html);
+    }
     entries.push({
-      role: message.role,
-      html: `${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}`,
+      role: item.role,
+      key: entryId,
+      html: `${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}${media.join("")}`,
     });
   }
-  // Consecutive turns from one speaker read as one group, as in the Control UI chat.
   const rows = entries.toReversed().map((entry, index, ordered) => {
+    // Stable across latest-page rollover; expose an opaque digest, not source metadata.
+    const key = createHash("sha256")
+      .update(entry.key ?? `${entry.role}:${entry.html}`)
+      .digest("hex")
+      .slice(0, 24);
+    if (entry.role === "tools") {
+      return entry.html.replace(
+        '<details class="tools"',
+        `<details class="tools" data-public-item="${key}"`,
+      );
+    }
     const continued = ordered[index - 1]?.role === entry.role;
-    return `<article class="message ${entry.role}${continued ? " continued" : ""}" aria-label="${entry.role === "user" ? "User" : "Assistant"} message"><h2 class="speaker">${entry.role === "user" ? "User" : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content">${entry.html}</div></article>`;
+    return `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" aria-label="${entry.role === "user" ? "User" : "Assistant"} message"><h2 class="speaker">${entry.role === "user" ? "User" : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content">${entry.html}</div></article>`;
   });
   const description = params.unavailable
     ? "Log in to open conversations you have access to."
@@ -308,7 +332,8 @@ export function renderPublicSessionDocument(params: {
   const navigation = params.olderUrl
     ? `<nav class="pagination" aria-label="Conversation pages"><a href="${escapeHtml(params.olderUrl)}" rel="prev">← Older messages</a></nav>`
     : "";
-  const count = `${rows.length} ${rows.length === 1 ? "message" : "messages"}`;
+  const messageCount = entries.filter((entry) => entry.role !== "tools").length;
+  const count = `${messageCount} ${messageCount === 1 ? "message" : "messages"}`;
   const eyebrow = params.unavailable
     ? ""
     : isLatest
@@ -318,23 +343,26 @@ export function renderPublicSessionDocument(params: {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
-${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""}
+${isLatest ? '<noscript><meta http-equiv="refresh" content="15"></noscript>' : ""}
 <title>${entryPending ? "OpenClaw" : `${title} · OpenClaw`}</title>${canonicalMetadata}
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
 <meta property="og:image" content="${escapeHtml(params.cardUrl)}">
+<meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${title} · OpenClaw public session">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${escapeHtml(params.cardUrl)}"><meta name="twitter:image:alt" content="${title} · OpenClaw public session">
 <link rel="stylesheet" href="${escapeHtml(params.assetBasePath)}/fonts/instrument-sans.css">
 <style>
 ${PUBLIC_SESSION_STYLES}
-</style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}[data-entry-pending] .login{visibility:visible}</style></noscript>" : ""}</head><body><main data-public-session${entryPending ? " data-entry-pending" : ""} data-public-refresh="${params.entryUrl && isLatest ? "true" : "false"}">
+</style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}[data-entry-pending] .login{visibility:visible}</style></noscript>" : ""}</head><body><main data-public-session${entryPending ? " data-entry-pending" : ""} data-public-refresh="${isLatest ? "true" : "false"}">
 <svg class="defs" aria-hidden="true" focusable="false"><linearGradient id="openclaw-shell" x1="0" y1="0" x2="1" y2="1"><stop offset="0" class="shell-light"/><stop offset="1" class="shell-dark"/></linearGradient></svg>
 <div class="page">
 <header class="topbar"><a class="brand" href="https://openclaw.ai" rel="noreferrer noopener">${LOBSTER_MARK}<span>OpenClaw</span></a>${entryLink}</header>
 <header class="article-head">${entryPending ? '<div class="entry-status" role="status"><h1>Loading conversation</h1><p class="intro">Checking access…</p></div><div class="entry-result">' : ""}${eyebrow}<h1>${title}</h1><p class="intro">${
     params.unavailable
       ? "This conversation is not publicly available. Log in to open conversations you have access to."
-      : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
+      : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text, tool steps, and shared images. Tool result text, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
   }</p>${entryPending ? "</div>" : ""}</header>
 ${truncated ? '<aside class="notice">Some messages or long text are omitted to keep this public page within its size limit.</aside>' : ""}
 ${navigation}
@@ -343,9 +371,9 @@ ${navigation}
 ${
   params.unavailable
     ? ""
-    : `<footer class="status"><span>${isLatest ? (params.entryUrl ? "Live view · Updates while this tab is visible" : "Live view · Refreshes every 15 seconds") : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
+    : `<footer class="status"><span>${isLatest ? "Live view · Updates while this tab is visible" : "Earlier conversation · Updates when you reload"}<br>Public access can be revoked by the session owner.</span><a${isLatest ? " data-public-refresh-now" : ""} href="${escapeHtml(params.latestUrl)}">${isLatest ? "Refresh now" : "Back to latest"}</a></footer>
 ${PUBLIC_SESSION_PITCH_HTML}`
 }
 </div>
-</main><script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script></body></html>`;
+</main>${params.unavailable ? "" : `<nav class="reader-controls" aria-label="Conversation navigation" hidden><span class="refresh-status" data-public-refresh-status role="status">${isLatest ? "Live updates" : "Earlier messages"}</span><button class="button" type="button" data-public-top aria-label="Go to top">↑ Top</button><button class="button" type="button" data-public-latest aria-label="Go to ${isLatest ? "latest message" : "page end"}">↓ ${isLatest ? "Latest" : "End"}</button>${isLatest ? `<a class="button" data-public-refresh-now href="${escapeHtml(params.latestUrl)}">Refresh now</a>` : ""}</nav>`}<script>${PUBLIC_SESSION_ENTRY_SCRIPT}</script></body></html>`;
 }

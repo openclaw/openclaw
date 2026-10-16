@@ -1,3 +1,4 @@
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -8,6 +9,7 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
@@ -143,3 +145,22 @@ export type OpenClawCodingToolsOptions = {
   AgentRunClientContext &
   AgentRunMessageContext &
   AgentRunChannelContext;
+
+export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  assertInvocationCurrent?: () => void;
+  pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
+  awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Policy-approved publication unavailable in this workspace, retained for new children. */
+  inheritedPublicationToolRef?: { current?: AnyAgentTool };
+  /** The host owns continuation policy when this factory builds only part of its tool surface. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
+};
+
+export type PluginCodingToolsOptions = Omit<
+  OpenClawCodingToolsOptions,
+  | "sessionReadScopeKey"
+  | "onProgressCardPlanSaved"
+  | "authProfileStoreSource"
+  | "onWebSearchConfiguration"
+>;

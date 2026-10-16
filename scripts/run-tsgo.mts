@@ -89,7 +89,7 @@ export function prepareTsgoCommand(
 /** The caller holds artifact ownership until this compiler and its output are joined. */
 export async function runPreparedTsgoCommand(
   command: NonNullable<ReturnType<typeof prepareTsgoCommand>>,
-  evidence: { evidenceId?: string; onEvidence?: () => void } = {},
+  evidence: { evidenceId?: string; onEvidence?: () => void; onTimeout?: () => void } = {},
 ): Promise<number> {
   try {
     await ensureKyselyTypes(findRepoRoot(command.cwd) ?? command.cwd);
@@ -175,6 +175,7 @@ export async function runPreparedTsgoCommand(
     if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {
       throw error;
     }
+    evidence.onTimeout?.();
     console.error(
       `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
     );

@@ -8,6 +8,7 @@ import { For, Show, untrack } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
@@ -19,25 +20,6 @@ export function DesktopLoading(props: { label: string; overlay?: boolean }) {
   return <PanelLoadingSkeleton variant="desktop" label={props.label} overlay={props.overlay} />;
 }
 
-function PanelIconButton(props: {
-  class: JSX.IntrinsicElements["button"]["class"];
-  label: string;
-  icon: Parameters<typeof Icon>[0]["name"];
-  onClick: () => void;
-}) {
-  return (
-    <button
-      class={props.class}
-      type="button"
-      title={props.label}
-      aria-label={props.label}
-      onClick={() => props.onClick()}
-    >
-      <Icon name={props.icon} />
-    </button>
-  );
-}
-
 export function DesktopPanelView(props: {
   embedded: boolean;
   workspaceControls?: boolean;
@@ -45,6 +27,7 @@ export function DesktopPanelView(props: {
   height: number;
   width: number;
   fullscreen: boolean;
+  sectionRef: (element: HTMLElement) => void;
   renderResizer: () => JSX.Element;
   renderFullscreenControl: () => JSX.Element;
   onClose: () => void;
@@ -53,8 +36,11 @@ export function DesktopPanelView(props: {
   content: Omit<Parameters<typeof DesktopPanelContent>[0], "connection">;
   connection: Omit<Parameters<typeof DesktopConnection>[0], "state">;
 }) {
+  // The section binding belongs to this mounted view and does not change reactively.
+  const sectionRef = untrack(() => props.sectionRef);
   return (
     <section
+      ref={sectionRef}
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
       style={
         props.embedded || props.fullscreen
@@ -73,26 +59,26 @@ export function DesktopPanelView(props: {
             <PanelIconButton
               class={["rail-header__action bp-icon", { "is-active": props.dock === "bottom" }]}
               label={t("desktop.dockBottom")}
-              icon="panelBottomOpen"
+              icon={<Icon name="panelBottomOpen" />}
               onClick={() => props.onDock("bottom")}
             />
             <PanelIconButton
               class={["rail-header__action bp-icon", { "is-active": props.dock === "right" }]}
               label={t("desktop.dockRight")}
-              icon="panelRightOpen"
+              icon={<Icon name="panelRightOpen" />}
               onClick={() => props.onDock("right")}
             />
             <PanelIconButton
               class="rail-header__action bp-icon bp-open-window"
               label={t("desktop.openWindow")}
-              icon="externalLink"
+              icon={<Icon name="externalLink" />}
               onClick={props.onOpenWindow}
             />
             {props.renderFullscreenControl()}
             <PanelIconButton
               class="rail-header__action bp-icon"
               label={t("desktop.hide")}
-              icon="x"
+              icon={<Icon name="x" />}
               onClick={props.onClose}
             />
           </div>
@@ -110,7 +96,7 @@ export function DesktopPanelView(props: {
                   <PanelIconButton
                     class="desktop-toolbar-action"
                     label={t("desktop.openWindow")}
-                    icon="externalLink"
+                    icon={<Icon name="externalLink" />}
                     onClick={props.onOpenWindow}
                   />
                   {props.renderFullscreenControl()}

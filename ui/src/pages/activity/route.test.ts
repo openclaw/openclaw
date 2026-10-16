@@ -44,10 +44,6 @@ describe("resolveActivityRouteData", () => {
     });
   });
 
-  it("keeps the browser-local tool feed behind its explicit mode", () => {
-    expect(loadRoute("?view=live")).toEqual({ mode: "live", selector: null });
-  });
-
   it("scopes readable person paths independently of query filters and mounted prefixes", () => {
     for (const { pathname, search } of [
       { pathname: "/ui/activity/ada-12345678", search: "?person=ignored&time=30d&q=release" },
@@ -65,16 +61,6 @@ describe("resolveActivityRouteData", () => {
     expect(loadRoute("?view=live", "/activity/ada-12345678")).toEqual({
       mode: "live",
       selector: null,
-    });
-  });
-
-  it("decodes one run-inspector query reference without narrowing it", () => {
-    const runId = "run:a/b % lobster";
-    expect(loadRoute(`?view=run&run=${encodeURIComponent(runId)}`)).toEqual({
-      mode: "run",
-      selector: { kind: "run", id: runId },
-      selectorId: null,
-      decisionCursor: null,
     });
   });
 

@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClaw } from "./client.js";
 import { createAgentEvent, createChatEvent } from "./client.test-support.js";
-import { GatewayClientTransport, observeGatewayReconnects } from "./transport.js";
+import {
+  GatewayClientTransport,
+  observeGatewayReconnects,
+  takeGatewayResponseReceipt,
+} from "./transport.js";
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 type MockGatewayClientInstance = {
@@ -165,6 +169,28 @@ describe("GatewayClientTransport", () => {
 
     await connectExpectation;
     expect(client?.stopAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("acknowledges unsubscribe in the new connection before its first event", async () => {
+    const transport = new GatewayClientTransport();
+    try {
+      const connecting = transport.connect();
+      const client = gatewayClientMocks.instances[0];
+      if (!client) {
+        throw new Error("Expected the SDK Gateway client");
+      }
+      client.opts.onHelloOk?.({ sessionId: "connection-1" });
+      await connecting;
+      client.opts.onEvent?.(createChatEvent("run", "global", 1, "delta", "old", 1));
+      client.opts.onClose?.(1006, "connection lost");
+      client.opts.onHelloOk?.({ sessionId: "connection-2" });
+      client.request.mockResolvedValueOnce({ subscribed: false, key: "global" });
+
+      const response = await transport.request("sessions.messages.unsubscribe", { key: "global" });
+      expect(takeGatewayResponseReceipt(response)).toEqual({ epoch: { current: true } });
+    } finally {
+      await transport.close();
+    }
   });
 
   it("rejects reconnect attempts after close", async () => {

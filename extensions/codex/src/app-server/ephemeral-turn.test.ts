@@ -150,4 +150,28 @@ describe("CodexEphemeralTurn", () => {
       }
     },
   );
+
+  it("reports forked-thread usage, which arrives only as thread token updates", async () => {
+    const fixture = createFakeCodexAppServerClient();
+    const collector = new CodexEphemeralTurn(fixture.client, threadId, { textMode: "last" });
+    try {
+      await fixture.notify(
+        notification("thread/tokenUsage/updated", {
+          tokenUsage: {
+            last: {
+              inputTokens: 21_000,
+              cachedInputTokens: 20_500,
+              outputTokens: 60,
+              totalTokens: 21_060,
+            },
+          },
+        }),
+      );
+      await fixture.notify(completed([answer]));
+      const result = await collector.wait(turn, waitOptions());
+      expect(result.usage).toMatchObject({ input: 500, cacheRead: 20_500, output: 60 });
+    } finally {
+      collector.route.release();
+    }
+  });
 });

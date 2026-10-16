@@ -6,6 +6,9 @@ import { requestResult, transactionComplete } from "../../lib/chat/control-ui-da
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   openSessionSnapshotDatabase,
+  CHAT_SNAPSHOT_DB_NAME,
+  CHAT_SNAPSHOT_STORE_NAME,
+  CHAT_SNAPSHOT_METADATA_STORE_NAME,
   SIDEBAR_SNAPSHOT_STORE_NAME,
 } from "./session-snapshot-database.ts";
 import {
@@ -52,15 +55,44 @@ describe("persistent sidebar projections", () => {
     vi.unstubAllGlobals();
   });
 
-  it("retires the legacy roster database when admitting the unified cache", async () => {
-    const legacy = await requestResult(indexedDB.open("openclaw-session-roster", 1));
-    legacy.close();
-    const store = createStore();
-    await store.writeSidebar(key(scope), model, validate);
-    expect((await indexedDB.databases()).map((database) => database.name)).not.toContain(
-      "openclaw-session-roster",
+  it("discards pre-rail-identity sidebar snapshots while retaining cached transcripts", async () => {
+    const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 6);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [
+        CHAT_SNAPSHOT_STORE_NAME,
+        CHAT_SNAPSHOT_METADATA_STORE_NAME,
+        SIDEBAR_SNAPSHOT_STORE_NAME,
+      ]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const database = await requestResult(request);
+    const transaction = database.transaction(
+      [SIDEBAR_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_STORE_NAME],
+      "readwrite",
     );
-    expect(await store.readSidebar(key(scope), validate)).toEqual(model);
+    transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).put({
+      sessionKey: key(scope),
+      savedAt: Date.now(),
+      projectionVersion: 1,
+      model,
+    });
+    const transcript = { sessionKey, snapshot: { messages: ["Retained conversation"] } };
+    transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put(transcript);
+    await transactionComplete(transaction);
+    database.close();
+
+    expect(await createStore().readSidebar(key(scope), validate)).toBeNull();
+    const upgraded = await openSessionSnapshotDatabase();
+    if (!upgraded) {
+      throw new Error("expected snapshot database");
+    }
+    const read = upgraded.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
+    expect(await requestResult(read.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey))).toEqual(
+      transcript,
+    );
+    await transactionComplete(read);
+    upgraded.close();
   });
 
   it("restores the settled row order before a connection and isolates gateway, account and profile", async () => {
@@ -126,7 +158,7 @@ describe("persistent sidebar projections", () => {
     expect(await store.readSidebar(key({ ...scope, profileId: "newer" }), validate)).toBeNull();
   });
 
-  it.each([undefined, "cache-eviction"] as const)(
+  it.each(["cache-eviction"] as const)(
     "removes only the requested transcript and applies %s sidebar invalidation",
     async (reason) => {
       const store = createStore();

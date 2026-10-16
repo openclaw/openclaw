@@ -26,7 +26,7 @@ import * as turnCapabilities from "./placement-turn-claim-events.js";
 
 describe("worker live reply media", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worker-live-media-");
-  let source: turnCapabilities.WorkerTurnTranscriptSource;
+  let source: Awaited<ReturnType<typeof captureWorkerTranscriptSource>>;
   let rx: ReturnType<typeof createWorkerLiveEventReceiver>;
   let events: Event[];
   let unsubscribe: () => void;
@@ -50,7 +50,7 @@ describe("worker live reply media", () => {
         activeWriterRunId: RUN,
       },
     );
-    source = captureWorkerTranscriptSource({
+    source = await captureWorkerTranscriptSource({
       agentId: "main",
       sessionId: SID,
       sessionKey: KEY,
@@ -64,6 +64,7 @@ describe("worker live reply media", () => {
   afterEach(async () => {
     unsubscribe();
     rx.clear();
+    await source.release();
     clearRuntimeConfigSnapshot();
     await drainStoreWriterQueuesForTest(SQLITE_SESSION_WRITER_QUEUES, "live media test cleanup");
     closeOpenClawAgentDatabasesForTest();

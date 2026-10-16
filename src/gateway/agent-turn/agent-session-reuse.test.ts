@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
@@ -58,6 +59,7 @@ describe("agent session reuse at mutation", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 60 } } };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const timestamp = Date.now();
         const sessionKey = "agent:main:main";
         const sessionId = `original-${status}`;
@@ -248,6 +250,7 @@ describe("agent session reuse at mutation", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 1 } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:reuse-proof";
       const scope = {
         agentId: "main",
@@ -306,6 +309,7 @@ describe("agent session reuse at mutation", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:admission-replacement",

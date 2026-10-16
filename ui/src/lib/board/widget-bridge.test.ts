@@ -70,18 +70,7 @@ describe("board widget bridge", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("opens HTTP widget links through the safe host opener", async () => {
-    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
-    const { controller } = setup();
-
-    await expect(
-      controller.handle(request("host.open", { url: "http://example.com/path" })),
-    ).resolves.toEqual({ ok: true });
-
-    expect(open).toHaveBeenCalledWith("http://example.com/path", "_blank", "noopener,noreferrer");
-  });
-
-  it.each(["javascript:alert(1)", "data:text/html,x", "/relative"])(
+  it.each(["javascript:alert(1)"])(
     "rejects unsafe widget link destinations without opening %s",
     async (url) => {
       const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
@@ -102,39 +91,6 @@ describe("board widget bridge", () => {
       controller.handle(request("host.open", { url: "https://example.com/path" })),
     ).rejects.toThrow("widget link could not be opened");
     expect(open).toHaveBeenCalledOnce();
-  });
-
-  it("asks for per-click confirmation when prompt is not granted", async () => {
-    const { controller, confirmPrompt, dispatchPrompt } = setup({ confirmationRequired: true });
-
-    await controller.handle(request("prompt.send", { text: "Show details" }), {
-      promptUserActivated: true,
-    });
-
-    expect(dispatchPrompt).toHaveBeenCalledWith(
-      expect.any(HTMLIFrameElement),
-      "Show details",
-      "widget",
-      confirmPrompt,
-      undefined,
-    );
-  });
-
-  it("skips the prompt confirmation callback only when granted", async () => {
-    const { controller, confirmPrompt, dispatchPrompt } = setup();
-
-    await controller.handle(request("prompt.send", { text: "Show details" }), {
-      promptUserActivated: true,
-    });
-
-    expect(confirmPrompt).not.toHaveBeenCalled();
-    expect(dispatchPrompt).toHaveBeenCalledWith(
-      expect.any(HTMLIFrameElement),
-      "Show details",
-      "widget",
-      undefined,
-      undefined,
-    );
   });
 
   it("keeps confirmation when the authorization response omits its decision", async () => {

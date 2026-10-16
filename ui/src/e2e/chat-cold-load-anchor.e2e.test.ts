@@ -3,12 +3,14 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import {
+  chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 
 type ColdLoadFrame = {
+  title?: string | null;
   top: number;
   max: number;
   duration: boolean;
@@ -31,7 +33,121 @@ declare global {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("paints the cached tail, reply metadata, and progress before hello and reconciles in place", async () => {
+  it.each(["direct", "sidebar"])(
+    "opens uncached history at the end on its first visible frame (%s)",
+    async (navigation) => {
+      await suite.withPage({ viewport: { width: 1200, height: 900 } }, async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:uncached-load";
+        const sourceKey = "agent:main:dashboard:starting-conversation";
+        const historyMessages = Array.from({ length: 40 }, (_, index) => ({
+          role: index % 2 ? "assistant" : "user",
+          content: "Synthetic message " + index + ": " + "Transcript detail. ".repeat(35),
+          timestamp: 1_800_000_000_000 + index * 1000,
+          __openclaw: { id: "uncached-" + index, seq: index + 1 },
+        }));
+        const responses = {
+          cases: [
+            {
+              match: { sessionKey },
+              response: {
+                messages: historyMessages,
+                sessionId: "uncached",
+                hasMore: true,
+                nextOffset: 40,
+                totalMessages: 2040,
+              },
+            },
+            {
+              match: { sessionKey: sourceKey },
+              response: {
+                messages: [{ role: "assistant", content: "Starting conversation." }],
+                sessionId: "starting",
+              },
+            },
+          ],
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey: navigation === "direct" ? sessionKey : sourceKey,
+          methodResponses: {
+            "chat.history": responses,
+            "chat.startup": responses,
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sourceKey,
+                sessionId: "starting",
+                kind: "direct",
+                label: "Starting conversation",
+                updatedAt: 2,
+              },
+              {
+                key: sessionKey,
+                sessionId: "uncached",
+                kind: "direct",
+                label: "Unvisited conversation",
+                updatedAt: 1,
+              },
+            ]),
+          },
+        });
+        await page.addInitScript(() => {
+          window.coldLoadSamples = [];
+          const sample = () => {
+            const thread = document.querySelector<HTMLElement>(
+              ".chat-pane-cache__pane--active .chat-thread",
+            );
+            if (
+              thread?.textContent?.includes("Synthetic message") &&
+              thread.clientHeight > 0 &&
+              getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility !== "hidden"
+            ) {
+              window.coldLoadSamples!.push({
+                top: thread.scrollTop,
+                max: thread.scrollHeight - thread.clientHeight,
+                duration: false,
+                reply: false,
+                progress: false,
+                threadTop: 0,
+                threadHeight: thread.clientHeight,
+                cardTop: null,
+                cardHeight: null,
+              });
+            }
+            if (window.coldLoadSamples!.length < 24) {
+              requestAnimationFrame(sample);
+            }
+          };
+          requestAnimationFrame(sample);
+        });
+        if (navigation === "sidebar") {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
+          await page.getByText("Starting conversation.", { exact: true }).waitFor();
+          await page
+            .locator(
+              '.sidebar-recent-session[data-session-key="' +
+                sessionKey +
+                '"] a.sidebar-recent-session__link',
+            )
+            .click();
+        } else {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        }
+        await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
+        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
+        const frames = await page.evaluate(() => window.coldLoadSamples!);
+        await writeFile(
+          path.join(suite.artifactDir, "uncached-load-" + navigation + "-frames.json"),
+          JSON.stringify(frames),
+        );
+        expect(frames[0]!.max).toBeGreaterThan(1000);
+        expect(
+          frames.every((frame) => Math.abs(frame.max - frame.top) <= 1),
+          JSON.stringify(frames),
+        ).toBe(true);
+      });
+    },
+  );
+
+  it("paints the cached tail, title, reply metadata, and progress before hello and reconciles in place", async () => {
     await suite.withPage(
       {
         viewport: { width: 1200, height: 900 },
@@ -110,7 +226,20 @@ suite.define(() => {
           sessions: [session],
           sessionInfo: session,
           historyMessages,
-          methodResponses: { "progressCard.get": { card: progressCard } },
+          methodResponses: {
+            "sessions.list": {
+              ...chatSessionListResponse(
+                Array.from({ length: 200 }, (_, index) => ({
+                  key: `agent:main:recent-${index}`,
+                  kind: "direct",
+                  label: `Recent conversation ${index}`,
+                  updatedAt: session.updatedAt + index + 1,
+                })),
+              ),
+              count: 300,
+            },
+            "progressCard.get": { card: progressCard },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
@@ -136,13 +265,19 @@ suite.define(() => {
           const read = (): ColdLoadFrame | null => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             const thread = pane?.querySelector<HTMLElement>(".chat-thread");
-            if (!thread?.querySelector(".chat-virtual-row") || thread.clientHeight === 0) {
+            if (
+              !thread?.querySelector(".chat-virtual-row") ||
+              thread.clientHeight === 0 ||
+              getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility === "hidden"
+            ) {
               return null;
             }
             const card = pane?.querySelector('[data-progress-card-placement="details"]');
             const cardRect = card?.getBoundingClientRect();
             const threadRect = thread.getBoundingClientRect();
             return {
+              title:
+                pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
               duration: thread.textContent.includes("Worked for 3 minutes"),
@@ -189,7 +324,8 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(samples).toHaveLength(20);
         for (const frame of samples) {
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
+          expect(frame.title).toBe(session.label);
+          expect(Math.abs(frame.max - frame.top), JSON.stringify(samples)).toBeLessThanOrEqual(1);
           expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
         }
         await gateway.waitForRequest("connect");
@@ -201,9 +337,9 @@ suite.define(() => {
         await gateway.waitForRequest("progressCard.get");
         await page.waitForFunction(() => {
           const pane = document.querySelector(".chat-pane-cache__pane--active") as
-            | (HTMLElement & { state?: { connected: boolean; chatLoading: boolean } })
+            | (HTMLElement & { transcriptReady: boolean })
             | null;
-          return pane?.state?.connected && !pane.state.chatLoading;
+          return pane?.transcriptReady;
         });
         const reconciled = await page.evaluate(async () => {
           for (let index = 0; index < 20; index += 1) {
@@ -228,6 +364,7 @@ suite.define(() => {
         expect(reconciled.frames.length).toBeGreaterThanOrEqual(20);
         const cached = samples[0]!;
         for (const frame of [...samples, ...reconciled.frames]) {
+          expect(frame.title).toBe(session.label);
           expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
           expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
           for (const key of [

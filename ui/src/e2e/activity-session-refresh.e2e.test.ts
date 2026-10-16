@@ -285,8 +285,11 @@ suite.define(() => {
           hasMore: true,
           totalCount: 101,
         });
+        const after = await gateway.deferNext("sessions.messages.subscribe", { key });
         await page.getByRole("tab", { name: "Live activity", exact: true }).click();
-        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { after, match: { key } });
+        // Scoped events can be delivered only after the Gateway accepts the subscription.
+        await gateway.resolveDeferred("sessions.messages.subscribe", undefined, { match: { key } });
         await gateway.emitGatewayEvent("agent", {
           runId: "run-activity",
           stream: "tool",

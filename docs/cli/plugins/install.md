@@ -60,6 +60,13 @@ Maintainers testing setup-time installs can override automatic plugin install
 sources with guarded environment variables. See
 [Plugin install overrides](/plugins/install-overrides).
 
+Packaged macOS builds from commits without an exact release tag prefer staged
+official plugins built from the same commit. Automatic setup uses those copies
+without fetching a registry package; official installs record the bundled source path.
+These copies follow app updates; Doctor and plugin updates keep them with their
+matching host SDK. Use `npm:<package>` to explicitly select the registry instead.
+Release builds keep the published plugin layout.
+
 <Warning>
 Bare package names install from npm by default. Bundled plugin ids select the bundled copy. Official plugin ids and unqualified official package names (bare or `@latest`) follow their catalog's declared source order, switching only when a target is unpublished. ClawHub-only plugins stay on ClawHub. Integrity, compatibility, trust, install-policy, and capability-consent failures stop the install without switching sources. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code; prefer pinned versions.
 </Warning>
@@ -206,7 +213,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 

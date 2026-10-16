@@ -48,7 +48,7 @@ export type PluginLoadOptions = {
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate" | "cli-metadata";
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */

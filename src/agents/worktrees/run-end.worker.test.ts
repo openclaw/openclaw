@@ -1,6 +1,10 @@
 import { StatementSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   SqliteWorkerError,
@@ -70,9 +74,14 @@ function interceptAdmission(
     );
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -220,6 +229,31 @@ it("retains SQL-free effect authority across unrelated writes and revokes pendin
     sql.expectIdle();
   } finally {
     sql.restore();
+  }
+});
+
+it("distinguishes checkout base and retained snapshot in registry binding predicates", async () => {
+  const { env } = await fixture();
+  const context = captureOpenClawStateWorkerContext({ env });
+  const record = (await readRegistryWorktree(context, "synthetic"))!;
+  for (const kind of ["binding", "exact-snapshot"] as const) {
+    const rejected =
+      kind === "binding"
+        ? { ...record, baseRef: "another-base" }
+        : { ...record, snapshotRef: "refs/openclaw/snapshots/another" };
+    await expect(
+      prepareWorktreeRegistryGuard(context, { predicates: [{ kind, record: rejected }] }),
+    ).rejects.toThrow(
+      kind === "binding" ? "owner or binding changed" : "owner or lifecycle changed",
+    );
+    const accepted =
+      kind === "binding"
+        ? { ...record, snapshotRef: "refs/openclaw/snapshots/another" }
+        : { ...record, baseRef: "another-base" };
+    const assertCurrent = await prepareWorktreeRegistryGuard(context, {
+      predicates: [{ kind, record: accepted }],
+    });
+    expect(assertCurrent).not.toThrow();
   }
 });
 

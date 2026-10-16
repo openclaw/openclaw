@@ -634,6 +634,17 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     approvalCapability: mattermostApprovalAuth,
+    agentPrompt: {
+      customInlineButtonHint: true,
+      messageToolHints: ({ cfg, accountId }) =>
+        inspectMattermostAccount({ cfg, accountId }).config.capabilities?.some(
+          (entry) => entry.trim().toLowerCase() === "inlinebuttons",
+        )
+          ? [
+              '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"yes","style":"primary"}]}]}`. Typed `callback` actions render as plain text.',
+            ]
+          : [],
+    },
     doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
@@ -745,8 +756,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         });
         ctx.log?.info(`[${account.accountId}] starting channel`);
         return (await import("./mattermost/monitor.js")).monitorMattermostProvider({
-          botToken: account.botToken ?? undefined,
-          baseUrl: account.baseUrl ?? undefined,
+          botToken: account.botToken,
+          baseUrl: account.baseUrl,
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,

@@ -134,7 +134,9 @@ function migrateWhatsAppDebounce(raw: Record<string, unknown>, changes: string[]
 export function migrateConfigTranche(raw: Record<string, unknown>, changes: string[]): void {
   stripRetiredPresentationPrefs(raw, changes);
   if (deleteRetiredPath(raw, ["skills", "load", "watchDebounceMs"])) {
-    changes.push("Removed skills.load.watchDebounceMs; the watcher now uses the 250 ms default.");
+    changes.push(
+      "Removed skills.load.watchDebounceMs; passive skill refresh now runs once per minute.",
+    );
   }
   stripRetiredAgentConfig(raw, changes);
   migrateWhatsAppDebounce(raw, changes);

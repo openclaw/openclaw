@@ -95,7 +95,7 @@ describe("qa-channel protocol", () => {
     );
   });
 
-  it("sanitizes QA bus tool-call arguments before persistence", () => {
+  it("preserves QA bus tool-call arguments while normalizing calls", () => {
     const toolCalls = sanitizeQaBusToolCalls([
       null,
       { name: 123 },
@@ -121,17 +121,17 @@ describe("qa-channel protocol", () => {
       {
         name: "exec",
         arguments: {
-          command: "[redacted]",
-          apiToken: "[redacted]",
+          command: "cat README.md",
+          apiToken: "secret-token",
           headers: {
-            Authorization: "[redacted]",
+            Authorization: "Bearer sk_test_12345678901234567890",
           },
           headerPairs: [
-            ["[redacted]", "[redacted]"],
-            ["[redacted]", "[redacted]"],
+            ["X-API-Key", "secret"],
+            ["Accept", "application/json"],
           ],
-          argv: ["[redacted]", "[redacted]", "[redacted]", "[redacted]", "[redacted]"],
-          values: ["[redacted]", { password: "[redacted]" }],
+          argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
+          values: ["ok", { password: "hunter2" }],
         },
       },
     ]);

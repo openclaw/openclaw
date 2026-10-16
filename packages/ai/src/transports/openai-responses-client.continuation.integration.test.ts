@@ -1,10 +1,16 @@
-import type { Context, Tool } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import type { Context, StreamOptions, Tool } from "@openclaw/llm-core";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   createResponsesLoopbackServer,
   responsesLoopbackModel,
 } from "./openai-responses-loopback.test-support.js";
+import { supportsResponsesReasoningUpdate } from "./openai-responses-reasoning-update.js";
 
 const numberTool = {
   name: "record_value",
@@ -12,12 +18,16 @@ const numberTool = {
   parameters: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
 };
 
-function responseEvents(first: boolean, responseId = first ? "resp_number" : "resp_done") {
+function responseEvents(
+  first: boolean,
+  responseId = first ? "resp_number" : "resp_done",
+  suffix = "",
+) {
   const item = first
     ? {
         type: "function_call",
-        id: "fc_number",
-        call_id: "call_number",
+        id: `fc_number${suffix}`,
+        call_id: `call_number${suffix}`,
         name: numberTool.name,
         arguments: '{"n":9007199254740993}',
         status: "completed",
@@ -57,6 +67,217 @@ function responseEvents(first: boolean, responseId = first ? "resp_number" : "re
     },
   ];
 }
+
+it.each([true, false])(
+  "keeps recorded three-step tool-loop prefixes byte-identical with store=%s",
+  async (store) => {
+    const server = await createResponsesLoopbackServer((turn) => {
+      const events = responseEvents(turn < 3, `resp_step_${turn}`, `_${turn}`);
+      const reasoning = {
+        encrypted_content: `opaque_${turn}`,
+        status: "completed",
+        summary: [{ type: "summary_text", text: "Display-only reasoning." }],
+        type: "reasoning",
+        id: `rs_step_${turn}`,
+      };
+      const shifted = events.map((event) => {
+        if ("response" in event) {
+          const response = event.response;
+          assert(response);
+          return Object.assign({}, event, {
+            response: Object.assign({}, response, {
+              output: [reasoning, ...response.output],
+            }),
+          });
+        }
+        return Object.assign({}, event, { output_index: event.output_index + 1 });
+      });
+      return [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...reasoning, summary: [] },
+        },
+        { type: "response.output_item.done", output_index: 0, item: reasoning },
+        ...shifted,
+      ];
+    });
+    const prepared: Record<string, unknown>[] = [];
+    const messages: Context["messages"] = [
+      { role: "user", content: "Record three values.", timestamp: 1 },
+    ];
+    const snapshots: string[] = [];
+    try {
+      for (let turn = 1; turn <= 3; turn++) {
+        const stream = await createOpenAIResponsesTransportStreamFn()(
+          responsesLoopbackModel,
+          { systemPrompt: "Use the supplied tool.", messages, tools: [numberTool] },
+          {
+            apiKey: "synthetic-continuation-key",
+            sessionId: `recorded-tool-loop-${store}`,
+            transport: "sse",
+            onPayload(payload) {
+              const request = {
+                ...(payload as Record<string, unknown>),
+                store,
+                metadata: { openclaw_turn_id: `turn-${turn}` },
+              };
+              prepared.push(structuredClone(request));
+              return request;
+            },
+          },
+        );
+        const assistant = await stream.result();
+        expect(Object.hasOwn(assistant, "errorMessage")).toBe(false);
+        const thinking = assistant.content.find((block) => block.type === "thinking");
+        assert(thinking?.type === "thinking");
+        expect(thinking.thinking).toBe("Display-only reasoning.");
+        expect(thinking.thinkingSignature).toBe(
+          JSON.stringify({
+            id: `rs_step_${turn}`,
+            type: "reasoning",
+            summary: [],
+            status: "completed",
+            encrypted_content: `opaque_${turn}`,
+          }),
+        );
+        expect(
+          messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => JSON.stringify(message)),
+        ).toEqual(snapshots);
+        messages.push(assistant);
+        snapshots.push(JSON.stringify(assistant));
+        if (turn < 3) {
+          const call = assistant.content.find((block) => block.type === "toolCall");
+          assert(call?.type === "toolCall");
+          messages.push({
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [{ type: "text", text: `recorded-${turn}` }],
+            isError: false,
+            timestamp: turn + 1,
+          });
+        }
+      }
+      expect(server.rawRequests).toEqual(server.requests.map((request) => JSON.stringify(request)));
+      for (let index = 1; index < 3; index++) {
+        const previous = prepared[index - 1];
+        const current = prepared[index];
+        assert(previous && current);
+        assert(Array.isArray(previous.input) && Array.isArray(current.input));
+        expect(JSON.stringify(current.input.slice(0, previous.input.length))).toBe(
+          JSON.stringify(previous.input),
+        );
+        const stableParameters = ({
+          input: _input,
+          metadata: _metadata,
+          ...parameters
+        }: Record<string, unknown>) => JSON.stringify(parameters);
+        expect(stableParameters(current)).toBe(stableParameters(previous));
+        const request = server.requests[index];
+        assert(request);
+        if (store) {
+          expect(request.previous_response_id).toBe(`resp_step_${index}`);
+          expect(request.input).toEqual([
+            {
+              type: "function_call_output",
+              call_id: `call_number_${index}`,
+              output: `recorded-${index}`,
+            },
+          ]);
+        } else {
+          expect(request).not.toHaveProperty("previous_response_id");
+          const previousWire = server.requests[index - 1]?.input;
+          assert(Array.isArray(previousWire) && Array.isArray(request.input));
+          expect(JSON.stringify(request.input.slice(0, previousWire.length))).toBe(
+            JSON.stringify(previousWire),
+          );
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  },
+);
+
+it("preserves reasoning controls in concurrent same-session SSE requests", async () => {
+  const manifest: unknown = JSON.parse(
+    readFileSync(
+      new URL("../../../../extensions/openai/openclaw.plugin.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert(isRecord(manifest), "Expected the registered OpenAI model catalog");
+  const catalog = normalizeModelCatalog(manifest.modelCatalog, {
+    ownedProviders: new Set(["openai"]),
+  });
+  const reasoningModel = catalog?.providers?.openai?.models.find((entry) =>
+    supportsResponsesReasoningUpdate({ model: entry.id, reasoning: { effort: "low" }, input: [] }),
+  );
+  assert(reasoningModel, "Expected a registered model supporting reasoning controls");
+  const server = await createResponsesLoopbackServer((turn) =>
+    responseEvents(false, `resp_${turn}`),
+  );
+  const accepted = createDeferred();
+  const release = createDeferred();
+  const run = async (
+    messages: Context["messages"],
+    reasoningEffort: "low" | "medium" | "high",
+    onResponse?: StreamOptions["onResponse"],
+  ) => {
+    const options = {
+      apiKey: "synthetic-continuation-key",
+      sessionId: "parallel-reasoning",
+      transport: "sse",
+      reasoningEffort,
+      onResponse,
+    } satisfies OpenAIResponsesOptions;
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      { ...responsesLoopbackModel, id: reasoningModel.id, reasoning: true },
+      { messages },
+      options,
+    );
+    return stream.result();
+  };
+  let active: ReturnType<typeof run> | undefined;
+  try {
+    const messages: Context["messages"] = [{ role: "user", content: "First.", timestamp: 1 }];
+    messages.push(await run(messages, "low"), { role: "user", content: "Second.", timestamp: 2 });
+    messages.push(await run(messages, "high"), { role: "user", content: "Third.", timestamp: 3 });
+    expect(server.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    active = run(messages, "medium", async () => {
+      accepted.resolve();
+      await release.promise;
+    });
+    await awaitGateBeforeSettlement(accepted.promise, active, "Expected active HTTP request");
+    const concurrent = await run(messages, "medium");
+    release.resolve();
+    expect((await active).stopReason).toBe("stop");
+    expect(concurrent.stopReason).toBe("stop");
+    expect(server.requests).toHaveLength(4);
+    expect(server.requests[3]).not.toHaveProperty("previous_response_id");
+    expect(server.requests[3]).toMatchObject({ reasoning: { effort: "low" } });
+    expect(server.requests[3]?.input).toEqual(server.requests[2]?.input);
+    expect(server.requests[3]?.input).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "high" } },
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant" }),
+      { type: "configuration_update", reasoning: { effort: "medium" } },
+      expect.objectContaining({ role: "user" }),
+    ]);
+  } finally {
+    release.resolve();
+    await active;
+    await server.close();
+  }
+});
 
 it.each([
   ["sse", "none"],

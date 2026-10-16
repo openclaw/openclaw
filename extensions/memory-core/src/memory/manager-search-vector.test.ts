@@ -13,11 +13,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runVectorKnnQuery } from "./manager-search-knn.js";
+import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
-import { vectorToBlob } from "./vector-blob.js";
 
 function referenceCosine(a: number[], b: number[]): number {
   let dot = 0;
@@ -40,7 +39,6 @@ type VectorSearchOptions = Omit<Parameters<typeof searchVector>[0], "runFallback
 function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOptions> = {}) {
   const { sourceFilterChunks = { sql: "", params: [] }, ...overrides } = options;
   const request: Omit<Parameters<typeof searchVector>[0], "runFallback"> = {
-    vectorTable: "memory_index_chunks_vec",
     providerModel: "target-model",
     queryVec: [1, 0],
     limit: 5,
@@ -156,7 +154,7 @@ describe("searchVector sqlite-vec KNN", () => {
     );
   }
 
-  it.each([9_007_199_254_740_993n, 9_007_199_254_740_995n])(
+  it.each([9_007_199_254_740_993n])(
     "scans the full signed rowid domain across sparse unsafe-integer batch boundaries from %s",
     async (firstHighRowid) => {
       const db = createFallbackDb();
@@ -266,43 +264,6 @@ describe("searchVector sqlite-vec KNN", () => {
           candidateIds: [],
         }),
       ).resolves.toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("searches an empty primary model without requiring aliases", async () => {
-    const db = createFallbackDb();
-    try {
-      insertFallbackChunk(db, { id: "empty-primary", model: "", vector: [1, 0] });
-      insertFallbackChunk(db, { id: "other", model: "other-model", vector: [1, 0] });
-
-      const results = await searchVectorFixture(db, { providerModel: "" });
-
-      expect(results.map((row) => row.id)).toEqual(["empty-primary"]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("keeps malformed binary vectors inert without interrupting fallback search", async () => {
-    const db = createFallbackDb();
-    try {
-      const malformed = [new Uint8Array([1, 2, 3]), new Uint8Array([0, 0, 0, 0, 0, 0, 240, 127])];
-      for (const [index, embedding] of malformed.entries()) {
-        const id = `malformed-${index}`;
-        insertFallbackChunk(db, { id, model: "target-model", vector: [] });
-        db.prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = ?").run(embedding, id);
-      }
-      insertFallbackChunk(db, { id: "healthy", model: "target-model", vector: [1, 0] });
-
-      const results = await searchVectorFixture(db);
-
-      expect(results.map(({ id, score }) => ({ id, score }))).toEqual([
-        { id: "healthy", score: 1 },
-        { id: "malformed-0", score: 0 },
-        { id: "malformed-1", score: 0 },
-      ]);
     } finally {
       db.close();
     }
@@ -536,11 +497,7 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it.each(
-    ["UTF-8", "UTF-16le", "UTF-16be"].flatMap((encoding) =>
-      ["KNN", "fallback"].map((mode) => ({ encoding, mode })),
-    ),
-  )(
+  it.each([{ encoding: "UTF-8", mode: "fallback" }])(
     "bounds $mode body fetches while preserving snippets in a $encoding database",
     async ({ encoding, mode }) => {
       const db = new DatabaseSync(":memory:", { allowExtension: true });

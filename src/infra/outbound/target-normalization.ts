@@ -17,8 +17,6 @@ type TargetNormalizerCacheEntry = {
 };
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
-const preparedPluginSignatureIds = new WeakMap<ChannelPlugin, number>();
-let nextPreparedPluginSignatureId = 1;
 
 function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
@@ -196,36 +194,4 @@ export async function maybeResolvePluginMessagingTarget(params: {
     source: resolved.source ?? "normalized",
     resolutionSource: "plugin",
   };
-}
-
-export function buildTargetResolverSignature(
-  channel: ChannelId,
-  preparedPlugin?: ChannelPlugin,
-): string {
-  const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
-  let registryScope = "pinned";
-  if (preparedPlugin) {
-    let id = preparedPluginSignatureIds.get(preparedPlugin);
-    if (!id) {
-      id = nextPreparedPluginSignatureId++;
-      preparedPluginSignatureIds.set(preparedPlugin, id);
-    }
-    registryScope = `prepared:${id}`;
-  }
-  const resolver = plugin?.messaging?.targetResolver;
-  const hint = resolver?.hint ?? "";
-  const reserved = (resolver?.reservedLiterals ?? [])
-    .map(normalizeOptionalLowercaseString)
-    .filter((literal): literal is string => Boolean(literal))
-    .toSorted()
-    .join(",");
-  const looksLike = resolver?.looksLikeId;
-  // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
-  const source = looksLike ? looksLike.toString() : "";
-  const value = `${registryScope}|${hint}|${reserved}|${source}`;
-  let hash = 5381;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
 }

@@ -4,7 +4,7 @@ export type PanelIconButtonProps = {
   label: string;
   icon: JSX.Element;
   onClick: () => void;
-  class: string;
+  class: JSX.IntrinsicElements["button"]["class"];
   title?: string;
   disabled?: boolean;
   busy?: boolean;

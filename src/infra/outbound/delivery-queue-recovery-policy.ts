@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { QueuedDelivery } from "./delivery-queue-types.js";
+import type { DeliveryRecoveryDrainDecision } from "../delivery-recovery.shared.js";
+import { hasActiveDeliveryOwner, type QueuedDelivery } from "./delivery-queue-types.js";
 
 const DEFAULT_MAX_RETRIES = 5;
 const TEXT_FINAL_FIELDS: Record<string, true> = {
@@ -31,6 +32,20 @@ export function isOrdinaryFinalText(
 
 export function canReplayAmbiguousFinalText(entry: QueuedDelivery): boolean {
   return entry.retryAmbiguousFinalText === true && entry.ambiguousTransportError === true;
+}
+
+export function shouldInspectQueuedDelivery(
+  entry: QueuedDelivery,
+  now: number,
+  selectEntry?: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision,
+): boolean {
+  // The live producer may still be awaiting its committed enqueue reply. Taking
+  // an inspection claim would preempt it before we reload and skip its lease.
+  return (
+    Boolean(entry.settlement) ||
+    (!hasActiveDeliveryOwner(entry, now) &&
+      (selectEntry === undefined || selectEntry(entry, now).match))
+  );
 }
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [

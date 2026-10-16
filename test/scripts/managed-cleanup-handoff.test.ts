@@ -47,6 +47,29 @@ function readSpawnedPids(record: string): number[] {
 }
 
 describe.skipIf(process.platform === "win32")("managed cleanup ownership handoff", () => {
+  it("acknowledges inherited custody in the current runtime", async ({ signal }) => {
+    const result = await runNodeScript(
+      [
+        "--input-type=module",
+        "-e",
+        `import { acquireManagedCleanup } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-cleanup-handoff.mts")).href)};
+for (let index = 0; index < 2; index++) {
+  const release = await acquireManagedCleanup();
+  if (!release) throw new Error("Missing managed cleanup parent");
+  await release(true, true);
+}
+console.log("custody-released");
+`,
+      ],
+      process.env,
+      undefined,
+      { signal, executable: process.execPath, requireProcessTreeExit: true, maxBuffer: 64 * 1024 },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("custody-released\n");
+  });
+
   it.for(["acknowledge", "cancel"] as const)(
     "holds concurrent command admission until the parent can %s ownership",
     async (action, { signal }) => {

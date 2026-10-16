@@ -1,7 +1,6 @@
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
@@ -27,8 +26,10 @@ import type {
   AgentDatabaseFileExecutionOwner,
   AgentDatabaseExecutionFileIdentity,
 } from "./openclaw-agent-execution-contract.js";
-import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
+} from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
@@ -50,14 +51,14 @@ export type AgentDatabaseExecutionPreparedTarget = {
 
 /** A read can borrow an already-selected file owner only within its current storage scope. */
 export function borrowExistingAgentDatabaseExecution(
-  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>,
+  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner>,
   options: { path: string; env?: NodeJS.ProcessEnv },
   capture?: (target: OpenClawAgentDatabaseOptions) => OpenClawAgentDatabaseExecution,
 ): OpenClawAgentDatabaseExecution | undefined {
   const pathname = path.resolve(options.path);
   const owner =
     owners.get(pathname) ?? owners.get(readDatabasePathIdentitySync(pathname).canonicalPath);
-  if (!owner || owner.kind !== "file") {
+  if (!owner) {
     return undefined;
   }
   const target = { ...options, agentId: owner.agentId, path: pathname };
@@ -94,13 +95,14 @@ export function supportsAgentDatabaseExecutionScope(
 ): boolean {
   const cleanup = getAgentDeletionDatabaseCleanup(options);
   return (
-    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
-    !hasAgentDatabaseMaintenanceAuthority() &&
+    (isOpenClawDatabaseMaintenanceWorkerAccess() ||
+      (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
+        !hasAgentDatabaseMaintenanceAuthority())) &&
     (!cleanup || cleanup.worker !== undefined)
   );
 }
 
-/** These native-only scopes still need their complete owning caller cutover. */
+/** Memory sessions have no database; maintenance scopes retain their local durable owner. */
 export function supportsOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
 ): boolean {
@@ -132,9 +134,6 @@ export function captureNativeAgentDatabaseExecutionIdentity(
     }
   };
   assertCurrent();
-  if (typeof native.identity !== "string") {
-    throw new Error("Agent execution requires an admitted native file");
-  }
   const fileIdentity: AgentDatabaseExecutionFileIdentity = {
     kind: "file",
     physicalIdentity: native.identity,
@@ -166,7 +165,7 @@ export function assertAgentDatabaseExecutionCreationIdentity(
   }
 }
 
-/** Each alias and retained file receipt must still name the borrower's original store. */
+/** Keep the borrower's captured file constraints bound to its native owner. */
 export function assertBorrowedAgentDatabaseFileIdentity({
   borrowedPath,
   identity,
@@ -182,7 +181,8 @@ export function assertBorrowedAgentDatabaseFileIdentity({
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   nativeIdentity: AgentDatabaseExecutionFileIdentity | undefined;
 }): void {
-  if (!fileIdentity || creatingTarget) {
+  // After admission the borrower follows its canonical owner, not a retargeted alias.
+  if (!fileIdentity) {
     const current = readDatabasePathIdentitySync(borrowedPath);
     if (
       current.canonicalPath !== identity.canonicalPath ||
@@ -211,10 +211,6 @@ export function assertBorrowedAgentDatabaseFileIdentity({
         (birthtime !== undefined && nativeIdentity.birthtime !== birthtime))
     ) {
       throw new Error("Agent database borrower belongs to another physical file");
-    }
-    // The native owner validates its own path last; a borrowed alias has a separate lifetime.
-    if (!nativeIdentity || borrowedPath !== nativeIdentity.nativeLocation) {
-      assertExistingDatabaseIdentity(borrowedPath, `file:${file.physicalIdentity}`, birthtime);
     }
   }
 }

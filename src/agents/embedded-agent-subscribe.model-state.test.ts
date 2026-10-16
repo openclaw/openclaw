@@ -246,6 +246,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       });
       const messages: string[] = [];
       try {
+        controller.observeAttempt({ providerRetryMaxRetries: 1 });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
         nowMs += 130_000;
         await runUsageCalls(
@@ -262,12 +263,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(messages).toEqual(["toolUse", stopReason]);
         expect(recovery.overflowCompactionAttempts).toBe(stopReason === "stop" ? 0 : 2);
         controller.observeAttempt({
+          providerRetryMaxRetries: 1,
           hasSuccessfulModelResponse: harness.subscription.hasSuccessfulModelResponse(),
         });
         await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(
           stopReason === "stop",
         );
-        expect(controller.transientRetryCount).toBe(stopReason === "stop" ? 2 : 1);
+        expect(controller.transientRetryCount).toBe(1);
       } finally {
         now.mockRestore();
         harness.subscription.unsubscribe();
@@ -391,6 +393,23 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       contextTokens: 11,
     },
     {
+      name: "authoritative zero token report",
+      call: {
+        usage: makeUsage({
+          usageReport: { state: "available" },
+          contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
+        }),
+      },
+      expected: {
+        input: 0,
+        output: 0,
+        total: 0,
+        usageReport: { state: "available" },
+        cost: { total: 0 },
+      },
+      contextTokens: 0,
+    },
+    {
       name: "final billing-only zero with streamed tokens",
       call: {
         streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.1 }),
@@ -487,7 +506,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       expect(
         onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage"),
       ).toEqual(
-        expected.output ? [{ stream: "usage", data: { outputTokens: expected.output } }] : [],
+        expected.output || call.usage.usageReport?.state === "available"
+          ? [{ stream: "usage", data: { outputTokens: expected.output } }]
+          : [],
       );
       expectDefined(terminal, "Expected assistant completion").usage.input = 999;
       const snapshot = expectDefined(

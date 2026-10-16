@@ -210,12 +210,12 @@ describe("Gateway RPC fixture session writes", () => {
           ]),
         ).toBe("closing");
         expect(isOpenClawStateDatabaseOpen(identityPath)).toBe(true);
-        await expect(fs.access(dir)).resolves.toBeUndefined();
+        await fs.access(dir);
         if (outcome === "timeout") {
           await expect(removing).rejects.toThrow(
             `Timed out closing shared-state fixture database ${JSON.stringify(identityPath)}`,
           );
-          await expect(fs.access(dir)).resolves.toBeUndefined();
+          await fs.access(dir);
         } else {
           release.resolve();
           await removing;

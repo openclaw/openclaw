@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixQaMediaMessageContent,
@@ -400,44 +397,6 @@ export function createMatrixQaClient(params: {
   };
 }
 
-async function joinRoomWithRetry(params: {
-  accessToken: string;
-  baseUrl: string;
-  fetchImpl?: MatrixQaFetchLike;
-  roomId: string;
-}) {
-  const client = createMatrixQaClient({
-    accessToken: params.accessToken,
-    baseUrl: params.baseUrl,
-    fetchImpl: params.fetchImpl,
-  });
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
-    try {
-      await client.joinRoom(params.roomId);
-      return;
-    } catch (error) {
-      lastError = error;
-      await sleep(300 * attempt);
-    }
-  }
-  throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
-}
-
-function resolveTopologyMemberAccounts(
-  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
-  memberRoles: MatrixQaParticipantRole[],
-) {
-  const uniqueRoles = uniqueValues(memberRoles);
-  if (uniqueRoles.length === 0) {
-    throw new Error("Matrix QA room provisioning requires at least one member");
-  }
-  return uniqueRoles.map((role) => ({
-    role,
-    account: accounts[role],
-  }));
-}
-
 async function provisionMatrixQaTopology(params: {
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>;
   baseUrl: string;
@@ -447,36 +406,37 @@ async function provisionMatrixQaTopology(params: {
   const rooms = [];
 
   for (const room of params.spec.rooms) {
-    const members = resolveTopologyMemberAccounts(params.accounts, room.members);
-    const creator = expectDefined(members[0], "Matrix QA room creator");
-    const invitees = members.slice(1);
+    const memberRoles = uniqueValues(room.members);
+    const [creatorRole, ...inviteeRoles] = memberRoles;
+    if (creatorRole === undefined) {
+      throw new Error("Matrix QA room provisioning requires at least one member");
+    }
     const creatorClient = createMatrixQaClient({
-      accessToken: creator.account.accessToken,
+      accessToken: params.accounts[creatorRole].accessToken,
       baseUrl: params.baseUrl,
       fetchImpl: params.fetchImpl,
     });
     const roomId = await creatorClient.createPrivateRoom({
       encrypted: room.encrypted === true,
-      inviteUserIds: invitees.map((entry) => entry.account.userId),
+      inviteUserIds: inviteeRoles.map((role) => params.accounts[role].userId),
       isDirect: room.kind === "dm",
       name: room.name,
     });
     await Promise.all(
-      invitees.map((invitee) =>
-        joinRoomWithRetry({
-          accessToken: invitee.account.accessToken,
+      inviteeRoles.map((role) =>
+        createMatrixQaClient({
+          accessToken: params.accounts[role].accessToken,
           baseUrl: params.baseUrl,
           fetchImpl: params.fetchImpl,
-          roomId,
-        }),
+        }).joinRoom(roomId),
       ),
     );
     rooms.push({
       encrypted: room.encrypted === true,
       key: room.key,
       kind: room.kind,
-      memberRoles: members.map((entry) => entry.role),
-      memberUserIds: members.map((entry) => entry.account.userId),
+      memberRoles,
+      memberUserIds: memberRoles.map((role) => params.accounts[role].userId),
       name: room.name,
       requireMention: room.kind === "group" && room.requireMention !== false,
       roomId,

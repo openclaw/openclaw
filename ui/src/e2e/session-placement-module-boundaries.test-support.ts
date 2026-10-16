@@ -2,14 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
+import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  navigateToControlUiSession,
-  pauseVirtualClock,
-  releasePlacementPolicyRead,
-} from "../test-helpers/control-ui-e2e.ts";
+import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   type createControlUiE2eSuite,
   tooltipTitleText,
@@ -77,7 +76,10 @@ export function defineSessionPlacementModuleBoundaryTests(
       const initialSession = {
         ...initialSessions.sessions[0],
         key: sessionKey,
+        kind: "direct",
+        contextTokens: undefined,
         sessionId: "session-cloud-e2e",
+        updatedAt: Date.now(),
         placement: {
           state: "requested",
           generation: 1,
@@ -85,7 +87,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           updatedAtMs: 1,
           stateChangedAtMs: 1,
         },
-      };
+      } satisfies GatewaySessionRow;
       const gateway = await installMockGateway(page, {
         sessions: [initialSession],
         defaultAgentId: "cloud",
@@ -179,15 +181,15 @@ export function defineSessionPlacementModuleBoundaryTests(
           })),
         ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
         await gateway.waitForRequest("environments.list");
-        const place = page.locator("wa-popover.new-session-page__where-popover");
+        const place = page.locator(".oc-popover.new-session-page__where-popover");
         await place.evaluate((element) => {
           const onAfterShow = (event: Event) => {
             if (event.target === element) {
-              element.removeEventListener("wa-after-show", onAfterShow);
+              element.removeEventListener("overlay-after-show", onAfterShow);
               element.setAttribute("data-test-picker-ready", "true");
             }
           };
-          element.addEventListener("wa-after-show", onAfterShow);
+          element.addEventListener("overlay-after-show", onAfterShow);
         });
         await page.locator("#new-session-where-trigger").click();
         await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
@@ -203,7 +205,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await page.locator("#new-session-project-trigger").click();
         await page.locator('.new-session-page__project-popover [data-value="workspace"]').click();
         const checkoutTrigger = page.locator("#new-session-checkout-trigger");
-        const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+        const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
         await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
         await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
           "Starting branch",
@@ -246,7 +248,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await thinkingSlider.press("End");
         await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
         await captureUiProof(suite, page, "01-cloud-thinking-level.png", {
-          surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+          surface: page.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
           content: [thinkingSlider],
         });
         await effortSelect.click();
@@ -256,7 +258,7 @@ export function defineSessionPlacementModuleBoundaryTests(
 
         // Both Gateway folders and registered projects remain eligible cloud sources.
         const projectTrigger = page.locator("#new-session-project-trigger");
-        const project = page.locator("wa-popover.new-session-page__project-popover");
+        const project = page.locator(".oc-popover.new-session-page__project-popover");
         await projectTrigger.click();
         await project.getByRole("button", { name: "Browse folders" }).click();
         await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
@@ -277,25 +279,19 @@ export function defineSessionPlacementModuleBoundaryTests(
         );
         await page.keyboard.press("Escape");
         await expect
-          .poll(() =>
-            checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
           .toBe(false);
 
         await projectTrigger.click();
         await expect
-          .poll(() =>
-            project.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => project.evaluate((element) => element.matches(":popover-open")))
           .toBe(true);
         await project.getByRole("button", { name: "OpenClaw", exact: true }).click();
         await expect.poll(() => projectTrigger.getAttribute("data-project-id")).toBe("openclaw");
         await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
         await checkoutTrigger.click();
         await expect
-          .poll(() =>
-            checkout.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-          )
+          .poll(() => checkout.evaluate((element) => element.matches(":popover-open")))
           .toBe(true);
         await checkout.getByLabel("Name", { exact: true }).fill("cloud-e2e");
         await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
@@ -341,11 +337,9 @@ export function defineSessionPlacementModuleBoundaryTests(
               "cloud-profile-refresh-retention",
               "01-before-refresh.png",
             ),
-            await takeControlUiViewportScreenshot(
-              page,
-              place.locator('wa-popup.popover > [part="popup"]'),
-              [place.locator('[data-value="cloud:aws"]')],
-            ),
+            await takeControlUiViewportScreenshot(page, place, [
+              place.locator('[data-value="cloud:aws"]'),
+            ]),
           );
           await page.keyboard.press("Escape");
         }
@@ -383,9 +377,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
           await gateway.deferNext("environments.list");
           const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
-          await releasePlacementPolicyRead(page, gateway, () =>
-            page.clock.fastForward(delayMs + 1),
-          );
+          await page.clock.fastForward(delayMs + 1);
           await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
           await expect.poll(() => startButton.isDisabled()).toBe(true);
           await gateway.rejectDeferred("environments.list", profileCatalogError);
@@ -423,6 +415,8 @@ export function defineSessionPlacementModuleBoundaryTests(
         }
         await page.keyboard.press("Escape");
 
+        // Placement events must render while the initial descriptor is still pending.
+        await gateway.deferNext("sessions.describe", { key: sessionKey });
         await startButton.click();
 
         const create = await gateway.waitForRequest("sessions.create");
@@ -470,33 +464,47 @@ export function defineSessionPlacementModuleBoundaryTests(
         await expect
           .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
           .toBe(false);
+        await pollLocatorText(startupStatus).toContain("Provisioning environment…");
         const publishPlacement = async (
-          state: "requested" | "provisioning" | "syncing" | "starting",
+          state: "provisioning" | "syncing" | "starting",
           generation: number,
           label: string,
           includeNeutral = false,
         ) => {
-          const placement = {
-            state,
+          const timing = {
             generation,
             createdAtMs: 1,
             updatedAtMs: generation,
             stateChangedAtMs: generation,
           };
+          const worker = { environmentId: "worker-1", workerBundleHash: "a".repeat(64) };
+          const placement =
+            state === "provisioning"
+              ? { state, ...timing }
+              : state === "syncing"
+                ? { state, ...timing, ...worker }
+                : {
+                    state,
+                    ...timing,
+                    ...worker,
+                    workspaceBaseManifestRef: "manifest-1",
+                    remoteWorkspaceDir: "/workspace",
+                  };
+          const now = await page.evaluate(() => Date.now());
+          const session = {
+            ...initialSession,
+            label: "Cloud session",
+            status: "running",
+            updatedAt: now,
+            snapshotAt: now,
+            placement,
+          } satisfies GatewaySessionRow;
           await gateway.setSessionsListResponse({
             count: includeNeutral ? 2 : 1,
             path: "",
             defaults: SESSION_LIST_DEFAULTS,
             sessions: [
-              {
-                key: sessionKey,
-                kind: "direct",
-                label: "Cloud session",
-                sessionId: "session-cloud-e2e",
-                status: "running",
-                updatedAt: Date.now(),
-                placement,
-              },
+              session,
               ...(includeNeutral
                 ? [
                     {
@@ -511,46 +519,49 @@ export function defineSessionPlacementModuleBoundaryTests(
             ],
             ts: Date.now(),
           });
-          await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey,
+            agentId: "cloud",
+            reason: "dispatch",
+            ts: now,
+            ancestorSessions: [],
+            ...buildGatewaySessionSnapshot({
+              sessionRow: session,
+              agentId: "cloud",
+              includeSession: true,
+            }),
+            placement,
+            placementMove: null,
+          });
           await pollLocatorText(startupStatus).toContain(label);
         };
 
-        const parentDescriptions = async () =>
-          (await gateway.getRequests("sessions.describe")).filter(
-            (request) => asNullableRecord(request.params)?.key === sessionKey,
-          );
-        let expectedParentReads = 1;
-        expect(await parentDescriptions()).toHaveLength(expectedParentReads);
-        for (const [state, generation, label] of [
-          ["requested", 1, "Provisioning environment…"],
+        const transitions = [
           ["provisioning", 2, "Provisioning environment…"],
           ["syncing", 3, "Preparing workspace…"],
           ["starting", 4, "Starting…"],
-        ] as const) {
+        ] as const;
+        for (const [state, generation, label] of transitions) {
           await publishPlacement(state, generation, label, state === "starting");
-          await page.clock.runFor(250);
-          expectedParentReads += 1;
-          expect(await parentDescriptions()).toHaveLength(expectedParentReads);
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         }
-        // Parent lookups follow placement transitions; child reads coalesce independently.
+        await gateway.resolveDeferred("sessions.describe", undefined, {
+          match: { key: sessionKey },
+        });
+        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
+        // Child hydration stays bounded independently of placement snapshot delivery.
         const childReads = (await gateway.getRequests("sessions.list")).filter(
           (request) => asNullableRecord(request.params)?.spawnedBy === sessionKey,
         );
         expect(childReads.length).toBeGreaterThan(0);
-        expect(childReads.length).toBeLessThanOrEqual(expectedParentReads);
+        expect(childReads.length).toBeLessThanOrEqual(transitions.length + 1);
         await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
         await expect.poll(() => page.url()).toContain("neutral-e2e");
-        await page.evaluate((pathname) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: {
-              context: {
-                navigate: (routeId: string, options: { pathname: string }) => void;
-              };
-            };
-          };
-          app.runtime?.context.navigate("chat", { pathname });
-        }, controlUiSessionPath(sessionKey));
+        await evaluateControlUiContext(
+          page,
+          (application, pathname) => application.navigate("chat", { pathname }),
+          controlUiSessionPath(sessionKey),
+        );
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
         await pollLocatorText(startupStatus).toContain("Starting…");
         expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
@@ -658,7 +669,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           .getByRole("menuitem", { name: "Stop cloud worker…" });
         await stopWorker.waitFor();
         await captureUiProof(suite, page, "02-active-cloud-worker-stop.png", {
-          surface: page.locator('openclaw-session-menu wa-dropdown [part="menu"]'),
+          surface: page.locator("openclaw-session-menu .session-menu__panel"),
           content: [stopWorker],
         });
         expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);

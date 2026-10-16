@@ -20,8 +20,8 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
-import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
+import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
+import type { GitHubIdentity as GitHubIdentityModel } from "../../features/github-connections/github-identity.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
@@ -33,7 +33,6 @@ import {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
 import { resolveToolAvailability, renderToolPolicyDetails } from "./tool-access-diagnostics.tsx";
@@ -166,7 +165,7 @@ export function AgentTools(
     toolsEffectiveResult: ToolsEffectiveResult | null;
     runtimeSessionKey: string;
     runtimeSessionMatchesSelectedAgent: boolean;
-    githubIdentity: GitHubIdentityController;
+    githubIdentity: GitHubIdentityModel;
     onOpenGitHubConnections: () => void;
     onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
     onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
@@ -463,8 +462,9 @@ export function AgentTools(
         </Show>
         {runtimeAvailability()}
       </SettingsSection>
-      <LitContent
-        render={() => renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
+      <GitHubIdentity
+        identity={params.githubIdentity}
+        onOpenConnections={params.onOpenGitHubConnections}
       />
       <SettingsSection title={t("agentTools.catalogTitle")}>
         {catalogLoading() ? (

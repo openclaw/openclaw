@@ -167,7 +167,6 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   });
   await archiveEntered.promise;
   const finalization = runSqliteSessionReclamation({
-    forceInProcess: false,
     onWorkerResult: () => {
       storage.committed = true;
       order.push("published");

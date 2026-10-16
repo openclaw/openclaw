@@ -57,8 +57,8 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
     domain: toStringOrEmpty(cookie.domain) || undefined,
     path: toStringOrEmpty(cookie.path) || undefined,
     expires: readOptionalRouteFiniteNumber(cookie.expires, "cookie.expires"),
-    httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
-    secure: toBoolean(cookie.secure) ?? undefined,
+    httpOnly: toBoolean(cookie.httpOnly),
+    secure: toBoolean(cookie.secure),
     sameSite:
       cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
         ? cookie.sameSite

@@ -1,10 +1,8 @@
 import { expect, it, vi } from "vitest";
 import {
-  bindPreparedSessionSourceAssertion,
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
-  prepareSessionSourceScope,
   runWithSessionSourceScope,
 } from "./session-source-authority.js";
 
@@ -101,37 +99,40 @@ it("keeps native opacity and full checks on transaction source preparation", asy
   expect(external).toHaveBeenCalledOnce();
 });
 
-it("allows a retained source to acquire a new fence but never renews released custody", async () => {
-  let initialFenceCurrent = true;
-  const release = vi.fn();
-  const prepare = vi.fn(async () => ({ assertCurrent() {}, checks: [] }));
-  const source = composeSessionSourceAssertion([
-    Object.assign(() => {}, {
-      prepareSessionSource: prepare,
-      prepareSessionSourceScope: prepare,
-    }),
-  ]);
-  const bound = bindPreparedSessionSourceAssertion(source, {
-    assertCurrent() {
-      if (!initialFenceCurrent) {
-        throw new Error("initial fence expired");
+it("retains every composed source until accepted work releases its hold", () => {
+  let references = 1;
+  const source = Object.assign(
+    () => {
+      if (references === 0) {
+        throw new Error("source released");
       }
     },
-    checks: [],
-    release,
-  });
-  initialFenceCurrent = false;
-  expect(bound).toThrow("initial fence expired");
-  await expect(
-    runWithSessionSourceScope(bound, async () => {
-      bound();
-      await bound.release();
-      expect(bound).toThrow("released");
+    {
+      retain: () => {
+        references++;
+        return () => references--;
+      },
+    },
+  );
+  const assertion = composeSessionSourceAssertion([composeSessionSourceAssertion([source])]);
+  const release = assertion.retain!();
+  references--;
+  expect(assertion).not.toThrow();
+  release();
+  release();
+  expect(assertion).toThrow("source released");
+});
+
+it("releases earlier source holds when a later acquisition fails", () => {
+  const release = vi.fn();
+  const assertion = composeSessionSourceAssertion([
+    Object.assign(() => {}, { retain: () => release }),
+    Object.assign(() => {}, {
+      retain: () => {
+        throw new Error("source released");
+      },
     }),
-  ).rejects.toThrow("released");
+  ]);
+  expect(() => assertion.retain!()).toThrow("source released");
   expect(release).toHaveBeenCalledOnce();
-  const preparedCount = prepare.mock.calls.length;
-  await expect(prepareSessionSourceAuthority(bound)).rejects.toThrow("released");
-  await expect(prepareSessionSourceScope(bound)).rejects.toThrow("released");
-  expect(prepare).toHaveBeenCalledTimes(preparedCount);
 });

@@ -380,6 +380,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
             hasAvatar: false,
             updatedAt: 2,
           },
+          preparedSessionProfile: {
+            profileId: "profile-guest",
+            aliases: new Set(["profile-guest"]),
+            role: null,
+            githubLogin: undefined,
+          },
           ...(rolesConfigured ? { operatorRolePolicy: role } : {}),
         });
         expect(ensureProfile).toHaveBeenCalledWith("guest@example.test", {
@@ -501,6 +507,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         avatarRevision: "3",
         hasAvatar: true,
         updatedAt: 3,
+      },
+      preparedSessionProfile: {
+        profileId: "profile-github-canonical",
+        aliases: new Set(["profile-github", "profile-github-canonical"]),
+        role: null,
+        githubLogin: undefined,
       },
     });
     expect(profileWrites.ensureCanonicalUserProfileForEmail).not.toHaveBeenCalled();

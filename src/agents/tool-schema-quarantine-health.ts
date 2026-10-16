@@ -84,23 +84,18 @@ export async function clearRecoveredPersistedRuntimeToolSchemaQuarantines(
   if (recoveredKeys.size === 0) {
     return;
   }
-  // Capture every key's source now; a renewed failure must not veto another key's recovery.
-  await Promise.all(
-    Array.from(recoveredKeys, async ([key, submission]) => {
-      const cleared = await quarantineStore.clearForProcess(
-        process.pid,
-        { kind: "tool-schema", keys: [key] },
-        () => {
-          if (submittedQuarantines.get(key) !== submission) {
-            throw new Error("Runtime tool quarantine changed during recovery");
-          }
-        },
-      );
-      if (cleared && submittedQuarantines.get(key) === submission) {
+  // The worker orders this diagnostic cleanup before later registrations.
+  const cleared = await quarantineStore.clearForProcess(process.pid, {
+    kind: "tool-schema",
+    keys: [...recoveredKeys.keys()],
+  });
+  if (cleared) {
+    for (const [key, submission] of recoveredKeys) {
+      if (submittedQuarantines.get(key) === submission) {
         submittedQuarantines.delete(key);
       }
-    }),
-  );
+    }
+  }
 }
 
 export async function listPersistedRuntimeToolSchemaQuarantines(): Promise<

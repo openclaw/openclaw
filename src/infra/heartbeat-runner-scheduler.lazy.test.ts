@@ -145,7 +145,7 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
   );
 
   it.each(["stop", "abort", "replace"] as const)(
-    "does not dispatch the old wake after %s during execution loading",
+    "settles the loading wake without duplicate execution after %s",
     async (action) => {
       const { start, wake } = await loadScheduler();
       const owner = new AbortController();
@@ -179,15 +179,24 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
         }
         start({ cfg, runOnce: replacement });
         await vi.advanceTimersByTimeAsync(250);
-        if (action === "replace") {
-          await expect(result).resolves.toMatchObject({ status: "ran" });
-        }
+        expect(replacement).not.toHaveBeenCalled();
 
         release.resolve();
         await vi.dynamicImportSettled();
         await vi.advanceTimersByTimeAsync(1);
 
-        expect(execute).not.toHaveBeenCalled();
+        if (action === "replace") {
+          await expect(result).resolves.toMatchObject({ status: "ran" });
+          expect(execute).toHaveBeenCalledOnce();
+          expect(replacement).not.toHaveBeenCalled();
+          const nextResult = wake();
+          await vi.advanceTimersByTimeAsync(1);
+          await expect(nextResult).resolves.toMatchObject({ status: "ran" });
+        } else {
+          expect(execute).not.toHaveBeenCalled();
+          const { HEARTBEAT_IDLE_RETRY_GRACE_MS } = await import("./heartbeat-wake.js");
+          await vi.advanceTimersByTimeAsync(HEARTBEAT_IDLE_RETRY_GRACE_MS);
+        }
         expect(replacement).toHaveBeenCalledOnce();
       } finally {
         release.resolve();

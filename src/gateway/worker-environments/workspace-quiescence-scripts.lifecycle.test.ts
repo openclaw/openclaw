@@ -1,9 +1,82 @@
 import * as crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import nativeFs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { classifySqliteMutation } from "../../infra/sqlite-schema-mutation.js";
 import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("renews and releases an initialized Windows lease without repeating DDL", () => {
+  const root = nativeFs.realpathSync(tempDirs.make("workspace-quiescence-warm-schema-"));
+  const directory = path.join(root, ".openclaw-worker", "quiescence");
+  nativeFs.mkdirSync(directory, { recursive: true });
+  const databasePath = path.join(directory, "windows-shared-host.sqlite");
+  const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
+  const nonce = "a".repeat(32);
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(
+      "CREATE TABLE workspace_leases (workspace_key TEXT PRIMARY KEY, lease_json TEXT NOT NULL)",
+    );
+    database.prepare("INSERT INTO workspace_leases VALUES (?, ?)").run(
+      workspaceKey,
+      JSON.stringify({
+        version: 1,
+        nonce,
+        sharedHost: true,
+        processes: [],
+        watchdog: null,
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    );
+  } finally {
+    database.close();
+  }
+  const require = createRequire(import.meta.url);
+  const output: string[] = [];
+  const sql = observeHostDataSql();
+  try {
+    for (const operation of [
+      { action: "renew", nonce, timeoutMs: 60_000, validationMode: "heartbeat" },
+      { action: "release", nonce },
+    ] as const) {
+      const command = workspaceQuiescenceArgv(root, operation, "shared-host");
+      runInNewContext(command[2]!, {
+        process: {
+          argv: [process.execPath, ...command.slice(3)],
+          platform: "win32",
+          stdout: { write: (value: string) => output.push(value) },
+          stderr: { write: (value: string) => output.push(value) },
+        },
+        performance: { now: () => 0 },
+        require: (name: string) => (name === "node:os" ? { homedir: () => root } : require(name)),
+      });
+    }
+    expect(output).toEqual([`renewed ${nonce}\n`, ""]);
+    const reader = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        reader
+          .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+          .get(workspaceKey),
+      ).toBeUndefined();
+    } finally {
+      reader.close();
+    }
+    expect(
+      sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
+    ).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
 
 it("closes the generated Windows lease database when admission fails", () => {
   const nonce = "a".repeat(32);

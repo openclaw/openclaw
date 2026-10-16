@@ -96,9 +96,8 @@ async function runModelRun(params: {
     resolveLocalCapabilityRuntimeConfig,
   } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { canonicalizeCaseOnlyCatalogModelRef } = await import("../../agents/model-selection.js");
-  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
     params.transport === "local"
@@ -106,13 +105,13 @@ async function runModelRun(params: {
           commandName: "infer model run",
           targetIds: getModelsCommandSecretTargetIds(),
         })
-      : getRuntimeConfig();
+      : await captureRuntimeConfigAsyncReader()();
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
   const modelRef = await canonicalizeCaseOnlyCatalogModelRef({
     raw: params.model,
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => readPreparedModelCatalog({ config: cfg, agentId, readOnly: true }),
+    loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -368,13 +367,13 @@ async function runModelAuthStatus(agent: string) {
 }
 
 async function runModelAuthLogout(provider: string, agent: string) {
-  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { listProfilesForProvider, loadAuthProfileStoreForRuntime } =
     await import("../../agents/auth-profiles.js");
   const { updateAuthProfileStoreWithLock } =
     await import("../../agents/auth-profiles/store-runtime.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveAgentDir(cfg, agent);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
@@ -472,9 +471,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, providerSummaryText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         return loadModelCatalogForInspection(
-          getRuntimeConfig(),
+          await captureRuntimeConfigAsyncReader()(),
           resolveCapabilityAgentOption(command, opts.agent),
         );
       }),
@@ -488,10 +487,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
         const catalog = await loadModelCatalogForInspection(
-          getRuntimeConfig(),
+          await captureRuntimeConfigAsyncReader()(),
           resolveCapabilityAgentOption(command, opts.agent),
         );
         const entry =
@@ -519,9 +518,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
   const resolveModelAuthAgent = async (command: Command, rawAgentId: unknown, surface: string) => {
     const { resolveCapabilityProviderAgentId, resolveCapabilityAgentOption } =
       await import("./shared.js");
-    const { getRuntimeConfig } = await import("../../config/config.js");
+    const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
     return resolveCapabilityProviderAgentId(
-      getRuntimeConfig(),
+      await captureRuntimeConfigAsyncReader()(),
       resolveCapabilityAgentOption(command, rawAgentId),
       surface,
     );

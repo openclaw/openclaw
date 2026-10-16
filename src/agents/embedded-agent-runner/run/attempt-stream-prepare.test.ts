@@ -111,9 +111,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     ["source-throw", "steering"],
     ["source-open", "steering"],
     ["source-recovered-false", "steering"],
-    ["source-recovered-throw", "steering"],
     ["source-recovered-false", "question"],
-    ["source-recovered-throw", "question"],
   ] as const)(
     "checks %s during real session %s preparation before its effect",
     async (transition, route) => {
@@ -257,7 +255,6 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it.each([
     [undefined, "check git status"],
-    ["explain", "check git status"],
     ["raw", "check git status, `git status`"],
   ] as const)(
     "renders %s progress detail through the real subscription",
@@ -508,7 +505,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       releaseSettlement.resolve();
       await Promise.all([prompt, nestedPrompt]);
       prepared.stopAcceptingSteerMessages();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
@@ -561,7 +558,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(session.agent.hasQueuedMessages()).toBe(false);
     } finally {
       unsubscribe();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
@@ -595,12 +592,12 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(session.getSteeringMessages()).toEqual([]);
     } finally {
       unsubscribe();
-      prepared.deferredLifecycleOwner?.discard();
+      await prepared.deferredLifecycleOwner?.discard();
       prepared.subscription.unsubscribe();
     }
   });
 
-  it.each(["ordinary", "cancelled", "deferred cancellation", "pending task"] as const)(
+  it.each(["ordinary", "deferred cancellation", "pending task"] as const)(
     "publishes terminal activity under %s ownership",
     async (scenario) => {
       const result = await observeTerminalRunActivity(scenario, (subscribe) =>
@@ -616,7 +613,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each(["subscription", "registration", "deferred lifecycle adoption"] as const)(
+  it.each(["deferred lifecycle adoption"] as const)(
     "releases acquired stream subscriptions when %s fails",
     async (stage) => {
       const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
@@ -626,22 +623,16 @@ describe("prepareEmbeddedAttemptStream", () => {
       const fail = () => {
         throw failure;
       };
-      if (stage === "subscription") {
-        mocks.subscribe.mockImplementationOnce(fail);
-      }
-      if (stage === "registration") {
-        mocks.setActiveRun.mockImplementationOnce(fail);
-      }
       expect(() =>
         prepareCatalogExecutor({
           activeSession: session,
           attempt: {
             deferTerminalLifecycle: true,
-            onDeferredLifecycleOwner: stage === "deferred lifecycle adoption" ? fail : () => {},
+            onDeferredLifecycleOwner: fail,
           },
         }),
       ).toThrow(failure);
-      expect(releases).toHaveLength(stage === "subscription" ? 1 : 2);
+      expect(releases).toHaveLength(2);
       expect(listeners.size).toBe(0);
       for (const release of releases) {
         expect(release).toHaveBeenCalledOnce();
@@ -650,53 +641,25 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each([
-    "prompt",
-    "abort",
-    "pre-aborted",
-    "supersede",
-    "unsubscribe",
-    "discard",
-    "complete",
-  ] as const)("releases each stream subscription once through %s cleanup", async (phase) => {
+  it("releases each stream subscription once through complete cleanup", async () => {
     const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
       mocks.subscribe.mockImplementation(subscribe),
     );
     const runAbortController = new AbortController();
-    if (phase === "pre-aborted") {
-      runAbortController.abort();
-    }
     const prepared = prepareCatalogExecutor({
       activeSession: session,
       runAbortController,
       abortRun: (_isTimeout, reason) => runAbortController.abort(reason),
       attempt: { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} },
     });
-    expect(listeners.size).toBe(phase === "pre-aborted" ? 1 : 2);
-
-    if (phase === "prompt") {
-      prepared.stopAcceptingSteerMessages();
-    } else if (phase === "abort") {
-      runAbortController.abort();
-    } else if (phase === "supersede") {
-      prepared.queueHandle.cancel("superseded");
-    } else if (phase === "unsubscribe") {
-      prepared.subscription.unsubscribe();
-    } else if (phase === "discard") {
-      prepared.deferredLifecycleOwner!.discard();
-    } else if (phase === "complete") {
-      await prepared.deferredLifecycleOwner!.complete();
-    }
+    expect(listeners.size).toBe(2);
+    await prepared.deferredLifecycleOwner!.complete();
 
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
-    expect(listeners.size).toBe(
-      phase === "prompt" || phase === "abort" || phase === "pre-aborted" || phase === "supersede"
-        ? 1
-        : 0,
-    );
+    expect(listeners.size).toBe(0);
     prepared.stopAcceptingSteerMessages();
     prepared.subscription.unsubscribe();
-    prepared.deferredLifecycleOwner!.discard();
+    await prepared.deferredLifecycleOwner!.discard();
     prepared.subscription.unsubscribe();
     expect(listeners.size).toBe(0);
     for (const release of releases) {

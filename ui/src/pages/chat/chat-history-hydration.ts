@@ -30,6 +30,7 @@ import {
   setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
+  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -38,7 +39,7 @@ import {
   applyHistoryRun,
 } from "./chat-history-stream.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
@@ -47,11 +48,6 @@ import {
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
-import {
-  controlUiNowMs,
-  recordControlUiPerformanceEvent,
-  roundedControlUiDurationMs,
-} from "./performance.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
@@ -99,34 +95,8 @@ export async function hydrateChatHistory(
         }
       : undefined;
   };
-  const startedAtMs = controlUiNowMs();
-  const previousMessages = state.chatMessages;
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
-  const previousPagination = state.chatHistoryPagination;
-  const previousSessionId = state.currentSessionId ?? null;
-  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
   const previousRunId = state.chatRunId;
-  const recordTiming = (
-    phase: "start" | "applied" | "stream-reset" | "stale" | "error",
-    extra: Record<string, unknown> = {},
-  ) =>
-    recordControlUiPerformanceEvent(
-      // SAFETY: real chat panes carry optional performance fields; minimal hosts may omit them.
-      state as ChatState & Parameters<typeof recordControlUiPerformanceEvent>[0],
-      "control-ui.chat.history",
-      {
-        phase,
-        durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
-        sessionKey: state.sessionKey,
-        activeRunId: state.chatRunId,
-        requestSessionKey: sessionKey,
-        requestAgentId,
-        previousRunId,
-        ...extra,
-      },
-      { maxBufferedEventsForType: 30 },
-    );
-  recordTiming("start", { method });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
@@ -183,21 +153,25 @@ export async function hydrateChatHistory(
     setChatError(state, null);
     let response = await request(deltaCursor);
     if (!isCurrent()) {
-      recordTiming("stale", {
-        reason: "apply-version",
-      });
       return undefined;
     }
     if (isHistoryCursor(response) && response.kind === "reset") {
       clearHistoryCursor(state, sessionKey, requestAgentId);
       response = await request();
       if (!isCurrent()) {
-        recordTiming("stale", {
-          reason: "reset-fallback-version",
-        });
         return undefined;
       }
     }
+    // Fetch in parallel with IndexedDB, then reconcile against the cached paint.
+    // Joining at publication keeps a fast response from retiring the local read.
+    const hydration = waitForInitialChatSnapshot(state);
+    if ((hydration && !(await hydration)) || !isCurrent()) {
+      return undefined;
+    }
+    const previousMessages = state.chatMessages;
+    const previousPagination = state.chatHistoryPagination;
+    const previousSessionId = state.currentSessionId ?? null;
+    const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
     if (isHistoryCursor(response) && response.kind === "delta") {
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
       const runActive = isSessionRunActive(response.sessionInfo);
@@ -236,11 +210,6 @@ export async function hydrateChatHistory(
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
       });
       commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null, response.sessionInfo);
-      recordTiming("applied", {
-        messageCount: response.messages.length,
-        visibleMessageCount: response.messages.length,
-        resetStream: false,
-      });
       return {
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
@@ -269,7 +238,8 @@ export async function hydrateChatHistory(
       sessionKey,
       visibleMessages,
     });
-    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+    const hasActiveLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId");
+    const nextDisplayedLeafEntryId = hasActiveLeafEntryId
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
@@ -290,9 +260,7 @@ export async function hydrateChatHistory(
       sessionKey,
       agentId: requestAgentId,
       sessionId: nextSessionId,
-      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
-        ? { activeLeafEntryId: nextDisplayedLeafEntryId }
-        : {}),
+      ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
     });
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
@@ -315,7 +283,7 @@ export async function hydrateChatHistory(
             : undefined,
       },
     );
-    if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
+    if (hasActiveLeafEntryId) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
@@ -359,7 +327,7 @@ export async function hydrateChatHistory(
       if (
         state.chatRunId &&
         (hasVisibleStream || liveToolIds.length > 0) &&
-        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+        !isChatRunRecoveryStatus(state.chatRunStartup)
       ) {
         reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }
@@ -384,10 +352,6 @@ export async function hydrateChatHistory(
           state.chatStream = null;
           state.chatStreamStartedAt = null;
         }
-        recordTiming("stream-reset", {
-          messageCount: messages.length,
-          visibleMessageCount: visibleMessages.length,
-        });
       } else if (!state.chatRunId) {
         publishChatSessionProjectionMessages(
           state,
@@ -429,20 +393,11 @@ export async function hydrateChatHistory(
       resetStream,
     });
 
-    recordTiming("applied", {
-      messageCount: messages.length,
-      visibleMessageCount: visibleMessages.length,
-      resetStream,
-    });
     return res;
   } catch (err) {
     if (!isCurrent()) {
-      recordTiming("stale", {
-        reason: "error-version",
-      });
       return undefined;
     }
-    recordTiming("error");
     const missingReadScope = isMissingOperatorReadScopeError(err);
     if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);

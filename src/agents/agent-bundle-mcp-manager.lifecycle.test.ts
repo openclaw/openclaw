@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -216,12 +216,16 @@ describe("MCP manager creation ownership", () => {
     expect(runtime.dispose).toHaveBeenCalledOnce();
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(manager.listRuntimeKeys()).toEqual([]);
+    await expect(
+      manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {}),
+    ).rejects.toThrow("cleanup owner lost");
 
     const otherSession = "unrelated-session";
     await manager.getOrCreate({ ...params, sessionId: otherSession });
     const targetedScope = createAgentCleanupScope();
     await targetedScope.run(() => manager.disposeSession(otherSession));
     expect(targetedScope.outcome).toBe("closed");
+    await manager.retireSessionForAgentDeletion(otherSession, "test", () => {});
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const laterScope = createAgentCleanupScope();
@@ -229,6 +233,55 @@ describe("MCP manager creation ownership", () => {
       expect(laterScope.outcome).toBe("uncertain");
     }
     expect(runtime.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves live MCP leases and rechecks deletion authority after admitted work", async () => {
+    const held = holdFactory();
+    const manager = createManager(held.createRuntime);
+    const acquiring = manager.acquire(params);
+    const runtime = await held.started;
+    let current = true;
+    const retiring = manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {
+      if (!current) {
+        throw new Error("deletion replaced");
+      }
+    });
+    current = false;
+    held.release();
+    const lease = await acquiring;
+    try {
+      await expect(retiring).rejects.toThrow("deletion replaced");
+      expect(runtime.dispose).not.toHaveBeenCalled();
+      await expect(
+        manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {}),
+      ).rejects.toThrow("active MCP leases");
+      expect(runtime.dispose).not.toHaveBeenCalled();
+    } finally {
+      lease.releaseLease();
+    }
+    const closing = holdDisposal(runtime);
+    const released = manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {});
+    await awaitGateBeforeSettlement(closing.started, released, "MCP retirement skipped disposal");
+    expect(runtime.dispose).toHaveBeenCalledOnce();
+    closing.release();
+    await released;
+    expect(manager.listRuntimeKeys()).toEqual([]);
+  });
+
+  it("preserves a captured session id rebound to another agent without arming retirement", async () => {
+    const held = holdFactory();
+    const manager = createManager(held.createRuntime);
+    const acquiring = manager.acquire({ ...params, sessionKey: "agent:keeper:rebound" });
+    const runtime = await held.started;
+    const retiring = manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {});
+    held.release();
+    const lease = await acquiring;
+    await retiring;
+    expect(runtime.dispose).not.toHaveBeenCalled();
+    expect(runtime.mcpAppModelContextRevoked).not.toBe(true);
+    lease.releaseLease();
+    await expect(manager.completeDeferredRetirement(params.sessionId)).resolves.toBe(false);
+    expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
   });
 
   it("constructs and retires an empty manager without binding or importing transports", async () => {
@@ -299,36 +352,6 @@ describe("MCP manager creation ownership", () => {
         await manager.disposeAll();
       }
     });
-  });
-
-  it("keeps idle reclamation on the surviving Gateway when the latest scheduler closes", async () => {
-    const firstClock = createGatewaySchedulerClock(Date.now());
-    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
-    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
-    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const lease = await manager.acquire({
-      ...params,
-      cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } },
-    });
-    try {
-      await manager.setScheduler(secondScheduler);
-      await secondScheduler.stop();
-      await firstClock.advanceBy(120_000);
-      expect(lease.runtime.dispose).not.toHaveBeenCalled();
-
-      lease.releaseLease();
-      await firstClock.advanceBy(60_000);
-      expect(lease.runtime.dispose).toHaveBeenCalledOnce();
-      expect(manager.listRuntimeKeys()).toEqual([]);
-    } finally {
-      lease.releaseLease();
-      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
-    }
   });
 
   it("resumes CLI acquisition after explicit scheduler binding and Gateway disposal", async () => {

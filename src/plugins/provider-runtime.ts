@@ -5,7 +5,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import {
@@ -24,6 +23,11 @@ import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+  type ProviderAuthScopeLookup,
+} from "./provider-auth-scope.js";
 import { hasConfiguredModelProvider } from "./provider-config-owner.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
@@ -53,7 +57,6 @@ import {
 import {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProviderRef,
-  resolveProviderRefOwnership,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -127,7 +130,8 @@ function toolSchemaHook<K extends "normalizeToolSchemas" | "inspectToolSchemas">
         : ensureProviderRuntimePluginHandle(params).plugin;
     // SAFETY: Hook derives both argument and result from the selected tool-schema method.
     const hook = plugin?.[name] as ((context: Parameters<Hook>[0]) => ReturnType<Hook>) | undefined;
-    return hook?.call(plugin, params.context) ?? undefined;
+    // Avoid invoking the managed function's own call wrapper.
+    return hook ? (Reflect.apply(hook, plugin, [params.context]) ?? undefined) : undefined;
   };
 }
 
@@ -480,7 +484,13 @@ export function resolveProviderTransportTurnStateWithPlugin(
   };
 }
 
-export { prepareProviderRuntimeAuth } from "./provider-runtime-auth.js";
+export {
+  loginProviderOAuthWithPlugin,
+  prepareProviderRuntimeAuth,
+  refreshProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin,
+} from "./provider-runtime-auth.js";
 
 const resolveUsageAuth = asyncRuntimeHook("resolveUsageAuth");
 export const resolveProviderUsageAuthWithPlugin = async (
@@ -569,71 +579,6 @@ export function listProviderUsagePluginDescriptors(params: {
 export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
 export const formatProviderAuthProfileApiKeyWithPlugin = runtimeHook("formatApiKey");
-
-export async function loginProviderOAuthWithPlugin(
-  params: ProviderRuntimeLookup & {
-    context: Parameters<NonNullable<ProviderPlugin["loginOAuth"]>>[0];
-  },
-) {
-  const ownership = resolveProviderRefOwnership(params);
-  const loginOAuth = resolveProviderRuntimePlugin(params)?.loginOAuth;
-  if (!loginOAuth) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  return {
-    status: "available" as const,
-    credentials: await loginOAuth(params.context),
-  };
-}
-
-export async function resolveProviderOAuthCredentialWithPlugin(
-  params: ProviderRuntimeLookup & {
-    credential: OAuthCredential;
-    refresh: boolean;
-  },
-) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
-  if (!plugin) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  let credential = params.credential;
-  if (params.refresh) {
-    const refreshOAuth = plugin.refreshOAuth;
-    if (!refreshOAuth) {
-      return { status: "unhandled" } as const;
-    }
-    credential = await refreshOAuth(params.credential);
-  }
-  if (!credential) {
-    return { status: "unhandled" } as const;
-  }
-  const apiKey = plugin.formatApiKey?.(credential) ?? credential.access;
-  if (typeof apiKey !== "string" || !apiKey) {
-    return { status: "unhandled" } as const;
-  }
-  return { status: "available" as const, credential, apiKey };
-}
-
-/** Resolve whether the current provider plugin generation owns OAuth refresh. */
-export function resolveProviderOAuthRefreshCapabilityWithPlugin(params: ProviderRuntimeLookup) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
-  if (!plugin) {
-    return {
-      status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
-    } as const;
-  }
-  return plugin.refreshOAuth
-    ? ({ status: "available" } as const)
-    : ({ status: "unhandled" } as const);
-}
-
-export const refreshProviderOAuthCredentialWithPlugin = asyncRuntimeHook("refreshOAuth");
 
 export const buildProviderAuthDoctorHintWithPlugin = asyncRuntimeHook("buildAuthDoctorHint");
 
@@ -733,7 +678,16 @@ function* resolveSyntheticAuthProviders(
   }
 }
 
+export function resolvePluginOwnedProviderAuth(
+  params: ProviderAuthScopeLookup & { profileId?: string; preferredProfile?: string },
+) {
+  return resolvePluginOwnedProviderAuthWith(params, resolveProviderRuntimePlugin);
+}
+
 export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSyntheticAuthParams) {
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -768,6 +722,9 @@ export async function prepareProviderSyntheticAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   if (captured) {
     return captured.result ?? undefined;
@@ -776,6 +733,10 @@ export async function prepareProviderSyntheticAuthWithPlugin(
 }
 
 function resolveExternalSyntheticAuthProviders(params: ProviderSyntheticAuthParams) {
+  // Instance-owned credentials cannot become transferable worker bearer facts.
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return [];
+  }
   const providers = [...resolveSyntheticAuthProviders(params)];
   return providers.some((provider) => provider.prepareSyntheticAuth) ? providers : [];
 }
@@ -785,6 +746,9 @@ export async function prepareProviderExternalAuthWithPlugin(
   params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
+  if (resolveProviderAuthScope(params) === "plugin") {
+    return resolvePluginOwnedProviderAuth(params);
+  }
   const captured = readPreparedSyntheticAuthFact(params.context, params);
   return captured
     ? (captured.result ?? undefined)

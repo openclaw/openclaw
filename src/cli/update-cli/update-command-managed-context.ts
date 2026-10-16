@@ -1,5 +1,4 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { createManagedUpdateRequesterContinuationAuthority } from "../../infra/update-requester-authority.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -10,6 +9,7 @@ import {
   type TargetDatabaseSchemaContextOptions,
 } from "./schema-preflight.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { readUpdateConfigFileSnapshot } from "./update-command-config.js";
 import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
@@ -71,7 +71,7 @@ export async function captureOwnedManagedUpdateContext(params: {
   // normalized owned environment before I/O so even capture failure recovery targets its owner.
   stopState.serviceEnv = env;
   return await withOwnedManagedUpdateEnv(env, async () => {
-    const configSnapshot = await readConfigFileSnapshot({
+    const configSnapshot = await readUpdateConfigFileSnapshot({
       observe: false,
       skipPluginValidation: true,
     });
@@ -91,7 +91,7 @@ export async function readUpdateCandidateSource(
   const snapshot = context?.legacyConfigPlan
     ? context.configSnapshot
     : await withOwnedManagedUpdateEnv(env, () =>
-        readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+        readUpdateConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
       );
   return {
     config: context?.legacyConfigPlan

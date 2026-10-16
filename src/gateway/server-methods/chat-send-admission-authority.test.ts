@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { retainSessionEntryWorkerPublication } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../../config/sessions/session-sharing-store.native.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -9,15 +10,22 @@ import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getSessionWorkAdmissionRelease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
 import type { SessionMutationAuthorization } from "./types.js";
@@ -50,7 +58,7 @@ describe("chat admission authority", () => {
       if (!prepared.ok) {
         throw new Error("session preparation failed");
       }
-      const session = qualifyChatSendSession(prepared.value);
+      const session = await qualifyChatSendSession(prepared.value);
       let current = true;
       const assertCurrent = () => {
         if (!current) {
@@ -92,14 +100,12 @@ describe("chat admission authority", () => {
           }
         }
       } finally {
-        session.releaseSessionTarget();
         await fixture.cleanup();
       }
     },
   );
   it("clears a pending reservation when its retained reader is revoked after publication", async () => {
     const fixture = await createBrowserFollowupFixture();
-    const sessions: Array<ReturnType<typeof qualifyChatSendSession>> = [];
     const prepare = async () => {
       const request = await normalizeChatSendRequest({
         params: fixture.params,
@@ -116,8 +122,7 @@ describe("chat admission authority", () => {
       if (!loaded.ok) {
         throw new Error("session preparation failed");
       }
-      const session = qualifyChatSendSession(loaded.value);
-      sessions.push(session);
+      const session = await qualifyChatSendSession(loaded.value);
       const resolved = await resolveSessionMutationAuthorizationAsync({
         client: fixture.client,
         method: "chat.send",
@@ -196,9 +201,6 @@ describe("chat admission authority", () => {
       }
       clearAgentRunContext(fixture.params.idempotencyKey);
       await closing;
-      for (const session of sessions.toReversed()) {
-        session.releaseSessionTarget();
-      }
       await fixture.cleanup();
     }
   });
@@ -220,7 +222,7 @@ describe("chat admission authority", () => {
     if (!prepared.ok) {
       throw new Error("session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    const session = await qualifyChatSendSession(prepared.value);
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client: fixture.client,
       method: "chat.send",
@@ -321,7 +323,6 @@ describe("chat admission authority", () => {
       await closing;
       root.release();
       caller.release();
-      session.releaseSessionTarget();
       await fixture.cleanup();
     }
   });
@@ -357,7 +358,7 @@ describe("chat admission authority", () => {
     if (!prepared.ok) {
       throw new Error("session preparation failed");
     }
-    const session = qualifyChatSendSession(prepared.value);
+    const session = await qualifyChatSendSession(prepared.value);
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client: fixture.client,
       method: "chat.send",
@@ -388,7 +389,103 @@ describe("chat admission authority", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
     } finally {
-      session.releaseSessionTarget();
+      await fixture.cleanup();
+    }
+  });
+
+  it("joins a session write still publishing when durable recovery reconciliation resumes", async () => {
+    const fixture = await createBrowserFollowupFixture({ active: false });
+    // A cancelled restart-safe turn keeps its recovery claim until its terminal write lands.
+    await patchSessionEntryCore(fixture.scope, (entry) => ({
+      ...entry,
+      status: "failed",
+      restartRecoveryRuns: [{ runId: "cancelled-turn", lifecycleGeneration: "cancelled" }],
+    }));
+    const normalized = await normalizeChatSendRequest({
+      params: fixture.params,
+      client: fixture.client,
+    });
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
+    const prepared = await prepareChatSendSession({
+      request: normalized.value,
+      client: fixture.client,
+      context: fixture.context,
+    });
+    if (!prepared.ok) {
+      throw new Error("session preparation failed");
+    }
+    const session = prepared.value;
+    const storePath = session.readSource?.path;
+    if (!storePath) {
+      throw new Error("Expected durable session store");
+    }
+    const { identity } = readOpenClawAgentDatabaseIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
+    );
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable session store identity");
+    }
+    const resolved = await resolveSessionMutationAuthorizationAsync({
+      client: fixture.client,
+      method: "chat.send",
+      requestParams: fixture.params,
+      context: fixture.context,
+    });
+    const authorization = resolved.authorization;
+    if (resolved.error || !authorization?.withCurrent) {
+      throw new Error("Expected retained worker authorization");
+    }
+    // The cancelled turn still owns its lifecycle, so reconciliation leaves its claim alone.
+    const cancelledTurn = await beginSessionWorkAdmission({
+      scope: session.storePath,
+      identities: [session.sessionKey, fixture.scope.sessionId],
+    });
+    const terminalWrite = retainSessionEntryWorkerPublication({
+      agentId: "main",
+      storePath,
+      databaseIdentity: identity,
+    });
+    let terminalPublication: "pending" | "publishing" | "settled" = "pending";
+    const withCurrent: NonNullable<SessionMutationAuthorization["withCurrent"]> = (consume) => {
+      const read = authorization.withCurrent!(consume);
+      if (terminalPublication === "pending") {
+        terminalPublication = "publishing";
+        // The terminal write starts publishing after the initial decision, while recovery reconciles.
+        return read.finally(() => {
+          terminalWrite.begin([session.sessionKey], []);
+          expect(() => authorization.assertCurrent()).toThrow(
+            SessionMutationAuthorizationChangedError,
+          );
+        });
+      }
+      if (terminalPublication === "publishing") {
+        // It settles only after the next authority read has joined its publication.
+        terminalPublication = "settled";
+        terminalWrite.settle(undefined, false);
+      }
+      return read;
+    };
+    const respond = vi.fn();
+    try {
+      await expect(
+        runChatSendPreAdmission({
+          request: normalized.value,
+          session,
+          client: fixture.client,
+          context: fixture.context,
+          respond,
+          assertCurrent: authorization.assertCurrent,
+          withCurrent,
+        }),
+      ).resolves.toBe(true);
+      expect(terminalPublication).toBe("settled");
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      terminalWrite.settle(undefined, false);
+      cancelledTurn.release();
+      authorization.release?.();
       await fixture.cleanup();
     }
   });

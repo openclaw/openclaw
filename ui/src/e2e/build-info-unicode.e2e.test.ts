@@ -71,8 +71,12 @@ async function openBuildDetails(page: Page) {
   expect(containsBrokenSurrogate(compactText)).toBe(false);
 
   await buildLink.hover();
-  const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
-  await expect.poll(() => tooltip.evaluate((element) => element.hasAttribute("open"))).toBe(true);
+  const tooltip = sidebar.locator(
+    "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
+  );
+  await expect
+    .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+    .toBe(true);
   const buildLinkHandle = await buildLink.elementHandle();
   if (!buildLinkHandle) {
     throw new Error("Expected the identity-menu build link to be attached");
@@ -80,7 +84,7 @@ async function openBuildDetails(page: Page) {
   const afterHideMarker = "data-openclaw-test-after-hide";
   await tooltip.evaluate((element, marker) => {
     element.removeAttribute(marker);
-    element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+    element.addEventListener("overlay-after-hide", () => element.setAttribute(marker, ""), {
       once: true,
     });
   }, afterHideMarker);

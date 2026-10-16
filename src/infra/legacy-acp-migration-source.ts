@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
 import { z } from "zod";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
@@ -77,7 +77,7 @@ export function legacyAcpMigrationBindingMatches(
 }
 
 export function hasLegacyAcpMigrationCompletion(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: LegacyAcpMigrationSource,
 ): boolean {
   const receipt = readLegacyMigrationReceiptFromDatabase(
@@ -97,7 +97,7 @@ export function hasLegacyAcpMigrationCompletion(
 
 /** Canonical supersession and legacy import consume the same source component. */
 export function recordLegacyAcpMigrationCompletion(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: LegacyAcpMigrationSource,
   now: number,
 ): void {

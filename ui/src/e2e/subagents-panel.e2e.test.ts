@@ -295,6 +295,44 @@ suite.define(() => {
             "chat.history": {
               cases: [
                 {
+                  match: { sessionKey: other.key },
+                  response: {
+                    sessionId: other.sessionId,
+                    messages: [
+                      {
+                        role: "assistant",
+                        runId: "keyboard-run",
+                        content: [
+                          {
+                            type: "toolCall",
+                            id: "keyboard-command",
+                            name: "exec",
+                            arguments: {
+                              title: "Retry failed benchmark targets",
+                              code: "return true;",
+                            },
+                          },
+                        ],
+                        activity: [
+                          {
+                            itemId: "tool:keyboard-command",
+                            toolCallId: "keyboard-command",
+                            kind: "tool",
+                            name: "exec",
+                            title: "Exec Retry failed benchmark targets",
+                            meta: "Retry failed benchmark targets",
+                            phase: "start",
+                            status: "running",
+                          },
+                        ],
+                      },
+                    ],
+                    hasMore: true,
+                    totalMessages: 160,
+                    inFlightRun: { runId: "keyboard-run", startedAt: other.startedAt },
+                  },
+                },
+                {
                   match: { sessionKey: child.key },
                   response: {
                     sessionId: child.sessionId,
@@ -405,12 +443,26 @@ suite.define(() => {
           runId: "keyboard-run",
           seq: 1,
           ts: Date.now(),
-          stream: "tool",
-          data: { toolCallId: "keyboard-command", name: "bash", phase: "start" },
+          stream: "item",
+          data: {
+            itemId: "tool:keyboard-command",
+            toolCallId: "keyboard-command",
+            kind: "tool",
+            name: "exec",
+            title: "Exec Retry failed benchmark targets",
+            meta: "Retry failed benchmark targets",
+            phase: "update",
+            status: "running",
+          },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
         await otherRow.locator(".chat-subagents__activity").waitFor();
-        expect(await otherRow.locator(".chat-subagents__activity").textContent()).not.toBe("");
+        await expect
+          .poll(() => otherRow.locator(".chat-subagents__activity").textContent())
+          .toBe("Retry failed benchmark targets");
+        await expect
+          .poll(() => otherRow.locator(".chat-subagents__calls").textContent())
+          .toBe("1+ calls");
         expect(await row.locator("svg").count()).toBe(1);
         if (capture) {
           const frame = await takeControlUiScreenshotFrame(page, panel, [row, otherRow], {

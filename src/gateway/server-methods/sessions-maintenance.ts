@@ -81,15 +81,8 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
       const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         assertCurrent,
-        beforeCommitInTransaction: sessionMutationCommitGuard,
-        opts: {
-          agent: params.agent,
-          allAgents: params.allAgents,
-          enforce: params.enforce,
-          activeKey: params.activeKey,
-          fixMissing: params.fixMissing,
-          fixDmScope: params.fixDmScope,
-        },
+        commitGuard: sessionMutationCommitGuard,
+        opts: params,
       });
       const result = serializeSessionCleanupResult({
         mode,

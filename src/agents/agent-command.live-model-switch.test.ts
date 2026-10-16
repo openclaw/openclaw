@@ -6,14 +6,16 @@ import { expectDefined, toStringifiedError } from "@openclaw/normalization-core"
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -39,6 +41,7 @@ import {
   createTestModelSelection,
   createTestModelVisibilityPolicy,
   makeSuccessResult,
+  requireArray,
   resetTestSessionReaders,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import { registerAgentCommandPreparedConfigCases } from "./agent-command.prepared-config.test-support.js";
@@ -291,9 +294,9 @@ vi.mock("./command/run-context.js", () => ({
   }),
 }));
 
+// mock-isolation: Model-switch fixtures own session reads and run-end writes without opening storage.
 vi.mock("./command/session-store.runtime.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => state.loadSessionEntryMock(...args),
-  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadSessionEntryMock(...args),
+  readSessionEntryInWorker: async (...args: unknown[]) => state.loadSessionEntryMock(...args),
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
@@ -421,19 +424,17 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
+// mock-isolation: mutable fixtures must stay independent of the process config publication owner.
 vi.mock("../config/runtime-snapshot.js", async () => {
   const { hashRuntimeConfigValue } = await vi.importActual<
     typeof import("../config/runtime-snapshot.js")
   >("../config/runtime-snapshot.js");
-  return {
+  const { createMutableRuntimeSnapshotMock } =
+    await import("./agent-command.runtime-snapshot.test-support.js");
+  return createMutableRuntimeSnapshotMock({
     hashRuntimeConfigValue,
     getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    // No source snapshot: runtime-source projection no-ops and resolvers read the
-    // provided config directly, matching this suite's pre-projection world.
-    getRuntimeConfigSourceSnapshot: () => null,
-    registerRuntimeConfigSnapshotPreparer: vi.fn(),
-    setRuntimeConfigSnapshot: vi.fn(),
-  };
+  });
 });
 
 vi.mock("../config/sessions.js", () => ({
@@ -445,13 +446,6 @@ vi.mock("../config/sessions.js", () => ({
       return fn(store);
     },
   ),
-}));
-
-vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
-    sessionFile: params.sessionEntry?.sessionFile ?? "/tmp/session.jsonl",
-    sessionEntry: params.sessionEntry ?? { sessionId: "session-1", updatedAt: Date.now() },
-  }),
 }));
 
 vi.mock("./internal-session-effects.js", async (importOriginal) => ({
@@ -610,6 +604,7 @@ vi.mock("./auth-profiles.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
   };
 });
 
@@ -620,6 +615,11 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+    ensureAuthProfileStoreAsync: vi.fn(async () => state.authProfileStoreMock),
+    findPersistedAuthProfileCredentialAsync: vi.fn(
+      async ({ profileId }: { profileId: string }) =>
+        state.authProfileStoreMock.profiles[profileId],
+    ),
   };
 });
 
@@ -643,8 +643,9 @@ vi.mock("./defaults.js", () => ({
 }));
 
 // Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+// mock-isolation: Model-switch tests isolate exec-policy storage and node discovery.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./lanes.js", () => ({
@@ -911,13 +912,6 @@ function setupAcpSession(): void {
 
 const requireRecord = createRequireRecord("object", "expected-label-object");
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   return expectDefined(mock.mock.calls[callIndex], `mock call ${callIndex}`)[argIndex];
 }
@@ -971,7 +965,10 @@ function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0
   });
 }
 
-function runInternalModelCommand(runId: string) {
+function runInternalModelCommand(
+  runId: string,
+  onSessionIdChanged?: Parameters<typeof agentCommand>[0]["onSessionIdChanged"],
+) {
   return agentCommand({
     message: "probe",
     to: "+1234567890",
@@ -979,6 +976,7 @@ function runInternalModelCommand(runId: string) {
     modelRun: true,
     promptMode: "none",
     sessionEffects: "internal",
+    onSessionIdChanged,
   });
 }
 
@@ -1134,9 +1132,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolvedSessionKeyMock = undefined;
     state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
       const params = args[0] as {
-        sessionStore?: Record<string, unknown>;
+        sessionStore?: Record<string, SessionEntry>;
         sessionKey?: string;
-        entry?: unknown;
+        entry?: SessionEntry;
         shouldPersist?: (entry: unknown) => boolean;
       };
       const current =
@@ -1151,6 +1149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }
       if (params.sessionStore && params.sessionKey && params.entry) {
         params.sessionStore[params.sessionKey] = params.entry;
+        (state.sessionStoreMock ??= params.sessionStore)[params.sessionKey] = params.entry;
         return params.entry;
       }
       return current;
@@ -1179,6 +1178,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     state.resolveMessageChannelSelectionMock.mockRejectedValue(new Error("channel required"));
     await resetTestSessionReaders(state);
+    // Keep command metadata writes on the fixture's persistence owner, including native recovery cases.
+    vi.spyOn(sessionEntryRuntime, "applySessionEntryOperation").mockImplementation(
+      async (scope, operation, options) => {
+        if (operation.kind !== "fields") {
+          throw new Error(`Unexpected command session patch: ${operation.kind}`);
+        }
+        const entry = state.loadSessionEntryMock(scope) as SessionEntry | undefined;
+        if (!entry) {
+          return null;
+        }
+        const patch = reduceSessionEntryPatch(operation, entry, entry);
+        if (!patch) {
+          return entry;
+        }
+        const persisted = (await state.persistSessionEntryMock({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          sessionStore: state.sessionStoreMock ?? { [scope.sessionKey]: entry },
+          initialEntry: entry,
+          entry: { ...entry, ...patch },
+        })) as SessionEntry | undefined;
+        if (persisted) {
+          options?.onCommitted?.(persisted);
+        }
+        return persisted ?? null;
+      },
+    );
     state.resolveAgentDeliveryPlanMock.mockImplementation(
       (params: {
         accountId?: string;
@@ -1945,44 +1972,46 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("clamps unsupported explicit thinking for subagent spawns instead of throwing", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
-    state.resolvedSessionKeyMock = "agent:planner:subagent:00000000-0000-4000-8000-000000000000";
-    state.isThinkingLevelSupportedMock.mockReturnValue(false);
-    state.resolveSupportedThinkingLevelMock.mockReturnValue("high");
-
-    await agentCommand({
-      message: "hello",
-      sessionKey: state.resolvedSessionKeyMock,
-      thinking: "xhigh",
-      lane: "subagent",
-    });
-
-    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalled();
-    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      resolvedThinkLevel: "high",
-    });
-  });
-
-  it.each(["subagent", "interactive"] as const)(
-    "rejects unsupported explicit thinking for ordinary sessions on the %s lane",
-    async (lane) => {
+  it.each(["spawn", "subagent", "interactive"] as const)(
+    "clamps unsupported thinking only for a real subagent spawn (%s)",
+    async (mode) => {
+      const spawned = mode === "spawn";
       setupSuccessfulAttempt("anthropic", "claude-fable-5");
       state.isThinkingLevelSupportedMock.mockReturnValue(false);
-      const { store } = setupStoredSession({ thinkingLevel: "low" });
-      state.resolvedSessionKeyMock = "agent:main:main";
-      const thinking = lane === "subagent" ? "xhigh" : "ultra";
+      const store = spawned ? undefined : setupStoredSession({ thinkingLevel: "low" }).store;
+      state.resolvedSessionKeyMock = spawned
+        ? "agent:planner:subagent:00000000-0000-4000-8000-000000000000"
+        : "agent:main:main";
+      if (spawned) {
+        state.resolveSupportedThinkingLevelMock.mockReturnValue("high");
+      }
+      const thinking = mode === "interactive" ? "ultra" : "xhigh";
+      const command = agentCommand({
+        message: "hello",
+        ...(!spawned ? { to: "+1234567890" } : {}),
+        thinking,
+        ...(mode !== "interactive"
+          ? { sessionKey: state.resolvedSessionKeyMock, lane: "subagent" }
+          : {}),
+      });
+      if (spawned) {
+        const result = await command;
+        expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalled();
+        expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+          resolvedThinkLevel: "high",
+        });
+        expect(result?.meta.requestShaping).toEqual({
+          thinking: "high",
+          thinkingClamp:
+            "Thinking level clamped to high for anthropic/claude-fable-5 (requested xhigh; preference retained).",
+        });
+        return;
+      }
 
-      await expect(
-        runBasicAgentCommand({
-          thinking,
-          ...(lane === "subagent" ? { sessionKey: "agent:main:main", lane } : {}),
-        }),
-      ).rejects.toThrow(/is not supported/u);
+      await expect(command).rejects.toThrow(/is not supported/u);
 
       expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
-      expect(store["agent:main:main"]?.thinkingLevel).toBe("low");
+      expect(store?.["agent:main:main"]?.thinkingLevel).toBe("low");
       expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
         expect.objectContaining({ entry: expect.objectContaining({ thinkingLevel: thinking }) }),
       );
@@ -2570,8 +2599,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSuccessfulAttempt();
     setupBareStoredSession();
     state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
-      const onDeliveryResult = (params as { onDeliveryResult?: (result: unknown) => void })
-        .onDeliveryResult;
+      const onDeliveryResult = (
+        params as { onDeliveryResult?: (result: unknown, payloads: ReplyPayload[]) => void }
+      ).onDeliveryResult;
       const deliveryResult = {
         payloads: [{ isReasoning: true }, { text: "ready", mediaUrls: ["/tmp/payload.png"] }],
         meta: {},
@@ -2592,7 +2622,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           },
         ],
       };
-      onDeliveryResult?.(deliveryResult);
+      onDeliveryResult?.(deliveryResult, deliveryResult.payloads);
       return deliveryResult;
     });
 
@@ -3243,6 +3273,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("removes the one-shot internal model-run SQLite session after success", async () => {
     setupSingleAttemptFallback();
+    const onSessionIdChanged = vi.fn();
     const result = makeSuccessResult("openai", "gpt-5.4");
     state.runAgentAttemptMock.mockImplementationOnce(
       async (
@@ -3288,7 +3319,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await releaseCleanup.promise;
     });
     let settled = false;
-    const pending = runInternalModelCommand("model-run-success").finally(() => {
+    const pending = runInternalModelCommand("model-run-success", onSessionIdChanged).finally(() => {
       settled = true;
     });
     try {
@@ -3322,6 +3353,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const cleanupOrder =
       state.applySessionEntryLifecycleMutationMock.mock.invocationCallOrder[0] ?? 0;
     expect(deliveryOrder).toBeLessThan(cleanupOrder);
+    expect(onSessionIdChanged).not.toHaveBeenCalled();
   });
 
   it.each(["prepare", "cleanup"] as const)(
@@ -3855,8 +3887,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
-      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
-      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+      const { ensureAuthProfileStoreAsync } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStoreAsync).toHaveBeenCalledWith(
         "/tmp/agent",
         expect.objectContaining({ profileId, allowKeychainPrompt: false }),
       );

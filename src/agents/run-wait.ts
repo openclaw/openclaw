@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -115,14 +116,22 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /socket hang up/i,
 ];
 
-function normalizeAgentWaitError(error: string): AgentWaitResult {
-  const timedOut = error.includes("gateway timeout") || error.includes("gateway request timeout");
+function normalizeAgentWaitError(cause: unknown): AgentWaitResult {
+  const error = formatErrorMessage(cause);
+  const unavailable =
+    cause instanceof GatewayClientRequestError &&
+    cause.gatewayCode === "UNAVAILABLE" &&
+    cause.retryable;
+  const timedOut =
+    !unavailable &&
+    (error.includes("gateway timeout") || error.includes("gateway request timeout"));
   const message = error.trim();
   const retryable =
-    !timedOut &&
-    message &&
-    (hasRetryableConnectionErrorCode(message) ||
-      RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message)));
+    unavailable ||
+    (!timedOut &&
+      message &&
+      (hasRetryableConnectionErrorCode(message) ||
+        RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS.some((pattern) => pattern.test(message))));
   return {
     status: timedOut ? "timeout" : "error",
     error,
@@ -217,7 +226,7 @@ export async function waitForAgentRun(params: {
       wait,
     );
   } catch (err) {
-    return normalizeAgentWaitError(formatErrorMessage(err));
+    return normalizeAgentWaitError(err);
   }
 }
 

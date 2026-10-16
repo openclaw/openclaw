@@ -1,6 +1,8 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
-import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
+import {
+  inspectTlsCertificateError,
+  matchesContextOverflowMessage,
+} from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,

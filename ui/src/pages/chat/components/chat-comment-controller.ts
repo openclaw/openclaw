@@ -2,7 +2,7 @@ import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments } from "./chat-attachment-draft.ts";
@@ -31,7 +31,7 @@ type ChatCommentControllerProps = {
 };
 
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
-defineSolidBridge<ChatCommentControllerProps>(
+export const ChatCommentController = defineSolidBridge<ChatCommentControllerProps>(
   "openclaw-chat-comment-controller",
   (view, host) => {
     let root: HTMLElement | null = null;
@@ -281,25 +281,25 @@ defineSolidBridge<ChatCommentControllerProps>(
     });
     const editingScope = createMemo(
       () => ({
-        attachments: view.props.attachments,
+        attachments: currentAttachments(view.props),
+        sessionKey: view.sessionKey,
         presented: view.presented,
         disabled: view.disabled,
       }),
       {
         equals: (previous, next) =>
           previous.attachments === next.attachments &&
+          previous.sessionKey === next.sessionKey &&
           previous.presented === next.presented &&
           previous.disabled === next.disabled,
       },
     );
-    createEffect(editingScope, () => {
+    createEffect(editingScope, ({ attachments, sessionKey, presented, disabled }) => {
       if (
-        !view.presented ||
-        view.disabled ||
+        !presented ||
+        disabled ||
         (editingId &&
-          !currentChatComments(currentAttachments(view.props), view.sessionKey).some(
-            (item) => item.id === editingId,
-          ))
+          !currentChatComments(attachments, sessionKey).some((item) => item.id === editingId))
       ) {
         retireEditor();
       }

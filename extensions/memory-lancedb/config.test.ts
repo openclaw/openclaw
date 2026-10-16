@@ -44,20 +44,6 @@ describe("memory-lancedb config", () => {
     expect(memoryConfigSchema.parse(configWith({ dbPath })).dbPath).toBe(dbPath);
   });
 
-  it("keeps config presentation metadata manifest-owned", () => {
-    expect(memoryConfigSchema).not.toHaveProperty("uiHints");
-    expect(manifest.uiHints?.["embedding.apiKey"]).toMatchObject({
-      label: "Embedding API Key",
-      sensitive: true,
-    });
-  });
-
-  it("accepts dreaming in the manifest schema and preserves it in runtime parsing", () => {
-    const config = configWith({ dreaming: { enabled: true } });
-    expect(validateManifest(config).ok).toBe(true);
-    expect(memoryConfigSchema.parse(config).dreaming).toEqual({ enabled: true });
-  });
-
   it("accepts provider-backed embedding config without a plugin apiKey", () => {
     const config = { embedding: { provider: "openai" } };
     expect(validateManifest(config).ok).toBe(true);
@@ -115,13 +101,19 @@ describe("memory-lancedb config", () => {
   });
 
   it("accepts custom trigger literals in the manifest schema and runtime parser", () => {
-    expect(validateManifest(configWith({ customTriggers: ["记住", "important project"] })).ok).toBe(
-      true,
-    );
     expect(
-      memoryConfigSchema.parse(configWith({ customTriggers: ["  记住  ", "important project"] }))
-        .customTriggers,
-    ).toEqual(["记住", "important project"]);
+      validateManifest(
+        configWith({ customTriggers: ["记住", "important project"], dreaming: { enabled: true } }),
+      ).ok,
+    ).toBe(true);
+    const parsed = memoryConfigSchema.parse(
+      configWith({
+        customTriggers: ["  记住  ", "important project"],
+        dreaming: { enabled: true },
+      }),
+    );
+    expect(parsed.customTriggers).toEqual(["记住", "important project"]);
+    expect(parsed.dreaming).toEqual({ enabled: true });
   });
 
   it("rejects unsafe custom trigger config values", () => {

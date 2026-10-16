@@ -32,7 +32,6 @@ import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversat
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -602,8 +601,7 @@ export async function resolveIMessageInboundDecision(params: {
         text: bodyText,
       });
   if (selfChatHit) {
-    const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
-    params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
+    params.logVerbose?.("imessage: dropping self-chat reflected duplicate");
     return { kind: "drop", reason: "self-chat echo" };
   }
 
@@ -621,7 +619,7 @@ export async function resolveIMessageInboundDecision(params: {
       })
     ) {
       params.logVerbose?.(
-        `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}: "${truncateUtf16Safe(bodyText, 50)}"`,
+        `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
       );
       return { kind: "drop", reason: "echo" };
     }

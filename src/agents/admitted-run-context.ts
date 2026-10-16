@@ -1,5 +1,4 @@
 /** Canonical operational instance and optional enabled execution-identity evidence. */
-import { randomUUID } from "node:crypto";
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import {
@@ -30,13 +29,16 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "./operational-run-instance.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
-/** Operational lifecycle correlation. This is never identity or authorization evidence. */
-export type OperationalRunInstanceRef = Readonly<{
-  instanceId: string;
-  runId: string;
-}>;
+export {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "./operational-run-instance.js";
 
 /** Exact context carried by one admitted execution and every retry/fallback it owns. */
 export type AdmittedRunContext = Readonly<{
@@ -295,7 +297,7 @@ export function runWithPreparedRunSourceScope<T>(
     }
     assertion = captured;
   }
-  return runWithSessionSourceScope(assertion, run);
+  return runWithSessionSourceScope(assertion, run, { checkAfter: false });
 }
 
 function bindAdmittedRunDelegatedAuthority(
@@ -504,10 +506,6 @@ export function createExecutionIdentityRecoveryAdmission(params: {
   });
 }
 
-export function createOperationalRunInstanceRef(runId: string): OperationalRunInstanceRef {
-  return Object.freeze({ instanceId: randomUUID(), runId });
-}
-
 /** Prepares a system-owned run without selecting its eventual execution runtime early. */
 export function prepareSystemAgentRunAdmission(
   cfg: OpenClawConfig,
@@ -623,34 +621,38 @@ export function prepareAgentRunAdmission(params: {
       // Later fallback paths reuse this exact admission instead of recapturing identity.
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
-      admitted ??= (async () => {
-        assertSourceCurrent?.();
-        const facts = executionIdentitySpawnAdmission({
-          operation: "attach",
-          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
-          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
-        });
-        const context = admitPreparedAgentRun({
-          cfg: params.cfg,
-          admissionSource: params.admissionSource,
-          facts,
-          operationalRunInstance,
-          runtimeInstanceId: admittedRuntimeInstanceId,
-          ...(params.recovery ? { recovery: params.recovery } : {}),
-        });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
-        admittedContext = context;
-        try {
-          await params.onAdmitted?.(context);
-          if (closed || !getAdmittedRunDelegatedAuthority(context)) {
-            throw new Error("prepared execution authority closed during admission");
+      admitted ??= runWithSessionSourceScope(
+        assertSourceCurrent,
+        async () => {
+          assertSourceCurrent?.();
+          const facts = executionIdentitySpawnAdmission({
+            operation: "attach",
+            value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+            extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+          });
+          const context = admitPreparedAgentRun({
+            cfg: params.cfg,
+            admissionSource: params.admissionSource,
+            facts,
+            operationalRunInstance,
+            runtimeInstanceId: admittedRuntimeInstanceId,
+            ...(params.recovery ? { recovery: params.recovery } : {}),
+          });
+          bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
+          admittedContext = context;
+          try {
+            await params.onAdmitted?.(context);
+            if (closed || !getAdmittedRunDelegatedAuthority(context)) {
+              throw new Error("prepared execution authority closed during admission");
+            }
+            return context;
+          } catch (error) {
+            closeAdmittedRunDelegatedAuthority(context);
+            throw error;
           }
-          return context;
-        } catch (error) {
-          closeAdmittedRunDelegatedAuthority(context);
-          throw error;
-        }
-      })();
+        },
+        { checkAfter: false },
+      );
       return admitted;
     },
   });

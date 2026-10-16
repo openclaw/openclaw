@@ -67,21 +67,21 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
-        const picker = page.locator("wa-popover.new-session-page__where-popover");
+        const picker = page.locator(".oc-popover.new-session-page__where-popover");
         await picker.evaluate((element) =>
-          (element as HTMLElement).style.setProperty("--show-duration", "60s"),
+          (element as HTMLElement).style.setProperty("--oc-overlay-show-duration", "60s"),
         );
         const where = page.locator("#new-session-where-trigger");
         await where.click();
-        const popup = picker.locator('wa-popup [part="popup"]').first();
         await expect
-          .poll(() => popup.evaluate((element) => element.getAnimations().length))
-          .toBe(1);
+          .poll(() => picker.evaluate((element) => element.getAnimations().length))
+          .toBeGreaterThan(0);
         // Hold the actual opening animation until the user has opened cloud configuration.
-        await popup.evaluate((element) => {
-          const animation = element.getAnimations()[0]!;
-          animation.pause();
-          animation.currentTime = Number(animation.effect!.getComputedTiming().duration) - 1;
+        await picker.evaluate((element) => {
+          for (const animation of element.getAnimations()) {
+            animation.pause();
+            animation.currentTime = Number(animation.effect!.getComputedTiming().duration) - 1;
+          }
         });
         await expect
           .poll(() =>
@@ -92,7 +92,7 @@ suite.define(() => {
         await profile[input]();
         const fast = picker.locator('[data-value="machine:fast"]');
         await fast.waitFor();
-        await popup.evaluate((element) =>
+        await picker.evaluate((element) =>
           Promise.all(
             element.getAnimations().map((animation) => {
               animation.finish();

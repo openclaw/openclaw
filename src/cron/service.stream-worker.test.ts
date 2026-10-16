@@ -299,7 +299,7 @@ describe("cron stream worker service", () => {
       loseReply: true,
     },
     {
-      name: "rejects source retirement during committed failure history without publishing it",
+      name: "retains committed failure history and event when its source retires",
       loseReply: false,
     },
   ])("$name", async ({ loseReply }) => {
@@ -390,11 +390,25 @@ describe("cron stream worker service", () => {
           expect(
             readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
               .entries,
-          ).toEqual([]);
+          ).toEqual([
+            expect.objectContaining({
+              jobId: job.id,
+              status: "error",
+              error: "source exhausted restarts",
+            }),
+          ]);
           expect(enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(
-            0,
-          );
+          expect(
+            onEvent.mock.calls
+              .filter(([event]) => event.action === "finished")
+              .map(([event]) => event),
+          ).toEqual([
+            expect.objectContaining({
+              jobId: job.id,
+              status: "error",
+              error: "source exhausted restarts",
+            }),
+          ]);
           expect(service.getJob(job.id)?.state).toEqual(residentBefore);
           expect(
             (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,

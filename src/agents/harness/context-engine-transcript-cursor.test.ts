@@ -7,6 +7,7 @@ import {
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -180,6 +181,7 @@ describe("context engine transcript cursor contract", () => {
     > = async () => undefined;
 
     try {
+      setRuntimeConfigSnapshot({ session: { store: storePath } });
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 10 });
       const first = await appendTranscriptMessage(target, {
         message: { role: "user", content: "first" },
@@ -290,6 +292,7 @@ describe("context engine transcript cursor contract", () => {
       expect(resetCount).toBe(1);
       expect(projectedMessages.map(readMessageContent)).toEqual(["replacement"]);
     } finally {
+      clearRuntimeConfigSnapshot();
       await cleanupSessionStateForTest({ stateDir: tempDir });
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

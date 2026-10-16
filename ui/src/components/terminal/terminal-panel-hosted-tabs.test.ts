@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -46,6 +45,7 @@ async function mount(embedded = true, tabsInHeader = true) {
   if (!embedded) {
     panel.toggle();
   }
+  await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));
@@ -56,7 +56,16 @@ async function mount(embedded = true, tabsInHeader = true) {
 function mountActions(panel: OpenClawTerminalPanel) {
   const container = document.createElement("div");
   document.body.append(container);
-  const update = () => render(panel.hostedActions, container);
+  const update = () => {
+    const actions = panel.hostedActions;
+    if (actions) {
+      if (container.firstChild !== actions) {
+        container.replaceChildren(actions);
+      }
+    } else {
+      container.replaceChildren();
+    }
+  };
   panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, update);
   update();
   return container;
@@ -88,11 +97,7 @@ describe("Terminal panel hosted tabs", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { embedded: true, tabsInHeader: true, ownsStrip: false },
-    { embedded: true, tabsInHeader: false, ownsStrip: true },
-    { embedded: false, tabsInHeader: true, ownsStrip: true },
-  ])(
+  it.each([{ embedded: false, tabsInHeader: true, ownsStrip: true }])(
     "keeps its own chrome=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
@@ -110,7 +115,7 @@ describe("Terminal panel hosted tabs", () => {
           selectedTab,
         );
       }
-      expect(panel.hostedActions === nothing).toBe(ownsStrip);
+      expect(panel.hostedActions === undefined).toBe(ownsStrip);
       expect(readPanelHostedTabs(panel)).toBe(panel);
     },
   );
@@ -247,8 +252,14 @@ describe("Terminal panel hosted tabs", () => {
     const dock = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     try {
-      button(actions, "Dock to bottom").click();
+      const dockButton = button(actions, "Dock to bottom");
+      dockButton.click();
       expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
+      panel.closeTerminalPanel();
+      panel.remove();
+      await Promise.resolve();
+      dockButton.click();
+      expect(dock).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
     }

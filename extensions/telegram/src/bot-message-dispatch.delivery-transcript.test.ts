@@ -125,7 +125,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
             });
           }
           const runId = `run-${sourceMessageIds.length}`;
-          replyOptions?.onAgentRunStart?.(runId);
+          replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
           const manager = SessionManager.open(scope, root);
           const sourceAssistant = {
             ...makeAgentAssistantMessage({
@@ -183,10 +183,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
             }),
             bot,
             streamMode: "partial",
-            telegramDeps: {
+            moduleMocks: {
               ...telegramDepsForTest,
               resolveStorePath: () => scope.storePath,
-              getSessionEntry: store.getSessionEntry,
+              getSessionEntryAsync: store.getSessionEntryAsync,
               deliverReplies: actualDelivery.deliverReplies,
               deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
             },
@@ -318,10 +318,10 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
         context,
         replyToMode: "off",
         streamMode: "partial",
-        telegramDeps: {
+        moduleMocks: {
           ...telegramDepsForTest,
           resolveStorePath: () => scope.storePath,
-          getSessionEntry: () => entry,
+          getSessionEntryAsync: async () => entry,
         },
       });
       expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(

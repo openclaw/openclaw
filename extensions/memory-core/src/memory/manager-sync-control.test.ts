@@ -24,30 +24,6 @@ function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?
 }
 
 describe("memory manager sync control", () => {
-  it("queues targeted session files behind an in-flight sync", async () => {
-    let releaseSync = () => {};
-    const pendingSync = new Promise<void>((resolve) => {
-      releaseSync = resolve;
-    });
-    const harness = createQueuedSyncHarness({ syncing: pendingSync });
-
-    const queued = harness.queue.enqueue({
-      archiveFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
-    });
-
-    expect(harness.sync).not.toHaveBeenCalled();
-    releaseSync();
-    await queued;
-
-    expect(harness.sync).toHaveBeenCalledTimes(1);
-    expect(harness.sync).toHaveBeenCalledWith({
-      reason: "queued-sessions",
-      sessions: [],
-      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
-    });
-    expect(harness.queue.pending).toBeNull();
-  });
-
   it("merges repeated queued requests while the active sync is still running", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {

@@ -33,7 +33,7 @@ export function sidebarCatalogLiveRows(sessionData: SessionDataController) {
 }
 
 export function projectSidebarSnoozeCatalogs(
-  host: SidebarSnoozeVisibilityHost,
+  host: SidebarSnoozeVisibilityHost & { readonly sessionInvolvingMeFilterActive: boolean },
   ownerId: string | null,
 ) {
   const visibility = projectSidebarArchiveVisibility({
@@ -49,6 +49,9 @@ export function projectSidebarSnoozeCatalogs(
     ownerId,
     sidebarCatalogLiveRows(host.sessionData),
     visibility.isSessionHidden,
+    host.sessionInvolvingMeFilterActive
+      ? new Set(host.sessionData.sessionsResult?.sessions.map((row) => row.key))
+      : undefined,
   );
 }
 

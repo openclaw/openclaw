@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshControlUiServiceWorker } from "../../app/sw-refresh.runtime.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -23,6 +23,11 @@ const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 describe("OpenClawTerminalPanel reconnect", () => {
+  beforeAll(async () => {
+    // Load the real responder before short RPC assertions begin on a cold worker.
+    await import("@openclaw/libterminal/browser");
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -30,6 +35,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     document.body.replaceChildren();
     await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
@@ -67,6 +73,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
       return panel;
     };
     const panel = mountPanel();
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
@@ -77,6 +85,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     panel.remove();
     mountPanel();
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       expect(requests.filter(({ method }) => method === "terminal.open")).toHaveLength(2);
     });
@@ -87,7 +96,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     ).toHaveLength(1);
   });
 
-  it.each(["conn", "agent:agent:main:background-task"] as const)(
+  it.each(["agent:agent:main:background-task"] as const)(
     "attaches a %s session with its native title and actual owner",
     async (owner) => {
       const controllers = [createTerminalController(), createTerminalController()] as const;
@@ -150,6 +159,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
       panel.available = true;
       document.body.append(panel);
       panel.toggle();
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       await waitForFast(() => {
         expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
       });
@@ -168,13 +179,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
         [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
           .find((row) => row.textContent?.includes("detached-agent"))
           ?.querySelector(".tp-session__state")?.textContent,
-      ).toContain(owner === "conn" ? "detached" : "agent");
+      ).toContain("agent");
       expect(menuText).toContain("attached");
       expect(menuText).toContain("current");
       const detachedRow = [
         ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
       ].find((button) => button.textContent?.includes("detached-agent"));
       detachedRow?.click();
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
 
       await waitForFast(() => {
         expect(requests).toContainEqual({
@@ -186,9 +199,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
         "detached history",
       );
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe(
-        owner === "conn" ? undefined : "agent",
-      );
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
       expect(panel.renderRoot.textContent).toContain("codex");
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
         JSON.stringify(["current-1", "detached-1"]),
@@ -562,23 +573,25 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.available = true;
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     panel.handleToggleRequest(
       new CustomEvent("openclaw:terminal-toggle", {
         detail: { open: true, terminalSessionId: "stalled-terminal" },
       }),
     );
 
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
-        "Reload this page to continue the terminal action",
-      );
-    });
+    await vi.advanceTimersByTimeAsync(10);
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+      "Reload this page to continue the terminal action",
+    );
     expect(
       panel.renderRoot.querySelector(
         'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
       ),
     ).toBeNull();
 
+    vi.useRealTimers();
     releaseRefresh?.(false);
     await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull();

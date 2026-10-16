@@ -1,85 +1,30 @@
 import { createMemo } from "solid-js";
-import { providerDisplayLabel, renderProviderBrandIcon } from "../provider-icon.ts";
-import type { PickerOption, PickerParams, SelectPicker } from "../select-picker.ts";
-import "../select-picker.ts";
+import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
+import { providerDisplayLabel } from "../provider-icon-data.ts";
+import { Picker, type PickerParams } from "../select-picker.ts";
+import { ProviderBrandIcon } from "./provider-icon.tsx";
 
-export type ModelPickerOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type { ModelPickerOption, ModelPickerParams } from "../model-picker-options.ts";
 
-type ModelSelectOption = ModelPickerOption & { description?: string };
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-select-picker": HTMLAttributes<SelectPicker> & {
-        "prop:params": PickerParams<PickerOption>;
-      };
-    }
-  }
-}
-
-export type ModelPickerParams = {
-  id?: string;
-  label: string;
-  value: string;
-  options: readonly ModelPickerOption[];
-  disabled?: boolean;
-  title?: string;
-  placement?: "top" | "bottom";
-  showSelectedDetail?: boolean;
-  groupByProvider?: boolean;
-  searchPlaceholder?: string;
-  custom?: {
-    label: string;
-    placeholder?: string;
-    commit?: "input" | "change";
-    id?: string;
-    invalid?: boolean;
-    describedBy?: string;
-  };
-  onOpen?: () => void;
-  onChange: (value: string) => void;
-};
+type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams) {
-  const customValue = createMemo(() => {
-    let value = "__openclaw_custom_model__";
-    const values = new Set([props.value, ...props.options.map((option) => option.value)]);
-    while (values.has(value)) {
-      value += "_";
-    }
-    return value;
-  });
-  const options = createMemo(() => {
-    const entries: ModelSelectOption[] = [
-      ...props.options.map((option) => ({ ...option, description: option.detail })),
-      ...(props.custom ? [{ value: customValue(), label: props.custom.label }] : []),
-    ];
-    const selected = entries.findIndex((option) => option.value === props.value);
-    if (selected > 0) {
-      entries.unshift(...entries.splice(selected, 1));
-    }
-    return entries;
-  });
-  const selectedIndex = () => options().findIndex((option) => option.value === props.value);
+  const choices = createMemo(() => modelPickerOptions(props));
+  let customInput: HTMLInputElement;
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (props.custom?.commit === "change")) {
       // SAFETY: Both handlers are attached to the custom-model input below.
       props.onChange((event.currentTarget as HTMLInputElement).value);
     }
   };
-  const providerIcon = (provider: string) =>
-    renderProviderBrandIcon(provider, { className: "model-picker__provider-icon" });
+  const providerIcon = (provider: string) => (
+    <ProviderBrandIcon provider={provider} class="model-picker__provider-icon" />
+  );
   const pickerParams = createMemo<PickerParams<ModelSelectOption>>(() => ({
     id: props.id,
     label: props.label,
     value: props.value,
-    options: options(),
+    options: choices().options,
     disabled: props.disabled,
     title: props.title,
     placement: props.placement,
@@ -91,7 +36,9 @@ export function ModelPicker(props: ModelPickerParams) {
             ? {
                 id: option.provider,
                 label: providerDisplayLabel(option.provider),
-                leading: providerIcon(option.provider),
+                get leading() {
+                  return providerIcon(this.id);
+                },
               }
             : undefined
       : undefined,
@@ -101,30 +48,24 @@ export function ModelPicker(props: ModelPickerParams) {
     onOpen: () => props.onOpen?.(),
     renderLeading: (option) => (option.provider ? providerIcon(option.provider) : undefined),
     onChange: (value) => props.onChange(value),
-    onChangeTarget: (value, select) => {
-      const input = select
-        .closest(".model-picker")
-        ?.querySelector<HTMLInputElement>(".model-picker__custom");
-      if (value === customValue() && input) {
-        input.hidden = false;
-        queueMicrotask(() => input.focus());
-        return;
-      }
+    onChangeTarget: (value) => {
+      const input = props.custom ? customInput : undefined;
       if (input) {
-        input.hidden = true;
+        input.hidden = value !== choices().customValue;
+        if (!input.hidden) {
+          queueMicrotask(() => input.focus());
+          return;
+        }
       }
       props.onChange(value);
     },
   }));
   return (
     <div class="model-picker">
-      <openclaw-select-picker
-        class="settings-select picker-select model-picker__select "
-        style={{ width: "100%", "min-width": "min(138px,100%)" }}
-        prop:params={pickerParams()}
-      />
+      <Picker params={pickerParams()} />
       {props.custom ? (
         <input
+          ref={(input) => (customInput = input)}
           id={props.custom.id}
           class="settings-input model-picker__custom"
           aria-label={props.custom.label}
@@ -132,7 +73,7 @@ export function ModelPicker(props: ModelPickerParams) {
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
           value={props.value}
-          hidden={selectedIndex() >= 0}
+          hidden={choices().selectedIndex >= 0}
           disabled={props.disabled}
           onInput={commitCustom}
           onChange={commitCustom}

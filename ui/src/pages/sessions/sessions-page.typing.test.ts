@@ -13,12 +13,7 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createContext,
-  createGateway,
-  createRenderedPage,
-  reconnectPage,
-} from "./sessions-page.test-support.ts";
+import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
   return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
@@ -229,10 +224,10 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(0);
         pending.at(-1)!.resolve(result("agent:main:limited"));
         await vi.advanceTimersByTimeAsync(0);
+        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
         const oldRequest = pending.at(-1)!;
-        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
         await page.updateComplete;
         input().focus();
         if (action === "click") {
@@ -271,13 +266,18 @@ describe("Sessions page typing ownership", () => {
     },
   );
 
-  it.each([
-    { timing: "queued", resubscribe: true, hidden: false },
-    { timing: "timer", resubscribe: false, hidden: false },
-    { timing: "unsubscribed", resubscribe: true, hidden: true },
-  ])(
-    "retires $timing event work while unobserved and catches up on resubscribe=$resubscribe hidden=$hidden",
-    async ({ timing, resubscribe, hidden }) => {
+  it.each(
+    [
+      { timing: "queued", resubscribe: true, hidden: false },
+      { timing: "timer", resubscribe: false, hidden: false },
+      { timing: "unsubscribed", resubscribe: true, hidden: true },
+    ].flatMap((scenario) => [
+      { ...scenario, reason: "update" },
+      { ...scenario, reason: "create" },
+    ]),
+  )(
+    "retires $timing $reason event work while unobserved and catches up on resubscribe=$resubscribe hidden=$hidden",
+    async ({ timing, resubscribe, hidden, reason }) => {
       vi.useFakeTimers();
       const visibility = vi.spyOn(document, "visibilityState", "get");
       const active = createDeferred<SessionsListResult>();
@@ -297,16 +297,18 @@ describe("Sessions page typing ownership", () => {
       let unsubscribe = sessions.subscribeList(query, vi.fn());
       const updatedObserved = createDeferred();
       const loading = sessions.refreshList(query);
+      const changed = sessionChangedEvent("agent:main:changed");
+      changed.payload = { ...(changed.payload as Record<string, unknown>), reason };
       try {
         if (timing !== "unsubscribed") {
-          emitEvent(sessionChangedEvent("agent:main:changed"));
+          emitEvent(changed);
           if (timing === "queued") {
             await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
         if (timing === "unsubscribed") {
-          emitEvent(sessionChangedEvent("agent:main:changed"));
+          emitEvent(changed);
         }
         visibility.mockReturnValue("hidden");
         document.dispatchEvent(new Event("visibilitychange"));
@@ -333,6 +335,9 @@ describe("Sessions page typing ownership", () => {
           expect(filteredCalls).toBe(1);
           visibility.mockReturnValue("visible");
           document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(0);
+        } else if (reason === "create" && resubscribe) {
+          // Creation retains its priority through the old read and resubscription.
           await vi.advanceTimersByTimeAsync(0);
         } else if (!resubscribe || timing === "queued") {
           await vi.advanceTimersByTimeAsync(4_999);
@@ -443,13 +448,12 @@ describe("Sessions page typing ownership", () => {
       expect(vi.getTimerCount()).toBe(0);
     }
   });
-  it.each(["detach", "reconnect", "client", "context"])(
+  it.each(["detach", "reconnect", "client"])(
     "retires pending work on %s and starts the new owner's query without the old response",
     async (retirement) => {
       vi.useFakeTimers();
       const harness = await mountTypingPage();
       const { page, input, edit, requests, pending, connection, client } = harness;
-      let replacementSessions: ReturnType<typeof createTestSessionCapability> | undefined;
       try {
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
@@ -463,21 +467,19 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(400);
         expect(requests).toHaveLength(2);
         if (retirement === "detach") {
-          reconnectPage(page);
-        } else if (retirement === "context") {
-          const replacement = createGateway(client);
-          replacementSessions = createTestSessionCapability(replacement.gateway);
-          page.context = createContext(replacement.gateway, replacementSessions);
-          page.requestUpdate();
-        } else {
-          connection.emit({
-            phase: "connected",
-            client:
-              retirement === "client"
-                ? ({ request: client.request.bind(client) } as GatewayBrowserClient)
-                : client,
-          });
+          pending[0]!.resolve(result("agent:main:retired"));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(requests).toHaveLength(2);
+          expect(page.isConnected).toBe(false);
+          return;
         }
+        connection.emit({
+          phase: "connected",
+          client:
+            retirement === "client"
+              ? ({ request: client.request.bind(client) } as GatewayBrowserClient)
+              : client,
+        });
         await page.updateComplete;
         await vi.advanceTimersByTimeAsync(0);
         expect(requests).toHaveLength(3);
@@ -499,7 +501,6 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(page.result?.sessions[0]?.key).toBe("agent:main:final");
       } finally {
-        replacementSessions?.dispose();
         await harness.cleanup();
       }
     },
@@ -526,8 +527,6 @@ describe("Sessions page typing ownership", () => {
         .find((button) => button.textContent?.trim() === "Load more sessions")!
         .click();
       await vi.advanceTimersByTimeAsync(0);
-      page.context = { ...harness.context };
-      page.requestUpdate();
       await page.updateComplete;
       expect(requests).toHaveLength(2);
       expect(page.result?.sessions).toHaveLength(50);

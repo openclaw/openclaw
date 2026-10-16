@@ -61,24 +61,30 @@ describe("googleChatApprovalCapability", () => {
     expect(text).toContain("`channels.googlechat.accounts.work.defaultTo`");
   });
 
-  it("preserves Google Chat approval actor authorization", () => {
+  it("preserves Google Chat approval actor authorization", async () => {
     const action = {
       cfg: { channels: { googlechat: { allowFrom: ["users/123"] } } },
       action: "approve" as const,
       approvalKind: "plugin" as const,
     };
     expect(
-      googleChatApprovalCapability.authorizeActorAction?.({ ...action, senderId: "users/123" }),
+      await googleChatApprovalCapability.authorizeActorActionAsync?.({
+        ...action,
+        senderId: "users/123",
+      }),
     ).toEqual({ authorized: true });
     expect(
-      googleChatApprovalCapability.authorizeActorAction?.({ ...action, senderId: "users/999" }),
+      await googleChatApprovalCapability.authorizeActorActionAsync?.({
+        ...action,
+        senderId: "users/999",
+      }),
     ).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Google Chat.",
     });
   });
 
-  it("only handles approvals for the originating Google Chat account", () => {
+  it("only handles approvals for the originating Google Chat account", async () => {
     const cfg: OpenClawConfig = {
       approvals: { exec: { enabled: true } },
       channels: {
@@ -119,7 +125,7 @@ describe("googleChatApprovalCapability", () => {
     } as never;
 
     expect(
-      shouldHandleGoogleChatNativeApprovalRequest({
+      await shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         accountId: "alpha",
         approvalKind: "exec",
@@ -127,7 +133,7 @@ describe("googleChatApprovalCapability", () => {
       }),
     ).toBe(true);
     expect(
-      shouldHandleGoogleChatNativeApprovalRequest({
+      await shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         accountId: "beta",
         approvalKind: "exec",
@@ -136,7 +142,7 @@ describe("googleChatApprovalCapability", () => {
     ).toBe(false);
   });
 
-  it("does not handle exec approvals when only plugin approval forwarding is enabled", () => {
+  it("does not handle exec approvals when only plugin approval forwarding is enabled", async () => {
     const request = {
       id: "approval-1",
       request: {
@@ -147,7 +153,7 @@ describe("googleChatApprovalCapability", () => {
     } as never;
 
     expect(
-      shouldHandleGoogleChatNativeApprovalRequest({
+      await shouldHandleGoogleChatNativeApprovalRequest({
         cfg: approvalConfig(GOOGLE_CHAT_APPROVAL_ACCOUNT, { plugin: { enabled: true } }),
         approvalKind: "exec",
         request,

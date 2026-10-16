@@ -8,6 +8,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   applySessionEntryReplacements,
   assignSessionOwner,
@@ -149,10 +150,10 @@ it.each(["participant", "owner"] as const)(
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
     // One fact uses separate indexed probes; metadata writes must not repeat any of them.
     const queries = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
-        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+        if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
           return null;
         }
         if (sql.includes('"age_namespaces"')) {
@@ -219,8 +220,10 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
     (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
     options,
   );
-  const reads = trackSqliteStatementExecutions(database.db, ["revision"], (sql) =>
-    /^PRAGMA data_version\b/i.test(sql) ? "revision" : null,
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["revision"],
+    (sql) => (/^PRAGMA data_version\b/i.test(sql) ? "revision" : null),
   );
   let admittedReads = 0;
   try {
@@ -238,7 +241,7 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
         },
       },
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "maintenance-age",
       nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
     });

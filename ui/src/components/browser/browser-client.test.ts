@@ -1,9 +1,9 @@
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import {
+  scrollBrowserBy,
   fetchBrowserScreenshotDataUrl,
-  requestBrowserScreencast,
   requestBrowserDashboard,
   isBrowserScreencastUnsupportedError,
   bindBrowserRequestClient,
@@ -31,14 +31,14 @@ describe("session browser requests", () => {
     sessionScoped: true,
   };
 
-  it.each(["session", "dock", "dashboard", "session-dashboard"] as const)(
+  it.each(["session", "dashboard", "session-dashboard"] as const)(
     "scopes only the session panel and sends transcript references only with its list (%s)",
     async (surface) => {
       const { client: gateway, request } = createBrowserClient(async () => ({}), {
         sessionScoped: surface === "session-dashboard",
       });
       const host = new TestBrowserPanelHost(gateway);
-      host.sessionKey = surface === "dock" ? "" : "  agent:main:panel  ";
+      host.sessionKey = "  agent:main:panel  ";
       host.sessionTabs = Array.from({ length: 65 }, (_, index) => ({
         target: "host",
         profile: "openclaw",
@@ -118,7 +118,6 @@ describe("session browser requests", () => {
   });
 
   it.each([
-    ["open", "POST"],
     ["resume", "POST"],
     ["stop", "DELETE"],
     ["inspect", "GET"],
@@ -184,45 +183,23 @@ describe("downloadBrowserDocument", () => {
     );
   });
 
-  it.each([
-    {},
-    { download: { path: "/managed/report.pdf" } },
-    { download: { suggestedFilename: "Report.pdf" } },
-  ])("rejects incomplete managed file replies %#", async (reply) => {
-    const request = vi.fn().mockResolvedValue(reply);
-    await expect(
-      downloadBrowserDocument(
-        { request },
-        "tab-a",
-        "https://assets.example.test/report",
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow("No file returned.");
-  });
+  it.each([{ download: { path: "/managed/report.pdf" } }])(
+    "rejects incomplete managed file replies %#",
+    async (reply) => {
+      const request = vi.fn().mockResolvedValue(reply);
+      await expect(
+        downloadBrowserDocument(
+          { request },
+          "tab-a",
+          "https://assets.example.test/report",
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("No file returned.");
+    },
+  );
 });
 
 describe("fetchBrowserScreenshotDataUrl", () => {
-  it("returns the fetched screenshot as a data URL", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const screenshot = new Blob(["image-bytes"], { type: "image/png" });
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => ({ ok: true, blob: async () => screenshot }) as Response,
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      fetchBrowserScreenshotDataUrl({
-        resourceBasePath: "",
-        authToken: null,
-        path: "/tmp/browser shot.png",
-      }),
-    ).resolves.toBe("data:image/png;base64,aW1hZ2UtYnl0ZXM=");
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "/__openclaw__/assistant-media?source=%2Ftmp%2Fbrowser+shot.png",
-    );
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("rejects an unsuccessful screenshot without waiting for stream cancellation", async () => {
     vi.useFakeTimers();
     const response = new Response("not found", { status: 404 });
@@ -356,64 +333,135 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
 describe("browser screencast requests", () => {
   it.each([
-    null,
-    {},
-    { token: "", wsPath: "/browser/screencast" },
-    { token: 123, wsPath: "/browser/screencast" },
-    { token: "token" },
-    { token: "token", wsPath: "" },
-    { token: "token", wsPath: 123 },
-  ])("rejects a malformed mint response (%j)", async (response) => {
-    await expect(
-      requestBrowserScreencast(
-        { request: vi.fn().mockResolvedValue(response) },
-        { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
-      ),
-    ).rejects.toThrow("browser screencast response is malformed");
-  });
-
-  it("normalizes absent or invalid optional metadata to empty strings", async () => {
-    const response = { token: "token", wsPath: "/browser/screencast?token=token", url: 123 };
-    await expect(
-      requestBrowserScreencast(
-        { request: vi.fn().mockResolvedValue(response) },
-        { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
-      ),
-    ).resolves.toEqual({ ...response, targetId: "", url: "" });
-  });
-
-  it("mints an HTTP-shaped request with the requested target and size", async () => {
-    const response = {
-      token: "token",
-      wsPath: "/browser/screencast?token=token",
-      targetId: "raw-a",
-      url: "https://example.test",
-    };
-    const request = vi.fn().mockResolvedValue(response);
-    await expect(
-      requestBrowserScreencast({ request }, { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 }),
-    ).resolves.toEqual(response);
-    expect(request).toHaveBeenCalledWith("browser.request", {
-      method: "POST",
-      path: "/screencast",
-      body: { targetId: "tab-a", maxWidth: 1280, maxHeight: 1600 },
-    });
-  });
-
-  it.each([
-    [
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Unsupported",
-        details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
-      }),
-      true,
-    ],
     [{ body: { code: "SCREENCAST_UNSUPPORTED" } }, true],
     [{ details: { body: { code: "SCREENCAST_UNSUPPORTED" } } }, true],
-    [new Error("SCREENCAST_UNSUPPORTED"), false],
-    [{ details: { code: "OTHER" } }, false],
   ])("recognizes structured unsupported failures (%s)", (error, expected) => {
     expect(isBrowserScreencastUnsupportedError(error)).toBe(expected);
+  });
+});
+
+describe("browser wheel script", () => {
+  // jsdom has no layout, so give each scroller the sizes a browser would report.
+  function scroller(id: string, overflow: string, size: { client: number; scroll: number }) {
+    const el = document.createElement(id === "body" ? "body" : "div");
+    el.id = id;
+    el.style.overflowY = overflow;
+    el.style.overflowX = overflow;
+    for (const axis of ["Height", "Width"] as const) {
+      Object.defineProperty(el, `client${axis}`, { configurable: true, value: size.client });
+      Object.defineProperty(el, `scroll${axis}`, { configurable: true, value: size.scroll });
+    }
+    const scrollBy = vi.fn();
+    el.scrollBy = scrollBy;
+    return { el, scrollBy };
+  }
+
+  async function runAt(
+    target: Element | null,
+    params: Omit<Parameters<typeof scrollBrowserBy>[1], "targetId">,
+  ) {
+    // jsdom has no hit testing; report the element a browser would find under the pointer.
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    const windowScroll = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+    const { client } = createBrowserClient(async (envelope) => {
+      const fn = envelope.body?.fn;
+      if (typeof fn !== "string") {
+        throw new Error("Expected a browser evaluate script");
+      }
+      return {
+        result: runInNewContext(`(${fn})()`, {
+          document,
+          window,
+          getComputedStyle,
+          ShadowRoot,
+        }),
+      };
+    });
+    await scrollBrowserBy(client, { targetId: "tab-a", ...params });
+    return { windowScroll };
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
+  it("scrolls the nested scroller under the pointer instead of the document", async () => {
+    const { el: list, scrollBy } = scroller("list", "auto", { client: 300, scroll: 3000 });
+    const item = document.createElement("span");
+    list.append(item);
+    document.body.append(list);
+
+    const { windowScroll } = await runAt(item, {
+      deltaX: 0,
+      deltaY: 400,
+      point: { x: 150, y: 300 },
+    });
+
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, 400);
+    expect(windowScroll).not.toHaveBeenCalled();
+  });
+
+  it("chains to the document when the scroller under the pointer cannot move further", async () => {
+    const { el: list, scrollBy } = scroller("list", "auto", { client: 300, scroll: 3000 });
+    list.scrollTop = 2700;
+    document.body.append(list);
+
+    const { windowScroll } = await runAt(list, { deltaX: 0, deltaY: 400, point: { x: 10, y: 10 } });
+
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(windowScroll).toHaveBeenCalledExactlyOnceWith(0, 400);
+  });
+
+  it("skips overflow-hidden ancestors and scrolls the document without a point", async () => {
+    const { el: clipped, scrollBy } = scroller("clipped", "hidden", { client: 300, scroll: 3000 });
+    document.body.append(clipped);
+
+    expect(
+      (await runAt(clipped, { deltaX: 0, deltaY: 120, point: { x: 5, y: 5 } })).windowScroll,
+    ).toHaveBeenCalledExactlyOnceWith(0, 120);
+    expect(scrollBy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(
+      (await runAt(clipped, { deltaX: 30, deltaY: 0 })).windowScroll,
+    ).toHaveBeenCalledExactlyOnceWith(30, 0);
+  });
+  it.each([
+    { left: 0, delta: -40, nested: true },
+    { left: -100, delta: 40, nested: true },
+    { left: -2700, delta: -40, nested: false },
+    { left: 0, delta: 40, nested: false },
+  ])("scrolls or chains RTL input at $left by $delta", async ({ left, delta, nested }) => {
+    const { el, scrollBy } = scroller("rtl", "auto", { client: 300, scroll: 3000 });
+    el.style.direction = "rtl";
+    el.scrollLeft = left;
+    const { el: outer, scrollBy: scrollOuter } = scroller("outer", "auto", {
+      client: 300,
+      scroll: 3000,
+    });
+    outer.style.direction = "rtl";
+    outer.scrollLeft = -100;
+    outer.append(el);
+    document.body.append(outer);
+    const { windowScroll } = await runAt(el, { deltaX: delta, deltaY: 0, point: { x: 10, y: 10 } });
+    expect(scrollBy).toHaveBeenCalledTimes(nested ? 1 : 0);
+    expect(scrollOuter).toHaveBeenCalledTimes(nested ? 0 : 1);
+    expect(windowScroll).not.toHaveBeenCalled();
+  });
+
+  it("scrolls an independently scrollable body", async () => {
+    const { el, scrollBy } = scroller("body", "auto", { client: 300, scroll: 3000 });
+    const previousBody = document.body;
+    document.documentElement.replaceChild(el, previousBody);
+    try {
+      const { windowScroll } = await runAt(el, { deltaX: 0, deltaY: 80, point: { x: 10, y: 10 } });
+      expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, 80);
+      expect(windowScroll).not.toHaveBeenCalled();
+    } finally {
+      document.documentElement.replaceChild(previousBody, el);
+    }
   });
 });

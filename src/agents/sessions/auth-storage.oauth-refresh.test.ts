@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { refreshAuthProfileFileState } from "../auth-profiles/file-state.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
@@ -22,6 +23,7 @@ import {
 } from "../auth-profiles/sqlite.js";
 import * as authProfileSqlite from "../auth-profiles/sqlite.js";
 import * as authProfileStoreRuntime from "../auth-profiles/store-runtime.js";
+import * as authProfileStoreUpdate from "../auth-profiles/store-update.js";
 import type { OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { AuthStorage, type AuthStorageBackend } from "./auth-storage.js";
@@ -212,8 +214,8 @@ describe("AuthStorage OAuth refresh ownership", () => {
             refreshToken,
             getApiKey: (credential) => credential.access,
           });
-          // A populated SQLite owner treats legacy files as leftover bytes. Retain
-          // the facade's expired credential while its durable owner loses migration admission.
+          // A populated SQLite owner treats legacy files as leftover bytes. Once
+          // emptied, its matching legacy credential must block further credential use.
           const migrationStore = { version: 1, profiles: {} };
           writePersistedAuthProfileStoreRaw(migrationStore, agentDir);
           await state.writeJson(
@@ -223,14 +225,11 @@ describe("AuthStorage OAuth refresh ownership", () => {
               : {
                   version: 1,
                   profiles: {
-                    "anthropic:default": {
-                      type: "api_key",
-                      provider: "anthropic",
-                      key: "synthetic-legacy-key",
-                    },
+                    "test-oauth:default": createCredential({ provider: "test-oauth" }),
                   },
                 },
           );
+          await refreshAuthProfileFileState();
           expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
             "requires legacy credential migration",
           );
@@ -385,14 +384,14 @@ describe("AuthStorage OAuth refresh ownership", () => {
         filterExternalAuthProfiles: false,
       });
 
-      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;
+      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfilesAsync;
       let providerAReads = 0;
       let providerBReads = 0;
       vi.spyOn(
         authProfileStoreRuntime,
-        "loadAuthProfileStoreWithoutExternalProfiles",
-      ).mockImplementation((...args: Parameters<typeof originalLoad>) => {
-        const store = originalLoad(...args);
+        "loadAuthProfileStoreWithoutExternalProfilesAsync",
+      ).mockImplementation(async (...args: Parameters<typeof originalLoad>) => {
+        const store = await originalLoad(...args);
         const credential = store.profiles[profileId];
         if (credential?.type === "oauth" && credential.provider === "openai") {
           providerAReads += 1;
@@ -666,6 +665,14 @@ function observeAuthTransactions(after: () => void, before?: () => void) {
       const result = runTransaction(agentDir, operation, options);
       after();
       return result;
+    },
+  );
+  const runUpdate = authProfileStoreUpdate.runAuthProfileStoreUpdate;
+  vi.spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate").mockImplementation(
+    async (params) => {
+      before?.();
+      await runUpdate(params);
+      after();
     },
   );
 }

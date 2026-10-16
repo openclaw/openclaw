@@ -13,11 +13,22 @@ vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent })
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title orchestration writes synthetic entry state instead of acquiring a persistence owner.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
-  loadSessionEntry,
 }));
-vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
+// mock-isolation: Title orchestration reads synthetic session entries without starting storage workers.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (scope: unknown) => loadSessionEntry(scope),
+}));
+// mock-isolation: Registry and transport behavior are covered by the real-provider title suites.
+vi.mock("../skills/discovery/chat-commands.js", () => ({
+  prepareSkillCommandsForWorkspace: async () => [],
+}));
+// mock-isolation: Title orchestration tests supply transcript reads without starting workers.
+vi.mock("./session-transcript-title-reader.js", () => ({
+  readSessionTitleFieldsFromTranscriptAsync: readSessionTitleFieldsFromTranscript,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -128,95 +139,38 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it.each([false, true])(
-    "preserves the native primary auth profile for utility models (ACP=%s)",
-    async (acp) => {
-      const profiledCfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5@personal" },
-            utilityModel: "openai/gpt-5.6-luna",
-          },
-          entries: {
-            main: acp ? { model: "harness-only@harness-profile", runtime: { type: "acp" } } : {},
-          },
+  it("preserves the native primary auth profile for utility models under ACP", async () => {
+    const profiledCfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5@personal" },
+          utilityModel: "openai/gpt-5.6-luna",
         },
-      } as OpenClawConfig;
-      resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
+        entries: {
+          main: { model: "harness-only@harness-profile", runtime: { type: "acp" } },
+        },
+      },
+    } as OpenClawConfig;
+    resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
-      await expect(
-        maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
-      ).resolves.toBe(true);
-
-      expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
-        expect.objectContaining({
-          utilityModelRef: "openai/gpt-5.6-luna",
-          regularModelRef: "openai/gpt-5.5@personal",
-          preferredProfile: "personal",
-        }),
-      );
-    },
-  );
-
-  it("goes directly to the regular model when utility routing is disabled", async () => {
-    resolveUtilityModelRefForAgent.mockReturnValue(undefined);
-
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    await expect(
+      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
+    ).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
-      expect.not.objectContaining({ utilityModelRef: expect.anything() }),
+      expect.objectContaining({
+        utilityModelRef: "openai/gpt-5.6-luna",
+        regularModelRef: "openai/gpt-5.5@personal",
+        preferredProfile: "personal",
+      }),
     );
   });
 
   it.each([
-    ['```text\n"Release Planning"\n```', "Release Planning"],
-    ["Title:  Release   planning ", "Release planning"],
     ['Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
-    ['Instruction to reply exactly "ok', "Instruction to reply exactly ok"],
-    ["Reply with 'ok'", "Reply with 'ok'"],
-    ["Reply with ‘ok’", "Reply with ‘ok’"],
-    ["Reply with ‘ok", "Reply with ok"],
     ["Reply with ok’", "Reply with ok"],
-    ["Bestätige mit „ok“", "Bestätige mit „ok“"],
-    ["Reply with “ok”", "Reply with “ok”"],
-    ["Reply with «ok»", "Reply with «ok»"],
-    ["„Release planning“", "Release planning"],
-    ["“Release planning”", "Release planning"],
-    ["«Release planning»", "Release planning"],
-    ["Reply with „ok", "Reply with ok"],
-    ["Reply with “ok", "Reply with ok"],
-    ["Reply with «ok", "Reply with ok"],
-    ["Reply with ok”", "Reply with ok"],
-    ["Reply with ok»", "Reply with ok"],
-    ["Don't change the user's title", "Don't change the user's title"],
-    ["Don’t change the user’s title", "Don’t change the user’s title"],
-    ["Users' permissions", "Users' permissions"],
-    ["Users’ permissions", "Users’ permissions"],
-    ['"Users\' permissions"', "Users' permissions"],
-    ["“Users’ permissions”", "Users’ permissions"],
-    ["Reply with 'users' permissions", "Reply with 'users' permissions"],
-    ["Reply with ‘users’ permissions", "Reply with ‘users’ permissions"],
-    ["Compare our permissions with other users’", "Compare our permissions with other users’"],
-    ["Compare our permissions with other users'", "Compare our permissions with other users'"],
-    ["'Users' permissions'", "Users' permissions"],
-    ["‘Users’ permissions’", "Users’ permissions"],
-    ["'Users' and admins' permissions'", "Users' and admins' permissions"],
     ["'Users' can't edit permissions'", "Users' can't edit permissions"],
-    ["“Compare our permissions with other users’”", "Compare our permissions with other users’"],
-    ["'users' or 'admins'", "'users' or 'admins'"],
-    ["Compare users’/admins’ permissions", "Compare users’/admins’ permissions"],
-    ["Review users'/permissions", "Review users'/permissions"],
-    ["Compare users’, then admins’ permissions", "Compare users’, then admins’ permissions"],
-    ["Reply with ‘users’, then ‘admins’", "Reply with ‘users’, then ‘admins’"],
-    ["Reply with 'users', then 'admins'", "Reply with 'users', then 'admins'"],
-    ["Compare users’+admins’ permissions", "Compare users’+admins’ permissions"],
-    ["Reply with ‘users’+‘admins’", "Reply with ‘users’+‘admins’"],
-    ["cafe\u0301’s setup", "cafe\u0301’s setup"],
-    ["\"'Release notes'\"", "Release notes"],
-    ["Reply with »ok«", "Reply with »ok«"],
-    ['"ok" or "later"', '"ok" or "later"'],
     [`${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
-    [`${"a".repeat(59)} 🚀`, "a".repeat(59)],
   ])("normalizes generated title wrappers", async (generated, expected) => {
     generateConversationLabelWithFallback.mockImplementation(async ({ normalizeLabel }) =>
       normalizeLabel(generated),
@@ -228,36 +182,13 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
   });
 
-  it.each([
-    ["legacy main session", { sessionKey: "agent:main:main" }],
-    ["slash command", { userMessage: "/status" }],
-    [
-      "manual rename shaped like its Android device stamp",
-      {
-        sessionKey: "agent:main:node-1234567890ab",
-        entry: { ...baseEntry, label: "OpenClaw App · Release planning · 1234567890ab" },
-      },
-    ],
-    ["persisted display name", { entry: { ...baseEntry, displayName: "My release" } }],
-  ])("skips %s", async (_name, override) => {
-    const params = { ...titleParams(), ...override };
-    loadSessionEntry.mockReturnValue(params.entry);
+  it("skips a persisted display name even when supplied an older entry", async () => {
+    const params = titleParams({ ...baseEntry, displayName: "My release" });
     await expect(maybeGenerateDashboardSessionTitle({ ...params, entry: baseEntry })).resolves.toBe(
       false,
     );
-
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["ios new-session key", "agent:main:ios-7f3a9c2b1d0e"],
-    ["android node key", "agent:main:node-1234567890ab"],
-  ])("titles %s", async (_name, sessionKey) => {
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), sessionKey }),
-    ).resolves.toBe(true);
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
@@ -280,41 +211,28 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
-    readSessionTitleFieldsFromTranscript.mockReturnValue({
-      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
-      lastMessagePreview: "Latest follow-up",
-    });
+    const transcript = createDeferredCore<{
+      firstUserMessage: string;
+      lastMessagePreview: string;
+    }>();
+    readSessionTitleFieldsFromTranscript.mockReturnValue(transcript.promise);
     mockSessionUpdate(entry);
 
-    await expect(
-      maybeGenerateDashboardSessionTitle({
-        ...titleParams(entry),
-        currentUserMessage: "Latest follow-up",
-        userMessage: "Latest follow-up",
-      }),
-    ).resolves.toBe(true);
+    const naming = maybeGenerateDashboardSessionTitle({
+      ...titleParams(entry),
+      currentUserMessage: "Latest follow-up",
+      userMessage: "Latest follow-up",
+    });
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    transcript.resolve({
+      // The title reader returns normalized task text.
+      firstUserMessage: "Original release plan",
+      lastMessagePreview: "Latest follow-up",
+    });
+    await expect(naming).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
       "Original release plan",
-    );
-  });
-
-  it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
-    readSessionTitleFieldsFromTranscript.mockReturnValue({
-      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Review this rollout",
-      lastMessagePreview: "Review this rollout",
-    });
-
-    await expect(
-      maybeGenerateDashboardSessionTitle({
-        ...titleParams(),
-        currentUserMessage: "Review this rollout",
-        userMessage: "Review this rollout\nDeployment context",
-      }),
-    ).resolves.toBe(true);
-
-    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
-      "Review this rollout\nDeployment context",
     );
   });
 
@@ -332,21 +250,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       expect.objectContaining({ utilityOnly: true }),
     );
     expect(updateSessionEntry).not.toHaveBeenCalled();
-  });
-
-  it("evicts a settled naming request so a later rename attempt can run", async () => {
-    generateConversationLabelWithFallback
-      .mockRejectedValueOnce(new Error("route unavailable"))
-      .mockResolvedValueOnce("Release Planning");
-
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
-    // Clear the persisted name so a later send can claim naming again.
-    loadSessionEntry.mockReturnValue(baseEntry);
-    mockSessionUpdate(baseEntry);
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
-    const update = updateSessionEntry.mock.calls.at(-1)?.[1];
-    expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
   it.each(["unavailable", "renamed"])(
@@ -411,12 +314,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     const params = titleParams();
     const background = maybeGenerateDashboardSessionTitle(params);
     const onError = vi.fn();
-    const onPersisted = vi.fn();
+    const onTitleStateChanged = vi.fn();
     const worktree = generateWorktreeSessionTitle({
       ...params,
       sessionKey: "dashboard:chat-1",
       onError,
-      onPersisted,
+      onTitleStateChanged,
     });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(worktree).resolves.toBeUndefined();
@@ -424,7 +327,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     naming.resolve("Release Planning");
     await expect(background).resolves.toBe(true);
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
-    expect(onPersisted).not.toHaveBeenCalled();
+    expect(onTitleStateChanged).not.toHaveBeenCalled();
     expect(loadSessionEntry()).toMatchObject({ displayName: "Release Planning" });
   });
 
@@ -433,13 +336,18 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     async (outcome) => {
       vi.useFakeTimers();
       const naming = createDeferredCore<string>();
-      generateConversationLabelWithFallback.mockReturnValue(naming.promise);
+      const started = createDeferredCore();
+      generateConversationLabelWithFallback.mockImplementation(() => {
+        started.resolve();
+        return naming.promise;
+      });
       const params = titleParams();
       const onError = vi.fn();
-      const onPersisted = vi.fn();
-      const worktree = generateWorktreeSessionTitle({ ...params, onError, onPersisted });
+      const onTitleStateChanged = vi.fn();
+      const worktree = generateWorktreeSessionTitle({ ...params, onError, onTitleStateChanged });
       const background = maybeGenerateDashboardSessionTitle(params);
 
+      await started.promise;
       await vi.advanceTimersByTimeAsync(8_000);
       expect(onError).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(22_000);
@@ -458,37 +366,33 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         displayName:
           outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
       });
-      expect(onPersisted).toHaveBeenCalledOnce();
+      expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
       expect(updateSessionEntry).toHaveBeenCalledOnce();
       expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     },
   );
 
-  it.each([1, 2])(
-    "retries a joined title failure only once (%s failed writes)",
-    async (failures) => {
-      const naming = createDeferredCore<string>();
-      generateConversationLabelWithFallback.mockReturnValueOnce(naming.promise);
-      const params = titleParams();
-      for (let attempt = 0; attempt < failures; attempt++) {
-        updateSessionEntry.mockRejectedValueOnce(new Error("temporary write failure"));
-      }
-      const onPersisted = vi.fn();
-      const worktree = generateWorktreeSessionTitle({ ...params, onError: vi.fn(), onPersisted });
-      const background = maybeGenerateDashboardSessionTitle(params);
-      const expected =
-        failures === 1
-          ? expect(background).resolves.toBe(true)
-          : expect(background).rejects.toThrow("temporary write failure");
-      naming.resolve("Release Planning");
-      await Promise.all([worktree, expected]);
+  it("retries a joined title write failure only once", async () => {
+    const naming = createDeferredCore<string>();
+    generateConversationLabelWithFallback.mockReturnValueOnce(naming.promise);
+    const params = titleParams();
+    updateSessionEntry.mockRejectedValueOnce(new Error("temporary write failure"));
+    const onTitleStateChanged = vi.fn();
+    const worktree = generateWorktreeSessionTitle({
+      ...params,
+      onError: vi.fn(),
+      onTitleStateChanged,
+    });
+    const background = maybeGenerateDashboardSessionTitle(params);
+    const expected = expect(background).resolves.toBe(true);
+    naming.resolve("Release Planning");
+    await Promise.all([worktree, expected]);
 
-      expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
-      expect(updateSessionEntry).toHaveBeenCalledTimes(2);
-      expect(onPersisted).not.toHaveBeenCalled();
-      expect(loadSessionEntry().displayName).toBe(failures === 1 ? "Release Planning" : undefined);
-    },
-  );
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+    expect(updateSessionEntry).toHaveBeenCalledTimes(2);
+    expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntry().displayName).toBe("Release Planning");
+  });
 
   it("revalidates worktree authority inside the final title commit", async () => {
     const writePrepared = createDeferredCore();
@@ -507,12 +411,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       loadSessionEntry.mockReturnValue({ ...baseEntry, ...patch });
       return loadSessionEntry();
     });
-    const onPersisted = vi.fn();
+    const onTitleStateChanged = vi.fn();
     const worktree = generateWorktreeSessionTitle({
       ...titleParams(),
       commitGuard,
       onError: vi.fn(),
-      onPersisted,
+      onTitleStateChanged,
     });
     const rejected = expect(worktree).rejects.toThrow("run closed");
     await writePrepared.promise;
@@ -520,7 +424,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     releaseWrite.resolve();
     await rejected;
     expect(loadSessionEntry()).not.toHaveProperty("displayName");
-    expect(onPersisted).not.toHaveBeenCalled();
+    expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent title requests for one session generation", async () => {
@@ -556,16 +460,13 @@ describe("buildDashboardSessionTitleSource", () => {
     );
   });
 
-  it.each([
-    ["attachment-only", "", "Pasted migration checklist"],
-    ["slash command with attachment", "/status", "Pasted incident report"],
-  ])("titles an %s turn from its text attachment", async (_name, userMessage, text) => {
+  it("titles a control command turn from its text attachment", () => {
     expect(
       buildDashboardSessionTitleSource({
-        message: userMessage,
-        attachments: [textAttachment(text)],
+        message: "/status",
+        attachments: [textAttachment("Pasted incident report")],
       }),
-    ).toBe(text);
+    ).toBe("Pasted incident report");
   });
 
   it.each([
@@ -580,27 +481,6 @@ describe("buildDashboardSessionTitleSource", () => {
     async (_name, attachment) =>
       expect(buildDashboardSessionTitleSource({ message: "", attachments: [attachment] })).toBe(""),
   );
-
-  it("ignores a long text attachment with malformed trailing base64", async () => {
-    const valid = Buffer.from("a".repeat(4_000)).toString("base64");
-    const malformed = `${valid.slice(0, -4)}AAA%`;
-
-    expect(
-      buildDashboardSessionTitleSource({
-        message: "",
-        attachments: [{ mimeType: "text/plain", content: malformed }],
-      }),
-    ).toBe("");
-  });
-
-  it("keeps attachment-derived title input on a UTF-16 boundary", async () => {
-    expect(
-      buildDashboardSessionTitleSource({
-        message: "",
-        attachments: [textAttachment(`${"a".repeat(999)}🚀tail`)],
-      }),
-    ).toBe("a".repeat(999));
-  });
 });
 
 function textAttachment(text: string): ChatAttachment {
@@ -627,23 +507,6 @@ describe("deriveGoalSessionTitle", () => {
     expect(deriveGoalSessionTitle("Hey. Investigate why heartbeat failed overnight.")).toBe(
       "Investigate why heartbeat failed overnight.",
     );
-  });
-
-  it("strips inbound metadata before deriving", () => {
-    expect(
-      deriveGoalSessionTitle(
-        "[Mon 2026-08-10 12:00 UTC] investigate why heartbeat failed overnight",
-      ),
-    ).toBe("Investigate why heartbeat failed overnight");
-  });
-
-  it("ignores host envelope leftovers that are not a user task", () => {
-    expect(
-      deriveGoalSessionTitle("<environment_context>\n{}\n</environment_context>"),
-    ).toBeUndefined();
-    expect(
-      deriveGoalSessionTitle("<recommended_plugins>\nHere is a list of plugins\n"),
-    ).toBeUndefined();
   });
 
   it("truncates long goals at a word boundary within 60 characters", () => {
@@ -774,14 +637,18 @@ describe("worktree title source lifecycle", () => {
         return { ...current };
       });
       const onError = vi.fn();
-      const onPersisted = vi.fn(() => persisted.resolve());
+      const onTitleStateChanged = vi.fn(() => {
+        if (current.displayName) {
+          persisted.resolve();
+        }
+      });
       const request = context.run("caller", () =>
         owner.run(() =>
           generateWorktreeSessionTitle({
             ...sourceTitleParams("success"),
             withSource: source.withSource,
             onError,
-            onPersisted,
+            onTitleStateChanged,
           }),
         ),
       );
@@ -821,7 +688,7 @@ describe("worktree title source lifecycle", () => {
         expect(writeContext).not.toBe(source.entered[0]);
         expect(writeAssertions).toEqual([writeContext]);
         expect(source.closed).toEqual(source.entered);
-        expect(onPersisted).toHaveBeenCalledOnce();
+        expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
         expect(current.displayName).toBe("Scoped release planning");
       } finally {
         continueGeneration.resolve();

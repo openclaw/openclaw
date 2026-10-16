@@ -1,15 +1,21 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import { killProcessTree, resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
+import { closedStdinDoctorEntrypoint } from "./doctor-closed-stdin-entrypoint.test-support.js";
 import {
   CODEX_MANAGED_APP_SERVER_CHECK_ID,
   registerCodexManagedAppServerDoctorChecks,
 } from "./doctor.js";
+
+const closedStdinDoctor = resolveRuntimeWorkerUrl(closedStdinDoctorEntrypoint);
 
 function config(appServer: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -95,6 +101,52 @@ function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctor
 
 describe("managed Codex doctor check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.skipIf(process.platform === "win32")(
+    "returns successful JSON when a version binary closes stdin immediately",
+    async () => {
+      const root = tempDirs.make("openclaw-codex-closed-stdin-");
+      const command = path.join(root, "codex");
+      await fs.writeFile(
+        command,
+        `#!${process.execPath}
+const fs = require("node:fs");
+const stdin = fs.fstatSync(0);
+fs.closeSync(0);
+// Reject an unnecessary input transport deterministically instead of racing its empty write.
+if (stdin.isSocket() || stdin.isFIFO()) process.exit(1);
+fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(closedStdinDoctor), command, JSON.stringify(config())],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            PATH: path.dirname(process.execPath),
+            SystemRoot: process.env.SystemRoot,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.signal, result.stderr).toBeNull();
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: true,
+        findings: [],
+        checksRun: 1,
+        checksSkipped: 0,
+      });
+    },
+  );
   it("reports an incompatible passive catalog executable without Codex routes", async () => {
     const cfg = config({ homeScope: "user" });
     cfg.agents = { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } };

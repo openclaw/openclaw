@@ -15,6 +15,8 @@ import {
   markTemplateReadyAsync,
   readTemplateAsync,
   reserveTemplateAsync,
+  retainTemplateReaderAsync,
+  releaseTemplateReaderAsync,
 } from "./template-registry-async.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
 
@@ -90,6 +92,76 @@ describe("worktree template registry", () => {
     } finally {
       sql.restore();
     }
+  });
+
+  it("admits readers only from retained ready generations and refuses retirement until they settle", async () => {
+    await reserveTemplateAsync(env, template, guard);
+    await markTemplateReadyAsync(env, template.id, 20, guard);
+    const owner = { pid: 1, host: "synthetic-remote-owner", startedAt: null };
+    const selection = {
+      selection: {
+        cacheKey: template.cacheKey,
+        contentKey: template.contentKey,
+        backend: template.backend,
+      },
+      key: "warm",
+      owner,
+    };
+    expect(await retainTemplateReaderAsync(env, selection, guard)).toBeUndefined();
+    await retainTemplateReaderAsync(env, { id: template.id, key: "first", owner }, guard);
+    expect(
+      await retainTemplateReaderAsync(
+        env,
+        { ...selection, selection: { ...selection.selection, contentKey: "other" } },
+        guard,
+      ),
+    ).toBeUndefined();
+    expect(await retainTemplateReaderAsync(env, selection, guard)).toEqual({
+      ...template,
+      status: "ready",
+      lastUsedAt: 20,
+    });
+    expect(
+      await retainTemplateReaderAsync(
+        env,
+        {
+          id: template.id,
+          key: "retire",
+          owner,
+          unpublish: true,
+        },
+        guard,
+      ),
+    ).toBeUndefined();
+    await releaseTemplateReaderAsync(env, "first", guard);
+    expect(
+      await retainTemplateReaderAsync(
+        env,
+        {
+          id: template.id,
+          key: "retire",
+          owner,
+          unpublish: true,
+        },
+        guard,
+      ),
+    ).toBeUndefined();
+    await releaseTemplateReaderAsync(env, "warm", guard);
+    expect(
+      await retainTemplateReaderAsync(
+        env,
+        {
+          id: template.id,
+          key: "retire",
+          owner,
+          unpublish: true,
+        },
+        guard,
+      ),
+    ).toMatchObject({ id: template.id });
+    expect(await retainTemplateReaderAsync(env, selection, guard)).toBeUndefined();
+    expect((await readTemplateAsync(env, template.cacheKey))?.status).toBe("preparing");
+    await releaseTemplateReaderAsync(env, "retire", guard);
   });
 
   it("rolls back ready publication when custody is revoked at worker commit", async () => {

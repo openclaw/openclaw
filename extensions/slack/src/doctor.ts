@@ -161,7 +161,7 @@ function collectSlackNameKeyedChannelWarnings({ cfg }: { cfg: OpenClawConfig }):
         continue;
       }
       warnings.add(
-        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or non-canonical ID form, not a routable Slack channel ID; ` +
+        `${channelsPrefix}.channels."${channelKey}" is keyed by a channel name or unsupported ID form, not a routable Slack channel ID; ` +
           `under groupPolicy: "${effectiveGroupPolicy}" inbound routing does not match this entry, so ${fallbackDescription}. ` +
           `Re-key it with the channel's ID (e.g. C0123ABCD, from the channel's About details or conversations.info).`,
       );

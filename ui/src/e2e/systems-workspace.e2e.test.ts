@@ -290,20 +290,9 @@ suite.define(() => {
           // The middle column no longer includes the navigation stack: overflow its own roster.
           await installSystemsGateway(page, 40);
           await page.goto(suite.server.baseUrl + route);
-          await page.locator('[data-navigation-view="sessions"]').click();
-          const all = page
-            .locator(".sidebar-navigation-scope")
-            .getByRole("button", { name: "All", exact: true });
-          if (route === "dashboards") {
-            // This inventory intentionally includes ownerless sessions, not only Mine.
-            await all.click();
-          }
           await page.locator('[data-navigation-view="pages"]').click();
           await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
           await page.locator('[data-navigation-view="sessions"]').click();
-          if (route === "dashboards") {
-            await expect.poll(() => all.getAttribute("aria-pressed")).toBe("true");
-          }
           const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
           const scroller = page.locator(".sidebar-shell__body");
           const railControls = page.locator(

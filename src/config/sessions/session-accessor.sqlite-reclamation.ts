@@ -235,7 +235,7 @@ function reclaimSqliteRowsInTransaction(
           undefined,
           new Set(sessionKeys),
         );
-        deleteLifecycleTargetRows(transactionDb, plan.deleteParams.target);
+        deleteLifecycleTargetRows(transactionDb, plan.deleteParams.target, snapshot);
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
             transactionDb,
@@ -348,7 +348,6 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 export function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
   env: _env,
-  descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
   return params;

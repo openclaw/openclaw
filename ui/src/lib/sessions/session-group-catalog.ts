@@ -38,14 +38,13 @@ function readLegacyStoredGroups(): string[] {
     );
     return normalizeUniqueTrimmedStringList(parsed);
   } catch {
+    // Malformed optional browser data must not block the canonical Gateway catalog.
     return [];
   }
 }
 
 export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadedEpoch = -1;
-  let loadGeneration = 0;
-  let catalogGeneration = 0;
   let defaultsStatus: SessionGroupDefaultsStatus = "idle";
   let pendingLoad: Promise<readonly SessionGroupSettings[] | null> | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -59,17 +58,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
 
   const dispose = () => {
     loadedEpoch = -1;
-    loadGeneration += 1;
     pendingLoad = null;
     clearRetry();
   };
 
   const invalidate = () => {
     dispose();
-    catalogGeneration += 1;
     defaultsStatus = "loading";
-    // Every invalidation publishes its generation, including back-to-back
-    // events while the previous reload is still pending.
     host.publish({ ...host.readState() });
   };
 
@@ -78,59 +73,33 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     sectionOrder: readonly string[],
     status: SessionGroupDefaultsStatus,
   ) => {
-    const state = host.readState();
-    const groups = groupSettings.map((group) => group.name);
-    const groupsUnchanged =
-      groups.length === state.groups.length &&
-      groups.every((group, i) => group === state.groups[i]);
-    const orderUnchanged =
-      sectionOrder.length === state.sectionOrder.length &&
-      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
-    const settingsUnchanged =
-      groupSettings.length === state.groupSettings.length &&
-      groupSettings.every((group, index) => {
-        const current = state.groupSettings[index];
-        return (
-          current?.name === group.name &&
-          current.position === group.position &&
-          current.cwd === group.cwd &&
-          current.worktree === group.worktree
-        );
-      });
-    const statusChanged = defaultsStatus !== status;
     defaultsStatus = status;
-    if (!groupsUnchanged || !settingsUnchanged || !orderUnchanged || statusChanged) {
-      host.publish({
-        ...state,
-        groups: [...groups],
-        groupSettings: [...groupSettings],
-        sectionOrder: [...sectionOrder],
-      });
-    }
+    host.publish({
+      ...host.readState(),
+      groups: groupSettings.map((group) => group.name),
+      groupSettings: [...groupSettings],
+      sectionOrder: [...sectionOrder],
+    });
   };
 
   const finishLoadFailure = (
     scope: SessionConnectionScope,
-    generation: number,
     error: unknown,
-    retry: boolean,
+    isCurrentLoad: () => boolean,
   ) => {
-    if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+    if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
       return null;
     }
     if (defaultsStatus !== "unavailable") {
       defaultsStatus = "unavailable";
       host.publish({ ...host.readState() });
     }
-    if (!retry) {
-      return null;
-    }
     loadedEpoch = -1;
     const delay = host.retryDelayMs(error);
     if (delay !== null) {
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        if (host.connection.isCurrent(scope) && generation === loadGeneration) {
+        if (host.connection.isCurrent(scope)) {
           void load();
         }
       }, delay);
@@ -138,14 +107,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     return null;
   };
 
-  const loadAttempt = async (
-    scope: SessionConnectionScope,
-    generation: number,
-    advertised: boolean | null,
-  ) => {
+  const loadAttempt = async (scope: SessionConnectionScope, isCurrentLoad: () => boolean) => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
         return null;
       }
       let settings = readSessionCustomGroups(listed);
@@ -161,7 +126,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       ) {
         if (settings.length === 0) {
           const put = await scope.client.request("sessions.groups.put", { names: legacy });
-          if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+          if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
             return null;
           }
           settings = readSessionCustomGroups(put);
@@ -186,24 +151,19 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       // The path-free catalog is independently useful to the sidebar. Defaults
       // readiness only gates group-target routes and must not erase those names.
       publishCatalog(settings, sectionOrder, "loading");
-      try {
-        const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
-        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
-          return null;
-        }
-        settings = mergeSessionGroupDefaults(settings, defaults);
-      } catch (error) {
-        return finishLoadFailure(scope, generation, error, true);
+      const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
+      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
+        return null;
       }
+      settings = mergeSessionGroupDefaults(settings, defaults);
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
-      // Gateways without feature metadata retain the legacy one-shot probe.
-      return finishLoadFailure(scope, generation, error, advertised === true);
+      return finishLoadFailure(scope, error, isCurrentLoad);
     }
   };
 
-  /** Group consumers may probe once per connection; explicitly absent features never probe. */
+  /** Share catalog loads per connection; explicitly absent features never request it. */
   const load = async (): Promise<readonly SessionGroupSettings[] | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -214,7 +174,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
-    const generation = ++loadGeneration;
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
@@ -224,11 +183,20 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    const promise = loadAttempt(scope, generation, advertised)
+    // Only the retained load may publish after a mutation or catalog invalidation.
+    const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
+      scope,
+      () => pendingLoad === promise,
+    )
       .then((result) => {
-        // Another invalidation can join the same admitted bootstrap task.
-        // Its completion must include the current catalog generation.
-        return host.connection.isCurrent(scope) && generation !== loadGeneration ? load() : result;
+        // Bootstrap coalesces invalidations into this task. Start a successor only
+        // when no other consumer has already loaded or retained the replacement.
+        return host.connection.isCurrent(scope) &&
+          pendingLoad === null &&
+          loadedEpoch === -1 &&
+          defaultsStatus === "loading"
+          ? load()
+          : result;
       })
       .finally(() => {
         if (pendingLoad === promise) {
@@ -323,7 +291,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   return {
     delete: remove,
     dispose,
-    generation: () => catalogGeneration,
     invalidate,
     load,
     put,

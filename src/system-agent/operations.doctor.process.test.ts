@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -8,6 +9,7 @@ import {
   registerSealedRuntimeProcessEntrypoint,
   resolveRuntimeProcessEntrypointUrl,
 } from "../infra/runtime-process-url.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { executeSystemAgentOperation } from "./operations-execute.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
@@ -63,4 +65,49 @@ process.stderr.write("doctor diagnostic 🦞\\n");
     await listener.releaseListener();
     await listener.claim.release();
   }
+});
+
+it("reports hosted Doctor findings without initializing or repairing operator state", async () => {
+  await withOpenClawTestState(
+    {
+      label: "hosted-doctor-readonly",
+      layout: "split",
+      scenario: "external-service",
+      // Compiled test workers can still resolve the checkout's source Plugin SDK.
+      env: {
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(path.resolve("scripts/tsx.mjs")).href}`,
+      },
+    },
+    async (state) => {
+      await state.writeConfig({
+        agents: { entries: {} },
+        plugins: { enabled: false },
+        memory: { search: { enabled: false } },
+      });
+      const snapshot = () =>
+        fs
+          .readdirSync(state.root, { recursive: true, encoding: "utf8" })
+          .toSorted()
+          .map((relative) => {
+            const filename = path.join(state.root, relative);
+            const stat = fs.statSync(filename, { bigint: true });
+            return {
+              path: relative,
+              sha256: stat.isFile()
+                ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
+                : undefined,
+              mtimeNs: stat.isFile() ? stat.mtimeNs : undefined,
+            };
+          });
+      const before = snapshot();
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      // Findings are expected (gateway.mode is unset); nonzero lint is not a repair.
+      await expect(executeSystemAgentOperation({ kind: "doctor" }, runtime)).rejects.toThrow(
+        "exit 1",
+      );
+      expect(snapshot()).toEqual(before);
+      expect(lines.join("\n")).toContain("core/doctor/gateway-config");
+      expect(lines.join("\n")).toContain("gateway.mode is unset");
+    },
+  );
 });

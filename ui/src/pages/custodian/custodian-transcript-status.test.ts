@@ -248,10 +248,12 @@ describe("custodian transcript status", () => {
     setGatewaySnapshot({ suspensionPhase: "draining" });
     setGatewaySnapshot({ suspensionPhase: "accepting" });
     await page.updateComplete;
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.chat.history",
-      "openclaw.chat",
-    ]);
+    await waitForFast(() =>
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "openclaw.chat.history",
+        "openclaw.chat",
+      ]),
+    );
 
     welcome.resolve({
       sessionId: "wizard-session",

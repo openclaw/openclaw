@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
 import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
@@ -19,7 +20,11 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
+import {
+  focusChatSidePanel,
+  openChatSidePanelType,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -541,10 +546,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     }
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    await page
-      .locator(".chat-pane__header")
-      .getByRole("button", { name: "Restore split", exact: true })
-      .click();
+    await selectChatLayoutAction(page, "Restore split");
     await expectRetainedBoardPresentation(page, "split");
     await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
@@ -558,10 +560,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     if (artifactDir) {
       await page.screenshot({ path: `${artifactDir}/04-note-before-minimize.png` });
     }
-    await sidePanel
-      .locator('[data-region-header="side"]')
-      .getByRole("button", { name: "Close", exact: true })
-      .click();
+    await selectChatLayoutAction(page, "Minimize side panel");
     await page.locator(".chat-thread").waitFor();
     await expect
       .poll(() => readBoardIdentity(page))
@@ -571,7 +570,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         inert: true,
         same: true,
       });
-    await page.locator(".chat-side-panel-toggle").click();
+    await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
     await draftNote.waitFor();
     if (artifactDir) {
       await page.screenshot({ path: `${artifactDir}/05-note-after-reopen.png` });
@@ -579,12 +578,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
     await expectRetainedBoardPresentation(page, "split");
 
-    const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");
-    await typeMenu.getByRole("button", { name: "Add side panel tab" }).click();
-    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Files" }).click();
-    await expect
-      .poll(() => typeMenu.evaluate((element) => Reflect.get(element, "open")))
-      .toBe(false);
+    await openChatSidePanelType(page, "Files");
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
@@ -599,10 +593,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
     await expectRetainedBoardPresentation(page, "expanded");
     await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
-    await sidePanel
-      .locator('[data-region-header="side"]')
-      .getByRole("button", { name: "Restore split", exact: true })
-      .click();
+    await selectChatLayoutAction(page, "Restore split");
     await expectRetainedBoardPresentation(page, "split");
     await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
     if (artifactDir) {

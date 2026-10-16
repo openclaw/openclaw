@@ -248,7 +248,7 @@ export async function createOAuthVerifiedBinding(
     auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
     deps: {
       ...harnessBinding.deps,
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
         version: 1,
         profiles: { [profileId]: credential },
       })) as never,
@@ -468,3 +468,4 @@ export { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js"
 export type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 export { RuntimeSystemAgentChatEngine };
 export { mocks };
+export { operationMocks } from "./chat-engine.mocks.test-support.js";

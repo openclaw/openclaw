@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
@@ -22,18 +23,14 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const PACKAGE_NAME = "@openclaw/discord";
 const PLUGIN_ID = "discord";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 /** Writes a managed plugin version into an `__openclaw-generation__` dir. */
 function writeManagedGeneration(params: {
@@ -87,12 +84,6 @@ function setInstallTimestamp(packageDir: string, timestampMs: number): void {
   fs.utimesSync(path.join(packageInfo.projectRoot, "package.json"), timestamp, timestamp);
   fs.utimesSync(packageInfo.projectRoot, timestamp, timestamp);
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-  clearLoadInstalledPluginIndexInstallRecordsCache();
-});
 
 describe("managed npm generation-dir loader precedence", () => {
   it("matches the authoritative generation case-insensitively on Windows", async () => {

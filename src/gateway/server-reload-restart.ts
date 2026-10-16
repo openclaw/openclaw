@@ -3,15 +3,12 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
 import { setRuntimeConfigAppliedHash } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
-import type { GatewayRestartIntent } from "../infra/restart-intent.js";
 import {
   deferGatewayRestartUntilIdle,
   type RestartDeferralHandle,
   setGatewayRestartPolicy,
 } from "../infra/restart.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import type { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
@@ -25,8 +22,6 @@ import {
   type GatewayRestartTransactionState,
 } from "./server-reload-contracts.js";
 import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js";
-
-const RESTART_EMISSION_RETRY_MS = 1_000;
 
 type RestartRequestDetails = {
   plan: GatewayReloadPlan;
@@ -74,8 +69,7 @@ type GatewayRestartCoordinatorOptions = {
 >;
 
 class GatewayRestartTransaction {
-  private readonly retryLifetime = new AbortController();
-  private retryJob: GatewayScheduledJob | null = null;
+  private stopped = false;
   private restartDeferral: RestartDeferralHandle | null = null;
   private requestGeneration = 0;
   // onReady/onTimeout precede async restart preparation. Keep committed details
@@ -97,7 +91,7 @@ class GatewayRestartTransaction {
 
   constructor(private readonly options: GatewayRestartCoordinatorOptions) {}
 
-  readonly isStopped = () => this.retryLifetime.signal.aborted;
+  readonly isStopped = () => this.stopped;
   readonly hasPendingConfigCandidate = () => this.acceptedTargetState.kind === "candidate-pending";
   readonly hasOperation = () => this.operation.kind !== "idle";
   readonly getAcceptedTarget = (): AcceptedRestartTarget | null =>
@@ -253,7 +247,7 @@ class GatewayRestartTransaction {
   }
 
   stop(): void {
-    this.retryLifetime.abort();
+    this.stopped = true;
     this.pausedDebt = null;
     this.conservativeDebt = null;
     this.supersedeRequest();
@@ -310,66 +304,7 @@ class GatewayRestartTransaction {
     this.requestGeneration += 1;
     this.restartDeferral?.cancel();
     this.restartDeferral = null;
-    this.retryJob?.cancel();
-    this.retryJob = null;
     this.operation = { kind: "idle" };
-  }
-
-  private scheduleEmissionRetry(retry: {
-    reason: string;
-    intent?: GatewayRestartIntent;
-    requestGeneration: number;
-    prepareForEmit?: () => Promise<boolean>;
-  }): void {
-    if (this.retryJob || !this.isCurrentRequest(retry.requestGeneration)) {
-      return;
-    }
-    // Retry the exact failed emission. Re-entering request planning would start
-    // a fresh idle deferral and discard a timeout's force/deadline decision.
-    this.retryJob = this.options.params.scheduler.schedule({
-      id: "config:restart-retry",
-      delayMs: RESTART_EMISSION_RETRY_MS,
-      run: () => {
-        this.retryJob = null;
-        if (!this.isCurrentRequest(retry.requestGeneration)) {
-          return undefined;
-        }
-        // Timer callbacks outlive the config transaction root. Re-enter process
-        // admission so prepared host suspension cannot race signal delivery.
-        return runWithGatewayIndependentRootWorkAdmission(
-          async () => {
-            if (!this.isCurrentRequest(retry.requestGeneration)) {
-              return;
-            }
-            if (retry.prepareForEmit && !(await retry.prepareForEmit())) {
-              this.scheduleEmissionRetry(retry);
-              return;
-            }
-            if (!this.isCurrentRequest(retry.requestGeneration)) {
-              return;
-            }
-            const emitResult = this.options.params.requestRecoveryRestart?.(
-              retry.reason,
-              retry.intent,
-            );
-            if (emitResult && emitResult.status !== "failed") {
-              this.markEmissionSettled();
-            }
-            if (!emitResult || emitResult.status === "failed") {
-              this.scheduleEmissionRetry(retry);
-            }
-          },
-          "reload:restart",
-          AbortSignal.any([this.retryLifetime.signal, this.options.params.scheduler.signal]),
-        ).catch((err: unknown) => {
-          if (this.isCurrentRequest(retry.requestGeneration)) {
-            this.options.params.logReload.warn(
-              `gateway restart recovery retry stopped: ${String(err)}`,
-            );
-          }
-        });
-      },
-    });
   }
 
   private requestForGeneration(
@@ -396,6 +331,7 @@ class GatewayRestartTransaction {
     }
     const requestRecoveryRestart = params.requestRecoveryRestart;
     let emissionPrepared = true;
+    let preparing = false;
     const prepareForEmit = async () => {
       try {
         await params.assertRestartReady?.(nextConfig);
@@ -430,62 +366,59 @@ class GatewayRestartTransaction {
         params.logReload.warn(`config change requires gateway restart (${reasons}) — preparing`);
       }
 
-      let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
       // Timeout and failed checks leave a live deferral owned by this request.
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
         reason: restartReason,
-        emitHooks: {
-          beforeEmit: async () => {
+        // Preparation can wait for the plugin lifecycle lease, whose holders need
+        // root admission; the deferral runs it before taking the signal fence.
+        prepareEmission: async () => {
+          preparing = true;
+          try {
             emissionPrepared = await prepareForEmit();
-          },
+          } finally {
+            preparing = false;
+          }
+        },
+        emitHooks: {
           emitRestart: (reason, intent) => {
             if (!this.isCurrentRequest(requestGeneration)) {
               return { status: "coalesced" };
             }
             const resolvedReason = reason ?? restartReason;
             if (!emissionPrepared) {
-              failedEmission = { reason: resolvedReason, intent };
+              params.logReload.warn(
+                "gateway restart preparation failed; reapply the config or restart the Gateway manually",
+              );
               return { status: "failed" };
             }
             const emitResult = requestRecoveryRestart(resolvedReason, intent);
             if (emitResult.status !== "failed") {
               this.markEmissionSettled();
+            } else {
+              params.logReload.warn(
+                "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
+              );
             }
-            failedEmission =
-              emitResult.status === "failed" ? { reason: resolvedReason, intent } : undefined;
             return emitResult;
-          },
-          afterEmitFailed: async () => {
-            if (!this.isCurrentRequest(requestGeneration) || !failedEmission) {
-              return;
-            }
-            if (!this.options.restartRecoveryAvailable) {
-              params.logReload.warn("gateway restart recovery unavailable; retry skipped");
-              return;
-            }
-            params.logReload.warn("gateway restart recovery emission failed; retrying");
-            this.scheduleEmissionRetry({
-              ...failedEmission,
-              requestGeneration,
-              prepareForEmit,
-            });
           },
         },
         hooks: {
           onReady: () => {
             this.restartDeferral = null;
-            params.logReload.info("all operations and replies completed; restarting gateway now");
+            if (this.operation.kind === "request" && this.operation.emissionSettled) {
+              params.logReload.info("all operations and replies completed; restarting gateway now");
+            }
           },
           onStillPending: (_pending, elapsedMs) => {
             params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("active")}`,
+              `restart still deferred after ${elapsedMs}ms with ${preparing ? "restart preparation pending; " : ""}${this.options.formatDeferredWorkStatus("active")}`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
-            // Keep the handle until delivery or cancellation; forced attempts may retry.
+            // Keep the handle until preparation settles or the request is cancelled.
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
@@ -509,14 +442,9 @@ class GatewayRestartTransaction {
       this.markEmissionSettled();
     }
     if (emitResult.status === "failed") {
-      params.logReload.warn("gateway restart recovery emission failed");
-      if (this.options.restartRecoveryAvailable) {
-        this.scheduleEmissionRetry({
-          reason: restartReason,
-          requestGeneration,
-          prepareForEmit,
-        });
-      }
+      params.logReload.warn(
+        "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
+      );
       return false;
     }
     if (emitResult.status === "coalesced") {

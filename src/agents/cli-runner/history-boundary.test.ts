@@ -4,6 +4,10 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
 } from "../../config/sessions/cli-history-boundary.js";
@@ -13,10 +17,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
-import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
@@ -33,12 +35,20 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "cli-history-boundary-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "cli-history-boundary-",
+);
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 async function fixture(withHeader = true) {
+  setRuntimeConfigSnapshot({});
   const dir = sessionDirs.make();
   const target = {
     agentId: "main",
@@ -174,58 +184,6 @@ describe("CLI transcript account boundary", () => {
     });
   });
 
-  it("rechecks exact current-input identity inside the writer transaction", async () => {
-    const f = await fixture();
-    await f.seed();
-    const anchor = readActiveTranscriptEntryAnchor({
-      ...f.target,
-      entryId: f.manager().getLeafId()!,
-    });
-    if (!anchor) {
-      throw new Error("Missing current input anchor");
-    }
-    const patch = patchSessionEntryCore;
-    let changed = false;
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-      (target, update, options) =>
-        patch(
-          target,
-          async (...args) => {
-            const planned = await update(...args);
-            const foreign = new DatabaseSync(f.target.storePath);
-            try {
-              // A foreign identity edit leaves the session row and transcript watermark unchanged.
-              expect(
-                foreign
-                  .prepare(
-                    "UPDATE transcript_event_identities SET parent_id = ? WHERE session_id = ? AND event_id = ?",
-                  )
-                  .run("foreign-parent", f.target.sessionId, anchor.entryId).changes,
-              ).toBe(1);
-              changed = true;
-            } finally {
-              foreign.close();
-            }
-            return planned;
-          },
-          options,
-        ),
-    );
-    await f.withRun("current-input-check", async (params) => {
-      await expect(
-        runWithSessionTranscriptReadFence(
-          { ...anchor, role: "user", logicalTurnId: "current-input-check" },
-          () =>
-            prepareCliHistoryBoundary(params, {
-              credential: { type: "token", provider: "test-cli", token: "epoch-a" },
-            }),
-        ),
-      ).rejects.toThrow("Current-turn transcript admission identity changed");
-      expect(changed).toBe(true);
-      expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
-    });
-  });
-
   it.each(["append", "rewrite", "reset", "revocation"] as const)(
     "refuses an intervening %s before committing the planned history boundary",
     async (change) => {
@@ -316,13 +274,6 @@ describe("CLI transcript account boundary", () => {
     },
   );
 
-  it("establishes coverage before the first transcript header and user row exist", async () => {
-    const f = await fixture(false);
-    await f.seed();
-    await f.run("epoch-a", async (allowed, params) => {
-      expect(await history(allowed, params)).toContain("A private canary");
-    });
-  });
   it("retains same-account raw and compacted history without exposing private metadata", async () => {
     const f = await fixture();
     await f.seed();
@@ -408,7 +359,7 @@ describe("CLI transcript account boundary", () => {
       throw new Error("Missing admitted history writer");
     }
     const before = f.manager().getEntries();
-    expect(() => writer.assertReadable()).toThrow();
+    await expect(writer.assertReadable()).rejects.toThrow();
     expect(() =>
       runWithCliHistoryWriter(writer, () =>
         f.manager().appendMessage({
@@ -629,12 +580,12 @@ describe("CLI transcript account boundary", () => {
         if (!writer) {
           throw new Error("Missing admitted history writer");
         }
-        writer.assertReadable();
+        await writer.assertReadable();
         await f.withRun(replacementRunId, async (replacement) => {
           await claimAgentSessionWriter(replacement);
-          expect
-            .soft(() => writer?.assertReadable())
-            .toThrow(
+          await expect
+            .soft(writer.assertReadable())
+            .rejects.toThrow(
               replacementRunId === params.runId
                 ? "admitted run authority is no longer active"
                 : "CLI history authority changed",

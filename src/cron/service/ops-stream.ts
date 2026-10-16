@@ -1,21 +1,19 @@
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
+import { createCronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly } from "../store/read-only.js";
 import type {
   CronRuntimeMutationContracts,
   CronExternalStateChange,
 } from "../store/runtime-worker.types.js";
-import {
-  CronStreamSourceRetirementError,
-  createCronStreamSourceIdentity,
-  ownsStreamSource,
-} from "../stream-schedule.js";
+import { CronStreamSourceRetirementError } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
+import { refreshCronScheduler } from "./scheduler-actor.js";
 import type { CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,
@@ -23,7 +21,6 @@ import {
   runPostPersistCronNotifications,
 } from "./store.js";
 import { emitCronRunFinished } from "./timer-outcome-events.js";
-import { armTimer } from "./timer.js";
 
 type ExternalOutcome = CronRuntimeMutationContracts["cron.mutateExternalState"]["outcome"];
 
@@ -42,7 +39,7 @@ async function mutateExternalState(
       const job = findJobOrThrow(state, jobId);
       if (
         change.source &&
-        !ownsStreamSource(job, change.source.scheduleKey, change.source.identity)
+        !ownsCronSource(job, change.source.scheduleKey, change.source.identity)
       ) {
         return undefined;
       }
@@ -111,10 +108,10 @@ async function mutateExternalState(
         if (change.kind === "failure") {
           for (const notification of committed.notifications) {
             source.assertCurrent();
-            runPostPersistCronNotifications(state, [notification]);
+            await runPostPersistCronNotifications(state, [notification]);
           }
           source.assertCurrent();
-          armTimer(state);
+          refreshCronScheduler(state);
         }
       }
     } catch (error) {
@@ -133,10 +130,7 @@ async function mutateExternalState(
           );
           source.assertStorageCurrent();
           const current = loaded.store.jobs.find((job) => job.id === jobId);
-          if (
-            current &&
-            ownsStreamSource(current, change.source.scheduleKey, change.nextIdentity)
-          ) {
+          if (current && ownsCronSource(current, change.source.scheduleKey, change.nextIdentity)) {
             retiredIdentity = change.nextIdentity;
             applyCronRuntimeRowsToState(state, [current]);
           }
@@ -197,7 +191,7 @@ export async function retireExternalStreamSource(
   const job = await mutateExternalState(state, id, {
     kind: "retire",
     source: { scheduleKey, identity },
-    nextIdentity: createCronStreamSourceIdentity(),
+    nextIdentity: createCronSourceIdentity(),
   });
   return job?.state.streamSourceIdentity;
 }

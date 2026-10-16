@@ -13,13 +13,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
   useSessionStoreTempDirs,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, vi, type Mock } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
+import * as telegramSessionRuntime from "./bot-message-context.session.runtime.js";
+import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
@@ -142,7 +146,7 @@ const defaultRuntimeConfig = (() =>
   ({
     messages: { inbound: { debounceMs: 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-  }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
+  }) as OpenClawConfig) as TelegramBotFixtureMocks["getRuntimeConfig"];
 
 function installTopicNameRuntimeForTest(): void {
   setTelegramRuntime({
@@ -211,17 +215,23 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
-export const telegramBotDepsForTest: TelegramBotDeps = {
+export const telegramBotDepsForTest: TelegramBotFixtureMocks = {
+  ...telegramDirectDeliveryDepsForTest,
+  ...telegramSessionRuntime,
+  getSessionEntryAsync,
+  readSessionUpdatedAtAsync: async () => undefined,
   getRuntimeConfig: defaultRuntimeConfig,
   resolveStorePath: vi.fn(
     (storePath?: string) => storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
-  ) as TelegramBotDeps["resolveStorePath"],
-  readChannelAllowFromStore: vi.fn(async () => []) as TelegramBotDeps["readChannelAllowFromStore"],
+  ) as TelegramBotFixtureMocks["resolveStorePath"],
+  readChannelAllowFromStore: vi.fn(
+    async () => [],
+  ) as TelegramBotFixtureMocks["readChannelAllowFromStore"],
   upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
-  })) as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueRoutedSystemEvent: vi.fn() as TelegramBotDeps["enqueueRoutedSystemEvent"],
+  })) as TelegramBotFixtureMocks["upsertChannelPairingRequest"],
+  enqueueRoutedSystemEvent: vi.fn() as TelegramBotFixtureMocks["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
   buildModelsProviderData: vi.fn(async () => ({
     byProvider: new Map<string, Set<string>>(),
@@ -229,12 +239,76 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     resolvedDefault: { provider: "openai", model: "gpt-4.1" },
     modelNames: new Map<string, string>(),
     modelCatalog: [],
-  })) as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents: vi.fn(() => []) as TelegramBotDeps["listSkillCommandsForAgents"],
-  wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+  })) as TelegramBotFixtureMocks["buildModelsProviderData"],
+  prepareSkillCommandsForAgents: vi.fn(
+    async () => [],
+  ) as TelegramBotFixtureMocks["prepareSkillCommandsForAgents"],
+  wasSentByBot: vi.fn(() => false) as TelegramBotFixtureMocks["wasSentByBot"],
 };
 
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>()),
+  // This harness proves the direct-delivery fallback, not durable owner admission.
+  deliverStructuredInboundReplyWithMessageSendContext: async () => ({
+    status: "unsupported",
+    reason: "missing_outbound_handler",
+  }),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: (...args: Parameters<TelegramBotFixtureMocks["getRuntimeConfig"]>) =>
+    telegramBotDepsForTest.getRuntimeConfig(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  resolveStorePath: (...args: Parameters<TelegramBotFixtureMocks["resolveStorePath"]>) =>
+    telegramBotDepsForTest.resolveStorePath(...args),
+  readSessionUpdatedAtAsync: (
+    ...args: Parameters<TelegramBotFixtureMocks["readSessionUpdatedAtAsync"]>
+  ) => telegramBotDepsForTest.readSessionUpdatedAtAsync(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: (
+    ...args: Parameters<TelegramBotFixtureMocks["readChannelAllowFromStore"]>
+  ) => telegramBotDepsForTest.readChannelAllowFromStore(...args),
+  upsertChannelPairingRequest: (
+    ...args: Parameters<TelegramBotFixtureMocks["upsertChannelPairingRequest"]>
+  ) => telegramBotDepsForTest.upsertChannelPairingRequest(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: (
+    ...args: Parameters<TelegramBotFixtureMocks["enqueueRoutedSystemEvent"]>
+  ) => telegramBotDepsForTest.enqueueRoutedSystemEvent(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: (
+    ...args: Parameters<TelegramBotFixtureMocks["buildModelsProviderData"]>
+  ) => telegramBotDepsForTest.buildModelsProviderData(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForAgents: (
+    ...args: Parameters<TelegramBotFixtureMocks["prepareSkillCommandsForAgents"]>
+  ) => telegramBotDepsForTest.prepareSkillCommandsForAgents(...args),
+}));
+
+vi.mock("./sent-message-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
+  wasSentByBot: (...args: Parameters<TelegramBotFixtureMocks["wasSentByBot"]>) =>
+    telegramBotDepsForTest.wasSentByBot(...args),
+}));
+
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   // Gateway starts the bot after registering this hook; direct harness construction must
   // preserve that boundary so topic routing does not bootstrap bundled plugins mid-turn.
   setActivePluginRegistry(
@@ -277,6 +351,7 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+  clearRuntimeConfigSnapshot();
 });
 
 vi.doMock("./bot.runtime.js", () => ({
@@ -325,18 +400,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
     );
   },
 }));
-
-vi.doMock("./bot-message-context.session.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
-    "./bot-message-context.session.runtime.js",
-  );
-  return {
-    ...actual,
-    readSessionUpdatedAtAsync: async () => undefined,
-    resolveStorePath: (storePath?: string) =>
-      storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
-  };
-});
 
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),

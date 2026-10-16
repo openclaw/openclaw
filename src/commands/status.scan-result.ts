@@ -54,21 +54,16 @@ export function buildStatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 >(
   params: Omit<StatusScanResult<AgentStatus>, keyof StatusScanGatewayResult> & {
-    gatewaySnapshot: StatusScanGatewayResult;
+    gatewaySnapshot: StatusScanOverviewResult["gatewaySnapshot"];
   },
 ): StatusScanResult<AgentStatus> {
   const { gatewaySnapshot, advertisedControlUiLinks, ...result } = params;
+  const { gatewayCallOverrides: _gatewayCallOverrides, ...gateway } = gatewaySnapshot;
   return {
     ...result,
     ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
-    gatewayConnection: gatewaySnapshot.gatewayConnection,
-    remoteUrlMissing: gatewaySnapshot.remoteUrlMissing,
-    gatewayMode: gatewaySnapshot.gatewayMode,
-    gatewayProbeAuth: gatewaySnapshot.gatewayProbeAuth,
+    ...gateway,
     gatewayProbeAuthWarning: gatewaySnapshot.gatewayProbeAuthWarning,
-    gatewayProbe: gatewaySnapshot.gatewayProbe,
-    gatewayReachable: gatewaySnapshot.gatewayReachable,
     localGatewayHealthy: gatewaySnapshot.localGatewayHealthy,
-    gatewaySelf: gatewaySnapshot.gatewaySelf,
   };
 }

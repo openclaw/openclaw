@@ -61,6 +61,7 @@ describe("runHeartbeatOnce", () => {
           expect.any(String),
           expect.any(Object),
         );
+        expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
       },
       { prefix: "openclaw-hb-" },
     );

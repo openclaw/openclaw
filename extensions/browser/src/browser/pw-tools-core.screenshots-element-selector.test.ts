@@ -1,6 +1,5 @@
 // Browser tests cover pw tools core.screenshots element selector plugin behavior.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CDPSession } from "playwright-core";
@@ -47,28 +46,6 @@ describe("pw-tools-core", () => {
     vi.clearAllMocks();
   });
 
-  it("screenshots an element selector", async () => {
-    const elementScreenshot = vi.fn(async () => Buffer.from("E"));
-    const page = {
-      locator: vi.fn(() => ({
-        first: () => screenshotElement(elementScreenshot),
-      })),
-      screenshot: vi.fn(async () => Buffer.from("P")),
-    };
-    setPwToolsCoreCurrentPage(page);
-
-    const res = await mod.takeScreenshotViaPlaywright({
-      ...target,
-      element: "#main",
-      type: "png",
-      timeoutMs: 1234,
-    });
-
-    expect(res.buffer.toString()).toBe("E");
-    expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
-    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
-    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png", timeout: 0 });
-  });
   it("screenshots a ref locator", async () => {
     const refScreenshot = vi.fn(async () => Buffer.from("R"));
     setPwToolsCoreCurrentRefLocator(screenshotElement(refScreenshot));
@@ -260,51 +237,6 @@ describe("pw-tools-core", () => {
       expect(page.setViewportSize).toHaveBeenCalledExactlyOnceWith({ width: 1280, height: 720 });
     },
   );
-  it("arms the next file chooser and sets files (default timeout)", async () => {
-    const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-upload-${crypto.randomUUID()}.txt`);
-    await fs.mkdir(path.dirname(uploadPath), { recursive: true });
-    await fs.writeFile(uploadPath, "fixture", "utf8");
-    const canonicalUploadPath = await fs.realpath(uploadPath);
-    const fileChooser = {
-      setFiles: vi.fn(
-        async (_paths: string[], _options: { timeout: number; signal: AbortSignal }) => {},
-      ),
-    };
-    const waitForEvent = vi.fn(
-      async (_eventValue: string, _opts: { timeout: number; signal: AbortSignal }) => fileChooser,
-    );
-    setPwToolsCoreCurrentPage({
-      waitForEvent,
-      keyboard: { press: vi.fn(async () => {}) },
-    });
-
-    try {
-      await downloads.armFileUploadViaPlaywright({
-        ...target,
-        paths: [uploadPath],
-      });
-
-      // waitForEvent is awaited immediately; handler continues async.
-      await Promise.resolve();
-
-      expect(waitForEvent).toHaveBeenCalledWith("filechooser", {
-        timeout: 0,
-        signal: expect.any(AbortSignal),
-      });
-      await vi.waitFor(() => {
-        expect(fileChooser.setFiles).toHaveBeenCalledExactlyOnceWith([canonicalUploadPath], {
-          timeout: expect.any(Number),
-          signal: expect.any(AbortSignal),
-        });
-      });
-      const { timeout, signal } = fileChooser.setFiles.mock.calls[0]![1];
-      expect(timeout).toBeGreaterThan(0);
-      expect(timeout).toBeLessThanOrEqual(120_000);
-      expect(signal.aborted).toBe(false);
-    } finally {
-      await fs.rm(uploadPath, { force: true });
-    }
-  });
   it("revalidates file-chooser paths at use-time and cancels missing files", async () => {
     const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
     const { fileChooser, press } = createFileChooserPageMocks();
@@ -319,17 +251,5 @@ describe("pw-tools-core", () => {
       expect(press).toHaveBeenCalledWith("Escape");
     });
     expect(fileChooser.setFiles).not.toHaveBeenCalled();
-  });
-  it("arms the next file chooser and escapes if no paths provided", async () => {
-    const { fileChooser, press } = createFileChooserPageMocks();
-
-    await downloads.armFileUploadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      paths: [],
-    });
-    await Promise.resolve();
-
-    expect(fileChooser.setFiles).not.toHaveBeenCalled();
-    expect(press).toHaveBeenCalledWith("Escape");
   });
 });

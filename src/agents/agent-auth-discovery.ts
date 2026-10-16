@@ -15,8 +15,8 @@ import {
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./auth-profiles/ambient-auth.js";
 import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -154,10 +154,10 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   return credentials;
 }
 
-export function resolveAgentDiscoveryAuthFacts(
+export async function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): { store: AuthProfileStore; credentials: AgentCredentialMap } {
+): Promise<{ store: AuthProfileStore; credentials: AgentCredentialMap }> {
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
@@ -167,12 +167,12 @@ export function resolveAgentDiscoveryAuthFacts(
   const store = options?.preparedStore
     ? options.preparedStore
     : options?.skipExternalAuthProfiles === true
-      ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
           allowKeychainPrompt: false,
           ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         })
-      : ensureAuthProfileStore(agentDir, {
+      : await ensureAuthProfileStoreAsync(agentDir, {
           ...storeOptions,
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         });

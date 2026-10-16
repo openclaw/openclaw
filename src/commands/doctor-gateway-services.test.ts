@@ -6,7 +6,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ServiceConfigAudit } from "../daemon/service-audit.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   makeDoctorIo,
   makeDoctorPrompts,
@@ -33,16 +33,14 @@ await vi.hoisted(() => import("./doctor-gateway-services.native.test-support.js"
 
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalPlatform = process.platform;
-const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-const originalParentSupportsConfigWrite =
-  process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
-const originalParentSupportsGatewayRestart =
-  process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART;
-const originalParentAllowsGatewayServiceRepair =
-  process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR;
-const originalParentAllowsGatewayActivation =
-  process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION;
+const savedEnv = captureEnv([
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_UPDATE_IN_PROGRESS",
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART",
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION",
+]);
 
 async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
   await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), {
@@ -182,40 +180,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     mockProcessPlatform(originalPlatform);
-    if (originalGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
-    }
-    if (originalUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
-    }
-    if (originalParentSupportsConfigWrite === undefined) {
-      delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
-    } else {
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE =
-        originalParentSupportsConfigWrite;
-    }
-    if (originalParentSupportsGatewayRestart === undefined) {
-      delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART;
-    } else {
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART =
-        originalParentSupportsGatewayRestart;
-    }
-    if (originalParentAllowsGatewayServiceRepair === undefined) {
-      delete process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR;
-    } else {
-      process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR =
-        originalParentAllowsGatewayServiceRepair;
-    }
-    if (originalParentAllowsGatewayActivation === undefined) {
-      delete process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION;
-    } else {
-      process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION =
-        originalParentAllowsGatewayActivation;
-    }
+    savedEnv.restore();
   });
 
   it("reports a passing vendor runtime note without rewriting the service", async () => {

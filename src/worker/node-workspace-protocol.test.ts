@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
+  NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
   NODE_WORKSPACE_QUIESCENCE_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
   parseNodeWorkerWorkspaceExecResult,
@@ -266,5 +267,28 @@ it("keeps foreground ownership opt-in and rejects combining operation owners", (
     },
   ]) {
     expect(() => parse({ ...foreground, ...conflicting })).toThrow();
+  }
+});
+
+it("preserves device-folder requests and rejects managed mutations and malformed validation", () => {
+  expect(
+    parse({
+      deviceFolder: "/projects/example",
+      argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
+    }).deviceFolder,
+  ).toBe("/projects/example");
+  for (const extra of [
+    { deviceFolder: "" },
+    { deviceFolder: "/projects/example", resetWorkspace: false },
+    { deviceFolder: "/projects/example", seed: { action: "apply", key } },
+    { deviceFolder: "/projects/example", preparationKey: key },
+    { argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND] },
+    {
+      deviceFolder: "/projects/example",
+      argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
+      input: "x",
+    },
+  ]) {
+    expect(() => parse(extra)).toThrow("INVALID_REQUEST");
   }
 });

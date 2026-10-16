@@ -7,7 +7,11 @@ import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { CommandProcessCleanupError, hasCommandProcessCleanupError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
-import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
+import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+  spawnCommand,
+  withCommandProcessScope,
+} from "./exec-spawn.js";
 import { runExec } from "./exec.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
@@ -200,31 +204,42 @@ describe("command scope physical settlement", () => {
     },
   );
 
-  it("refuses Doctor-style input admission when custody binding fails", async () => {
-    const fixture = commandFixture();
-    fixture.child.stdin = new PassThrough();
-    const beforeInput = vi.fn();
-    const reservation = {
-      spawned: vi.fn(() => {
-        throw new Error("custody receipt unavailable");
-      }),
-      settled: vi.fn(),
-    };
-    const scope = ownScope(
-      async () => {
-        await runCommandWithTimeout(["fixture"], { input: "private input", beforeInput });
-      },
-      { reserve: () => reservation },
-    );
-    const outcome = scope.catch((error: unknown) => error);
-    fixture.open();
-    await setImmediate();
-    fixture.finish();
-    fixture.cleanup.resolve("forced");
-    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
-    expect(beforeInput).not.toHaveBeenCalled();
-    expect(reservation.settled).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "refuses input after failed binding and settles only extinct groups: %s",
+    async (live) => {
+      const fixture = commandFixture();
+      fixture.child.stdin = new PassThrough();
+      const beforeInput = vi.fn();
+      const reservation = {
+        spawned: vi.fn(() => {
+          throw new Error("custody receipt unavailable");
+        }),
+        settled: vi.fn(),
+      };
+      const scope = ownScope(
+        async () => {
+          await runCommandWithTimeout(["fixture"], { input: "private input", beforeInput });
+        },
+        { reserve: () => reservation },
+      );
+      const outcome = scope.catch((error: unknown) => error);
+      if (live) {
+        vi.useFakeTimers();
+        vi.spyOn(process, "kill").mockReturnValue(true);
+      }
+      fixture.open();
+      await setImmediate();
+      fixture.finish();
+      fixture.cleanup.resolve("forced");
+      if (live) {
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
+        vi.useRealTimers();
+      }
+      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      expect(beforeInput).not.toHaveBeenCalled();
+      expect(reservation.settled).toHaveBeenCalledTimes(live ? 0 : 1);
+    },
+  );
 
   it.each(["forced", "uncertain"] as const)(
     "keeps bounded results pending until %s scope cleanup",
@@ -301,8 +316,40 @@ it.skipIf(process.platform === "win32")(
     fixture.open();
     fixture.finish();
     try {
-      await vi.advanceTimersByTimeAsync(301);
+      await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
       expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "confirms a closed raw command group that outlives the cooperative grace",
+  async () => {
+    vi.useFakeTimers();
+    const disappearsAt = Date.now() + 1_000;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("synthetic group probe"), {
+        code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+      });
+    });
+    const fixture = commandFixture();
+    const reservation = { spawned: vi.fn(), settled: vi.fn() };
+    const scope = ownScope(
+      async () => {
+        await spawnCommand(["fixture"], { reject: false });
+      },
+      { reserve: () => reservation },
+    );
+    fixture.open();
+    fixture.finish();
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(reservation.settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(scope).resolves.toBeUndefined();
+      expect(reservation.settled).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

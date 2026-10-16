@@ -1,3 +1,4 @@
+import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   resolveCompactionReplayEligibility,
@@ -13,11 +14,14 @@ import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
+import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -35,6 +39,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -148,10 +153,9 @@ export async function settleEmbeddedAttemptStream(input: {
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
-  const wasCompactingBefore = activeSession.isCompacting;
+  const wasCompacting = activeSession.isCompacting;
   const snapshot = activeSession.messages.slice();
-  const wasCompactingAfter = activeSession.isCompacting;
-  const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+  const preCompactionSnapshot = wasCompacting ? null : snapshot;
   const preCompactionSessionId = activeSession.sessionId;
   const aggregateTimeoutMs = 60_000;
 
@@ -338,6 +342,9 @@ export async function settleEmbeddedAttemptStream(input: {
               error: formatErrorMessage(state.promptError),
             });
           } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
           }
         }
@@ -435,6 +442,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvePreparedExtraParams({
       ...extraParamsContext,
       cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
       provider: attempt.provider,
       modelId: attempt.modelId,
       providerRuntimeHandle: input.getProviderRuntimeHandle(),
@@ -443,37 +451,16 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
-    cfg: attempt.config,
+    cfg: attempt.transportConfig ?? attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     auth,
   });
-  const directProviderStreamFn = providerStreamFn
-    ? wrapStreamFnWithMessageTransform(
-        providerStreamFn,
-        (messages) => messages,
-        async ({ context, ...provider }) => {
-          assertRunCurrent?.();
-          const prepared = await materializeProviderContext({
-            ...provider,
-            context,
-            workspaceDir: input.workspaceDir,
-            agentWorkspaceDir: attempt.workspaceDir,
-            workspaceOnly: input.workspaceOnly,
-            localRoots: input.workspaceOnly
-              ? undefined
-              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
-            onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-            sandbox:
-              input.sandbox?.enabled && input.sandbox.fsBridge
-                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
-                : undefined,
-          });
-          assertRunCurrent?.();
-          return prepared;
-        },
-      )
-    : undefined;
+  const sessionFork = {
+    runId: attempt.runId,
+    sessionId: attempt.sessionId,
+    agentId: input.sessionAgentId,
+  };
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -485,7 +472,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
     wrapApiKey,
   } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
+    providerStreamFn: providerStreamFn
+      ? wrapStreamFnWithSessionFork(providerStreamFn, sessionFork)
+      : undefined,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -495,8 +484,50 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
+    sessionFork,
   });
-  session.agent.streamFn = streamFn;
+  const boundaryStreamFn = wrapStreamFnWithMessageTransform(
+    streamFn,
+    (messages) => messages,
+    async ({ context, ...provider }) => {
+      assertRunCurrent?.();
+      const prepared = await materializeProviderContext({
+        ...provider,
+        context,
+        workspaceDir: input.workspaceDir,
+        agentWorkspaceDir: attempt.workspaceDir,
+        workspaceOnly: input.workspaceOnly,
+        localRoots: input.workspaceOnly
+          ? undefined
+          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+        sandbox:
+          input.sandbox?.enabled && input.sandbox.fsBridge
+            ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+            : undefined,
+      });
+      assertRunCurrent?.();
+      return prepared;
+    },
+  );
+  const providerInput = configuredModelSupportsNativeVideo({
+    cfg: attempt.config,
+    provider: attempt.model.provider,
+    modelId: attempt.model.id,
+    api: attempt.model.api,
+  })
+    ? [...attempt.model.input, "video" as const]
+    : undefined;
+  // A direct provider transport replaces the session SDK stream, so attach
+  // turn-owned thinking provenance to the selected transport as well.
+  session.agent.streamFn = (model, context, options) => {
+    const providerOptions = {
+      ...options,
+      openclawThinkingExplicit: attempt.thinkingExplicit,
+      ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+    };
+    return boundaryStreamFn(model, context, providerOptions);
+  };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
@@ -548,23 +579,27 @@ export async function prepareEmbeddedAttemptTransport(input: {
     senderE164: attempt.senderE164,
   };
 
-  const { nativeWebSearchAllowedByToolPolicy } = applyExtraParamsToAgent(
-    session.agent,
-    attempt.config,
-    attempt.provider,
-    attempt.modelId,
-    streamExtraParamsOverride,
-    input.providerThinkingLevel,
-    input.sessionAgentId,
-    input.workspaceDir,
-    attempt.model,
-    input.agentDir,
-    resolvedTransport,
-    {
-      preparedExtraParams: effectiveExtraParams,
-      auth,
-      nativeWebSearchPolicyContext,
-    },
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        transportConfig: attempt.transportConfig,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
   );
   if (input.codeModeControlsEnabled) {
     session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
@@ -587,13 +622,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     effectiveExtraParams,
   });
   const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
-  if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
-    const previousTransport = session.agent.transport;
-    log.debug(
-      `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-        `(${attempt.provider}/${attempt.modelId})`,
-    );
-  }
   session.agent.transport = effectiveAgentTransport;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   const serverToolClearingEnabled =
@@ -644,6 +672,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
           baseUrl: model.baseUrl,
           ...observation,
         }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
     );
   }
   return {

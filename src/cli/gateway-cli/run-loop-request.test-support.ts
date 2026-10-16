@@ -180,7 +180,10 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         await vi.advanceTimersByTimeAsync(0);
         await expect(exited).resolves.toBe(1);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "gateway stopping" });
+        expect(close).toHaveBeenCalledExactlyOnceWith({
+          retainSharedState: true,
+          reason: "gateway stopping",
+        });
         expect(start).toHaveBeenCalledOnce();
       } finally {
         consumed.resolve(null);

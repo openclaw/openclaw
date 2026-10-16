@@ -1,5 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import { renderConfigView } from "./config-view.test-support.ts";
+import { renderConfigView } from "./config-view.test-support.tsx";
 
 it("renders the external-link preference off by default and applies a personal change", () => {
   const onAppearanceChange = vi.fn();

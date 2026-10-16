@@ -1,6 +1,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -78,7 +82,10 @@ describe("CLI durable session context", () => {
       prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
       loadManifestModelCatalog: () => [],
     });
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext(params);
+    });
   });
 
   afterEach(async () => {
@@ -92,6 +99,7 @@ describe("CLI durable session context", () => {
       resetCliRunnerPrepareTestDeps();
       cliBackendsTesting.resetDepsForTest();
       await fixture.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 
@@ -208,6 +216,59 @@ describe("CLI durable session context", () => {
       expect(revokedPrompt).toContain("active_node=unknown");
       expect(revokedPrompt).not.toContain("active_node=mac-two");
       expect(revoked.params.transcriptPrompt).toBe("latest ask");
+    },
+  );
+
+  it.each([
+    { backendId: "claude-cli", transport: "plugin", relocate: true },
+    { backendId: "claude-cli", transport: "process", relocate: false },
+    { backendId: "test-cli", transport: "plugin", relocate: false },
+  ])(
+    "preserves current Runtime facts for $backendId $transport sessions",
+    async ({ backendId, transport, relocate }) => {
+      const backend = {
+        ...buildDefaultTestCliBackend(),
+        id: backendId,
+        modelProvider: "test-cli",
+        config: { ...buildDefaultTestCliBackend().config, systemPromptWhen: "always" as const },
+        ...(transport === "plugin"
+          ? {
+              prepareExecution: () => ({
+                async *execute() {
+                  yield { type: "result", subtype: "success", result: "complete" };
+                },
+              }),
+            }
+          : {}),
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+      const prepare = async (key: string) => {
+        const context = await fixture.prepare({
+          provider: backendId,
+          sessionKey: key,
+          skillsSnapshot: { prompt: "", skills: [] },
+        });
+        cleanups.push(() => context.preparedBackend.cleanup?.());
+        return context;
+      };
+      const first = await prepare("agent:main:first");
+      const second = await prepare("agent:main:second");
+      if (relocate) {
+        expect(second.systemPrompt).toBe(first.systemPrompt);
+        expect(first.systemPrompt).not.toContain("Runtime: ");
+        expect(first.promptContext?.appendContext).toContain("Runtime: agent=main");
+        expect(first.promptContext?.appendContext).toContain("session=agent:main:first");
+        expect(second.promptContext?.appendContext).toContain("session=agent:main:second");
+        expect(first.params.prompt).toBe("latest ask");
+        expect(second.contextEngineTurnPrompt).toBe("latest ask");
+      } else {
+        expect(first.systemPrompt).toContain("session=agent:main:first");
+        expect(second.systemPrompt).toContain("session=agent:main:second");
+        expect(second.systemPrompt).not.toBe(first.systemPrompt);
+      }
     },
   );
 

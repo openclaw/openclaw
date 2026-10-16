@@ -6,6 +6,7 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarMenuOption,
   chooseSidebarOwner,
@@ -84,11 +85,7 @@ suite.define(() => {
         { id: "profile-bob", background: "#985b42", label: "B" },
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-      // The toolbar filters refine All; Mine intentionally excludes both foreign owners.
-      await page
-        .locator(".sidebar-navigation-scope")
-        .getByRole("button", { name: "All", exact: true })
-        .click();
+      await selectAllSidebarSessions(page);
       const menu = await openSidebarSortMenu(page);
       await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
       await closeSidebarMenu(page);
@@ -114,16 +111,16 @@ suite.define(() => {
         );
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
-      const summary = page.locator(".sidebar-session-filter-summary");
+      const ownerChip = page.locator("#sidebar-session-owner-title");
       const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
-      await expectBrowser(summary).toBeVisible();
-      await expectBrowser(summary).toContainText("Ada");
-      await expectBrowser(summary).toHaveAccessibleName("Ada · Show all sessions");
-      await expectBrowser(funnel).toHaveClass(/sidebar-session-sort--filtered/);
+      await expectBrowser(ownerChip).toBeVisible();
+      await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("Ada");
+      await expectBrowser(ownerChip).toHaveAccessibleName("Owners: Ada");
+      await expectBrowser(funnel).not.toHaveClass(/sidebar-session-sort--filtered/);
       await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
 
       const beforeClear = (await gateway.getRequests("sessions.list")).length;
-      await summary.click();
+      await selectAllSidebarSessions(page);
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).slice(beforeClear).some((request) => {
@@ -133,7 +130,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expectBrowser(bobSection).toBeVisible();
-      await expectBrowser(summary).toHaveCount(0);
+      await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("All owners");
       await expectBrowser(funnel).not.toHaveClass(/sidebar-session-sort--filtered/);
       await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
     } finally {
