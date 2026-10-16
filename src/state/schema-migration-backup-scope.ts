@@ -1,3 +1,4 @@
+import type { SqliteIntegrityCheckOptions } from "../infra/sqlite-integrity.js";
 import type { IncompatibleOpenClawDatabase } from "./openclaw-database-preflight.types.js";
 import { SCHEMA_MIGRATION_BACKUP_TABLES } from "./schema-migration-backup-tables.js";
 
@@ -23,4 +24,16 @@ export function resolveSchemaMigrationBackupTables(
     tables.add("config_machine_state");
   }
   return [...tables].toSorted();
+}
+
+/** Undeclared historical migrations keep full verification until their write scope is known. */
+export function resolveSchemaMigrationIntegrityCheck(
+  migration: Pick<IncompatibleOpenClawDatabase, "kind" | "foundVersion" | "supportedVersion">,
+  check: "quick" | "full" = "quick",
+): SqliteIntegrityCheckOptions {
+  if (check === "full" || migration.foundVersion >= migration.supportedVersion) {
+    return { check };
+  }
+  const tables = resolveSchemaMigrationBackupTables(migration);
+  return tables ? { check, tables } : { check: "full" };
 }

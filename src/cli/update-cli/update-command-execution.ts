@@ -539,6 +539,7 @@ export async function executeMutableUpdate(
   };
   const installOptions = {
     root: params.root,
+    fullIntegrityCheck: opts.fullIntegrityCheck,
     restart: opts.restart,
     installKind: params.installKind,
     startedAt: params.startedAt,

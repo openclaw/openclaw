@@ -19,6 +19,63 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
+  it("refuses structural damage in a table outside the migration scope", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
+    const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    writer.exec(`
+      CREATE TABLE touched(value TEXT);
+      CREATE TABLE untouched(value TEXT);
+      INSERT INTO untouched VALUES ('retained');
+    `);
+    const pageSize = Number(writer.prepare("PRAGMA page_size").get()?.page_size);
+    const rootPage = Number(
+      writer.prepare("SELECT rootpage FROM sqlite_schema WHERE name='untouched'").get()?.rootpage,
+    );
+    writer.close();
+    const file = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
+    } finally {
+      fs.closeSync(file);
+    }
+    using database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    expect(() =>
+      assertSqliteIntegrity(database, "migration source", { check: "quick", tables: ["touched"] }),
+    ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+  });
+
+  it.each([
+    { check: "quick", tables: ["touched"], refuses: false },
+    { check: "quick", tables: ["untouched"], refuses: true },
+    { check: "full", tables: ["touched"], refuses: true },
+  ] as const)(
+    "checks index consistency with $check verification scoped to $tables",
+    ({ check, tables, refuses }) => {
+      using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+      database.exec(`
+        CREATE TABLE touched(value TEXT);
+        CREATE TABLE untouched(id INTEGER PRIMARY KEY, value TEXT);
+        CREATE INDEX idx_untouched ON untouched(id);
+        INSERT INTO untouched VALUES (1, 'retained'), (2, 'history');
+      `);
+      database.enableDefensive?.(false);
+      database.exec("PRAGMA writable_schema = ON");
+      database
+        .prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_untouched'")
+        .run("CREATE INDEX idx_untouched ON untouched(value)");
+      database.exec("PRAGMA writable_schema = OFF");
+      const version = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+      database.exec(`PRAGMA schema_version = ${version + 1}`);
+
+      const verify = () => assertSqliteIntegrity(database, "migration source", { check, tables });
+      if (refuses) {
+        expect(verify).toThrow(/integrity_check.*idx_untouched/su);
+      } else {
+        expect(verify).not.toThrow();
+      }
+    },
+  );
+
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     try {

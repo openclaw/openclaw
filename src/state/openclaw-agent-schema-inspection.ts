@@ -28,6 +28,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import type { OpenClawAgentSchemaPreflightResult } from "./openclaw-database-preflight.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 export type AgentSchemaInspectionInput = {
   pathname: string;
@@ -160,7 +161,17 @@ export function inspectAgentDatabaseSchema(
         // The pending Gateway owner claims the live lease and validates before writes.
         inspection.preparationPending = true;
       } else {
-        assertSqliteIntegrity(database, input.pathname);
+        assertSqliteIntegrity(
+          database,
+          input.pathname,
+          version < input.supportedVersion
+            ? resolveSchemaMigrationIntegrityCheck({
+                kind: "agent",
+                foundVersion: version,
+                supportedVersion: input.supportedVersion,
+              })
+            : undefined,
+        );
         inspection.integrityGateOutcome = "healthy";
       }
       if (migrationPending && version === input.supportedVersion) {
