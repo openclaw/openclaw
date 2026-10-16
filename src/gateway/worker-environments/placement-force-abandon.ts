@@ -61,11 +61,13 @@ function isCapturedPlacementCurrent(
     captured.activeOwnerEpoch === current.activeOwnerEpoch &&
     captured.generation === current.generation &&
     captured.executionMode === current.executionMode &&
-    captured.turnClaim?.claimId === current.turnClaim?.claimId &&
-    captured.turnClaim?.runId === current.turnClaim?.runId &&
-    captured.turnClaim?.generation === current.turnClaim?.generation &&
-    captured.turnClaim?.owner === current.turnClaim?.owner &&
-    captured.turnClaim?.ownerEpoch === current.turnClaim?.ownerEpoch
+    // A completed captured turn leaves this placement eligible for abandonment.
+    (!current.turnClaim ||
+      (captured.turnClaim?.claimId === current.turnClaim.claimId &&
+        captured.turnClaim?.runId === current.turnClaim.runId &&
+        captured.turnClaim?.generation === current.turnClaim.generation &&
+        captured.turnClaim?.owner === current.turnClaim.owner &&
+        captured.turnClaim?.ownerEpoch === current.turnClaim.ownerEpoch))
   );
 }
 

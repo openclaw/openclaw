@@ -158,8 +158,8 @@ describe("forced worker environment abandonment", () => {
     expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 
-  it.each(["environment", "epoch", "placement", "claim"] as const)(
-    "preserves a replacement %s while captured abandonment reads are pending",
+  it.each(["release", "environment", "epoch", "placement", "claim"] as const)(
+    "handles a %s change while captured abandonment reads are pending",
     async (replacement) => {
       const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
       const original = await store.claimTurn({
@@ -191,6 +191,16 @@ describe("forced worker environment abandonment", () => {
           "Abandonment missed the read gate",
         );
         await store.releaseTurn(original);
+        if (replacement === "release") {
+          release.resolve();
+          await abandonment;
+          expect(store.get(active.sessionId)).toMatchObject({
+            state: "failed",
+            turnClaim: null,
+            recoveryError: "Worker result abandoned by forced operator teardown",
+          });
+          return;
+        }
         const successorEnvironment =
           replacement === "environment" ? "replacement-environment" : environmentId;
         const successorEpoch =
