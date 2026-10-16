@@ -102,26 +102,14 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("resolves explicit and effective model primary separately", () => {
-    const cfgWithStringDefault = agentConfig({
-      defaults: { model: "anthropic/claude-sonnet-4-6" },
-      entries: { main: {} },
-    });
-    expect(resolveAgentExplicitModelPrimary(cfgWithStringDefault, "main")).toBeUndefined();
-    expect(resolveAgentEffectiveModelPrimary(cfgWithStringDefault, "main")).toBe(
-      "anthropic/claude-sonnet-4-6",
-    );
-
-    const cfgWithObjectDefault = agentConfig({
-      defaults: { model: modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]) },
-      entries: { main: {} },
-    });
-    expect(resolveAgentExplicitModelPrimary(cfgWithObjectDefault, "main")).toBeUndefined();
-    expect(resolveAgentEffectiveModelPrimary(cfgWithObjectDefault, "main")).toBe("openai/gpt-5.4");
-
-    const cfgNoDefaults = agentConfig({ entries: { main: {} } });
-    expect(resolveAgentExplicitModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
-    expect(resolveAgentEffectiveModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
+  it.each([
+    ["anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"],
+    [modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]), "openai/gpt-5.4"],
+    [undefined, undefined],
+  ] as const)("resolves explicit and inherited primary separately for %j", (model, expected) => {
+    const cfg = agentConfig({ ...(model ? { defaults: { model } } : {}), entries: { main: {} } });
+    expect(resolveAgentExplicitModelPrimary(cfg, "main")).toBeUndefined();
+    expect(resolveAgentEffectiveModelPrimary(cfg, "main")).toBe(expected);
   });
 
   it("reports no configured fallbacks", () => {
@@ -375,35 +363,24 @@ describe("resolveAgentConfig", () => {
     ).toBeUndefined();
   });
 
-  it("identifies legacy auto fallback overrides without origin metadata", () => {
+  it.each([
+    ["anthropic", "claude-sonnet-4-6", false],
+    [" ", "claude-sonnet-4-6", true],
+    ["anthropic", undefined, true],
+  ] as const)("identifies legacy auto fallback origin %j/%j", (provider, model, expected) => {
     expect(
       hasLegacyAutoFallbackWithoutOrigin({
         modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "anthropic",
-        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        modelOverrideFallbackOriginProvider: provider,
+        modelOverrideFallbackOriginModel: model,
       }),
-    ).toBe(false);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: " ",
-        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-      }),
-    ).toBe(true);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "anthropic",
-      }),
-    ).toBe(true);
-    expect(
-      hasLegacyAutoFallbackWithoutOrigin({
-        modelOverrideSource: "user",
-      }),
-    ).toBe(false);
-    expect(hasLegacyAutoFallbackWithoutOrigin({})).toBe(false);
-    expect(hasLegacyAutoFallbackWithoutOrigin(undefined)).toBe(false);
+    ).toBe(expected);
   });
+
+  it.each([{ modelOverrideSource: "user" }, {}, undefined] as const)(
+    "does not classify %j as a legacy auto fallback",
+    (entry) => expect(hasLegacyAutoFallbackWithoutOrigin(entry)).toBe(false),
+  );
 
   it("recognizes recovered auto fallback provenance without a source marker", () => {
     expect(
@@ -471,26 +448,15 @@ describe("resolveAgentConfig", () => {
       },
     });
 
-    expect(resolveSubagentModelFallbacksOverride(cfg, "research")).toEqual([
-      "openai/gpt-5.4",
-      "zai/glm-5",
-    ]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "openai/gpt-5.4",
-      "zai/glm-5",
-    ]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
-      "openai/gpt-5.4",
-      "zai/glm-5",
-    ]);
-    expect(
-      resolveSubagentModelFallbacksOverride(cfg, "fallback-only-subagent-model"),
-    ).toStrictEqual([]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
-      "openai/gpt-5.4",
-      "zai/glm-5",
-    ]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
+    for (const id of ["research", "agent-model", "fallback-only-agent-model", "default-subagent"]) {
+      expect(resolveSubagentModelFallbacksOverride(cfg, id)).toEqual([
+        "openai/gpt-5.4",
+        "zai/glm-5",
+      ]);
+    }
+    for (const id of ["fallback-only-subagent-model", "strict"]) {
+      expect(resolveSubagentModelFallbacksOverride(cfg, id)).toStrictEqual([]);
+    }
   });
 
   it("uses subagent model fallbacks for auto-selected spawned subagent models", () => {
@@ -508,33 +474,17 @@ describe("resolveAgentConfig", () => {
       },
     });
 
-    expect(
+    const fallbacks = (agentId: string, modelOverrideSource: "auto" | "user") =>
       resolveEffectiveModelFallbacks({
         cfg,
-        agentId: "research",
-        sessionKey: "agent:research:subagent:child",
+        agentId,
+        sessionKey: `agent:${agentId}:subagent:child`,
         hasSessionModelOverride: true,
-        modelOverrideSource: "auto",
-      }),
-    ).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
-    expect(
-      resolveEffectiveModelFallbacks({
-        cfg,
-        agentId: "research",
-        sessionKey: "agent:research:subagent:child",
-        hasSessionModelOverride: true,
-        modelOverrideSource: "user",
-      }),
-    ).toStrictEqual([]);
-    expect(
-      resolveEffectiveModelFallbacks({
-        cfg,
-        agentId: "fallback-only-subagent",
-        sessionKey: "agent:fallback-only-subagent:subagent:child",
-        hasSessionModelOverride: true,
-        modelOverrideSource: "auto",
-      }),
-    ).toEqual(["zai/glm-5"]);
+        modelOverrideSource,
+      });
+    expect(fallbacks("research", "auto")).toEqual(["openai/gpt-5.4", "zai/glm-5"]);
+    expect(fallbacks("research", "user")).toStrictEqual([]);
+    expect(fallbacks("fallback-only-subagent", "auto")).toEqual(["zai/glm-5"]);
   });
 
   it("uses OPENCLAW_WORKSPACE_DIR for default agent workspace", () => {

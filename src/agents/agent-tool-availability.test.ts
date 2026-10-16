@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability as finalize,
@@ -49,14 +49,28 @@ function deniedCopy<T extends ReturnType<typeof reader>>(tool: T, message: strin
 function collect(tool: ReturnType<typeof spawnTool>, id: string) {
   return tool.execute(id, { task: "inspect", collect: true });
 }
-function catalogFixture() {
+function catalogFixture(wait = reader(), toolExecutionAllow?: string[]) {
   const catalogConfig = {
     ...config,
     tools: { toolSearch: { enabled: true, mode: "tools" as const } },
   };
   const catalogRef = createToolSearchCatalogRef();
   const controls = createToolSearchTools({ config: catalogConfig, catalogRef });
-  return { config: catalogConfig, catalogRef, controls };
+  const tool = spawnTool();
+  const params = {
+    tools: [...controls, tool, wait],
+    config: catalogConfig,
+    catalogRef,
+    toolExecutionAllow,
+  };
+  onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
+  const apply = (currentReader?: typeof wait) => {
+    if (currentReader) {
+      params.tools = [...controls, tool, currentReader];
+    }
+    return applyCatalog(params);
+  };
+  return { tool, params, catalogRef, apply, wait };
 }
 function expectHiddenCollection(tool: { parameters: unknown; description: unknown }) {
   expect(tool.parameters).toHaveProperty("properties.fastMode");
@@ -78,6 +92,12 @@ async function expectCollectionDenied(
 function expectNormalizedCollector(tool: { parameters: unknown }) {
   expect(tool.parameters).toHaveProperty("properties.outputSchema.type", "object");
   expect(tool.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+}
+function expectSpawned(details: Record<string, unknown>) {
+  expect(spawn).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining(details),
+    expect.anything(),
+  );
 }
 
 beforeEach(() => {
@@ -131,50 +151,38 @@ describe("execution allowlist availability", () => {
 
     expect(callableNames).toEqual(expected);
   });
+});
 
+describe("collector tool availability", () => {
   it("rechecks execution caps on catalog restriction and rebuild", async () => {
-    const { config: catalogConfig, catalogRef, controls } = catalogFixture();
-    const tool = spawnTool();
-    const params = {
-      tools: [...controls, tool, reader()],
-      config: catalogConfig,
-      catalogRef,
-      toolExecutionAllow: ["sessions_spawn", "agents_wait"],
-    };
+    const allow = ["sessions_spawn", "agents_wait"];
+    const { tool, params, catalogRef, apply } = catalogFixture(reader(), allow);
     const expectUnavailable = async () => {
       await expectCollectionDenied(tool);
       expect(tool.parameters).not.toHaveProperty("properties.collect");
     };
-    try {
-      applyCatalog(params);
-      expect(tool.parameters).toHaveProperty("properties.collect");
+    apply();
+    expect(tool.parameters).toHaveProperty("properties.collect");
 
-      params.toolExecutionAllow[1] = "read";
-      restrictCatalog({
-        catalogRef,
-        allowedToolNames: new Set(["sessions_spawn", "agents_wait"]),
-      });
-      await expectUnavailable();
+    allow[1] = "read";
+    restrictCatalog({
+      catalogRef,
+      allowedToolNames: new Set(["sessions_spawn", "agents_wait"]),
+    });
+    await expectUnavailable();
 
-      params.toolExecutionAllow[1] = "agents_wait";
-      applyCatalog(params);
-      expect(tool.parameters).toHaveProperty("properties.collect");
+    allow[1] = "agents_wait";
+    apply();
+    expect(tool.parameters).toHaveProperty("properties.collect");
 
-      params.toolExecutionAllow = ["sessions_spawn", "read"];
-      applyCatalog(params);
-      await expectUnavailable();
-    } finally {
-      clearToolSearchCatalog({ catalogRef });
-    }
+    params.toolExecutionAllow = ["sessions_spawn", "read"];
+    apply();
+    await expectUnavailable();
   });
-});
-
-describe("collector tool availability", () => {
   it("reuses immutable schema variants without sharing collector authority", async () => {
     const first = spawnTool();
     const second = spawnTool();
-    const hidden = first.parameters;
-    expect(second.parameters).toBe(hidden);
+    expect(second.parameters).toBe(first.parameters);
 
     finalize([first, reader()]);
     finalize([second, reader()]);
@@ -185,10 +193,7 @@ describe("collector tool availability", () => {
     expect(first.parameters).not.toHaveProperty("properties.collect");
     await expectCollectionDenied(first);
     await collect(second, "allowed");
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ collect: true }),
-      expect.anything(),
-    );
+    expectSpawned({ collect: true });
   });
 
   it("preserves normalized collector fields across availability changes", () => {
@@ -228,14 +233,7 @@ describe("collector tool availability", () => {
         [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "copied",
       });
       await tool.execute("ordinary", { task: "inspect", fastMode: "auto" });
-      expect(spawn).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          collect: undefined,
-          fastMode: "auto",
-          expectsCompletionMessage: true,
-        }),
-        expect.anything(),
-      );
+      expectSpawned({ collect: undefined, fastMode: "auto", expectsCompletionMessage: true });
     },
   );
 
@@ -247,59 +245,46 @@ describe("collector tool availability", () => {
   ] as const)(
     "revokes collection after $boundary with $readerState despite unchanged descriptors",
     async ({ boundary, readerState }) => {
-      const { config: catalogConfig, catalogRef, controls } = catalogFixture();
-      const tool = spawnTool();
-      const wait = wrapHook(reader());
-      const compact = (currentReader: typeof wait) =>
-        applyCatalog({
-          tools: [...controls, tool, currentReader],
-          config: catalogConfig,
-          catalogRef,
-        });
-      try {
-        compact(wait);
-        const firstCatalog = catalogRef.current!;
-        const firstEntries = firstCatalog.entries;
-        const allowedToolNames = new Set(firstEntries.map((entry) => entry.name));
-        expect(tool.parameters).toHaveProperty("properties.collect");
-        if (boundary === "reuse") {
-          expect(compact(wait).catalogReused).toBe(true);
-        } else {
-          expect(restrictCatalog({ catalogRef, allowedToolNames })).toBe(2);
-        }
-        expect(catalogRef.current).toBe(firstCatalog);
-        expect(catalogRef.current?.entries).toBe(firstEntries);
-        expect(tool.parameters).toHaveProperty("properties.collect");
-
-        const currentReader =
-          readerState === "lookalike"
-            ? { ...wait }
-            : readerState === "denied-wrapper"
-              ? denyExecution(deniedCopy(wait, "executor denied"))
-              : denyExecution(wait);
-        if (boundary === "reuse") {
-          compact(currentReader);
-        } else {
-          restrictCatalog({ catalogRef, allowedToolNames });
-        }
-
-        // Exercise the real spawn guard before schema assertions can hide an admitted child.
-        await expectCollectionDenied(tool, "collect-after-revocation");
-        expect(
-          firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
-        ).toHaveProperty("properties.collect");
-        const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
-        expectHiddenCollection(tool);
-        expectHiddenCollection({ parameters: entry?.parameters, description: entry?.description });
-      } finally {
-        clearToolSearchCatalog({ catalogRef });
+      const { tool, catalogRef, apply: compact, wait } = catalogFixture(wrapHook(reader()));
+      compact(wait);
+      const firstCatalog = catalogRef.current!;
+      const firstEntries = firstCatalog.entries;
+      const allowedToolNames = new Set(firstEntries.map((entry) => entry.name));
+      expect(tool.parameters).toHaveProperty("properties.collect");
+      if (boundary === "reuse") {
+        expect(compact(wait).catalogReused).toBe(true);
+      } else {
+        expect(restrictCatalog({ catalogRef, allowedToolNames })).toBe(2);
       }
+      expect(catalogRef.current).toBe(firstCatalog);
+      expect(catalogRef.current?.entries).toBe(firstEntries);
+      expect(tool.parameters).toHaveProperty("properties.collect");
+
+      const currentReader =
+        readerState === "lookalike"
+          ? { ...wait }
+          : readerState === "denied-wrapper"
+            ? denyExecution(deniedCopy(wait, "executor denied"))
+            : denyExecution(wait);
+      if (boundary === "reuse") {
+        compact(currentReader);
+      } else {
+        restrictCatalog({ catalogRef, allowedToolNames });
+      }
+
+      // Exercise the real spawn guard before schema assertions can hide an admitted child.
+      await expectCollectionDenied(tool, "collect-after-revocation");
+      expect(
+        firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
+      ).toHaveProperty("properties.collect");
+      const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
+      expectHiddenCollection(tool);
+      expectHiddenCollection({ parameters: entry?.parameters, description: entry?.description });
     },
   );
 
   it("preserves binding and later denial across hook rebuilds and metadata copies", async () => {
-    const original = spawnTool();
-    const wrapped = rewrapHook(wrapHook(original));
+    const wrapped = rewrapHook(wrapHook(spawnTool()));
     const wait = rewrapHook(wrapHook(reader()));
     const denied = deniedCopy(wrapped, "later executor policy");
     const executor = denied.execute;

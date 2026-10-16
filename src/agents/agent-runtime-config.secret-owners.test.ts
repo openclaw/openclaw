@@ -14,6 +14,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import * as secretResolver from "../secrets/resolve.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
@@ -75,22 +76,22 @@ function pinOfflineConfig(config: OpenClawConfig) {
 }
 
 function providerConfig(): OpenClawConfig {
+  const provider = (baseUrl: string, api: "openai-completions" | "ollama", key: string) => ({
+    baseUrl,
+    api,
+    apiKey: secretRef(key),
+    models: [],
+  });
   return {
     plugins: { enabled: false },
     models: {
       providers: {
-        healthy: {
-          baseUrl: "https://healthy.example/v1",
-          api: "openai-completions",
-          apiKey: secretRef("TEST_HEALTHY_PROVIDER_KEY"),
-          models: [],
-        },
-        ollama: {
-          baseUrl: "http://127.0.0.1:11434",
-          api: "ollama",
-          apiKey: secretRef("TEST_COLD_PROVIDER_KEY"),
-          models: [],
-        },
+        healthy: provider(
+          "https://healthy.example/v1",
+          "openai-completions",
+          "TEST_HEALTHY_PROVIDER_KEY",
+        ),
+        ollama: provider("http://127.0.0.1:11434", "ollama", "TEST_COLD_PROVIDER_KEY"),
       },
     },
   };
@@ -105,11 +106,7 @@ async function activateProviderConfig(config = providerConfig()) {
     allowUnavailableSecretOwners: true,
   });
   expect(snapshot.degradedOwners).toContainEqual(
-    expect.objectContaining({
-      ownerKind: "provider",
-      ownerId: "ollama",
-      degradationState: "cold",
-    }),
+    expect.objectContaining({ ownerKind: "provider", ownerId: "ollama", degradationState: "cold" }),
   );
   activateSnapshot(snapshot);
   return snapshot;
@@ -149,20 +146,7 @@ describe("agent execution respects prepared secret owners", () => {
     const facts = resolutionFacts([]);
     setConfigFacts(config, facts);
     const manifestRegistry = {
-      plugins: [
-        {
-          id: "refresh-context-fixture",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled" as const,
-          rootDir: "/fixture/plugin",
-          source: "/fixture/plugin/index.js",
-          manifestPath: "/fixture/plugin/openclaw.plugin.json",
-        },
-      ],
+      plugins: [createPluginManifestRecordFixture({ id: "refresh-context-fixture" })],
     };
     const snapshot = await prepareSnapshot({
       config,
@@ -202,14 +186,8 @@ describe("agent execution respects prepared secret owners", () => {
     ).resolves.toMatchObject({ apiKey: "prepared-fixture-key" });
     vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
     await expectUnavailable(
-      providerAuth(config, {
-        profileId: "ollama:fallback",
-        store: fallbackStore(),
-      }),
-      {
-        ownerKind: "provider",
-        ownerId: "ollama",
-      },
+      providerAuth(config, { profileId: "ollama:fallback", store: fallbackStore() }),
+      { ownerKind: "provider", ownerId: "ollama" },
     );
   });
 
@@ -243,24 +221,11 @@ describe("agent execution respects prepared secret owners", () => {
     expect(resolveRef).not.toHaveBeenCalled();
   });
 
-  it("reuses a cloned prepared runtime config without re-resolution", async () => {
-    const snapshot = await activateProviderConfig();
-    const input = clonePreparedConfig(snapshot.config);
-    const config = await resolveReplyConfig(input);
-    expect(config).toEqual(snapshot.config);
-    expect(callGatewayMock).not.toHaveBeenCalled();
-    await expectUnavailable(providerAuth(config));
-  });
-
   it.each(["provider-auth refresh", "config refresh with auth graft"] as const)(
     "retains config preparation authority after %s",
     async (operation) => {
       const source = providerConfig();
-      source.skills = {
-        entries: {
-          fixture: { apiKey: secretRef("TEST_COLD_SKILL_KEY") },
-        },
-      };
+      source.skills = { entries: { fixture: { apiKey: secretRef("TEST_COLD_SKILL_KEY") } } };
       const snapshot = await activateProviderConfig(source);
       if (operation === "provider-auth refresh") {
         await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
@@ -286,6 +251,15 @@ describe("agent execution respects prepared secret owners", () => {
     },
   );
 
+  it("reuses a cloned prepared runtime config without re-resolution", async () => {
+    const snapshot = await activateProviderConfig();
+    const input = clonePreparedConfig(snapshot.config);
+    const config = await resolveReplyConfig(input);
+    expect(config).toEqual(snapshot.config);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectUnavailable(providerAuth(config));
+  });
+
   it("requires the same authored-ref facts token with a healthy ref key", async () => {
     const source = providerConfig();
     setConfigFacts(source, resolutionFacts([]));
@@ -309,6 +283,17 @@ describe("agent execution respects prepared secret owners", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps foreign-provider reply configs on the strict command path", async () => {
+    const snapshot = await activateProviderConfig();
+    const input = clonePreparedConfig(snapshot.config);
+    input.models!.providers!.ollama!.baseUrl = "https://foreign.example/v1";
+    await expect(resolveReplyConfig(input)).rejects.toThrow(
+      "is unresolved in the active runtime snapshot",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(getRuntimeConfigSnapshot()).toEqual(snapshot.config);
+  });
+
   it("does not treat an unrecorded snapshot as config-ref preparation authority", async () => {
     const source = providerConfig();
     const snapshot = await prepareSnapshot({
@@ -330,17 +315,6 @@ describe("agent execution respects prepared secret owners", () => {
       "models.providers.ollama.apiKey is unresolved",
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps foreign-provider reply configs on the strict command path", async () => {
-    const snapshot = await activateProviderConfig();
-    const input = clonePreparedConfig(snapshot.config);
-    input.models!.providers!.ollama!.baseUrl = "https://foreign.example/v1";
-    await expect(resolveReplyConfig(input)).rejects.toThrow(
-      "is unresolved in the active runtime snapshot",
-    );
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(getRuntimeConfigSnapshot()).toEqual(snapshot.config);
   });
 
   it("keeps unprepared agent config strict even if the generic runtime config is pinned", async () => {
@@ -394,15 +368,9 @@ describe("agent execution respects prepared secret owners", () => {
   it("resolves a persona-only agent SecretRef for local agent commands", async () => {
     const config: OpenClawConfig = { plugins: { enabled: false } };
     const keyPath = [
-      "agents",
-      "entries",
-      "reader",
-      "tts",
-      "personas",
+      ..."agents.entries.reader.tts.personas".split("."),
       "reader.uk",
-      "providers",
-      "mock",
-      "apiKey",
+      ..."providers.mock.apiKey".split("."),
     ];
     const personaRef = secretRef("TEST_TTS_PERSONA_ONLY_KEY");
     setPathCreateStrict(config, keyPath, personaRef);

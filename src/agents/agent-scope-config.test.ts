@@ -1,4 +1,3 @@
-// Agent scope tests cover which per-agent fields may flatten into runtime defaults.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -43,26 +42,25 @@ function fleet(agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig {
   return { agents };
 }
 const twoAgents = () => fleet({ entries: { main: {}, ops: {} } });
+const explicitFleet = (agentId?: string): OpenClawConfigWithLegacyRoster => ({
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId } },
+    entries: { ops: { default: true }, research: {} },
+  },
+});
 const legacy = (list?: LegacyAgentListEntry[]): OpenClawConfigWithLegacyRoster => ({
   agents: { list },
 });
 
 describe("agent roster resolution", () => {
-  it("rejects unknown configured-agent selections with canonical CLI guidance", () => {
+  it.each([undefined, "testprof"])("keeps configured-agent guidance runnable: %s", (profile) => {
     const cfg = twoAgents();
-
-    expect(configuredAgent(cfg, "ops")).toBe("ops");
-    expect(() => configuredAgent(cfg, "nope-zzz")).toThrow(
-      'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.',
-    );
-  });
-
-  it("keeps the guidance runnable under a profile", () => {
-    const cfg = twoAgents();
-    vi.stubEnv("OPENCLAW_PROFILE", "testprof");
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
     try {
+      expect(configuredAgent(cfg, "ops")).toBe("ops");
       expect(() => configuredAgent(cfg, "nope-zzz")).toThrow(
-        "Run openclaw --profile testprof agents list to see configured agents.",
+        `Unknown agent id "nope-zzz". Run openclaw${profile ? ` --profile ${profile}` : ""} agents list to see configured agents.`,
       );
     } finally {
       vi.unstubAllEnvs();
@@ -72,27 +70,24 @@ describe("agent roster resolution", () => {
   it("preserves the Plugin SDK fallback only when the roster property is absent", () => {
     expect(listAgentIds({})).toEqual(["main"]);
     expect(listAgentIds({ agents: { entries: {} } })).toEqual([]);
-    expect(defaultAgent({})).toBe("main");
-    expect(defaultAgent(legacy())).toBe("main");
-    expect(defaultAgent({ agents: { defaults: { workspace: "/srv/main" } } })).toBe("main");
-    expect(() => defaultAgent({ agents: { entries: {} } })).toThrow("No agents configured");
-    expect(() => defaultAgent(legacy([]))).toThrow("No agents configured");
+    for (const cfg of [{}, legacy(), fleet({ defaults: { workspace: "/srv/main" } })]) {
+      expect(defaultAgent(cfg)).toBe("main");
+    }
+    for (const cfg of [fleet({ entries: {} }), legacy([])]) {
+      expect(() => defaultAgent(cfg)).toThrow("No agents configured");
+    }
   });
 
   it("preserves raw legacy markers while sole-agent lookup stays strict", () => {
     expect(soleAgent({ agents: { entries: { alpha: {} } } })).toBe("alpha");
     expect(trySoleAgent({ agents: { entries: { alpha: {} } } })).toBe("alpha");
-    const missingDefault = legacy([{ id: "alpha" }, { id: "beta" }]);
-    expect(() => defaultAgent(missingDefault)).toThrow(AgentSelectionRequiredError);
-    expect(tryDefaultAgent(missingDefault)).toBeUndefined();
     const markedDefault = legacy([{ id: "alpha" }, { id: "beta", default: true }]);
     expect(defaultAgent(markedDefault)).toBe("beta");
-    const duplicateDefaults = legacy([
-      { id: "alpha", default: true },
-      { id: "beta", default: true },
-    ]);
-    expect(() => defaultAgent(duplicateDefaults)).toThrow(AgentSelectionRequiredError);
-    expect(tryDefaultAgent(duplicateDefaults)).toBeUndefined();
+    for (const marked of [false, true]) {
+      const cfg = legacy(["alpha", "beta"].map((id) => (marked ? { id, default: true } : { id })));
+      expect(() => defaultAgent(cfg)).toThrow(AgentSelectionRequiredError);
+      expect(tryDefaultAgent(cfg)).toBeUndefined();
+    }
   });
 
   it("reads only enough own enumerable entries to distinguish a sole mutable agent", () => {
@@ -149,10 +144,7 @@ describe("agent roster resolution", () => {
   });
 
   it("fails closed with context when an ambient owner is ambiguous", () => {
-    const ownerlessFleet = {
-      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
-    } satisfies OpenClawConfig;
-
+    const ownerlessFleet = fleet({ ownership: "explicit", entries: { ops: {}, research: {} } });
     retainLegacyDefaultAgentId(ownerlessFleet, "ops");
     expect(tryAmbientOwner(ownerlessFleet)).toBeUndefined();
     expect(() => ambientOwner(ownerlessFleet)).toThrow(AgentSelectionRequiredError);
@@ -176,72 +168,62 @@ describe("agent roster resolution", () => {
   });
 
   it("uses the recorded explicit owner ahead of migration provenance and retired markers", () => {
-    const migrated = createCanonicalAgentConfigFixture({
-      agents: {
-        defaults: { systemAgent: { agentId: "research" } },
-        entries: { ops: { default: true }, research: {} },
-      },
-    }).config;
+    const input = explicitFleet("research");
+    delete input.agents!.ownership;
+    const migrated = createCanonicalAgentConfigFixture(input).config;
     migrated.agents!.ownership = "explicit";
     for (const config of [migrated, structuredClone(migrated)]) {
-      expect(compatibilityAgent(config)).toBe("research");
-      expect(operationAgent(config)).toBe("research");
-      expect(ambientOwner(config)).toBe("research");
-      expect(tryDefaultAgent(config)).toBeUndefined();
+      expect([
+        compatibilityAgent(config),
+        operationAgent(config),
+        ambientOwner(config),
+        tryDefaultAgent(config),
+      ]).toEqual(["research", "research", "research", undefined]);
     }
   });
 
   it("does not infer an explicit fleet owner from a retired marker", () => {
-    const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "deleted" } },
-        entries: { ops: { default: true }, research: {} },
-      },
-    };
+    const config = explicitFleet("deleted");
     retainLegacyDefaultAgentId(config, "ops");
-    expect(compatibilityAgent(config)).toBeUndefined();
-    expect(tryOperationAgent(config)).toBeUndefined();
+    expect([compatibilityAgent(config), tryOperationAgent(config)]).toEqual([undefined, undefined]);
   });
 
-  it("prefers a per-agent toolProgressDetail over the roster default", () => {
-    const defaults = { toolProgressDetail: "explain" as const };
-    const entries = { main: { toolProgressDetail: "raw" as const } };
-
-    expect(agentConfig({ agents: { defaults, entries } }, "main")?.toolProgressDetail).toBe("raw");
-    expect(agentConfig({ agents: { entries } }, "main")?.toolProgressDetail).toBe("raw");
-    expect(
-      agentConfig({ agents: { defaults, entries: { main: {} } } }, "main")?.toolProgressDetail,
-    ).toBe("explain");
+  it.each([
+    ["toolProgressDetail", "explain", "raw", "raw"],
+    ["toolProgressDetail", undefined, "raw", "raw"],
+    ["toolProgressDetail", "explain", undefined, "explain"],
+    [
+      "modelPolicy",
+      { allow: ["openai/gpt-5.5"] },
+      { allow: ["openai/gpt-5.6-sol"] },
+      { allow: ["openai/gpt-5.6-sol"] },
+    ],
+  ] as const)("resolves %s defaults %j and override %j", (field, fallback, value, expected) => {
+    const cfg = fleet({ defaults: { [field]: fallback }, entries: { main: { [field]: value } } });
+    expect(agentConfig(cfg, "main")?.[field]).toEqual(expected);
   });
 
   it("resolves defaults only for the rosterless implicit main agent", () => {
     const defaults = { fastModeDefault: "auto" as const };
-    const emptyLegacyRoster: OpenClawConfigWithLegacyRoster = { agents: { defaults, list: [] } };
-
     expect(agentConfig({ agents: { defaults } }, "main")?.fastModeDefault).toBe("auto");
     expect(agentConfig({ agents: { defaults } }, "work")).toBeUndefined();
-    expect(agentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
-    expect(agentConfig(emptyLegacyRoster, "main")).toBeUndefined();
+    for (const roster of [{ entries: {} }, { list: [] }]) {
+      expect(agentConfig({ agents: { defaults, ...roster } }, "main")).toBeUndefined();
+    }
   });
 
   it("does not project unrelated keyed entries while resolving one agent", () => {
-    let unrelatedEntryReads = 0;
-    const entries = new Proxy(
-      { main: { name: "Primary" }, worker: { name: "Worker" } },
-      {
-        get(target, property, receiver) {
-          if (property === "worker") {
-            unrelatedEntryReads += 1;
-          }
-          return Reflect.get(target, property, receiver);
-        },
+    const unrelatedEntry = vi.fn(() => ({ name: "Worker" }));
+    const entries = {
+      main: { name: "Primary" },
+      get worker() {
+        return unrelatedEntry();
       },
-    );
+    };
     const config = { agents: { ownership: "explicit" as const, entries } };
 
     expect(agentConfig(config, "main")?.name).toBe("Primary");
-    expect(unrelatedEntryReads).toBe(0);
+    expect(unrelatedEntry).not.toHaveBeenCalled();
   });
 
   it("prepares one published fleet roster per generation", () => {
@@ -265,7 +247,6 @@ describe("agent roster resolution", () => {
           expect(compatibilityAgent(source)).toBe("agent-0");
         });
       }
-      // One point-lookup index and one configured-owner membership projection.
       expect(entries.mock.calls.length + ids.mock.calls.length).toBeLessThanOrEqual(2);
       source.agents.entries["agent-0"]!.name = "Replacement";
       source.agents.defaults.systemAgent.agentId = "agent-199";
@@ -328,18 +309,5 @@ describe("agent roster resolution", () => {
       });
       expect(listedEntry.tools).toBeUndefined();
     }
-  });
-});
-
-describe("agentConfig model policy", () => {
-  it("returns an explicit per-agent allowlist override", () => {
-    const cfg = fleet({
-      defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } },
-      entries: { main: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } } },
-    });
-
-    expect(agentConfig(cfg, "main")?.modelPolicy).toEqual({
-      allow: ["openai/gpt-5.6-sol"],
-    });
   });
 });
