@@ -1,7 +1,9 @@
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as preflightRuntime from "./message-handler.preflight.js";
-import * as processRuntime from "./message-handler.process.js";
+import { processDiscordMessage } from "./message-handler.process.js";
+
+vi.mock("./message-handler.process.js", { spy: true });
 
 export { createDiscordMessageDispatcher as createDiscordMessageHandler } from "./message-dispatcher.js";
 
@@ -16,7 +18,7 @@ beforeEach(() => {
     .spyOn(preflightRuntime, "preflightDiscordMessage")
     .mockImplementation((...args) => preflightDiscordMessageMock(...args));
   const process = vi
-    .spyOn(processRuntime, "processDiscordMessage")
+    .mocked(processDiscordMessage)
     .mockImplementation((...args) => processDiscordMessageMock(...args));
   restore = () => {
     preflight.mockRestore();
