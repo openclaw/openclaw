@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData, Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkboardStore } from "../../../extensions/workboard/runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -23,6 +22,18 @@ import type {
   MixedModeWorkerInput,
   MixedModeWorkerResult,
 } from "./mixed-mode.conformance.test-support.js";
+
+type WorkboardStore = {
+  ready(): Promise<void>;
+  listBoards(): Promise<{ boards: Array<{ id: string; name: string }> }>;
+  upsertBoard(input: { id: string; name: string }): Promise<unknown>;
+  close(): Promise<void>;
+};
+
+// Exercise the public plugin API without importing its implementation into core type graphs.
+const { WorkboardStore } = await vi.importActual<{
+  WorkboardStore: { openSqlite(workerModuleUrl: URL): WorkboardStore };
+}>("../../../extensions/workboard/runtime-api.js");
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;

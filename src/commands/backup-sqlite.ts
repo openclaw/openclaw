@@ -40,10 +40,14 @@ export async function backupSqliteCreateCommand(
   options: BackupSqliteCreateOptions,
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const globalPath = options.global === true ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   assertHomogeneousDatabaseEngines(config, "backup");
   try {
-    const database = await resolveSnapshotDatabase(options, config);
+    const database = await resolveSnapshotDatabase(options, config, globalPath);
     let postgres = false;
     try {
       postgres = readBackupEngine(database.path).engine === "postgres";
@@ -171,7 +175,11 @@ export async function backupSqliteRestoreCommand(
   return report;
 }
 
-async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions, config: OpenClawConfig) {
+async function resolveSnapshotDatabase(
+  options: BackupSqliteCreateOptions,
+  config: OpenClawConfig,
+  globalPath: string | undefined,
+) {
   const rawAgentId = options.agent?.trim();
   if (options.agent !== undefined && !rawAgentId) {
     throw new Error("--agent must not be blank");
@@ -182,11 +190,9 @@ async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions, confi
   if (options.global !== true && !rawAgentId) {
     throw new Error("Choose a SQLite snapshot source: --global or --agent <id>.");
   }
-  if (options.global === true) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     return {
-      path: await fs.realpath(selectedPath),
+      path: await fs.realpath(globalPath),
       identity: { role: "global" as const },
     };
   }

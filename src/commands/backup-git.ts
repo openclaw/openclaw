@@ -61,6 +61,10 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
+  const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   assertHomogeneousDatabaseEngines(config, "backup");
   let agents: Array<{ agentId: string; databasePath: string }> = [];
@@ -74,11 +78,9 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     path: string;
     identity: GitBackupIdentity;
   }> = [];
-  if (options.all || options.global) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     databases.push({
-      path: selectedPath,
+      path: globalPath,
       identity: { role: "global" },
     });
   }

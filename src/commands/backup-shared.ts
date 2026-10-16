@@ -8,7 +8,6 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
 import {
@@ -542,21 +541,20 @@ export async function resolveBackupPlanFromDisk(
     return await resolveBackupPlanFromState(params);
   }
   assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-  const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
-  assertHomogeneousDatabaseEngines(configRead.snapshot.config, "backup");
-  return await withOpenClawStateDatabaseReadSnapshot(() =>
-    resolveBackupPlanFromState(params, configRead),
-  );
+  // Admit the engine choice without opening state before its stable discovery snapshot.
+  const configSnapshot = await createConfigIO({
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshot();
+  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
+  return await withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params));
 }
 
-async function resolveBackupPlanFromState(
-  params: {
-    includeWorkspace?: boolean;
-    onlyConfig?: boolean;
-    nowMs?: number;
-  },
-  preparedConfigRead?: ReadConfigFileSnapshotForWriteResult,
-) {
+async function resolveBackupPlanFromState(params: {
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  nowMs?: number;
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();
@@ -575,10 +573,9 @@ async function resolveBackupPlanFromState(
   }
 
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
-  const configRead =
-    preparedConfigRead ??
-    (await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite());
+  const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
+  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
   const discoverySnapshot =
     (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
