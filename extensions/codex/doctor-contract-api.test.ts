@@ -5,7 +5,6 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +13,10 @@ import {
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
+import {
+  createBindingMigrationFixture,
+  removeCodexDoctorFixture,
+} from "./doctor-contract-api.test-helpers.js";
 import { createDoctorContext } from "./doctor-contract-api.test-support.js";
 import {
   bindingStoreKey,
@@ -39,86 +42,6 @@ function sessionBindingKey(sessionId: string, sessionKey: string, agentId = "mai
 
 function legacySession(sessionId: string, fields: Record<string, unknown> = {}) {
   return { sessionId, sessionFile: `${sessionId}.jsonl`, ...fields };
-}
-
-async function removeCodexDoctorFixture(stateDir: string): Promise<void> {
-  // Doctor migrations open per-agent databases and leave the shared state database open under
-  // the temporary state dir; both must be released before removal or Windows keeps the files
-  // locked and the removal fails with EBUSY. Agent close first: it releases leases through
-  // shared state, so the reverse order can reopen it.
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await fs.rm(stateDir, { recursive: true, force: true });
-}
-
-async function createBindingMigrationFixture(options: {
-  binding?: Record<string, unknown>;
-  legacySharedRoot?: boolean;
-  name: string;
-  sessionIndex?: Record<string, unknown>;
-  storeRoot?: "agent" | "fixed";
-  threadId: string;
-}) {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionsDir =
-    options.storeRoot === "fixed"
-      ? path.join(stateDir, "fixed-sessions")
-      : options.legacySharedRoot
-        ? path.join(stateDir, "sessions")
-        : path.join(stateDir, "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const transcriptPath = path.join(sessionsDir, `${options.name}.jsonl`);
-  const sidecarPath = `${transcriptPath}.codex-app-server.json`;
-  await fs.mkdir(sessionsDir, { recursive: true });
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({ type: "session", id: options.name })}\n`,
-    "utf8",
-  );
-  if (options.sessionIndex !== undefined) {
-    await fs.writeFile(storePath, JSON.stringify(options.sessionIndex), "utf8");
-  }
-  await fs.writeFile(
-    sidecarPath,
-    JSON.stringify({
-      schemaVersion: 2,
-      threadId: options.threadId,
-      sessionFile: transcriptPath,
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      pluginAppPolicyContext: {
-        fingerprint: "policy-1",
-        apps: {},
-        pluginAppIds: {},
-      },
-      ...options.binding,
-    }),
-    "utf8",
-  );
-  const migration = stateMigrations[0];
-  if (!migration) {
-    throw new Error("missing Codex binding migration");
-  }
-  return {
-    env,
-    migration,
-    params: {
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context: createDoctorContext(env),
-    },
-    sessionsDir,
-    sidecarPath,
-    stateDir,
-    storePath,
-    transcriptPath,
-    readSession: (sessionKey: string, agentId = "main") =>
-      getSessionEntry({ agentId, env, sessionKey, storePath }),
-  };
 }
 
 afterEach(async () => {
