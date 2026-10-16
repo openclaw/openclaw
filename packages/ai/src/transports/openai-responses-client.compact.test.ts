@@ -18,23 +18,20 @@ vi.mock("openai", () => {
 });
 
 import { resolveOpenAIResponsesCompactEndpointPlan } from "./openai-responses-payload-policy.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   createOpenAIResponsesTransportStreamFn,
   requestPreparedOpenAIResponsesCompaction,
 } from "./openai-responses-transport.js";
 
-const model = {
+const model = createModel({
   id: "grok-4.5",
   name: "Grok 4.5",
-  api: "openai-responses",
   provider: "xai",
   baseUrl: "https://api.x.ai/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 256_000,
   maxTokens: 8_192,
-} satisfies Model<"openai-responses">;
+});
 
 const officialOpenAIModel = {
   ...model,
@@ -49,16 +46,32 @@ const context = {
   messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
 } satisfies Context;
 
-function mockCompactResponse(body: unknown): void {
-  sdkState.post.mockResolvedValue(body);
+const compactionItem = { type: "compaction", id: "cmp_1", encrypted_content: "opaque" };
+const retainedUser = {
+  type: "message",
+  role: "user",
+  content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
+};
+function mockCompactResponse(
+  output: unknown[],
+  usage = { input_tokens: 1, output_tokens: 1 },
+): void {
+  sdkState.post.mockResolvedValue({ object: "response.compaction", output, usage });
 }
 
-function compact(requestModel: Model = model) {
+function compact(requestModel: Model = model, requestContext = context, sessionId?: string) {
   return requestPreparedOpenAIResponsesCompaction(
     createOpenAIResponsesTransportStreamFn(),
     requestModel,
-    context,
-    { apiKey: "test-key" },
+    requestContext,
+    { apiKey: "test-key", sessionId },
+  );
+}
+
+function expectCompactBody(body: unknown) {
+  expect(sdkState.post).toHaveBeenCalledWith(
+    "/responses/compact",
+    expect.objectContaining({ body }),
   );
 }
 
@@ -69,49 +82,25 @@ describe("responses compact endpoint", () => {
   });
 
   it("sends the system prompt as instructions and accepts retained users from official OpenAI", async () => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
-        },
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-      usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
-    });
-
-    const result = await requestPreparedOpenAIResponsesCompaction(
-      createOpenAIResponsesTransportStreamFn(),
-      officialOpenAIModel,
-      context,
-      { apiKey: "test-key", sessionId: "session-1" },
-    );
+    const usage = { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 };
+    mockCompactResponse([retainedUser, compactionItem], usage);
+    const result = await compact(officialOpenAIModel, context, "session-1");
 
     expect(sdkState.clients[0]).toMatchObject({
       apiKey: "test-key",
       baseURL: "https://api.openai.com/v1",
     });
     // The prompt stays out of input, so the endpoint cannot retain it in the window.
-    expect(sdkState.post).toHaveBeenCalledWith(
-      "/responses/compact",
-      expect.objectContaining({
-        body: {
-          model: "gpt-5.6-luna",
-          instructions: "Retain the conversation.",
-          input: [expect.objectContaining({ role: "user", type: "message" })],
-        },
-      }),
-    );
+    expectCompactBody({
+      model: "gpt-5.6-luna",
+      instructions: "Retain the conversation.",
+      input: [expect.objectContaining({ role: "user", type: "message" })],
+    });
     expect(result).toMatchObject({
-      output: [
-        expect.objectContaining({ role: "user" }),
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-      item: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
+      output: [expect.objectContaining({ role: "user" }), compactionItem],
+      item: compactionItem,
       historyMode: "retained-users",
-      usage: { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 },
+      usage,
       model: officialOpenAIModel,
       replayMetadata: {
         source: "openai-responses",
@@ -134,34 +123,22 @@ describe("responses compact endpoint", () => {
         { type: "message", ...message },
         { type: "compaction", encrypted_content: "opaque" },
       ];
-      mockCompactResponse({
-        object: "response.compaction",
-        output,
-        usage: { input_tokens: 100, output_tokens: 10 },
+      mockCompactResponse(output, { input_tokens: 100, output_tokens: 10 });
+      const result = await compact(officialOpenAIModel, {
+        ...context,
+        messages: [
+          ...context.messages,
+          { role: "user", content: "A second user message.", timestamp: 2 },
+        ],
       });
-      const result = await requestPreparedOpenAIResponsesCompaction(
-        createOpenAIResponsesTransportStreamFn(),
-        officialOpenAIModel,
-        {
-          ...context,
-          messages: [
-            ...context.messages,
-            { role: "user", content: "A second user message.", timestamp: 2 },
-          ],
-        },
-        { apiKey: "test-key" },
-      );
       expect(result.output).toEqual(output);
       expect(result.historyMode).toBe("retained-users");
-      expect(sdkState.post).toHaveBeenCalledWith(
-        "/responses/compact",
+      expectCompactBody(
         expect.objectContaining({
-          body: expect.objectContaining({
-            input: [
-              expect.objectContaining({ role: "user" }),
-              expect.objectContaining({ role: "user" }),
-            ],
-          }),
+          input: [
+            expect.objectContaining({ role: "user" }),
+            expect.objectContaining({ role: "user" }),
+          ],
         }),
       );
     },
@@ -184,42 +161,22 @@ describe("responses compact endpoint", () => {
       reason: "exactly one compaction item",
     },
   ])("rejects invalid canonical windows: $reason", async ({ output, reason }) => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output,
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
+    mockCompactResponse(output);
     await expect(compact(officialOpenAIModel)).rejects.toThrow(reason);
   });
 
   it("rejects retained-message prefixes from native xAI", async () => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
-        },
-        { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
+    mockCompactResponse([retainedUser, compactionItem]);
 
     await expect(compact()).rejects.toThrow("retained messages require native OpenAI");
     // xAI has no instructions field on /responses/compact and disables the developer role.
-    expect(sdkState.post).toHaveBeenCalledWith(
-      "/responses/compact",
-      expect.objectContaining({
-        body: {
-          model: "grok-4.5",
-          input: [
-            expect.objectContaining({ role: "system", type: "message" }),
-            expect.objectContaining({ role: "user", type: "message" }),
-          ],
-        },
-      }),
-    );
+    expectCompactBody({
+      model: "grok-4.5",
+      input: [
+        expect.objectContaining({ role: "system", type: "message" }),
+        expect.objectContaining({ role: "user", type: "message" }),
+      ],
+    });
   });
 
   it.each([
@@ -227,25 +184,19 @@ describe("responses compact endpoint", () => {
     { type: "input_file", file_id: 42 },
     { type: "output_text", text: "not supported input" },
   ])("rejects unsupported retained content without rewriting it: %j", async (block) => {
-    mockCompactResponse({
-      object: "response.compaction",
-      output: [
-        { type: "message", role: "user", content: [block] },
-        { type: "compaction", encrypted_content: "opaque" },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1 },
-    });
+    mockCompactResponse([
+      { type: "message", role: "user", content: [block] },
+      { type: "compaction", encrypted_content: "opaque" },
+    ]);
     await expect(compact(officialOpenAIModel)).rejects.toThrow("unsupported content");
   });
 
   it.each([{ ...model, provider: "custom", baseUrl: "https://responses.example/v1" }])(
     "rejects endpoint output altered by the $provider route's status policy",
     async (route) => {
-      mockCompactResponse({
-        object: "response.compaction",
-        output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
-        usage: { input_tokens: 1, output_tokens: 1 },
-      });
+      mockCompactResponse([
+        { type: "compaction", encrypted_content: "opaque", status: "completed" },
+      ]);
       await expect(compact(route)).rejects.toThrow("rewritten by the Responses payload policy");
     },
   );
@@ -253,18 +204,14 @@ describe("responses compact endpoint", () => {
   it.each(["data:image/png;base64,invalid", "data:image/png;base64,/9j/"])(
     "rejects canonical image output that the transport would change: %s",
     async (imageUrl) => {
-      mockCompactResponse({
-        object: "response.compaction",
-        output: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
-          },
-          { type: "compaction", encrypted_content: "opaque" },
-        ],
-        usage: { input_tokens: 1, output_tokens: 1 },
-      });
+      mockCompactResponse([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
+        },
+        { type: "compaction", encrypted_content: "opaque" },
+      ]);
       await expect(compact(officialOpenAIModel)).rejects.toThrow(
         "rewritten by the Responses payload policy",
       );

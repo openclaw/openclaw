@@ -2,7 +2,7 @@
 // fact (e.g. content_filter) instead of collapsing it into a generic message;
 // the generic string is classified as a transient timeout by failover and
 // triggers pointless model rotation.
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessageEventStreamLike } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
@@ -40,24 +40,41 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 
-const model = {
+const model = createModel({
   id: "test-responses",
   name: "Test Responses",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 const initialHost = getAiTransportHost();
 const logWarn = vi.fn();
 const logDebug = vi.fn<typeof initialHost.logDebug>();
 const logInfo = vi.fn<typeof initialHost.logInfo>();
+
+function queueStream(data: AsyncIterable<unknown>) {
+  sseState.outcomes.push({ data, response: new Response(null, { status: 200 }) });
+}
+
+function run(options: OpenAIResponsesOptions = {}) {
+  return createOpenAIResponsesTransportStreamFn()(
+    model,
+    { messages: [], tools: [] },
+    { apiKey: "test-key", transport: "sse", ...options },
+  );
+}
+
+async function collect(stream: AssistantMessageEventStreamLike) {
+  const events: string[] = [];
+  for await (const event of stream) {
+    events.push(event.type);
+  }
+  return { events, result: await stream.result() };
+}
+
+function terminalDiagnostic(details: Record<string, unknown>) {
+  return { type: "openai_responses_terminal", timestamp: expect.any(Number), details };
+}
 beforeEach(() => {
   logWarn.mockClear();
   logDebug.mockClear();
@@ -78,8 +95,8 @@ describe("managed Responses transport terminal errors", () => {
     vi.stubEnv("OPENCLAW_DEBUG_SSE", "peek");
     let now = 1_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    sseState.outcomes.push({
-      data: (async function* () {
+    queueStream(
+      (async function* () {
         yield { type: "response.created", response: { id: "resp_long", service_tier: "default" } };
         yield {
           type: "response.output_text.delta",
@@ -106,14 +123,9 @@ describe("managed Responses transport terminal errors", () => {
           },
         };
       })(),
-      response: new Response(null, { status: 200 }),
-    });
+    );
     try {
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        model,
-        { messages: [], tools: [] },
-        { apiKey: "test-key", transport: "sse", maxTokens: 4096, serviceTier: "priority" },
-      );
+      const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
       expect((await stream.result()).stopReason).toBe("length");
       const messages = [
         ...logDebug.mock.calls.map(([, build]) => build()?.message),
@@ -145,8 +157,8 @@ describe("managed Responses transport terminal errors", () => {
         status: "completed",
         async: true,
       }));
-      sseState.outcomes.push({
-        data: (async function* () {
+      queueStream(
+        (async function* () {
           for (const [output_index, item] of calls.entries()) {
             yield {
               type: "response.output_item.added",
@@ -185,23 +197,13 @@ describe("managed Responses transport terminal errors", () => {
             },
           };
         })(),
-        response: new Response(null, { status: 200 }),
-      });
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        model,
-        { messages: [], tools: [] },
-        {
-          apiKey: "test-key",
-          transport: "sse",
+      );
+      const { events, result } = await collect(
+        await run({
           asyncToolExecution: true,
           signal: controller.signal,
-        } satisfies OpenAIResponsesOptions,
+        }),
       );
-      const events: string[] = [];
-      for await (const event of stream) {
-        events.push(event.type);
-      }
-      const result = await stream.result();
       expect(events).not.toContain("toolcall_end");
       expect(events.filter((type) => type === "done" || type === "error")).toEqual(["error"]);
       expect(result.stopReason).toBe(ending === "aborted" ? "aborted" : "error");
@@ -217,9 +219,11 @@ describe("managed Responses transport terminal errors", () => {
         expect(result.errorCode).toBe("AGENT_RUN_SUPERSEDED_ABORT");
       }
       if (ending !== "eof" && ending !== "aborted") {
-        expect(result.usage).toMatchObject({ input: 20, output: 9, totalTokens: 29 });
-        expect(result.responseId).toBe("resp_parallel_truncated");
-        expect(result.responseModel).toBe("served-model");
+        expect(result).toMatchObject({
+          usage: { input: 20, output: 9, totalTokens: 29 },
+          responseId: "resp_parallel_truncated",
+          responseModel: "served-model",
+        });
       }
       if (ending === "eof") {
         expect(result.errorCode).toBe("malformed_tool_call_arguments");
@@ -245,19 +249,14 @@ describe("managed Responses transport terminal errors", () => {
 
   it("keeps a caller deadline at warning level when the stream throws a generic abort", async () => {
     const controller = new AbortController();
-    sseState.outcomes.push({
-      data: (async function* () {
+    queueStream(
+      (async function* () {
         yield { type: "response.created", response: { id: "resp_timeout", status: "in_progress" } };
         controller.abort(new DOMException("run deadline", "TimeoutError"));
         throw new Error("Request was aborted");
       })(),
-      response: new Response(null, { status: 200 }),
-    });
-    const stream = await createOpenAIResponsesTransportStreamFn()(
-      model,
-      { messages: [], tools: [] },
-      { apiKey: "test-key", transport: "sse", signal: controller.signal },
     );
+    const stream = await run({ signal: controller.signal });
 
     expect((await stream.result()).stopReason).toBe("aborted");
     expect(logWarn).toHaveBeenCalledWith(
@@ -283,8 +282,8 @@ describe("managed Responses transport terminal errors", () => {
         arguments: '{"token":"unfinished',
         status: "incomplete",
       };
-      sseState.outcomes.push({
-        data: (async function* () {
+      queueStream(
+        (async function* () {
           yield {
             type: "response.output_item.added",
             output_index: 0,
@@ -317,19 +316,8 @@ describe("managed Responses transport terminal errors", () => {
             },
           };
         })(),
-        response: new Response(null, { status: 200 }),
-      });
-      const options = { apiKey: "test-key", transport: "sse" } satisfies OpenAIResponsesOptions;
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        model,
-        { messages: [], tools: [] },
-        options,
       );
-      const events: string[] = [];
-      for await (const event of stream) {
-        events.push(event.type);
-      }
-      const result = await stream.result();
+      const { events, result } = await collect(await run());
       expect(result.stopReason).toBe("error");
       expect(events.filter((type) => type === "done" || type === "error")).toEqual(["error"]);
       expect(events).not.toContain("toolcall_end");
@@ -344,12 +332,9 @@ describe("managed Responses transport terminal errors", () => {
       expect(isResponsesOutputLimitToolCallError(result)).toBe(
         status === undefined || status === "incomplete",
       );
-      expect(result.responseId).toBe("resp_truncated");
-      expect(result.responseModel).toBe("served-model");
-      expect(result.diagnostics).toContainEqual({
-        type: "openai_responses_terminal",
-        timestamp: expect.any(Number),
-        details: {
+      expect(result).toMatchObject({ responseId: "resp_truncated", responseModel: "served-model" });
+      expect(result.diagnostics).toContainEqual(
+        terminalDiagnostic({
           eventType: "response.incomplete",
           stopReason:
             status === undefined || status === "incomplete"
@@ -360,8 +345,8 @@ describe("managed Responses transport terminal errors", () => {
           incompleteReason: "max_output_tokens",
           incompleteToolCallId: "call_truncated|fc_truncated",
           endTurn: "absent",
-        },
-      });
+        }),
+      );
     },
   );
 
@@ -373,8 +358,8 @@ describe("managed Responses transport terminal errors", () => {
   ])(
     "preserves bounded incomplete diagnostics for $reason (active tool: $activeTool)",
     async ({ reason, activeTool }) => {
-      sseState.outcomes.push({
-        data: (async function* () {
+      queueStream(
+        (async function* () {
           if (activeTool) {
             yield {
               type: "response.output_item.added",
@@ -398,18 +383,8 @@ describe("managed Responses transport terminal errors", () => {
             },
           };
         })(),
-        response: new Response(null, { status: 200 }),
-      });
-      const options = {
-        apiKey: "test-key",
-        sessionId: "session-terminal-error",
-        transport: "sse",
-      } satisfies OpenAIResponsesOptions;
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        model,
-        { messages: [], tools: [] },
-        options,
       );
+      const stream = await run({ sessionId: "session-terminal-error" });
       const result = await stream.result();
       expect(result.stopReason).toBe(
         activeTool || reason === "content_filter" ? "error" : "length",
@@ -420,18 +395,16 @@ describe("managed Responses transport terminal errors", () => {
       if (reason === "content_filter") {
         expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
       }
-      expect(result.diagnostics).toContainEqual({
-        type: "openai_responses_terminal",
-        timestamp: expect.any(Number),
-        details: {
+      expect(result.diagnostics).toContainEqual(
+        terminalDiagnostic({
           eventType: "response.incomplete",
           stopReason: reason === "content_filter" ? "error" : "length",
           incompleteReason:
             reason === undefined || reason === "provider-private-reason" ? "unknown" : reason,
           ...(activeTool ? { incompleteToolCallId: "call_filtered|fc_filtered" } : {}),
           endTurn: "absent",
-        },
-      });
+        }),
+      );
       expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
       if (result.stopReason === "error") {
         expect(logWarn).toHaveBeenCalledWith(

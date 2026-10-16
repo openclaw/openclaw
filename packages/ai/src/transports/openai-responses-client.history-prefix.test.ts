@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
@@ -8,25 +8,50 @@ import {
   snapshotProviderPrefix,
 } from "../../../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-sanitize.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 
-const model: Model<"openai-responses"> = {
+const model = createModel({
   id: "gpt-5.4",
   name: "Synthetic prefix replay",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
   compat: { supportsResponsesContinuation: true },
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 1024,
-};
+});
+
+function reasoningItem(id: string, encrypted_content: string | null | undefined) {
+  return { type: "reasoning", id, summary: [], content: [], encrypted_content };
+}
+
+function callItem(id: string, args = {}) {
+  return {
+    type: "function_call",
+    id: `fc_${id}`,
+    call_id: `call_${id}`,
+    name: "cache_probe",
+    arguments: JSON.stringify(args),
+    async: true,
+  };
+}
+
+function thinking(id: string, encryptedContent: string | null | undefined) {
+  return {
+    type: "thinking",
+    thinking: "",
+    thinkingSignature: JSON.stringify({
+      id,
+      type: "reasoning",
+      summary: [],
+      content: [],
+      encrypted_content: encryptedContent,
+    }),
+  };
+}
 
 it("preserves terminal reasoning bytes from warm continuation through cold transcript replay", async () => {
   const sessionId = "reasoning-container-prefix";
@@ -72,13 +97,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
       );
       const id = `response_${requests.length}`;
       const output = [
-        {
-          type: "reasoning",
-          id: `rs_${id}`,
-          summary: [],
-          content: [],
-          encrypted_content: `encrypted_${id}`,
-        },
+        reasoningItem(`rs_${id}`, `encrypted_${id}`),
         requests.length % 3 !== 0
           ? {
               type: "function_call",
@@ -151,14 +170,9 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         const call = assistant.content.find((block) => block.type === "toolCall");
         expect(assistant.stopReason).toBe(step < 2 ? "toolUse" : "stop");
         if (call) {
-          context.messages.push({
-            role: "toolResult",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: [{ type: "text", text: "Synthetic record." }],
-            isError: false,
-            timestamp: turn,
-          });
+          context.messages.push(
+            makeTextToolResult(call.id, call.name, "Synthetic record.", false, turn),
+          );
         }
       }
     }
@@ -192,21 +206,8 @@ it.each(["terminal-ciphertext", undefined, null])(
   "settles async transcript prefixes with terminal ciphertext %s",
   async (encryptedContent) => {
     const output = createOpenAIResponsesAssistantOutput(model);
-    const reasoning = {
-      type: "reasoning",
-      id: "rs_async",
-      summary: [],
-      content: [],
-      encrypted_content: "streamed-ciphertext",
-    };
-    const call = {
-      type: "function_call",
-      id: "fc_async",
-      call_id: "call_async",
-      name: "cache_probe",
-      arguments: "{}",
-      async: true,
-    };
+    const reasoning = reasoningItem("rs_async", "streamed-ciphertext");
+    const call = callItem("async");
     let terminalSeen = false;
     const snapshots: unknown[] = [];
     await processResponsesStream(
@@ -239,17 +240,7 @@ it.each(["terminal-ciphertext", undefined, null])(
     expect(snapshots).toEqual([
       {
         terminalSeen: true,
-        reasoning: {
-          type: "thinking",
-          thinking: "",
-          thinkingSignature: JSON.stringify({
-            id: "rs_async",
-            type: "reasoning",
-            summary: [],
-            content: [],
-            encrypted_content: encryptedContent,
-          }),
-        },
+        reasoning: thinking("rs_async", encryptedContent),
       },
     ]);
   },
@@ -260,13 +251,7 @@ it.each(["stream error", "error event", "abort", "missing terminal"])(
   async (ending) => {
     const output = createOpenAIResponsesAssistantOutput(model);
     const controller = new AbortController();
-    const reasoning = {
-      type: "reasoning",
-      id: "rs_interrupted",
-      summary: [],
-      content: [],
-      encrypted_content: "item-done-ciphertext",
-    };
+    const reasoning = reasoningItem("rs_interrupted", "item-done-ciphertext");
     const snapshots: unknown[] = [];
     const result = processResponsesStream(
       (async function* () {
@@ -275,15 +260,7 @@ it.each(["stream error", "error event", "abort", "missing terminal"])(
           yield {
             type: "response.output_item.done",
             output_index: index,
-            item: {
-              type: "function_call",
-              id: `fc_${index}`,
-              call_id: `call_${index}`,
-              name: "cache_probe",
-              arguments: JSON.stringify({ index }),
-              status: "completed",
-              async: true,
-            },
+            item: { ...callItem(String(index), { index }), status: "completed" },
           };
         }
         if (ending === "stream error") {
@@ -330,17 +307,7 @@ it.each(["stream error", "error event", "abort", "missing terminal"])(
         },
         transcript: expect.objectContaining({
           content: [
-            {
-              type: "thinking",
-              thinking: "",
-              thinkingSignature: JSON.stringify({
-                id: "rs_interrupted",
-                type: "reasoning",
-                summary: [],
-                content: [],
-                encrypted_content: "item-done-ciphertext",
-              }),
-            },
+            thinking("rs_interrupted", "item-done-ciphertext"),
             expect.objectContaining({ id: "call_1|fc_1" }),
             expect.objectContaining({ id: "call_2|fc_2" }),
           ],

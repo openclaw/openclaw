@@ -23,6 +23,22 @@ const model = {
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Context;
+const responseMetadata = {
+  status: 202,
+  headers: {
+    "content-type": "text/event-stream",
+    "x-ratelimit-remaining-requests": "42",
+    "x-request-id": "req_observable",
+  },
+};
+
+async function eventTypes(stream: AssistantMessageEventStreamLike) {
+  const types: string[] = [];
+  for await (const event of stream) {
+    types.push(event.type);
+  }
+  return types;
+}
 
 type RequestLifecycle = {
   requestAborted: ReturnType<typeof vi.fn>;
@@ -49,14 +65,7 @@ function installResponse(): RequestLifecycle {
         addAbortListener = vi.spyOn(signal, "addEventListener");
         removeAbortListener = vi.spyOn(signal, "removeEventListener");
       }
-      return new Response(body, {
-        status: 202,
-        headers: {
-          "content-type": "text/event-stream",
-          "x-ratelimit-remaining-requests": "42",
-          "x-request-id": "req_observable",
-        },
-      });
+      return new Response(body, responseMetadata);
     },
   });
   return {
@@ -73,12 +82,8 @@ function installResponse(): RequestLifecycle {
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 
-function createManagedFixtureStream(
-  fixtureModel: Model<"openai-completions">,
-  fixtureContext: Context,
-  fixtureOptions?: StreamOptions,
-): AssistantMessageEventStreamLike {
-  const stream = createManagedStream(fixtureModel, fixtureContext, fixtureOptions);
+function createStream(options: StreamOptions): AssistantMessageEventStreamLike {
+  const stream = createManagedStream(model, context, { apiKey: "fixture-token", ...options });
   if (stream instanceof Promise) {
     throw new Error("OpenAI Chat transport must return its event stream synchronously");
   }
@@ -110,7 +115,6 @@ afterEach(() => {
 });
 
 describe("OpenAI Chat response hook", () => {
-  const createStream = createManagedFixtureStream;
   it("reports a rejected response before its body is consumed without retrying", async () => {
     const response = Response.json({ error: { message: "overloaded" } }, { status: 503 });
     const readBody = vi.spyOn(response, "text");
@@ -121,10 +125,7 @@ describe("OpenAI Chat response hook", () => {
       bodyReadsDuringHook.push(readBody.mock.calls.length);
     });
 
-    const result = await createStream(model, context, {
-      apiKey: "fixture-token",
-      onResponse,
-    }).result();
+    const result = await createStream({ onResponse }).result();
 
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -162,24 +163,9 @@ describe("OpenAI Chat response hook", () => {
     expect(order).toEqual(["accepted:http_response", "hook:start"]);
     expect(acceptanceObserver).toHaveBeenCalledWith({
       kind: "http_response",
-      status: 202,
-      headers: {
-        "content-type": "text/event-stream",
-        "x-ratelimit-remaining-requests": "42",
-        "x-request-id": "req_observable",
-      },
+      ...responseMetadata,
     });
-    expect(onResponse).toHaveBeenCalledWith(
-      {
-        status: 202,
-        headers: {
-          "content-type": "text/event-stream",
-          "x-ratelimit-remaining-requests": "42",
-          "x-request-id": "req_observable",
-        },
-      },
-      model,
-    );
+    expect(onResponse).toHaveBeenCalledWith(responseMetadata, model);
 
     continueHook();
     await consume;
@@ -198,11 +184,8 @@ describe("OpenAI Chat response hook", () => {
     const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(() =>
       Promise.reject(hookError),
     );
-    const stream = createStream(model, context, { apiKey: "fixture-token", onResponse });
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
+    const stream = createStream({ onResponse });
+    const events = await eventTypes(stream);
     const result = await stream.result();
 
     expect(onResponse).toHaveBeenCalledOnce();
@@ -210,7 +193,7 @@ describe("OpenAI Chat response hook", () => {
       stopReason: "error",
       errorMessage: "after_provider_response hook failed",
     });
-    expect(eventTypes).toEqual(["error"]);
+    expect(events).toEqual(["error"]);
     expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
     lifecycle.assertListenersRemoved();
   });
@@ -226,12 +209,8 @@ describe("OpenAI Chat response hook", () => {
       { apiKey: "fixture-token", onResponse },
       acceptanceObserver,
     );
-    const stream = createStream(model, context, options);
-    const eventTypes: string[] = [];
-
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
+    const stream = createStream(options);
+    const events = await eventTypes(stream);
 
     expect(await stream.result()).toMatchObject({
       stopReason: "error",
@@ -239,7 +218,7 @@ describe("OpenAI Chat response hook", () => {
     });
     expect(acceptanceObserver).toHaveBeenCalledOnce();
     expect(onResponse).not.toHaveBeenCalled();
-    expect(eventTypes).toEqual(["error"]);
+    expect(events).toEqual(["error"]);
     expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
   });
 
@@ -253,14 +232,9 @@ describe("OpenAI Chat response hook", () => {
       onFirstEventTimeout,
       onResponse,
     });
-    const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
+    const consume = eventTypes(stream);
     const result = await settleWithin(stream.result());
-    await consume;
+    const events = await consume;
 
     expect(onResponse).toHaveBeenCalledOnce();
     expect(result.stopReason).toBe("error");
@@ -268,7 +242,7 @@ describe("OpenAI Chat response hook", () => {
       /completions HTTP stream opened but did not deliver a first SSE event within 20ms/,
     );
     expect(onFirstEventTimeout).toHaveBeenCalledWith(expect.any(Error));
-    expect(eventTypes).toEqual(["error"]);
+    expect(events).toEqual(["error"]);
     expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
     lifecycle.assertListenersRemoved();
   });
@@ -281,17 +255,11 @@ describe("OpenAI Chat response hook", () => {
       settleHook = () => reject(new Error("late response hook rejection"));
     });
     const onResponse = vi.fn(() => pendingHook);
-    const stream = createStream(model, context, {
-      apiKey: "fixture-token",
+    const stream = createStream({
       signal: controller.signal,
       onResponse,
     });
-    const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
+    const consume = eventTypes(stream);
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     const abortReason = Object.assign(new Error("caller canceled the provider response"), {
@@ -299,20 +267,20 @@ describe("OpenAI Chat response hook", () => {
     });
     controller.abort(abortReason);
     const result = await settleWithin(stream.result());
-    await consume;
+    const events = await consume;
     expect(result).toMatchObject({
       stopReason: "aborted",
       errorCode: "CALLER_ABORTED",
       errorMessage: "caller canceled the provider response",
     });
-    expect(eventTypes).toEqual(["error"]);
+    expect(events).toEqual(["error"]);
     expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
     settleHook();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(eventTypes).toEqual(["error"]);
+    expect(events).toEqual(["error"]);
     lifecycle.assertListenersRemoved();
   });
 });

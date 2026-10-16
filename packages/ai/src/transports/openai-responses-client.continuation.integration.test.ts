@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
-import type { Context, StreamOptions, Tool } from "@openclaw/llm-core";
+import type { Context, Model, StreamOptions, Tool } from "@openclaw/llm-core";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
@@ -22,6 +23,8 @@ function responseEvents(
   first: boolean,
   responseId = first ? "resp_number" : "resp_done",
   suffix = "",
+  callOverrides: Partial<{ id: string; call_id: string; arguments: string }> = {},
+  message = { id: "msg_done", text: "recorded" },
 ) {
   const item = first
     ? {
@@ -31,13 +34,14 @@ function responseEvents(
         name: numberTool.name,
         arguments: '{"n":9007199254740993}',
         status: "completed",
+        ...callOverrides,
       }
     : {
         type: "message",
-        id: "msg_done",
+        id: message.id,
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text: "recorded", annotations: [] }],
+        content: [{ type: "output_text", text: message.text, annotations: [] }],
       };
   return [
     ...(first
@@ -51,7 +55,7 @@ function responseEvents(
             type: "response.function_call_arguments.delta",
             output_index: 0,
             item_id: item.id,
-            delta: '{"n":9007199254740993}',
+            delta: item.arguments,
           },
           { type: "response.output_item.done", output_index: 0, item },
         ]
@@ -66,6 +70,15 @@ function responseEvents(
       },
     },
   ];
+}
+
+async function respond(
+  context: Context,
+  options: OpenAIResponsesOptions,
+  model: Model = responsesLoopbackModel,
+) {
+  const stream = await createOpenAIResponsesTransportStreamFn()(model, context, options);
+  return stream.result();
 }
 
 it.each([true, false])(
@@ -109,8 +122,7 @@ it.each([true, false])(
     const snapshots: string[] = [];
     try {
       for (let turn = 1; turn <= 3; turn++) {
-        const stream = await createOpenAIResponsesTransportStreamFn()(
-          responsesLoopbackModel,
+        const assistant = await respond(
           { systemPrompt: "Use the supplied tool.", messages, tools: [numberTool] },
           {
             apiKey: "synthetic-continuation-key",
@@ -127,7 +139,6 @@ it.each([true, false])(
             },
           },
         );
-        const assistant = await stream.result();
         expect(Object.hasOwn(assistant, "errorMessage")).toBe(false);
         const thinking = assistant.content.find((block) => block.type === "thinking");
         assert(thinking?.type === "thinking");
@@ -151,14 +162,9 @@ it.each([true, false])(
         if (turn < 3) {
           const call = assistant.content.find((block) => block.type === "toolCall");
           assert(call?.type === "toolCall");
-          messages.push({
-            role: "toolResult",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: [{ type: "text", text: `recorded-${turn}` }],
-            isError: false,
-            timestamp: turn + 1,
-          });
+          messages.push(
+            makeTextToolResult(call.id, call.name, `recorded-${turn}`, false, turn + 1),
+          );
         }
       }
       expect(server.rawRequests).toEqual(server.requests.map((request) => JSON.stringify(request)));
@@ -234,12 +240,11 @@ it("preserves reasoning controls in concurrent same-session SSE requests", async
       reasoningEffort,
       onResponse,
     } satisfies OpenAIResponsesOptions;
-    const stream = await createOpenAIResponsesTransportStreamFn()(
-      { ...responsesLoopbackModel, id: reasoningModel.id, reasoning: true },
-      { messages },
-      options,
-    );
-    return stream.result();
+    return respond({ messages }, options, {
+      ...responsesLoopbackModel,
+      id: reasoningModel.id,
+      reasoning: true,
+    });
   };
   let active: ReturnType<typeof run> | undefined;
   try {
@@ -287,9 +292,8 @@ it.each([
   async (transport, edited) => {
     const server = await createResponsesLoopbackServer((turn) => responseEvents(turn === 1));
     const { requests } = server;
-    const run = async (messages: Context["messages"]) => {
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        responsesLoopbackModel,
+    const run = (messages: Context["messages"]) =>
+      respond(
         { messages, tools: [numberTool] },
         {
           apiKey: "synthetic-continuation-key",
@@ -298,8 +302,6 @@ it.each([
           onPayload: (payload) => ({ ...(payload as Record<string, unknown>), store: true }),
         },
       );
-      return stream.result();
-    };
     try {
       const user = { role: "user" as const, content: "Record 9007199254740993.", timestamp: 1 };
       const first = await run([user]);
@@ -314,14 +316,7 @@ it.each([
       if (edited !== "none") {
         replay.content = [{ ...call, arguments: { n: editedValue } }];
       }
-      const result = {
-        role: "toolResult" as const,
-        toolCallId: call.id,
-        toolName: call.name,
-        content: [{ type: "text" as const, text: "ok" }],
-        isError: false,
-        timestamp: 2,
-      };
+      const result = makeTextToolResult(call.id, call.name, "ok", false, 2);
       const second = await run([user, replay, result]);
       expect(second.stopReason).toBe("stop");
       expect(requests).toHaveLength(2);
@@ -376,9 +371,8 @@ it.each(["sse", "websocket-cached"] as const)(
     const server = await createResponsesLoopbackServer((turn) =>
       responseEvents(false, `resp_${turn}`),
     );
-    const run = async (messages: Context["messages"], failSerialization = false) => {
-      const stream = await createOpenAIResponsesTransportStreamFn()(
-        responsesLoopbackModel,
+    const run = (messages: Context["messages"], failSerialization = false) =>
+      respond(
         { messages },
         {
           apiKey: "synthetic-continuation-key",
@@ -401,8 +395,6 @@ it.each(["sse", "websocket-cached"] as const)(
           }),
         },
       );
-      return stream.result();
-    };
     try {
       const user = { role: "user" as const, content: "First.", timestamp: 1 };
       const first = await run([user]);
@@ -617,81 +609,40 @@ describe("tool changes and continuation identity", () => {
     },
   ] as const;
 
-  function toolChangeEvents(turn: number) {
-    const item =
-      turn === 1
-        ? {
-            type: "function_call",
-            id: "fc_value",
-            call_id: "call_value",
-            name: recordTool.name,
-            arguments: '{"n":7}',
-            status: "completed",
-          }
-        : {
-            type: "message",
-            id: `msg_${turn}`,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: `done ${turn}`, annotations: [] }],
-          };
-    return [
-      ...(turn === 1
-        ? [
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...item, arguments: "", status: "in_progress" },
-            },
-            {
-              type: "response.function_call_arguments.delta",
-              output_index: 0,
-              item_id: item.id,
-              delta: '{"n":7}',
-            },
-            { type: "response.output_item.done", output_index: 0, item },
-          ]
-        : []),
-      {
-        type: "response.completed",
-        response: {
-          id: `resp_${turn}`,
-          status: "completed",
-          output: [item],
-          usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-        },
-      },
-    ];
-  }
-
   it.each(scenarios)(
     "real $transport continuation with $name tools",
     async ({ transport, ...scenario }) => {
-      const server = await createResponsesLoopbackServer(toolChangeEvents);
+      const server = await createResponsesLoopbackServer((turn) =>
+        responseEvents(
+          turn === 1,
+          `resp_${turn}`,
+          "",
+          {
+            id: "fc_value",
+            call_id: "call_value",
+            arguments: '{"n":7}',
+          },
+          { id: `msg_${turn}`, text: `done ${turn}` },
+        ),
+      );
       const { requests, authorization } = server;
       const prepared: Array<Record<string, unknown>> = [];
-      const run = async (context: Context, later = false) => {
-        const stream = await createOpenAIResponsesTransportStreamFn()(
-          responsesLoopbackModel,
-          context,
-          {
-            apiKey: later && scenario.name === "key" ? "synthetic-key-b" : "synthetic-key-a",
-            sessionId: `${transport}-${scenario.name}-${later && scenario.name === "session" ? "b" : "a"}`,
-            cacheRetention: "none",
-            transport,
-            onPayload: (payload) => {
-              const request = {
-                ...(payload as Record<string, unknown>),
-                store: true,
-                tool_choice: later && scenario.name === "tool-choice" ? "none" : "auto",
-              };
-              prepared.push(request);
-              return request;
-            },
+      const run = (context: Context, later = false) =>
+        respond(context, {
+          apiKey: later && scenario.name === "key" ? "synthetic-key-b" : "synthetic-key-a",
+          sessionId: `${transport}-${scenario.name}-${later && scenario.name === "session" ? "b" : "a"}`,
+          cacheRetention: "none",
+          transport,
+          onPayload: (payload) => {
+            const request = {
+              ...(payload as Record<string, unknown>),
+              store: true,
+              tool_choice: later && scenario.name === "tool-choice" ? "none" : "auto",
+            };
+            prepared.push(request);
+            return request;
           },
-        );
-        return stream.result();
-      };
+        });
       try {
         const user = { role: "user" as const, content: "Record 7.", timestamp: 1 };
         const first = await run({ messages: [user], tools: [recordTool] });
@@ -702,14 +653,7 @@ describe("tool changes and continuation identity", () => {
         if (!call) {
           throw new Error("Expected a completed tool call");
         }
-        const result = {
-          role: "toolResult" as const,
-          toolCallId: call.id,
-          toolName: call.name,
-          content: [{ type: "text" as const, text: "ok" }],
-          isError: false,
-          timestamp: 2,
-        };
+        const result = makeTextToolResult(call.id, call.name, "ok", false, 2);
         const messages: Context["messages"] = [user, first, result];
         const second = await run({ messages, tools: [...scenario.after] }, true);
         const nextUser = { role: "user" as const, content: "Continue.", timestamp: 3 };

@@ -8,6 +8,7 @@ import {
   responsesInputFingerprint,
   recordResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
+import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
@@ -15,18 +16,31 @@ import {
   encodeTextSignatureV1,
 } from "./openai-responses-replay-messages-internal.js";
 
-const model: Model = {
+const model = createModel({
   id: "async-model",
   name: "Async Model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1000,
   maxTokens: 1000,
-};
+});
+
+const user = (content: string) => ({ role: "user" as const, content, timestamp: 1 });
+function answer(text: string, overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+  return {
+    ...createOpenAIResponsesAssistantOutput(model),
+    content: [{ type: "text", text }],
+    ...overrides,
+  };
+}
+function asyncPrefix(responseId: string | undefined, turnId?: string): AssistantMessage {
+  return answer("", {
+    responseId,
+    turnId,
+    stopReason: "toolUse",
+    content: [
+      { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
+    ],
+  });
+}
 
 it.each([
   ["provider", convertProviderResponsesMessages],
@@ -77,7 +91,10 @@ it.each([
       content: [text("Captured screen"), image("aW1n")],
       output: [wireText("Captured screen"), wireImage("aW1n")],
     },
-    { content: [image("aW1n"), text("Caption")], output: [wireImage("aW1n"), wireText("Caption")] },
+    {
+      content: [image("aW1n"), text("Caption")],
+      output: [wireImage("aW1n"), wireText("Caption")],
+    },
     {
       content: [
         text("Before:"),
@@ -125,30 +142,16 @@ it.each([
 ] as const)(
   "%s keeps retained runtime carriers with their own users when steering is appended",
   (_name, convert) => {
-    const user = (content: string) => ({ role: "user" as const, content, timestamp: 1 });
-    const answer = (text: string): AssistantMessage => ({
-      ...createOpenAIResponsesAssistantOutput(model),
-      content: [{ type: "text", text }],
-    });
     const context: Context = {
-      messages: [
-        user("first"),
+      messages: ["first", "second"].flatMap((turn) => [
+        user(turn),
         {
-          role: "user",
-          content: "OpenClaw runtime context:\nfirst context",
+          ...user(`OpenClaw runtime context:\n${turn} context`),
           timestamp: 0,
           runtimeContext: {},
         },
-        answer("first answer"),
-        user("second"),
-        {
-          role: "user",
-          content: "OpenClaw runtime context:\nsecond context",
-          timestamp: 0,
-          runtimeContext: {},
-        },
-        answer("second answer"),
-      ],
+        answer(`${turn} answer`),
+      ]),
     };
     const original = structuredClone(context);
     const prefix = convert(model, context, new Set(["openai"]));
@@ -178,19 +181,11 @@ it.each([
   ["transport", convertResponsesMessages],
 ] as const)("%s anchors mixed-media shipped carriers before async replay", (_name, convert) => {
   const imageModel: Model = { ...model, input: ["text", "image"] };
-  const prefix: AssistantMessage = {
-    ...createOpenAIResponsesAssistantOutput(imageModel),
-    responseId: "resp_async",
-    stopReason: "toolUse",
-    content: [
-      { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
-    ],
-  };
-  const tail: AssistantMessage = {
-    ...createOpenAIResponsesAssistantOutput(imageModel),
+  const prefix = asyncPrefix("resp_async");
+  const tail = answer("", {
     responseId: "resp_async",
     content: [{ type: "text", text: "answer", textSignature: encodeTextSignatureV1("msg_tail") }],
-  };
+  });
   const carrier = {
     role: "user" as const,
     content: [
@@ -241,19 +236,11 @@ it.each([
 ] as const)(
   "%s replay preserves one async result and the incremental response prefix",
   (_name, convert, earlyResult, terminalIdentity) => {
-    const prefix: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
-      responseId: terminalIdentity ? undefined : "resp_async",
-      turnId: terminalIdentity ? "streamed_turn" : undefined,
-      stopReason: "toolUse",
-      content: [
-        { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
-      ],
-    };
-    const tail: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(model),
+    const turnId = terminalIdentity ? "streamed_turn" : undefined;
+    const prefix = asyncPrefix(terminalIdentity ? undefined : "resp_async", turnId);
+    const tail = answer("", {
       responseId: "resp_async",
-      turnId: terminalIdentity ? "streamed_turn" : undefined,
+      turnId,
       content: [
         {
           type: "text",
@@ -261,14 +248,8 @@ it.each([
           textSignature: encodeTextSignatureV1("msg_tail"),
         },
       ],
-    };
-    const toolResult: ToolResultMessage = makeTextToolResult(
-      "call_async|fc_async",
-      "lookup",
-      "found",
-      false,
-      2,
-    );
+    });
+    const toolResult = makeTextToolResult("call_async|fc_async", "lookup", "found", false, 2);
     const context: Context = {
       messages: [
         { role: "user", content: "look up", timestamp: 1 },
@@ -383,13 +364,7 @@ it.each(["before", "after"] as const)(
         { type: "toolCall", id: "call_1|fc_1", name: "lookup", arguments: {}, async: true },
       ],
     };
-    const result: ToolResultMessage = makeTextToolResult(
-      "call_1|fc_1",
-      "lookup",
-      "found",
-      false,
-      2,
-    );
+    const result = makeTextToolResult("call_1|fc_1", "lookup", "found", false, 2);
     const input = { type: "function_call_output", call_id: "call_1", output: "found" };
     const response: AssistantMessage = {
       ...createOpenAIResponsesAssistantOutput(model),
