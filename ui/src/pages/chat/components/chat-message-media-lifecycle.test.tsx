@@ -225,12 +225,16 @@ function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
   });
 }
 
-function createAvailabilityPane(source: string, authToken: string, policyKey?: string) {
+function createAvailabilityPane(
+  source: string,
+  authToken: string | (() => string),
+  policyKey?: string,
+) {
   let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
   const rerender = observeSubscriber(() => {
     latest = resolveAssistantAttachmentAvailability(source, {
       resourceBasePath: "/openclaw",
-      authToken,
+      authToken: typeof authToken === "function" ? authToken() : authToken,
       policyKey,
       onRequestUpdate: rerender,
     });
@@ -241,6 +245,19 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
       return latest;
     },
   };
+}
+
+function installTicketFetch(...tickets: Array<[string, number?]>) {
+  const fetchMock = vi.fn<() => Promise<Response>>();
+  for (const [ticket, expiresIn] of tickets) {
+    fetchMock.mockImplementationOnce(async () => ticketResponse(ticket, expiresIn));
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function expectTicket(pane: ReturnType<typeof createAvailabilityPane>, mediaTicket: string) {
+  expect(pane.latest).toMatchObject({ status: "available", mediaTicket });
 }
 
 describe("chat media resource lifecycle", () => {
@@ -360,44 +377,26 @@ describe("chat media resource lifecycle", () => {
       if (approving) {
         expect(url.searchParams.get("allow")).toBe("1");
       }
-      return {
-        ok: true,
-        json: async () =>
-          protectedSession && !approving && !renewing
-            ? {
-                available: false,
-                reason: "Outside allowed folders",
-                retryable: false,
-                canAllow: true,
-              }
-            : {
-                available: true,
-                mediaTicket: renewing
-                  ? "renewed-image"
-                  : approving
-                    ? "approved-image"
-                    : "open-image",
-                mediaTicketExpiresAt: new Date(
-                  Date.now() + (approving ? 31_000 : 90_000),
-                ).toISOString(),
-              },
-      };
+      if (protectedSession && !approving && !renewing) {
+        return Response.json({
+          available: false,
+          reason: "Outside allowed folders",
+          retryable: false,
+          canAllow: true,
+        });
+      }
+      const ticket = renewing ? "renewed-image" : approving ? "approved-image" : "open-image";
+      return ticketResponse(ticket, approving ? 31_000 : 90_000);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const protectedPane = document.createElement("div");
-    const openPane = document.createElement("div");
-    const renderPane = (container: HTMLElement, sessionKey: string, onRequestUpdate: () => void) =>
-      renderImages(container, [{ url: source, fileName: "preview.png" }], {
+    const pane = (sessionKey: string) =>
+      createImagePane(() => [{ url: source, fileName: "preview.png" }], {
         sessionKey,
         agentId: "main",
         authToken: "image-test-token",
-        onRequestUpdate,
       });
-    const renderProtected = observeSubscriber(() =>
-      renderPane(protectedPane, "protected", renderProtected),
-    );
-    const renderOpen = observeSubscriber(() => renderPane(openPane, "unprotected", renderOpen));
-
+    const { container: protectedPane, rerender: renderProtected } = pane("protected");
+    const { container: openPane, rerender: renderOpen } = pane("unprotected");
     renderProtected();
     renderOpen();
     await vi.advanceTimersByTimeAsync(0);
@@ -651,11 +650,10 @@ describe("chat media resource lifecycle", () => {
 
   it("shares assistant attachment completion and ticket refresh across split panes", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(async () => ticketResponse("ticket-before-refresh", 31_000))
-      .mockImplementationOnce(async () => ticketResponse("ticket-after-refresh"));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = installTicketFetch(
+      ["ticket-before-refresh", 31_000],
+      ["ticket-after-refresh"],
+    );
 
     const first = createAvailabilityPane(source, "split-pane-token");
     const second = createAvailabilityPane(source, "split-pane-token");
@@ -666,20 +664,14 @@ describe("chat media resource lifecycle", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const pane of [first, second]) {
-      expect(pane.latest).toMatchObject({
-        status: "available",
-        mediaTicket: "ticket-before-refresh",
-      });
+      expectTicket(pane, "ticket-before-refresh");
     }
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const pane of [first, second]) {
-      expect(pane.latest).toMatchObject({
-        status: "available",
-        mediaTicket: "ticket-after-refresh",
-      });
+      expectTicket(pane, "ticket-after-refresh");
     }
   });
 
@@ -702,25 +694,18 @@ describe("chat media resource lifecycle", () => {
     firstResponse.resolve(ticketResponse("first-pane-ticket"));
     secondResponse.resolve(ticketResponse("second-pane-ticket"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(first.latest).toMatchObject({ status: "available", mediaTicket: "first-pane-ticket" });
-    expect(second.latest).toMatchObject({ status: "available", mediaTicket: "second-pane-ticket" });
+    expectTicket(first, "first-pane-ticket");
+    expectTicket(second, "second-pane-ticket");
     releaseChatMediaResourceSubscriber(first.rerender);
     const remounted = createAvailabilityPane(source, "shared-token", "full");
     remounted.rerender();
     await vi.advanceTimersByTimeAsync(0);
-    expect(remounted.latest).toMatchObject({
-      status: "available",
-      mediaTicket: "current-policy-ticket",
-    });
+    expectTicket(remounted, "current-policy-ticket");
   });
 
   it("refreshes an idle attachment immediately when its ticket expired offscreen", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(async () => ticketResponse("ticket-before-unmount"))
-      .mockImplementationOnce(async () => ticketResponse("ticket-after-remount"));
-    vi.stubGlobal("fetch", fetchMock);
+    installTicketFetch(["ticket-before-unmount"], ["ticket-after-remount"]);
     const first = createAvailabilityPane(source, "idle-ticket-token");
     first.rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -731,10 +716,7 @@ describe("chat media resource lifecycle", () => {
     const remounted = createAvailabilityPane(source, "idle-ticket-token");
     remounted.rerender();
     await vi.advanceTimersByTimeAsync(0);
-    expect(remounted.latest).toMatchObject({
-      status: "available",
-      mediaTicket: "ticket-after-remount",
-    });
+    expectTicket(remounted, "ticket-after-remount");
   });
 
   it("keeps automatic renewal when switching to the oldest retained attachment at capacity", async () => {
@@ -750,20 +732,13 @@ describe("chat media resource lifecycle", () => {
       releaseChatMediaResourceSubscriber(pane.rerender);
     }
     let authToken = "replacement";
-    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
-    const rerender = observeSubscriber(() => {
-      latest = resolveAssistantAttachmentAvailability(source, {
-        resourceBasePath: "/openclaw",
-        authToken,
-        onRequestUpdate: rerender,
-      });
-    });
-    rerender();
+    const pane = createAvailabilityPane(source, () => authToken);
+    pane.rerender();
     await vi.advanceTimersByTimeAsync(0);
     authToken = "original";
-    rerender();
+    pane.rerender();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(latest).toMatchObject({ status: "available", mediaTicket: `ticket-${Date.now()}` });
+    expectTicket(pane, `ticket-${Date.now()}`);
   });
 
   it("bounds transient ticket refresh failures before using the unavailable retry", async () => {
@@ -924,29 +899,24 @@ describe("chat media resource lifecycle", () => {
 });
 
 describe("pairing QR expiry resource lifecycle", () => {
-  it.each([
-    { name: "ordinary messages", message: { content: [{ type: "text", text: "hello" }] } },
-    {
-      name: "expired pairing QR messages",
-      message: () => ({
-        content: [
-          {
-            type: "openclaw_pairing_qr",
-            image_url: "data:image/png;base64,cXJwbmc=",
-            expiresAtMs: Date.now() - 1,
-          },
-        ],
-      }),
-    },
-  ])("does not subscribe or schedule expiry for $name", ({ message }) => {
+  it.each(["ordinary", "expired QR"])("does not schedule expiry for %s messages", (kind) => {
     const messageKey = crypto.randomUUID();
     const refresh = observeSubscriber(vi.fn());
-    const resolvedMessage = typeof message === "function" ? message() : message;
+    const message = {
+      content: [
+        kind === "ordinary"
+          ? { type: "text", text: "hello" }
+          : {
+              type: "openclaw_pairing_qr",
+              image_url: "data:image/png;base64,cXJwbmc=",
+              expiresAtMs: Date.now() - 1,
+            },
+      ],
+    };
 
     schedulePairingQrExpiryRefresh(
       messageKey,
-      projectMessageMedia(resolvedMessage, normalizeMessage(resolvedMessage).content)
-        .nextPairingQrExpiresAt,
+      projectMessageMedia(message, normalizeMessage(message).content).nextPairingQrExpiresAt,
       refresh,
     );
 

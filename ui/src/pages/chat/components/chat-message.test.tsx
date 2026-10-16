@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
@@ -20,6 +21,7 @@ import {
   MessageGroup as MessageGroupView,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
+import { managedSource } from "./chat-message-media.test-helpers.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import {
@@ -99,7 +101,7 @@ function MessageFixtures(props: { values: MessageFixture[] }) {
   );
 }
 
-function render(value: MessageFixture | MessageFixture[], container: HTMLElement) {
+function render(value: MessageFixture | MessageFixture[], container: HTMLElement = view) {
   const values = Array.isArray(value) ? value : [value];
   const existing = messageMounts.get(container);
   if (existing) {
@@ -141,10 +143,7 @@ function expectElement<T extends Element>(
 ): T {
   const element = container.querySelector<T>(selector);
   expect(element).toBeInstanceOf(constructor);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Expected ${selector} to match ${constructor.name}`);
-  }
-  return element;
+  return expectDefined(element, selector);
 }
 
 function elementText(selector: string, container: Element = view) {
@@ -166,15 +165,11 @@ function requireFetchCallForUrl(fetchMock: ReturnType<typeof vi.fn>, expectedUrl
   const call = fetchMock.mock.calls.find(([url]) => url === expectedUrl) as
     | [string, RequestInit?]
     | undefined;
-  if (!call) {
-    throw new Error(`Expected fetch call for ${expectedUrl}`);
-  }
-  return call;
+  return expectDefined(call, `fetch call for ${expectedUrl}`);
 }
 
 function expectSameOriginGet(init: RequestInit | undefined) {
-  expect(init?.credentials).toBe("same-origin");
-  expect(init?.method).toBe("GET");
+  expect(init).toMatchObject({ credentials: "same-origin", method: "GET" });
 }
 
 function rejectWhenAborted<T>(signal: AbortSignal, rejection: () => Error): Promise<T> {
@@ -398,10 +393,7 @@ function renderNotices(host: ReturnType<typeof createHost>, runId: string, paneI
   if (!items.length || !items.every((item) => item.kind === "notice")) {
     throw new Error("Expected notice projections");
   }
-  render(
-    items.map((item) => renderChatNotice(item)),
-    view,
-  );
+  render(items.map((item) => renderChatNotice(item)));
 }
 
 afterEach(() => {
@@ -523,7 +515,6 @@ describe("grouped chat rendering", () => {
         renderTestMessageGroup(
           createMessageGroup(message, "assistant", { key: "stream-media", isStreaming }),
         ),
-        view,
       );
     };
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
@@ -811,7 +802,6 @@ describe("grouped chat rendering", () => {
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
         runOutputTokens: 892,
       }),
-      view,
     );
 
     const status = view.querySelector(".chat-working-indicator__status");
@@ -832,7 +822,6 @@ describe("grouped chat rendering", () => {
         waitingApproval: true,
         runOutputTokens: 5_500,
       }),
-      view,
     );
 
     expect(elementText(".chat-working-indicator__status")).toContain("Waiting for approval…");
@@ -855,7 +844,6 @@ describe("grouped chat rendering", () => {
         ],
         { showAssistantAvatar: false },
       ),
-      view,
     );
 
     const group = view.querySelector(".chat-group.assistant");
@@ -878,7 +866,6 @@ describe("grouped chat rendering", () => {
         ],
         { showAssistantAvatar: false },
       ),
-      view,
     );
     expect(view.querySelector(".chat-bubble.streaming")).toBeNull();
     expect(view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
@@ -946,7 +933,7 @@ describe("grouped chat rendering", () => {
         __openclaw: metadata,
       });
       const group = prepareMessageGroup(createMessageEntry("source-message", message));
-      render(renderTestMessageGroup(group, options), view);
+      render(renderTestMessageGroup(group, options));
       if (sender === undefined) {
         expect(view.querySelector(".chat-sender-name")).toBeNull();
         expect(view.textContent).not.toContain("Unrelated Viewer");
@@ -983,7 +970,6 @@ describe("grouped chat rendering", () => {
             personActivity: { basePath: "", navigate },
           },
         ),
-        view,
       );
       return view;
     };
@@ -1015,7 +1001,6 @@ describe("grouped chat rendering", () => {
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
-      view,
     );
 
     const notice = view.querySelector<HTMLElement>(".chat-notice");
@@ -1141,7 +1126,7 @@ describe("grouped chat rendering", () => {
       // A gateway avatar exercises the image tier without third-party requests.
       sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
     });
-    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }), view);
+    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
 
     const image = await vi.waitFor(() => {
       const result = view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
@@ -1216,7 +1201,6 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     render(
       renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true }),
-      view,
     );
     await settleToolBridges(view);
     expect(elementText(".chat-activity-group__label")?.trim()).toBe(
@@ -1254,7 +1238,6 @@ describe("grouped chat rendering", () => {
             isToolExpanded: () => true,
           },
         ),
-        view,
       );
       await settleToolBridges(view);
       return history;
@@ -1340,14 +1323,14 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: (id) => id === "activity:stable-first",
     };
 
-    render(renderActivityGroup(groups.slice(0, 2), opts), view);
+    render(renderActivityGroup(groups.slice(0, 2), opts));
     const initialSummary = expectElement(view, ".chat-activity-group__summary", HTMLButtonElement);
     const initialBodyId = initialSummary.getAttribute("aria-controls");
     expect(initialSummary.getAttribute("aria-expanded")).toBe("true");
     expect(initialBodyId).toMatch(/^activity-body-[0-9a-f]+$/);
     expect(view.querySelector(`[id="${initialBodyId}"]`)).not.toBeNull();
 
-    render(renderActivityGroup(groups, opts), view);
+    render(renderActivityGroup(groups, opts));
     const appendedSummary = expectElement(view, ".chat-activity-group__summary", HTMLButtonElement);
     expect(appendedSummary.getAttribute("aria-controls")).toBe(initialBodyId);
     expect(appendedSummary.getAttribute("aria-expanded")).toBe("true");
@@ -1711,7 +1694,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("resolves managed transcode audio to an inline player", async () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     const ticketedUrl = `${source}?mediaTicket=managed-ticket`;
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
@@ -1756,7 +1739,7 @@ describe("grouped chat rendering", () => {
   it("backs off stale managed ticket refreshes and eventually marks them unavailable", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
     let finishSecondRequest: (() => void) | undefined;
     const resolveArtifactDownload = vi.fn(() => {
@@ -1821,7 +1804,7 @@ describe("grouped chat rendering", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-07-29T00:00:00.000Z"));
       const initialExpiry = Date.now() + 20_000;
-      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+      const source = managedSource();
       const artifactId = `artifact_managed_media_${crypto.randomUUID()}`;
       const resolveArtifactDownload = vi.fn(async () => {
         const attempt = resolveArtifactDownload.mock.calls.length;
@@ -1864,7 +1847,7 @@ describe("grouped chat rendering", () => {
   );
 
   it("does not render an unticketed managed attachment without an artifact resolver", () => {
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const source = managedSource();
     renderAssistantMessage(
       createAssistantAudioMessage(
         source,
@@ -2186,7 +2169,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("fetches managed outgoing chat images with auth and requester scope", async () => {
-    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const managedChatImageUrl = managedSource();
     const objectUrl = "blob:managed-image";
     stubObjectUrls(() => objectUrl);
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -2266,6 +2249,8 @@ describe("grouped chat rendering", () => {
 
     await flushAssistantAttachmentAvailabilityChecks();
     expectElement(container, ".chat-assistant-attachment-card__expand", HTMLButtonElement).click();
+    expect(sidebarContent).not.toHaveProperty("src");
+    expect(sidebarContent).toHaveProperty("sourceIdentity", source);
 
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
@@ -2347,7 +2332,7 @@ describe("grouped chat rendering", () => {
 
   it("falls back when a managed outgoing image body stalls after headers", async () => {
     vi.useFakeTimers();
-    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const managedChatImageUrl = managedSource();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const signal = init?.signal;
       if (!signal) {
@@ -2388,10 +2373,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("bounds managed outgoing image blob URLs with least-recently-used eviction", async () => {
-    const imageUrls = Array.from(
-      { length: 65 },
-      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-    );
+    const imageUrls = Array.from({ length: 65 }, () => managedSource());
     let objectUrlIndex = 0;
     const { createObjectURL, revokeObjectURL } = stubObjectUrls(
       () => `blob:managed-image-${objectUrlIndex++}`,
@@ -2465,10 +2447,7 @@ describe("grouped chat rendering", () => {
   });
 
   it("bounds managed outgoing image miss retention", async () => {
-    const imageUrls = Array.from(
-      { length: 65 },
-      () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-    );
+    const imageUrls = Array.from({ length: 65 }, () => managedSource());
     const fetchMock = vi.fn(async () => ({ ok: false }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 

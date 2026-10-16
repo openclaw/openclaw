@@ -27,6 +27,7 @@ const query = <T extends Element = HTMLElement>(selector: string) =>
   container.querySelector<T>(selector);
 const required = <T extends Element = HTMLElement>(selector: string) =>
   expectDefined(query<T>(selector), selector);
+const text = (selector: string) => query(selector)?.textContent;
 const sessionKey = "agent:research:report";
 const agentOptions = {
   agentId: "main",
@@ -74,6 +75,18 @@ function renderTestMessageGroup(
     assistantAvatar: null,
     ...options,
   });
+}
+
+function titlerFor(key: string, title: string) {
+  const titler = new SessionLinkTitler(container);
+  titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
+  const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
+    status: "ok",
+    sessionKey: key,
+    agentId: key.split(":")[1],
+    title,
+  });
+  return { titler, request };
 }
 
 function readCall(id: string, path: string, parentToolCallId?: string) {
@@ -238,9 +251,7 @@ describe("forwarded message attribution", () => {
       });
       renderTestMessageGroup(group);
       if (!forwarded) {
-        expect(query(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
-          "Forwarded from main",
-        );
+        expect(text(".chat-group.assistant .chat-sender-name")).toBe("Forwarded from main");
         expect(query(".chat-group--forwarded")).toBeNull();
         return;
       }
@@ -255,8 +266,7 @@ describe("forwarded message attribution", () => {
         'a.markdown-session-link[data-session-key="agent:main:main"]',
       );
       expect(attribution?.textContent).toContain("From");
-      expect(link?.textContent).toBe("agent:main:main");
-      expect(link?.tabIndex).toBe(0);
+      expect(link).toMatchObject({ textContent: "agent:main:main", tabIndex: 0 });
       const bubble = required(".chat-group--forwarded .chat-bubble");
       expect(attribution.nextElementSibling).toBe(bubble);
       expect(query(".chat-avatar, .chat-avatar-slot")).toBeNull();
@@ -264,14 +274,7 @@ describe("forwarded message attribution", () => {
       expect(query(".chat-group-footer .chat-group-timestamp")).not.toBeNull();
       expect(query(".chat-group-footer-actions")).not.toBeNull();
 
-      const titler = new SessionLinkTitler(container);
-      titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-      vi.spyOn(titler.client, "request").mockResolvedValueOnce({
-        status: "ok",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        title: "Main session",
-      });
+      const { titler } = titlerFor("agent:main:main", "Main session");
       const sourceLink = expectDefined(link, "source session link");
       expect(sourceLink).toBeInstanceOf(HTMLAnchorElement);
       await titler.decorate(sourceLink, true);
@@ -284,104 +287,87 @@ describe("forwarded message attribution", () => {
   );
 
   it.each([
-    { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
-    { agentId: "research", avatar: "https://example.test/avatar.png", expected: "face" },
-    { agentId: "main", avatar: "blob:main-avatar", expected: "face" },
-    { agentId: "removed", avatar: "blob:stale-avatar", expected: "empty" },
-    { agentId: undefined, avatar: null, expected: "empty" },
-  ])(
-    "renders $expected for forwarded agent $agentId with $avatar",
-    async ({ agentId, avatar, expected }) => {
-      const group = createGroup({
-        senderSession: { agentId },
-      });
-      const options = {
-        ...agentOptions,
-        senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
-      };
-      renderTestMessageGroup(group, options);
+    ["research", "blob:research-avatar", "image"],
+    ["research", "https://example.test/avatar.png", "face"],
+    ["main", "blob:main-avatar", "face"],
+    ["removed", "blob:stale-avatar", "empty"],
+    [undefined, null, "empty"],
+  ] as const)("renders forwarded agent %s with %s as %s", async (agentId, avatar, expected) => {
+    const group = createGroup({
+      senderSession: { agentId },
+    });
+    const options = {
+      ...agentOptions,
+      senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
+    };
+    renderTestMessageGroup(group, options);
 
-      const image = query("img.chat-avatar.assistant");
-      expect(image !== null).toBe(expected === "image");
-      if (expected === "empty") {
-        expect(query(".chat-avatar, .chat-avatar-slot")).toBeNull();
+    const image = query("img.chat-avatar.assistant");
+    expect(image !== null).toBe(expected === "image");
+    if (expected === "empty") {
+      expect(query(".chat-avatar, .chat-avatar-slot")).toBeNull();
+    }
+    if (expected === "image") {
+      expect(image).toMatchObject({ src: avatar, alt: "Research Agent" });
+    }
+    if (expected === "face") {
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => expect(query(".identity-avatar__agent-face")).not.toBeNull());
+      expect(query(".chat-avatar--sender-initials")).toBeNull();
+    }
+  });
+
+  it.each([
+    ["agent:main:main", "Named source", undefined, "/chat/main"],
+    [
+      "agent:main:cron:daily:run:first",
+      "Daily report",
+      undefined,
+      "/automations?job=daily&run=first",
+    ],
+    [
+      "agent:main:cron:daily report:run:first+run",
+      undefined,
+      "/control",
+      "/control/automations?job=daily+report&run=first%2Brun",
+    ],
+  ] as const)(
+    "uses the Gateway label and encoded destination for %s",
+    async (key, label, basePath, href) => {
+      const chipText = label ?? "Automation";
+      const group = createGroup({
+        senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
+      });
+      renderTestMessageGroup(group, {
+        ...agentOptions,
+        mainKey: "main",
+        basePath,
+      });
+
+      const chip = required<HTMLAnchorElement>("a.markdown-session-link");
+      expect(chip).toBeInstanceOf(HTMLAnchorElement);
+      expect(chip.textContent?.trim()).toBe(chipText);
+      expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
+      expect(chip.classList.contains("markdown-session-link--titled")).toBe(true);
+      const isCronRun = key.includes(":cron:");
+      expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
+      const attributionText =
+        text(".chat-group--forwarded .chat-reply-attribution")?.replace(/\s+/g, " ").trim() ?? "";
+      expect(attributionText).not.toContain("—");
+      const { titler, request } = titlerFor(key, "Client session title");
+      await titler.decorate(chip, true);
+      expect(chip.textContent?.trim()).toBe(chipText);
+      expect(chip.getAttribute("href")).toBe(href);
+      if (isCronRun) {
+        expect(request).not.toHaveBeenCalled();
       }
-      if (expected === "image") {
-        expect(image?.getAttribute("src")).toBe(avatar);
-        expect(image?.getAttribute("alt")).toBe("Research Agent");
-      }
-      if (expected === "face") {
-        await vi.dynamicImportSettled();
-        await vi.waitFor(() => expect(query(".identity-avatar__agent-face")).not.toBeNull());
-        expect(query(".chat-avatar--sender-initials")).toBeNull();
+      if (key.includes(":cron:")) {
+        expect(chip.querySelector(".session-link-icon svg")?.namespaceURI).toBe(
+          "http://www.w3.org/2000/svg",
+        );
       }
     },
   );
-
-  it.each([
-    {
-      name: "Gateway label overrides a main session's agent name",
-      key: "agent:main:main",
-      label: "Named source",
-      chipText: "Named source",
-    },
-    {
-      name: "cron run uses its automation name",
-      key: "agent:main:cron:daily:run:first",
-      label: "Daily report",
-      chipText: "Daily report",
-    },
-    {
-      name: "cron run respects the app base path and encodes its ids",
-      key: "agent:main:cron:daily report:run:first+run",
-      chipText: "Automation",
-      basePath: "/control",
-      href: "/control/automations?job=daily+report&run=first%2Brun",
-    },
-  ])("$name", async ({ key, label, chipText, basePath, href }) => {
-    const group = createGroup({
-      senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
-    });
-    renderTestMessageGroup(group, {
-      ...agentOptions,
-      mainKey: "main",
-      basePath,
-    });
-
-    const chip = required<HTMLAnchorElement>("a.markdown-session-link");
-    expect(chip).toBeInstanceOf(HTMLAnchorElement);
-    expect(chip.textContent?.trim()).toBe(chipText);
-    expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
-    expect(chip.classList.contains("markdown-session-link--titled")).toBe(true);
-    const isCronRun = key.includes(":cron:");
-    expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
-    const attributionText =
-      query(".chat-group--forwarded .chat-reply-attribution")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim() ?? "";
-    expect(attributionText).not.toContain("—");
-    const titler = new SessionLinkTitler(container);
-    titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-    const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
-      status: "ok",
-      sessionKey: key,
-      agentId: key.split(":")[1],
-      title: "Client session title",
-    });
-    await titler.decorate(chip, true);
-    expect(chip.textContent?.trim()).toBe(chipText);
-    expect(chip.getAttribute("href")).toBe(
-      isCronRun ? (href ?? "/automations?job=daily&run=first") : `/chat/${key.split(":")[1]}`,
-    );
-    if (isCronRun) {
-      expect(request).not.toHaveBeenCalled();
-    }
-    if (key.includes(":cron:")) {
-      expect(chip.querySelector(".session-link-icon svg")?.namespaceURI).toBe(
-        "http://www.w3.org/2000/svg",
-      );
-    }
-  });
 
   it.each([
     { senderSession: { agentId: "main" }, label: "1 update · Forwarded from main" },
@@ -464,16 +450,13 @@ it.each([
       avatarPlacement,
       ...viewer,
     });
-    expect(container.querySelector(".chat-sender-name")?.textContent).toBe(
-      sender ? "Recorded author" : "Message",
-    );
-    expect(container.querySelector("a.chat-sender-name, img")).toBeNull();
+    expect(text(".chat-sender-name")).toBe(sender ? "Recorded author" : "Message");
+    expect(query("a.chat-sender-name, img")).toBeNull();
     if (sender) {
-      expect(container.querySelector(".chat-avatar")?.textContent?.trim()).toBe("RA");
+      expect(text(".chat-avatar")?.trim()).toBe("RA");
     } else {
-      expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
-      expect(container.querySelector(".chat-group--peer")).toBeNull();
-      expect(container.querySelector(".chat-text")?.textContent).toContain(message.content);
+      expect(query(".chat-avatar, .chat-author-avatar, .chat-group--peer")).toBeNull();
+      expect(text(".chat-text")).toContain(message.content);
     }
   }
   expect(input).toEqual(original);

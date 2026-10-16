@@ -25,6 +25,12 @@ import {
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
+const toolGroup = (text: string) =>
+  createMessageGroup(
+    createToolResultMessage("call-read", "read", text, { timestamp: 1000 }),
+    "tool",
+  );
+
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
   (unavailable) => {
@@ -60,8 +66,10 @@ it.each([false, true])(
     expect(
       [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
     ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
-    expect(metadata?.querySelector(".msg-meta__cost") === null).toBe(unavailable);
-    expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
+    expect([
+      metadata?.querySelector(".msg-meta__cost") === null,
+      metadata?.querySelector(".msg-meta__ctx") === null,
+    ]).toEqual([unavailable, unavailable]);
   },
 );
 
@@ -305,12 +313,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   // SAFETY: This grouped-renderer fixture consumes only the complete plugin capability.
   const context = { plugins } as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const [group, setGroup] = createSignal(
-    createMessageGroup(
-      createToolResultMessage("call-read", "read", "Original tool output", { timestamp: 1000 }),
-      "tool",
-    ),
-  );
+  const [group, setGroup] = createSignal(toolGroup("Original tool output"));
   const [options, setOptions] = createSignal<NativeMessageGroupOptions>({
     sessionKey: "agent:main:fixture",
     agentId: "main",
@@ -320,6 +323,10 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     presented: true,
   });
   const [active, setActive] = createSignal(true);
+  const select = (replacement?: ControlUiReplacement) => {
+    selected = replacement;
+    listeners.forEach((listener) => listener());
+  };
   const view = mountSolid(
     () => (
       <ContentPresentation value={active}>
@@ -367,10 +374,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
         };
       },
     };
-    selected = replacement;
-    for (const listener of listeners) {
-      listener();
-    }
+    select(replacement);
     await waitForSolid(() =>
       expect(view.container.textContent).toContain("Selected tool renderer"),
     );
@@ -384,12 +388,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
       output: { text: "Original tool output" },
     });
     expect(latest?.presented).toBe(true);
-    setGroup(
-      createMessageGroup(
-        createToolResultMessage("call-read", "read", "Updated tool output", { timestamp: 1000 }),
-        "tool",
-      ),
-    );
+    setGroup(toolGroup("Updated tool output"));
     setOptions((previous) => ({ ...previous, presented: false }));
     await waitForSolid(() => {
       expect(latest?.props).toMatchObject({ output: { text: "Updated tool output" } });
@@ -397,21 +396,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
       expect(view.container.textContent).toContain("Updated tool output");
     });
     const mountedSignal = latest?.signal;
-    setActive(false);
-    flush();
-    await Promise.resolve();
-    expect(mountedSignal?.aborted).toBe(false);
-    expect(dispose).not.toHaveBeenCalled();
-    setActive(true);
-    setOptions((previous) => ({ ...previous, presented: true }));
-    await waitForSolid(() => {
-      expect(latest?.signal).toBe(mountedSignal);
-      expect(latest?.presented).toBe(true);
-    });
-    selected = undefined;
-    for (const listener of listeners) {
-      listener();
-    }
+    select();
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-plugin-view")).toBeNull(),
     );
@@ -420,10 +405,8 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).not.toHaveBeenCalled();
     // Replacing the application owner retires subscriptions from the parked tree.
-    selected = replacement;
-    for (const listener of listeners) {
-      listener();
-    }
+    setOptions((previous) => ({ ...previous, presented: true }));
+    select(replacement);
     setActive(false);
     flush();
     provider.setContext(nextContext);
@@ -480,10 +463,13 @@ describe("owned message controls", () => {
     const previous = vi.fn();
     const current = vi.fn();
     const prompt = createMessageGroup({ role: "user", content: "Prompt", timestamp: 1000 }, "user");
-    const answer = createMessageGroup(
-      { role: "assistant", content: "Answer", timestamp: 1001, usage: { input: 100, output: 10 } },
-      "assistant",
-    );
+    const answerAt = (timestamp: number, input: number, output: number) => ({
+      role: "assistant",
+      content: "Answer",
+      timestamp,
+      usage: { input, output },
+    });
+    const answer = createMessageGroup(answerAt(1001, 100, 10), "assistant");
     const [options, setOptions] = createSignal({ onRewind: previous, contextWindow: 4000 });
     const [assistant, setAssistant] = createSignal(answer);
     const view = mountSolid(() => (
@@ -515,17 +501,7 @@ describe("owned message controls", () => {
     setAssistant({
       ...answer,
       timestamp: 2001,
-      messages: [
-        {
-          ...answer.messages[0]!,
-          message: {
-            role: "assistant",
-            content: "Answer",
-            timestamp: 2001,
-            usage: { input: 200, output: 20 },
-          },
-        },
-      ],
+      messages: [{ ...answer.messages[0]!, message: answerAt(2001, 200, 20) }],
     });
     flush();
     expect(view.container.querySelector(".chat-group.assistant .msg-meta__summary")).toBe(

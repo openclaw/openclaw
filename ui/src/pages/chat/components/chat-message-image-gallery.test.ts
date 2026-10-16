@@ -11,6 +11,12 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
+  imageResponse,
+  managedSource,
+  stubObjectUrls,
+  ticketResponse,
+} from "./chat-message-media.test-helpers.ts";
+import {
   releaseChatMediaResourceSubscriber,
   type ImageBlock,
   type ImageRenderOptions,
@@ -23,8 +29,6 @@ import {
 } from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
-const managedSource = () =>
-  `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
 let onRequestUpdate: () => void;
 let imageView: ReturnType<typeof mountSolid<MessageImagesProps>> | undefined;
 
@@ -57,14 +61,7 @@ function renderImages(images: ImageBlock[], options: ImageRenderOptions) {
 
 function stubImageDecoding(blobPrefix: string, decode: () => Promise<void>) {
   let blobIndex = 0;
-  const NativeUrl = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeUrl {
-      static override createObjectURL = () => `${blobPrefix}-${blobIndex++}`;
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubObjectUrls(() => `${blobPrefix}-${blobIndex++}`);
   vi.stubGlobal(
     "Image",
     class {
@@ -72,14 +69,6 @@ function stubImageDecoding(blobPrefix: string, decode: () => Promise<void>) {
       decode = decode;
     },
   );
-}
-
-function ticketResponse(mediaTicket: string) {
-  return Response.json({
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-  });
 }
 
 async function whenImageAppears(draw: () => void) {
@@ -96,10 +85,6 @@ async function whenImageAppears(draw: () => void) {
   } finally {
     observer.disconnect();
   }
-}
-
-function imageResponse() {
-  return new Response("png", { headers: { "Content-Type": "image/png" } });
 }
 
 function createGallery() {
@@ -145,26 +130,15 @@ describe("message image gallery loading", () => {
       id: "user-inbound-media-ref",
       __openclaw: { media: [{ path: source, contentType: "image/png", fileName: filename }] },
     });
-    const group = createMessageGroup(message, "user");
-    const draw = () =>
-      mountSolid(
-        MessageGroup,
-        {
-          group,
-          options: {
-            showReasoning: true,
-            showToolCalls: false,
-            assistantName: "OpenClaw",
-            assistantAvatar: null,
-            resourceBasePath: "/openclaw",
-            assistantAttachmentAuthToken: "test-auth-token",
-            onRequestUpdate,
-            onOpenImage,
-          },
-        },
-        container,
-      );
-    await whenImageAppears(draw);
+    await whenImageAppears(() =>
+      renderMessage(message, "user", {
+        showReasoning: true,
+        resourceBasePath: "/openclaw",
+        assistantAttachmentAuthToken: "test-auth-token",
+        onRequestUpdate,
+        onOpenImage,
+      }),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
@@ -319,15 +293,15 @@ describe("message image gallery loading", () => {
   );
 });
 
-function renderAssistantMessage(
-  target: HTMLElement,
+function renderMessage(
   message: unknown,
+  role: "user" | "assistant",
   options: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
 ) {
   mountSolid(
     MessageGroup,
     {
-      group: createMessageGroup(message, "assistant"),
+      group: createMessageGroup(message, role),
       options: {
         showReasoning: false,
         showToolCalls: false,
@@ -336,7 +310,7 @@ function renderAssistantMessage(
         ...options,
       },
     },
-    target,
+    container,
   );
 }
 
@@ -366,11 +340,11 @@ describe("message attachment image gallery projection", () => {
     "keeps assistant $format in order and in one image gallery without persisted mirrors",
     async ({ content }) => {
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-      renderAssistantMessage(
-        container,
+      renderMessage(
         createAssistantMessage(content, {
           timestamp: 1000,
         }),
+        "assistant",
         { onOpenImage },
       );
 
@@ -438,7 +412,7 @@ describe("message attachment image gallery projection", () => {
     },
   ])("projects $name into the gallery", ({ message, index }) => {
     const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-    renderAssistantMessage(container, message, { onOpenImage });
+    renderMessage(message, "assistant", { onOpenImage });
     const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
     expect(tiles).toHaveLength(2);
     tiles[index]?.click();

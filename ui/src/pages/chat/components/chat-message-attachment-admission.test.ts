@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
+import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
@@ -112,10 +113,11 @@ function mount(
 function localAttachment(
   kind: AttachmentItem["attachment"]["kind"],
   label: string,
+  overrides: Partial<AttachmentItem["attachment"]> = {},
 ): AttachmentItem {
   return {
     type: "attachment",
-    attachment: { kind, label, url: `/tmp/openclaw/${crypto.randomUUID()}/${label}` },
+    attachment: { kind, label, url: `/tmp/openclaw/${crypto.randomUUID()}/${label}`, ...overrides },
   };
 }
 
@@ -159,13 +161,10 @@ describe("nonimage attachment source admission", () => {
   );
 
   it("defers a managed ticket without delaying the admitted download", async () => {
-    const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const url = managedSource();
     const resolveArtifactDownload = vi.fn(async () => ({ url: `${url}?mediaTicket=fixture` }));
     const { container } = mount(
-      {
-        type: "attachment",
-        attachment: { kind: "document", label: "notes.pdf", url, artifactId: "fixture-document" },
-      },
+      localAttachment("document", "notes.pdf", { url, artifactId: "fixture-document" }),
       { resolveArtifactDownload },
     );
     await settle();
@@ -202,13 +201,7 @@ describe("nonimage attachment source admission", () => {
   });
 
   it("opens a deferred file with the sidebar's current authority without a viewport callback", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({
-        available: true,
-        mediaTicket: "current-authority",
-        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-      }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => ticketResponse("current-authority"));
     vi.stubGlobal("fetch", fetchMock);
     const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
     const { container } = mount(localAttachment("document", "explicit.pdf"), {}, onOpenSidebar);
@@ -241,10 +234,7 @@ describe("nonimage attachment source admission", () => {
     "preserves ongoing static playback across authority updates for %s",
     async (url) => {
       const options: ImageRenderOptions = { authToken: "initial-token", connectionEpoch: 1 };
-      const item: AttachmentItem = {
-        type: "attachment",
-        attachment: { kind: "audio", label: "recording.wav", mimeType: "audio/wav", url },
-      };
+      const item = localAttachment("audio", "recording.wav", { mimeType: "audio/wav", url });
       const view = mount(item, options);
       await settle();
       const media = view.container.querySelector("audio");
@@ -296,18 +286,10 @@ const commentText =
 function textAttachment(kind: "comment" | "paste", managed = false): AttachmentItem {
   const id = crypto.randomUUID();
   const label = kind === "comment" ? "selection-comment.txt" : "pasted-text-123.txt";
-  return {
-    type: "attachment",
-    attachment: {
-      kind: "document",
-      label,
-      mimeType: "text/plain",
-      url: managed
-        ? `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full`
-        : `/tmp/openclaw/${id}/${label}`,
-      ...(managed ? { artifactId: id } : {}),
-    },
-  };
+  return localAttachment("document", label, {
+    mimeType: "text/plain",
+    ...(managed ? { url: managedSource(id), artifactId: id } : {}),
+  });
 }
 
 async function settleText(container: HTMLElement) {
@@ -378,11 +360,7 @@ describe("history text chip source admission", () => {
             ? input.href
             : input.url
         ).includes("meta=1")
-          ? Response.json({
-              available: true,
-              mediaTicket: "text-chip",
-              mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-            })
+          ? ticketResponse("text-chip")
           : new Response(managed || kind === "comment" ? commentText : "Visible pasted excerpt"),
       );
       vi.stubGlobal("fetch", fetchMock);

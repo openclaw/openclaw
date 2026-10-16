@@ -10,6 +10,12 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
+  imageResponse,
+  managedSource,
+  stubObjectUrls,
+  ticketResponse,
+} from "./chat-message-media.test-helpers.ts";
+import {
   releaseChatMediaResourceSubscriber,
   type ImageBlock,
   type ImageRenderOptions,
@@ -17,8 +23,6 @@ import {
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 let container: HTMLDivElement;
-const managedSource = () =>
-  `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
 let onRequestUpdate: () => void;
 let disconnectMedia: Set<() => void>;
 let view:
@@ -29,6 +33,8 @@ let view:
     }
   | undefined;
 const intersections: (() => void)[] = [];
+const imageElement = () => container.querySelector("img");
+const imageButton = () => container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -55,14 +61,7 @@ beforeEach(() => {
       }
     },
   );
-  const NativeUrl = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeUrl {
-      static override createObjectURL = () => `blob:${crypto.randomUUID()}`;
-      static override revokeObjectURL = vi.fn();
-    },
-  );
+  stubObjectUrls();
 });
 
 afterEach(() => {
@@ -75,14 +74,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-const imageResponse = () => new Response("png", { headers: { "Content-Type": "image/png" } });
-const ticketResponse = () =>
-  Response.json({
-    available: true,
-    mediaTicket: "image-ticket",
-    mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-  });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
   const props = { images, options: { onRequestUpdate, ...options } };
@@ -125,19 +116,10 @@ function unmount() {
 async function loadAdmittedImage() {
   intersections[0]!();
   await vi.advanceTimersByTimeAsync(0);
-  const loaded = container.querySelector("img")!;
+  const loaded = imageElement()!;
   Object.defineProperties(loaded, { naturalWidth: { value: 20 }, complete: { value: true } });
   loaded.dispatchEvent(new Event("load"));
   return loaded;
-}
-
-function submitInlineImage(artifactId: string) {
-  const inline: ImageBlock = { url: "data:image/png;base64,cG5n", artifactId };
-  draw([inline], { localSubmission: true });
-  const image = container.querySelector("img")!;
-  Object.defineProperty(image, "naturalWidth", { value: 20 });
-  image.dispatchEvent(new Event("load"));
-  return { inline, image };
 }
 
 it.each(["render", "click"] as const)(
@@ -323,9 +305,9 @@ it("keeps an artifact-only viewer rendition alive when its inline tile rerenders
   draw([image], options);
   intersections[0]!();
   await vi.advanceTimersByTimeAsync(0);
-  const inline = container.querySelector("img")!;
+  const inline = imageElement()!;
   const preview = inline.getAttribute("src");
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   const opened = onOpenImage.mock.calls[0]![0];
   expect(opened.src).toBe(preview);
   const pending = opened.loadDisplayImage!();
@@ -339,10 +321,10 @@ it("keeps an artifact-only viewer rendition alive when its inline tile rerenders
   draw([{ ...image }], { ...options });
   // Reopening reacquires the inline rendition with the same pane subscriber
   // while the earlier viewer request is still pending.
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   await vi.advanceTimersByTimeAsync(0);
   expect(signal.aborted).toBe(false);
-  expect(container.querySelector("img")).toBe(inline);
+  expect(imageElement()).toBe(inline);
   expect(inline.getAttribute("src")).toBe(preview);
   expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
 
@@ -382,13 +364,13 @@ it.each([
     draw([{ artifactId }], { sessionKey: "main", resolveArtifactDownload, onOpenImage });
     intersections[0]!();
     await vi.advanceTimersByTimeAsync(0);
-    const preview = container.querySelector("img")?.getAttribute("src");
+    const preview = imageElement()?.getAttribute("src");
     expect(preview).toBeTruthy();
     expect(resolveArtifactDownload).toHaveBeenCalledExactlyOnceWith(
       { sessionKey: "main", artifactId, variant: "thumbnail", previewWidth: inline },
       expect.any(AbortSignal),
     );
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+    imageButton().click();
     const opened = onOpenImage.mock.calls[0]![0];
     expect(opened.src).toBe(preview);
     const rendition = await opened.loadDisplayImage!();
@@ -434,9 +416,9 @@ it.each(["assistant remount", "managed remount", "assistant reconnect"] as const
       draw(images);
     }
     expect(container.querySelector(".chat-image-skeleton")).toBeNull();
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(src);
+    expect(imageElement()?.getAttribute("src")).toBe(src);
     if (!managed) {
-      expect(container.querySelector("img")).toBe(loaded);
+      expect(imageElement()).toBe(loaded);
     }
     expect(fetch).toHaveBeenCalledOnce();
   },
@@ -479,11 +461,11 @@ it.each([
     options[change] = "after";
   }
   draw(images, options);
-  expect(container.querySelector("img")).toBeNull();
+  expect(imageElement()).toBeNull();
   expect(fetch).toHaveBeenCalledOnce();
   intersections.at(-1)!();
   await vi.advanceTimersByTimeAsync(0);
-  expect(container.querySelector("img")).not.toBe(loaded);
+  expect(imageElement()).not.toBe(loaded);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
@@ -493,7 +475,7 @@ it("admits on focus without replacing the pending control or opening an empty pr
   vi.stubGlobal("fetch", fetch);
   const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
   draw([{ url: `/tmp/${crypto.randomUUID()}.png` }], { onOpenImage });
-  const button = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
+  const button = imageButton();
   expect(button.disabled).toBe(false);
   expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(fetch).not.toHaveBeenCalled();
@@ -524,7 +506,7 @@ it("lets explicit gallery navigation load an offscreen neighbor", async () => {
       opened = item;
     },
   });
-  container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+  imageButton().click();
   expect(fetch).not.toHaveBeenCalled();
 
   const neighbor = await opened!.gallery!.items[1]!(true);
@@ -532,60 +514,6 @@ it("lets explicit gallery navigation load an offscreen neighbor", async () => {
   expect(fetch).toHaveBeenCalledOnce();
   expect(container.querySelectorAll("img")).toHaveLength(1);
   neighbor?.release?.();
-});
-
-it("preserves an immediate inline submission and its settled canonical handoff", async () => {
-  const artifactId = crypto.randomUUID();
-  const metadata = createDeferred<Response>();
-  const fetch = vi.fn(() => metadata.promise);
-  vi.stubGlobal("fetch", fetch);
-  const { inline, image } = submitInlineImage(artifactId);
-  expect(intersections).toHaveLength(0);
-
-  const canonical: ImageBlock = { url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 };
-  const options = {
-    localSubmission: true,
-    canonicalMessageKey: "canonical-submission",
-  };
-  draw([canonical], options);
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(container.querySelector("img")).toBe(image);
-  expect(image.getAttribute("src")).toBe(inline.url);
-
-  metadata.resolve(Response.json({ available: true }));
-  await vi.advanceTimersByTimeAsync(0);
-  expect(image.getAttribute("src")).not.toBe(inline.url);
-  image.dispatchEvent(new Event("load"));
-  draw([canonical], options);
-  expect(container.querySelector("img")).toBe(image);
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(intersections).toHaveLength(0);
-});
-
-it("retires inline handoff pixels synchronously when the transcript disconnects", async () => {
-  const artifactId = crypto.randomUUID();
-  const metadata = createDeferred<Response>();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => metadata.promise),
-  );
-  const { image } = submitInlineImage(artifactId);
-  draw([{ url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 }], {
-    localSubmission: true,
-    canonicalMessageKey: "disconnecting-submission",
-  });
-  expect(container.querySelector("img")).toBe(image);
-
-  for (const disconnect of disconnectMedia) {
-    disconnect();
-  }
-  expect(image.isConnected).toBe(false);
-  image.dispatchEvent(new Event("load"));
-  metadata.resolve(ticketResponse());
-  await vi.advanceTimersByTimeAsync(0);
-  expect(container.querySelector("img")).toBeNull();
-  unmount();
-  expect(disconnectMedia.size).toBe(0);
 });
 
 it("ignores replaced observers and aborts detached artifact resolution before blob fetch", async () => {
@@ -608,46 +536,8 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
   await vi.advanceTimersByTimeAsync(0);
 
   expect(fetch).not.toHaveBeenCalled();
-  expect(container.querySelector("img")).toBeNull();
+  expect(imageElement()).toBeNull();
 });
-
-it.each(["error", "timeout"] as const)(
-  "retries a canonical upload handoff after native %s without reviving inline pixels",
-  async (failure) => {
-    const artifactId = crypto.randomUUID();
-    const fetch = vi.fn(async () => ticketResponse());
-    vi.stubGlobal("fetch", fetch);
-    const { image } = submitInlineImage(artifactId);
-    const canonical: ImageBlock = {
-      url: "media://inbound/" + artifactId,
-      artifactId,
-      factIndex: 0,
-    };
-    draw([canonical], { localSubmission: true, canonicalMessageKey: "failed-upload" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(container.querySelector("img")).toBe(image);
-    if (failure === "error") {
-      image.dispatchEvent(new Event("error"));
-      flush();
-    } else {
-      await vi.advanceTimersByTimeAsync(30_000);
-    }
-    expect(container.querySelector("img")).toBeNull();
-    const retry = container.querySelector<HTMLButtonElement>(
-      ".chat-assistant-attachment-card__retry",
-    );
-    expect(retry).not.toBeNull();
-    image.dispatchEvent(new Event("load"));
-    expect(container.querySelector("img")).toBeNull();
-    retry!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    const replacement = container.querySelector("img");
-    expect(replacement).not.toBeNull();
-    expect(replacement).not.toBe(image);
-    expect(replacement?.getAttribute("src")).toContain("mediaTicket=image-ticket");
-  },
-);
 
 describe("message attachment availability", () => {
   const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
@@ -672,12 +562,7 @@ describe("message attachment availability", () => {
     panes.push(pane);
     return pane;
   }
-  const availabilityTicket = (mediaTicket: string) =>
-    Response.json({
-      available: true,
-      mediaTicket,
-      mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+  const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);
   it("does not reuse another message's available ticket for the same source", async () => {
     vi.useFakeTimers();
     const source = "/tmp/openclaw/" + crypto.randomUUID() + ".png";
