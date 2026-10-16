@@ -22,6 +22,20 @@ function captureEvents(run: () => void): TrustedMessageAuditEvent[] {
   return events;
 }
 
+function captureTerminals(
+  terminals: Parameters<typeof emitOutboundAuditTerminals>[0]["terminals"],
+  context: Parameters<typeof emitOutboundAuditTerminals>[0]["context"] = {
+    channel: "matrix",
+    to: "!room:target",
+    payloads: [{ text: "sent?" }],
+  },
+  queueId?: string,
+) {
+  return captureEvents(() =>
+    emitOutboundAuditTerminals({ context, terminals, queueId, startedAt: Date.now() }),
+  );
+}
+
 describe("outbound audit projection", () => {
   it("projects replay-safe queued and platform-started lifecycle records", () => {
     const executionIdentityToken = createExecutionIdentityAdmissionToken("run-1");
@@ -86,33 +100,30 @@ describe("outbound audit projection", () => {
   });
 
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: {
-          channel: "matrix",
-          to: "!room:target",
-          payloads: [{ text: "suppressed" }, { text: "sent" }],
-          session: { conversationKind: "channel" },
-          mirror: { sessionKey: "secret-session", agentId: "mirror-agent", isGroup: true },
-        },
-        terminals: () =>
-          completedOutboundAuditTerminals({
-            payloadCount: 2,
-            results: [{ channel: "matrix", messageId: "platform-1" }],
-            payloadOutcomes: [
-              { index: 0, status: "suppressed", reason: "no_visible_payload" },
-              {
-                index: 1,
-                status: "sent",
-                deliveryKind: "media",
-                results: [{ channel: "matrix", messageId: "platform-1" }],
-              },
-            ],
-          }),
-        startedAt: Date.now(),
-        queueId: "queue-1",
-      });
-    });
+    const events = captureTerminals(
+      () =>
+        completedOutboundAuditTerminals({
+          payloadCount: 2,
+          results: [{ channel: "matrix", messageId: "platform-1" }],
+          payloadOutcomes: [
+            { index: 0, status: "suppressed", reason: "no_visible_payload" },
+            {
+              index: 1,
+              status: "sent",
+              deliveryKind: "media",
+              results: [{ channel: "matrix", messageId: "platform-1" }],
+            },
+          ],
+        }),
+      {
+        channel: "matrix",
+        to: "!room:target",
+        payloads: [{ text: "suppressed" }, { text: "sent" }],
+        session: { conversationKind: "channel" },
+        mirror: { sessionKey: "secret-session", agentId: "mirror-agent", isGroup: true },
+      },
+      "queue-1",
+    );
 
     expect(events.map((event) => event.sourceId)).toEqual([
       "message:outbound:queue:queue-1:payload:0",
@@ -182,19 +193,15 @@ describe("outbound audit projection", () => {
   });
 
   it("treats a missing adapter identity as unknown rather than a proven suppression", () => {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: { channel: "matrix", to: "!room:target", payloads: [{ text: "sent?" }] },
-        terminals: completedOutboundAuditTerminals({
-          payloadCount: 1,
-          results: [],
-          payloadOutcomes: [
-            { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
-          ],
-        }),
-        startedAt: Date.now(),
-      });
-    });
+    const events = captureTerminals(
+      completedOutboundAuditTerminals({
+        payloadCount: 1,
+        results: [],
+        payloadOutcomes: [
+          { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+        ],
+      }),
+    );
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -245,40 +252,37 @@ describe("outbound audit projection", () => {
   });
 
   it("counts physical sends once across receipt representations and result fallbacks", () => {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: { channel: "matrix", to: "!room:target", payloads: [{ text: "batch" }] },
-        terminals: uniformOutboundAuditTerminals(1, {
-          outcome: "sent",
-          results: [
-            {
-              channel: "matrix",
-              messageId: "aggregate-with-parts",
-              receipt: {
-                primaryPlatformMessageId: "part-1",
-                platformMessageIds: ["part-1", "part-2"],
-                parts: [
-                  { platformMessageId: "part-1", kind: "text", index: 0 },
-                  { platformMessageId: "part-2", kind: "text", index: 1 },
-                ],
-                sentAt: Date.now(),
-              },
+    const events = captureTerminals(
+      uniformOutboundAuditTerminals(1, {
+        outcome: "sent",
+        results: [
+          {
+            channel: "matrix",
+            messageId: "aggregate-with-parts",
+            receipt: {
+              primaryPlatformMessageId: "part-1",
+              platformMessageIds: ["part-1", "part-2"],
+              parts: [
+                { platformMessageId: "part-1", kind: "text", index: 0 },
+                { platformMessageId: "part-2", kind: "text", index: 1 },
+              ],
+              sentAt: Date.now(),
             },
-            {
-              channel: "matrix",
-              messageId: "aggregate-with-ids",
-              receipt: {
-                platformMessageIds: ["id-1", "id-2", "id-3"],
-                parts: [],
-                sentAt: Date.now(),
-              },
+          },
+          {
+            channel: "matrix",
+            messageId: "aggregate-with-ids",
+            receipt: {
+              platformMessageIds: ["id-1", "id-2", "id-3"],
+              parts: [],
+              sentAt: Date.now(),
             },
-            { channel: "matrix", messageId: "single-result" },
-          ],
-        }),
-        startedAt: Date.now(),
-      });
-    });
+          },
+          { channel: "matrix", messageId: "single-result" },
+        ],
+      }),
+      { channel: "matrix", to: "!room:target", payloads: [{ text: "batch" }] },
+    );
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -291,75 +295,34 @@ describe("outbound audit projection", () => {
   function conversationKindFor(
     context: Omit<Parameters<typeof emitOutboundAuditTerminals>[0]["context"], "payloads">,
   ): string | undefined {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: { ...context, payloads: [{ text: "x" }] },
-        terminals: uniformOutboundAuditTerminals(1, {
-          outcome: "sent",
-          results: [{ channel: context.channel, messageId: "m-1" }],
-        }),
-        startedAt: Date.now(),
-      });
-    });
+    const events = captureTerminals(
+      uniformOutboundAuditTerminals(1, {
+        outcome: "sent",
+        results: [{ channel: context.channel, messageId: "m-1" }],
+      }),
+      { ...context, payloads: [{ text: "x" }] },
+    );
     return events[0]?.conversationKind;
   }
 
   it("classifies direct only from a session route naming this exact destination", () => {
-    expect(
-      conversationKindFor({
-        channel: "matrix",
-        to: "@user:server",
-        session: { key: "agent:main:matrix:default:direct:@user:server" },
-      }),
-    ).toBe("direct");
-    expect(
-      conversationKindFor({
-        channel: "slack",
-        to: "channel:C0AGENT",
-        session: { key: "agent:main:slack:channel:c0agent" },
-      }),
-    ).toBe("channel");
-    // Channel-name-prefixed targets (telegram:999) must match route peer 999.
-    expect(
-      conversationKindFor({
-        channel: "telegram",
-        to: "telegram:999",
-        session: { key: "agent:main:telegram:default:direct:999" },
-      }),
-    ).toBe("direct");
-    // An explicit group target must never validate a direct route.
-    expect(
-      conversationKindFor({
-        channel: "slack",
-        to: "group:123",
-        session: { key: "agent:main:slack:default:direct:123" },
-      }),
-    ).toBe("unknown");
-    // The full canonical prefix grammar applies: room: is a group fact even
-    // when the direct route's peer id literally contains the prefix.
-    expect(
-      conversationKindFor({
-        channel: "matrix",
-        to: "room:123",
-        session: { key: "agent:main:matrix:default:direct:room:123" },
-      }),
-    ).toBe("unknown");
-    // Nested provider+kind prefixes normalize in layers: discord:dm:123 -> 123.
-    expect(
-      conversationKindFor({
-        channel: "discord",
-        to: "discord:dm:123",
-        session: { key: "agent:main:discord:dm:123" },
-      }),
-    ).toBe("direct");
-    // direct: is in the kind map even though the canonical strip default omits it.
-    expect(
-      conversationKindFor({
-        channel: "whatsapp",
-        to: "direct:+15551234567",
-        session: { key: "agent:main:whatsapp:default:direct:+15551234567" },
-      }),
-    ).toBe("direct");
+    const cases = [
+      ["matrix", "@user:server", "agent:main:matrix:default:direct:@user:server", "direct"],
+      ["slack", "channel:C0AGENT", "agent:main:slack:channel:c0agent", "channel"],
+      ["telegram", "telegram:999", "agent:main:telegram:default:direct:999", "direct"],
+      ["slack", "group:123", "agent:main:slack:default:direct:123", "unknown"],
+      ["matrix", "room:123", "agent:main:matrix:default:direct:room:123", "unknown"],
+      ["discord", "discord:dm:123", "agent:main:discord:dm:123", "direct"],
+      [
+        "whatsapp",
+        "direct:+15551234567",
+        "agent:main:whatsapp:default:direct:+15551234567",
+        "direct",
+      ],
+    ] as const;
+    for (const [channel, to, key, expected] of cases) {
+      expect(conversationKindFor({ channel, to, session: { key } }), to).toBe(expected);
+    }
   });
 
   it("does not treat Object.prototype keys as target-kind prefixes", () => {

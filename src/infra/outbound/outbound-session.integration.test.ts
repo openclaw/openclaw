@@ -38,6 +38,16 @@ import {
   type OutboundSessionRoute,
 } from "./outbound-session.js";
 
+function makeRoute(
+  sessionKey = "agent:helper:reef:direct:peer",
+  id = "peer",
+  from = "reef:peer",
+  to = "user:peer",
+  kind: OutboundSessionRoute["chatType"] = "direct",
+): OutboundSessionRoute {
+  return { sessionKey, baseSessionKey: sessionKey, peer: { kind, id }, chatType: kind, from, to };
+}
+
 describe("outbound session persistence", () => {
   let storePath: string;
 
@@ -112,14 +122,7 @@ describe("outbound session persistence", () => {
         sourceSessionKey,
       }),
     );
-    const route: OutboundSessionRoute = {
-      sessionKey: "agent:helper:reef:direct:peer",
-      baseSessionKey: "agent:helper:reef:direct:peer",
-      peer: { kind: "direct", id: "peer" },
-      chatType: "direct",
-      from: "reef:peer",
-      to: "user:peer",
-    };
+    const route: OutboundSessionRoute = makeRoute();
     const resolvedRoute = await resolveOutboundSessionRoute({
       cfg,
       channel: "reef",
@@ -188,14 +191,7 @@ describe("outbound session persistence", () => {
       };
       const databaseOptions = { agentId: "keeper", path: destinationPath, env };
       openOpenClawAgentDatabase(databaseOptions);
-      const route: OutboundSessionRoute = {
-        sessionKey: "agent:helper:reef:direct:peer",
-        baseSessionKey: "agent:helper:reef:direct:peer",
-        peer: { kind: "direct", id: "peer" },
-        chatType: "direct",
-        from: "reef:peer",
-        to: "user:peer",
-      };
+      const route: OutboundSessionRoute = makeRoute();
       replaceSessionEntrySync(
         { ...scope, sessionKey: route.sessionKey },
         { sessionId: "retained", updatedAt: 100 },
@@ -290,14 +286,7 @@ describe("outbound session persistence", () => {
     fs.renameSync(sourcePath, path.join(root, "retired-source.sqlite"));
     openOpenClawAgentDatabase({ agentId: "replacement", path: sourcePath, env });
     replaceSessionEntrySync(sourceScope, { sessionId: "same-session", updatedAt: 100 });
-    const route: OutboundSessionRoute = {
-      sessionKey: "agent:helper:reef:direct:peer",
-      baseSessionKey: "agent:helper:reef:direct:peer",
-      peer: { kind: "direct", id: "peer" },
-      chatType: "direct",
-      from: "reef:peer",
-      to: "user:peer",
-    };
+    const route: OutboundSessionRoute = makeRoute();
 
     await expect(
       bindOutboundSessionEntry(
@@ -338,14 +327,7 @@ describe("outbound session persistence", () => {
       {
         cfg,
         channel: "reef",
-        route: {
-          sessionKey,
-          baseSessionKey: sessionKey,
-          peer: { kind: "direct", id: "peer" },
-          chatType: "direct",
-          from: "reef:peer",
-          to: identity.deliveryTarget,
-        },
+        route: makeRoute(sessionKey, "peer", "reef:peer", identity.deliveryTarget),
         workerGuard: {
           conversation: {
             conversationRef: identity.conversationRef,
@@ -410,14 +392,7 @@ describe("outbound session persistence", () => {
         cfg: { session: { store: storePath } } as OpenClawConfig,
         channel: "reef",
         accountId: "default",
-        route: {
-          sessionKey,
-          baseSessionKey: sessionKey,
-          peer: { kind: "direct", id: "peer-agent" },
-          chatType: "direct",
-          from: "reef:peer-agent",
-          to: "@molty",
-        },
+        route: makeRoute(sessionKey, "peer-agent", "reef:peer-agent", "@molty"),
         workerGuard: {
           conversation: {
             conversationRef: identity!.conversationRef,
@@ -491,14 +466,7 @@ describe("outbound session persistence", () => {
       cfg: { session: { store: storePath } } as OpenClawConfig,
       channel: "reef",
       accountId: "default",
-      route: {
-        sessionKey,
-        baseSessionKey: sessionKey,
-        peer: { kind: "direct", id: "contact-42" },
-        chatType: "direct",
-        from: peerId,
-        to: target,
-      },
+      route: makeRoute(sessionKey, "contact-42", peerId, target),
     });
 
     expect(
@@ -534,14 +502,7 @@ describe("outbound session persistence", () => {
       cfg: { session: { store: storePath } } as OpenClawConfig,
       channel: "reef",
       accountId: "default",
-      route: {
-        sessionKey,
-        baseSessionKey: sessionKey,
-        peer: { kind: "direct", id: "peer-agent" },
-        chatType: "direct",
-        from: "reef:peer-agent",
-        to: "reef:peer-agent",
-      },
+      route: makeRoute(sessionKey, "peer-agent", "reef:peer-agent", "reef:peer-agent"),
     });
 
     expect(
@@ -574,14 +535,7 @@ describe("outbound session persistence", () => {
       cfg: { session: { store: storePath } } as OpenClawConfig,
       channel: "reef",
       accountId: "default",
-      route: {
-        sessionKey,
-        baseSessionKey: sessionKey,
-        peer: { kind: "group", id: channelId },
-        chatType: "group",
-        from,
-        to,
-      },
+      route: makeRoute(sessionKey, channelId, from, to, "group"),
     });
 
     const persisted = loadExactSessionEntry({ agentId: "main", sessionKey, storePath });

@@ -26,42 +26,24 @@ const createAgentScopedHostMediaReadFileMock = vi.hoisted(() =>
   ),
 );
 const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
-  vi.fn<
-    (params: {
-      cfg: unknown;
-      agentId?: string;
-      mediaSources?: readonly string[];
-      accountId?: string;
-      requesterSenderId?: string;
-      requesterSenderName?: string;
-      requesterSenderUsername?: string;
-      requesterSenderE164?: string;
-      mediaAccess?: {
-        localRoots?: readonly string[];
-        readFile?: (filePath: string) => Promise<Buffer>;
-        workspaceDir?: string;
-      };
-      mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    }) => {
-      localRoots: readonly string[];
-      readFile: (filePath: string) => Promise<Buffer>;
-    }
-  >((params) => ({
-    localRoots:
-      params.mediaAccess?.localRoots ??
-      getAgentScopedMediaLocalRootsForSourcesMock({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        mediaSources: params.mediaSources ?? [],
-      }),
-    readFile:
-      params.mediaAccess?.readFile ??
-      params.mediaReadFile ??
-      createAgentScopedHostMediaReadFileMock({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      }),
-  })),
+  vi.fn<typeof import("../../media/read-capability.js").resolveAgentScopedOutboundMediaAccess>(
+    (params) => ({
+      localRoots:
+        params.mediaAccess?.localRoots ??
+        getAgentScopedMediaLocalRootsForSourcesMock({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          mediaSources: params.mediaSources ?? [],
+        }),
+      readFile:
+        params.mediaAccess?.readFile ??
+        params.mediaReadFile ??
+        createAgentScopedHostMediaReadFileMock({
+          cfg: params.cfg,
+          agentId: params.agentId,
+        }),
+    }),
+  ),
 );
 const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -134,6 +116,41 @@ function createContext(overrides: ContextOverrides): ExecuteSendContext {
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
+
+function send(ctx: ContextOverrides, input: Partial<Omit<ExecuteSendInput, "ctx">> = {}) {
+  return executeSendAction({
+    to: "channel:123",
+    message: "hello",
+    ...input,
+    ctx: createContext(ctx),
+  });
+}
+
+function sendMedia(
+  params: ExecuteSendContext["params"],
+  input: Partial<Omit<ExecuteSendInput, "ctx">>,
+  mediaAccess?: ExecuteSendContext["mediaAccess"],
+) {
+  return send(
+    { params: { ...defaultSendParams, ...params }, agentId: "agent-1", mediaAccess },
+    input,
+  );
+}
+
+const defaultSendParams = { to: "channel:123", message: "hello" };
+const poll = {
+  to: "channel:123",
+  question: "Lunch?",
+  options: ["Pizza", "Sushi"],
+  maxSelections: 1,
+};
+const pollResult = {
+  ...poll,
+  channel: "demo-outbound",
+  durationSeconds: null,
+  durationHours: null,
+  via: "gateway",
+};
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -251,20 +268,15 @@ describe("executeSendAction", () => {
 
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    mocks.dispatchChannelMessageAction.mockClear();
-    mocks.sendMessage.mockClear();
+    for (const mock of Object.values(mocks)) {
+      mock.mockClear();
+    }
     mocks.sendMessage.mockResolvedValue({
       channel: "demo-outbound",
       to: "channel:123",
       via: "direct",
       mediaUrl: null,
     });
-    mocks.sendPoll.mockClear();
-    mocks.getDefaultMediaLocalRoots.mockClear();
-    mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
-    mocks.createAgentScopedHostMediaReadFile.mockClear();
-    mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
-    mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -305,13 +317,7 @@ describe("executeSendAction", () => {
       };
     });
 
-    const result = await executeSendAction({
-      ctx: createContext({
-        params: { to: "channel:123", message: "hello" },
-      }),
-      to: "channel:123",
-      message: "hello",
-    });
+    const result = await send({ params: defaultSendParams });
 
     expect(result.deliveredText).toBe("[Peer] hello");
   });
@@ -338,18 +344,14 @@ describe("executeSendAction", () => {
       };
     });
 
-    await executeSendAction({
-      ctx: createContext({
-        params: { to: "channel:123", message: "hello" },
-        onSendAccepted,
-        input: {
-          requireQueuePersistence: true,
-          onDeliveryResult,
-          onDeliveryIntent,
-        },
-      }),
-      to: "channel:123",
-      message: "hello",
+    await send({
+      params: defaultSendParams,
+      onSendAccepted,
+      input: {
+        requireQueuePersistence: true,
+        onDeliveryResult,
+        onDeliveryIntent,
+      },
     });
 
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
@@ -851,19 +853,8 @@ describe("executeSendAction", () => {
   it("passes concrete media sources when widening plugin dispatch roots", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
-    await executeSendAction({
-      ctx: createContext({
-        params: {
-          to: "channel:123",
-          message: "hello",
-          media: "/Users/peter/Pictures/photo.png",
-        },
-        agentId: "agent-1",
-      }),
-      to: "channel:123",
-      message: "hello",
-      mediaUrl: "/Users/peter/Pictures/photo.png",
-    });
+    const media = "/Users/peter/Pictures/photo.png";
+    await sendMedia({ media }, { mediaUrl: media });
 
     expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
       cfg: {},
@@ -875,20 +866,13 @@ describe("executeSendAction", () => {
   it("passes mediaUrls and structured attachment sources when widening send roots", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
-    await executeSendAction({
-      ctx: createContext({
-        params: {
-          to: "channel:123",
-          message: "hello",
-          mediaUrls: ["/workspace/Pictures/chart.png", ""],
-          attachments: [{ filePath: "/workspace/Documents/report.md" }],
-        },
-        agentId: "agent-1",
-      }),
-      to: "channel:123",
-      message: "hello",
-      mediaUrls: ["/workspace/Pictures/chart.png"],
-    });
+    await sendMedia(
+      {
+        mediaUrls: ["/workspace/Pictures/chart.png", ""],
+        attachments: [{ filePath: "/workspace/Documents/report.md" }],
+      },
+      { mediaUrls: ["/workspace/Pictures/chart.png"] },
+    );
 
     expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
       cfg: {},
@@ -901,23 +885,15 @@ describe("executeSendAction", () => {
     const explicitReadFile = vi.fn(async () => Buffer.from("explicit capability"));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
-    await executeSendAction({
-      ctx: createContext({
-        params: {
-          to: "channel:123",
-          message: "hello",
-          mediaUrls: ["/workspace/Pictures/chart.png"],
-        },
-        mediaAccess: {
-          localRoots: ["/explicit-root"],
-          readFile: explicitReadFile,
-        },
-        agentId: "agent-1",
-      }),
-      to: "channel:123",
-      message: "hello",
-      mediaUrls: ["/workspace/Pictures/chart.png"],
-    });
+    const mediaUrls = ["/workspace/Pictures/chart.png"];
+    await sendMedia(
+      { mediaUrls },
+      { mediaUrls },
+      {
+        localRoots: ["/explicit-root"],
+        readFile: explicitReadFile,
+      },
+    );
 
     const resolveArg = expectSingleCallFirstArg(
       mocks.resolveAgentScopedOutboundMediaAccess,
@@ -935,8 +911,11 @@ describe("executeSendAction", () => {
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
-    await executePluginMirroredSend({
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    await send({
+      params: defaultSendParams,
       mirror: {
+        sessionKey: "agent:main:demo-outbound:channel:123",
         idempotencyKey: "idem-plugin-send-1",
       },
     });
@@ -1112,16 +1091,7 @@ describe("executeSendAction", () => {
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendPoll.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationSeconds: null,
-      durationHours: null,
-      via: "gateway",
-    });
+    mocks.sendPoll.mockResolvedValue(pollResult);
 
     await executePollAction({
       ctx: createContext({
@@ -1132,11 +1102,8 @@ describe("executeSendAction", () => {
         },
       }),
       resolveCorePoll: () => ({
-        to: "channel:123",
-        question: "Lunch?",
+        ...poll,
         content: "Vote now",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 1,
         durationSeconds: 300,
         threadId: "thread-1",
         isAnonymous: true,
@@ -1160,16 +1127,7 @@ describe("executeSendAction", () => {
   });
 
   it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {
-    mocks.sendPoll.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationSeconds: null,
-      durationHours: 6,
-      via: "gateway",
-    });
+    mocks.sendPoll.mockResolvedValue({ ...pollResult, durationHours: 6 });
 
     await executePollAction({
       ctx: createContext({
@@ -1185,10 +1143,7 @@ describe("executeSendAction", () => {
         },
       }),
       resolveCorePoll: () => ({
-        to: "channel:123",
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 1,
+        ...poll,
         durationHours: 6,
       }),
     });
