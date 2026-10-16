@@ -25,13 +25,7 @@ function windowRank(label: string): number {
 }
 
 function groupUsageWindows(windows: UsageWindow[]): Map<string, UsageWindow[]> {
-  const groups = new Map<string, UsageWindow[]>();
-  for (const window of windows) {
-    const label = window.groupLabel ?? "";
-    const group = groups.get(label) ?? [];
-    group.push(window);
-    groups.set(label, group);
-  }
+  const groups = Map.groupBy(windows, (window) => window.groupLabel ?? "");
   for (const group of groups.values()) {
     group.sort((left, right) => windowRank(left.label) - windowRank(right.label));
   }

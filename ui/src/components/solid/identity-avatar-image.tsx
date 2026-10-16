@@ -1,5 +1,6 @@
 import { createEffect, createMemo, onCleanup, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
@@ -98,12 +99,15 @@ export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
       active = false;
     };
   });
-  onCleanup(() => release?.());
+  // Retired image nodes can still emit errors after a replacement owns the avatar.
+  const cleanup = [() => release?.()];
+  onCleanup(() => cleanup.forEach((stop) => stop()));
   return (
     <img
-      ref={(element) => (image = element)}
-      onLoad={load}
-      onError={error}
+      ref={(element) => {
+        image = element;
+        cleanup.push(listen(image, "load", load), listen(image, "error", error));
+      }}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}
