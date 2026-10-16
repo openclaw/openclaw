@@ -1,7 +1,7 @@
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CLI_SESSION_SOURCE_CAPABILITY } from "./node-cli-sessions.js";
-import { catalogProvider } from "./session-catalog-resident.test-support.js";
+import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -20,9 +20,21 @@ import {
   fs,
   path,
   type OpenClawConfig,
+  config,
+  nodeHostMocks,
+  resolveCodexAppServerLocalHomeDir,
+  CODEX_LOCAL_SESSION_HOST_ID,
+  type CodexCatalogHome,
 } from "./session-catalog.test-helpers.js";
 
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pairedNode = (nodeId: string) => ({
+  nodeId,
+  connected: true,
+  caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
+  commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+  invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+});
 
 async function nativeCommands(
   factory: ReturnType<typeof createCodexSessionCatalogControlFactory>,
@@ -45,22 +57,23 @@ async function nativeCommands(
     method === "thread/read" ? { thread } : { data: [thread] },
   );
   const commands = createCodexSessionCatalogNodeHostCommands(factory);
-  return (command: string) => commands.find((candidate) => candidate.command === command)!;
+  return (command: string, params: Record<string, unknown>) =>
+    commands.find((candidate) => candidate.command === command)!.handle(JSON.stringify(params));
 }
 
 describe("Codex node catalog sources", () => {
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
     const sourceByNode = new Map([
-      ["ready-cli", { status: "idle", source: "cli" }],
-      ["ready-vscode", { status: "notLoaded", source: "vscode" }],
-      ["ready-atlas", { status: "notLoaded", source: "atlas" }],
-      ["older-node", { status: "notLoaded", source: "cli" }],
-      ["unix-source", { status: "notLoaded", source: "cli" }],
-      ["missing-source", { status: "notLoaded", source: "cli" }],
-      ["invalid-source", { status: "notLoaded", source: "cli" }],
-      ["missing-run", { status: "idle", source: "cli" }],
-      ["active", { status: "active", source: "cli" }],
-      ["noninteractive", { status: "idle", source: "exec" }],
+      ["ready-cli", ["idle", "cli"]],
+      ["ready-vscode", ["notLoaded", "vscode"]],
+      ["ready-atlas", ["notLoaded", "atlas"]],
+      ["older-node", ["notLoaded", "cli"]],
+      ["unix-source", ["notLoaded", "cli"]],
+      ["missing-source", ["notLoaded", "cli"]],
+      ["invalid-source", ["notLoaded", "cli"]],
+      ["missing-run", ["idle", "cli"]],
+      ["active", ["active", "cli"]],
+      ["noninteractive", ["idle", "exec"]],
     ]);
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => {
       const source = sourceByNode.get(nodeId);
@@ -79,8 +92,8 @@ describe("Codex node catalog sources", () => {
           sessions: [
             {
               threadId: `thread-${nodeId}`,
-              status: source.status,
-              source: source.source,
+              status: source[0],
+              source: source[1],
               archived: false,
             },
           ],
@@ -88,19 +101,18 @@ describe("Codex node catalog sources", () => {
       };
     });
     const { runtime } = createRuntime({
-      nodes: [...sourceByNode.keys()].map((nodeId) => ({
-        nodeId,
-        displayName: nodeId,
-        connected: true,
-        caps: nodeId === "older-node" ? [] : [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
-        commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        invocableCommands:
-          nodeId === "missing-run"
-            ? CODEX_NODE_CONTINUE_COMMANDS.filter(
-                (command) => command !== CODEX_CLI_SESSION_RESUME_COMMAND,
-              )
-            : [...CODEX_NODE_CONTINUE_COMMANDS],
-      })),
+      nodes: [...sourceByNode.keys()].map((nodeId) =>
+        Object.assign(pairedNode(nodeId), {
+          displayName: nodeId,
+          caps: nodeId === "older-node" ? [] : [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
+          invocableCommands:
+            nodeId === "missing-run"
+              ? CODEX_NODE_CONTINUE_COMMANDS.filter(
+                  (command) => command !== CODEX_CLI_SESSION_RESUME_COMMAND,
+                )
+              : [...CODEX_NODE_CONTINUE_COMMANDS],
+        }),
+      ),
       invoke,
     });
     const provider = catalogProvider(createControl(), runtime);
@@ -109,16 +121,13 @@ describe("Codex node catalog sources", () => {
       hostIds: [...sourceByNode.keys()].map((id) => `node:${id}`),
     });
     const sessionByHost = new Map(hosts?.map((host) => [host.hostId, host.sessions[0]]) ?? []);
-    for (const nodeId of ["ready-cli", "ready-vscode", "ready-atlas"]) {
+    for (const nodeId of sourceByNode.keys()) {
       expect(sessionByHost.get(`node:${nodeId}`)).toMatchObject({
-        canContinue: true,
+        threadId: `thread-${nodeId}`,
+        canContinue: nodeId.startsWith("ready-"),
         canArchive: false,
       });
     }
-    expect(sessionByHost.get("node:older-node")).toMatchObject({
-      threadId: "thread-older-node",
-      canContinue: false,
-    });
     invoke.mockClear();
     await expect(
       provider.continueSession?.({
@@ -128,15 +137,6 @@ describe("Codex node catalog sources", () => {
       }),
     ).rejects.toThrow("Update the node");
     expect(invoke).not.toHaveBeenCalled();
-    expect(sessionByHost.get("node:missing-run")).toMatchObject({ canContinue: false });
-    expect(sessionByHost.get("node:active")).toMatchObject({ canContinue: false });
-    expect(sessionByHost.get("node:noninteractive")).toMatchObject({ canContinue: false });
-    for (const nodeId of ["unix-source", "missing-source", "invalid-source"]) {
-      expect(sessionByHost.get(`node:${nodeId}`)).toMatchObject({
-        threadId: `thread-${nodeId}`,
-        canContinue: false,
-      });
-    }
   });
 
   it.each([false, undefined] as const)(
@@ -162,15 +162,7 @@ describe("Codex node catalog sources", () => {
         ),
       }));
       const { runtime, createSessionEntry } = createRuntime({
-        nodes: [
-          {
-            nodeId: "source-node",
-            connected: true,
-            caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
-            commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-            invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          },
-        ],
+        nodes: [pairedNode("source-node")],
         invoke,
       });
       const provider = catalogProvider(createControl(), runtime);
@@ -210,54 +202,39 @@ describe("Codex node catalog sources", () => {
       getRuntimeConfig: () => runtimeConfig,
     });
     const command = await nativeCommands(factory, thread);
-    const listCommand = command(CODEX_APP_SERVER_THREADS_LIST_COMMAND);
-    const transcriptCommand = command(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
-    const boundedTranscriptCommand = command(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND);
 
     for (const agentId of ["gatewayOnly", undefined]) {
       await (await factory.forNode(agentId)).control.initialize();
+      const params = { agentId, threadId: thread.id, limit: 25 };
       expect(
-        JSON.parse(await listCommand.handle(JSON.stringify({ agentId, limit: 25 }))),
+        JSON.parse(await command(CODEX_APP_SERVER_THREADS_LIST_COMMAND, { agentId, limit: 25 })),
       ).toMatchObject({
         canContinueCodex: true,
         sessions: [{ threadId: thread.id }],
       });
-      await expect(
-        transcriptCommand.handle(JSON.stringify({ agentId, threadId: thread.id, limit: 25 })),
-      ).resolves.toBe(JSON.stringify({ data: [] }));
-      await expect(
-        boundedTranscriptCommand.handle(
-          JSON.stringify({ agentId, threadId: thread.id, limit: 25 }),
-        ),
-      ).resolves.toBe(JSON.stringify({ items: [] }));
+      await expect(command(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, params)).resolves.toBe(
+        JSON.stringify({ data: [] }),
+      );
+      await expect(command(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, params)).resolves.toBe(
+        JSON.stringify({ items: [] }),
+      );
       runtimeConfig = {
         agents: { ownership: "explicit", entries: { renamedNodeAgent: {} } },
       };
     }
+    const nativeScope = expect.objectContaining({
+      agentDir: undefined,
+      authProfileId: null,
+      startOptions: expect.objectContaining({ env: { CODEX_HOME: codexHome }, homeScope: "user" }),
+    });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
       {},
       "thread/list",
       expect.any(Object),
-      expect.objectContaining({
-        agentDir: undefined,
-        authProfileId: null,
-        startOptions: expect.objectContaining({
-          env: { CODEX_HOME: codexHome },
-          homeScope: "user",
-        }),
-      }),
+      nativeScope,
     );
-    expect(pinnedConnectionMocks.getClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: undefined,
-        authProfileId: null,
-        startOptions: expect.objectContaining({
-          env: { CODEX_HOME: codexHome },
-          homeScope: "user",
-        }),
-      }),
-    );
-    await expect(listCommand.handle(JSON.stringify({ agentId: 42 }))).rejects.toThrow(
+    expect(pinnedConnectionMocks.getClient).toHaveBeenCalledWith(nativeScope);
+    await expect(command(CODEX_APP_SERVER_THREADS_LIST_COMMAND, { agentId: 42 })).rejects.toThrow(
       "agentId must be a string",
     );
   });
@@ -290,48 +267,116 @@ describe("Codex node catalog sources", () => {
         source: "cli",
         ...(rollout ? { path: rollout } : {}),
       });
-      const commands = await nativeCommands(factory, thread);
-      const command = commands(CODEX_APP_SERVER_THREADS_LIST_COMMAND);
-      const read = commands(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
+      const command = await nativeCommands(factory, thread);
+      const list = (agentId?: string) =>
+        command(CODEX_APP_SERVER_THREADS_LIST_COMMAND, { agentId, limit: 25 });
       await (await factory.forNode("beta")).control.initialize();
-      expect(
-        JSON.parse(await command.handle(JSON.stringify({ agentId: "beta", limit: 25 }))),
-      ).toMatchObject({
+      expect(JSON.parse(await list("beta"))).toMatchObject({
         canContinueCodex: appServer.transport === "stdio",
         sessions: [{ threadId: thread.id }],
       });
       await expect(
-        read.handle(JSON.stringify({ agentId: "beta", threadId: thread.id, limit: 25 })),
+        command(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
+          agentId: "beta",
+          threadId: thread.id,
+          limit: 25,
+        }),
       ).resolves.toBe(JSON.stringify({ data: [] }));
+      const configuredScope = expect.objectContaining({
+        agentDir: source.agentDir,
+        startOptions: source.appServer.start,
+      });
       expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
         { appServer },
         "thread/list",
         expect.any(Object),
-        expect.objectContaining({
-          agentDir: source.agentDir,
-          startOptions: source.appServer.start,
-        }),
+        configuredScope,
       );
-      expect(pinnedConnectionMocks.getClient).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDir: source.agentDir,
-          startOptions: source.appServer.start,
-        }),
-      );
+      expect(pinnedConnectionMocks.getClient).toHaveBeenCalledWith(configuredScope);
       commandRpcMocks.codexControlRequest.mockClear();
-      await expect(command.handle(JSON.stringify({ limit: 25 }))).rejects.toThrow(
-        "no explicit owner",
-      );
-      await expect(
-        command.handle(JSON.stringify({ agentId: "gateway-only", limit: 25 })),
-      ).rejects.toThrow("unknown Codex session catalog agent");
+      await expect(list()).rejects.toThrow("no explicit owner");
+      await expect(list("gateway-only")).rejects.toThrow("unknown Codex session catalog agent");
       runtimeConfig = {
         agents: { ownership: "explicit", entries: { alpha: {}, replacement: {} } },
       };
-      await expect(command.handle(JSON.stringify({ agentId: "beta", limit: 25 }))).rejects.toThrow(
-        "unknown Codex session catalog agent",
-      );
+      await expect(list("beta")).rejects.toThrow("unknown Codex session catalog agent");
       expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["stdio", "websocket"] as const)(
+    "keeps terminal capabilities and execution on the selected %s source",
+    async (transport) => {
+      const binDir = nodeTempDirs.make("codex-terminal-source-");
+      const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+      await fs.writeFile(
+        executable,
+        process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n",
+      );
+      if (process.platform !== "win32") {
+        await fs.chmod(executable, 0o755);
+      }
+      process.env.PATH = "";
+      nodeHostMocks.userShellPaths.set("codex", binDir);
+      const factory = catalogFactory({
+        getPluginConfig: () => undefined,
+        getRuntimeConfig: () => config,
+      });
+      const primary = (await factory.homesForAgent("main"))[0]!;
+      const local = transport === "stdio";
+      const source: CodexCatalogHome = {
+        ...primary,
+        sourceHomeId: local ? "synthetic-home-secondary" : "synthetic-home-remote",
+        hostId: local
+          ? CODEX_LOCAL_SESSION_HOST_ID
+          : `${CODEX_LOCAL_SESSION_HOST_ID}:synthetic-home-remote`,
+        label: local ? "Local Codex · Secondary" : "Remote Codex",
+        appServer: { ...primary.appServer, start: { ...primary.appServer.start, transport } },
+      };
+      const threadId = "123e4567-e89b-12d3-a456-426614174000";
+      const control = createControl({
+        listPage: async () => ({
+          sessions: [
+            {
+              threadId,
+              name: "Selected source session",
+              cwd: "/synthetic/project",
+              status: "idle",
+              source: "cli",
+              archived: false,
+            },
+          ],
+        }),
+      });
+      const provider = catalogProvider({
+        ...factory,
+        homesForAgent: async () => [source],
+        forRequest: () => control,
+      });
+      expect(await provider.list({})).toMatchObject([
+        {
+          hostId: source.hostId,
+          canStartTerminal: local,
+          sessions: [{ threadId, canOpenTerminal: local }],
+        },
+      ]);
+      const request = { hostId: source.hostId, threadId, sourceHomeId: source.sourceHomeId };
+      if (local) {
+        await expect(provider.openTerminal!(request)).resolves.toMatchObject({
+          kind: "local",
+          argv: [executable, "resume", threadId],
+          env: {
+            CODEX_HOME: resolveCodexAppServerLocalHomeDir(source.appServer.start, source.agentDir),
+          },
+        });
+      } else {
+        await expect(provider.openTerminal!(request)).rejects.toThrow(
+          "Native terminal requires a local Codex source",
+        );
+      }
+      await expect(
+        provider.openTerminal!({ ...request, sourceHomeId: "removed-home" }),
+      ).rejects.toThrow("Codex session source home is unavailable");
     },
   );
 });

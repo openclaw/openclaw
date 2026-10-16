@@ -105,6 +105,19 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     });
     expect(sanitize.mock.calls.map(([value]) => value)).not.toContain(knownPreview);
     expect(sanitize.mock.calls.map(([value]) => value)).not.toContain("Hidden native execution");
+    await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
+    sanitize.mockClear();
+    const renamed = "Offline title ".repeat(60).trim();
+    known.name = renamed;
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await vi.waitFor(async () => {
+      const current = (await control.listPage({})).sessions.find(
+        (row) => row.threadId === known.id,
+      );
+      expect(current?.name).toBe(renamed.slice(0, 500));
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
+    expect(sanitize).not.toHaveBeenCalled();
   } finally {
     try {
       await factory.stop();

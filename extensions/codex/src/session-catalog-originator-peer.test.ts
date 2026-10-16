@@ -57,40 +57,26 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
           ? Buffer.from(raw)
           : raw;
       const request = JSON.parse(bytes.toString()) as RpcRequest;
+      const send = (result: unknown) => socket.send(JSON.stringify({ id: request.id, result }));
       methods.push(request.method);
       if (request.method === "initialize") {
-        socket.send(
-          JSON.stringify({
-            id: request.id,
-            result: { userAgent: `codex/${CODEX_APP_SERVER_VERSION}` },
-          }),
-        );
-        return;
-      }
-      if (request.method === "initialized") {
-        return;
-      }
-      if (request.method === "thread/list") {
+        send({ userAgent: `codex/${CODEX_APP_SERVER_VERSION}` });
+      } else if (request.method === "thread/list") {
         const params = request.params as { cursor?: string; limit?: number };
         cursors.push(params.cursor);
         const page = Number(params.cursor ?? "0");
+        send({
+          data: [pages[page]],
+          nextCursor: page + 1 < pages.length ? String(page + 1) : null,
+        });
+      } else if (request.method !== "initialized") {
         socket.send(
           JSON.stringify({
             id: request.id,
-            result: {
-              data: [pages[page]],
-              nextCursor: page + 1 < pages.length ? String(page + 1) : null,
-            },
+            error: { code: -32601, message: "Unexpected fixture request" },
           }),
         );
-        return;
       }
-      socket.send(
-        JSON.stringify({
-          id: request.id,
-          error: { code: -32601, message: "Unexpected fixture request" },
-        }),
-      );
     });
   });
 
@@ -132,26 +118,21 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       query: { hostIds: [source.hostId], limitPerHost: 1 },
       sessionEntries: { entriesForAgent: () => [], entriesForCatalog: () => [] },
     } satisfies Parameters<typeof createCodexSessionCatalogListOperation>[0];
-    const result = await runCatalogListInline(createCodexSessionCatalogListOperation(listParams));
-    const openedRollouts = opening.mock.calls.filter(
-      ([file]) => typeof file === "string" && rolloutPaths.has(file),
-    );
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ connected: true, sessions: [] });
+    const list = () => runCatalogListInline(createCodexSessionCatalogListOperation(listParams));
+    const openedRollouts = () =>
+      opening.mock.calls.filter(([file]) => typeof file === "string" && rolloutPaths.has(file));
+    const result = await list();
+    expect(result).toMatchObject([{ connected: true, sessions: [] }]);
     expect(result[0]).not.toHaveProperty("nextCursor");
     expect(cursors).toEqual(
       Array.from({ length: 20 }, (_, index) => (index === 0 ? undefined : String(index))),
     );
-    expect(openedRollouts).toHaveLength(0);
+    expect(openedRollouts()).toHaveLength(0);
     const nativeRequests = [...methods];
     opening.mockClear();
-    expect(await runCatalogListInline(createCodexSessionCatalogListOperation(listParams))).toEqual(
-      result,
-    );
+    expect(await list()).toEqual(result);
     expect(methods).toEqual(nativeRequests);
-    expect(
-      opening.mock.calls.filter(([file]) => typeof file === "string" && rolloutPaths.has(file)),
-    ).toHaveLength(0);
+    expect(openedRollouts()).toHaveLength(0);
   } finally {
     await control?.stop();
     opening.mockRestore();

@@ -35,13 +35,46 @@ function catalogState(namespace: string) {
   });
 }
 
-function createSnapshotFixture(namespace: string, rows: CodexThread[], homeId = namespace) {
+function createSnapshotFixture(
+  namespace: string,
+  rows: CodexThread[],
+  homeId = namespace,
+  localSessionsRoot?: string,
+) {
   const native = { rows };
   const openState = () => catalogState(namespace);
-  const readNative = vi.fn(async () => projectCodexCatalogPage({ data: native.rows }));
+  let blocked: Promise<void> | undefined;
+  const readNative = vi.fn(async (_params: CodexThreadListParams) => {
+    if (blocked) {
+      await blocked;
+    }
+    return projectCodexCatalogPage({ data: structuredClone(native.rows) });
+  });
   const createIndex = (state = openState()) =>
-    new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
-  return { native, openState, readNative, createIndex };
+    new CodexCatalogIndex({
+      homeId,
+      localSessionsRoot,
+      state,
+      readNative,
+      assertCurrent: () => {},
+    });
+  const seed = async (inspect?: (index: CodexCatalogIndex) => Promise<void>) => {
+    const index = createIndex();
+    try {
+      await index.initialize();
+      await inspect?.(index);
+    } finally {
+      await index.close();
+    }
+    await closeOpenClawStateDatabaseAsync();
+  };
+  const pause = () => {
+    const gate = createDeferred<void>();
+    blocked = gate.promise;
+    readNative.mockClear();
+    return gate;
+  };
+  return { native, openState, readNative, createIndex, seed, pause };
 }
 
 function localStartOptions(prefix: string): CodexAppServerStartOptions {
@@ -256,27 +289,14 @@ describe("resident Codex catalog SQLite durability", () => {
     for (const thread of native) {
       thread.path = await writeCatalogRollout(root, thread);
     }
-    const openState = () => catalogState("resident-restart-test");
-    const nativeAllowed = createDeferred<void>();
-    let paused = false;
-    const readNative = vi.fn(async () => {
-      if (paused) {
-        await nativeAllowed.promise;
-      }
-      return projectCodexCatalogPage({ data: structuredClone(native) });
-    });
-    const createIndex = () =>
-      new CodexCatalogIndex({
-        homeId: "restart",
-        localSessionsRoot: root,
-        state: openState(),
-        readNative,
-        assertCurrent: () => {},
-      });
-    const first = createIndex();
-    let initial;
-    try {
-      await first.initialize();
+    const { openState, readNative, createIndex, seed, pause } = createSnapshotFixture(
+      "resident-restart-test",
+      native,
+      "restart",
+      root,
+    );
+    let initial!: Awaited<ReturnType<CodexCatalogIndex["list"]>>;
+    await seed(async (first) => {
       initial = await first.list({});
       const persisted = (await openState().entries()).map((entry) => entry.value);
       expect(persisted).toHaveLength(3);
@@ -288,17 +308,13 @@ describe("resident Codex catalog SQLite durability", () => {
       expect(
         persisted.flatMap((entry) => (entry.kind === "row" ? [entry.row.threadId] : [])).toSorted(),
       ).toEqual(["changed", "untouched"]);
-    } finally {
-      await first.close();
-    }
-    await closeOpenClawStateDatabaseAsync();
+    });
     native[0]!.preview = "Changed while the Gateway was stopped";
     const changedFile = await writeCatalogRollout(root, {
       ...native[0]!,
       cwd: "/workspace/stale-rollout-header",
     });
-    paused = true;
-    readNative.mockClear();
+    const nativeAllowed = pause();
     const open = vi.spyOn(fs, "open");
     const readFile = vi.spyOn(fs, "readFile");
     const restarted = createIndex();
@@ -352,39 +368,22 @@ describe("resident Codex catalog SQLite durability", () => {
     native.path = rollout;
     const originalBytes = await fs.readFile(rollout);
     const originalStat = await fs.stat(rollout);
-    const openState = () => catalogState("resident-offline-title-test");
-    const metadata = createDeferred<void>();
-    let offline = false;
-    const readNative = vi.fn(async (_params: CodexThreadListParams) => {
-      if (offline) {
-        await metadata.promise;
-      }
-      return projectCodexCatalogPage({ data: [structuredClone(native)] });
-    });
-    const createIndex = () =>
-      new CodexCatalogIndex({
-        homeId: "offline-title",
-        localSessionsRoot: root,
-        state: openState(),
-        readNative,
-        assertCurrent: () => {},
-      });
-    const first = createIndex();
-    try {
-      await first.initialize();
+    const { readNative, createIndex, seed, pause } = createSnapshotFixture(
+      "resident-offline-title-test",
+      [native],
+      "offline-title",
+      root,
+    );
+    await seed(async (first) => {
       expect((await first.list({})).sessions[0]?.name).toBe("Previous title");
-    } finally {
-      await first.close();
-    }
-    await closeOpenClawStateDatabaseAsync();
-    offline = true;
+    });
+    const metadata = pause();
     native.name = "Renamed while offline";
     expect(await fs.readFile(rollout)).toEqual(originalBytes);
     expect(await fs.stat(rollout)).toMatchObject({
       mtimeMs: originalStat.mtimeMs,
       size: originalStat.size,
     });
-    readNative.mockClear();
     const open = vi.spyOn(fs, "open");
     const readFile = vi.spyOn(fs, "readFile");
     const restarted = createIndex();
@@ -431,17 +430,11 @@ describe("resident Codex catalog SQLite durability", () => {
       }),
       idleThread({ id: "archived", name: "Archived title", source: "cli" }),
     ];
-    const openState = () => catalogState("resident-mutations-test");
-    const readNative = vi.fn(async () =>
-      projectCodexCatalogPage({ data: structuredClone(native) }),
+    const { openState, readNative, createIndex } = createSnapshotFixture(
+      "resident-mutations-test",
+      native,
+      homeId,
     );
-    const createIndex = () =>
-      new CodexCatalogIndex({
-        homeId,
-        state: openState(),
-        readNative,
-        assertCurrent: () => {},
-      });
     const first = createIndex();
     const harness = createClientHarness();
     try {
@@ -516,18 +509,13 @@ describe("resident Codex catalog SQLite durability", () => {
 it("does not restore offline-deleted rows after repeated failed snapshot enumerations", async () => {
   const deleted = idleThread({ id: "deleted-while-offline", source: "cli" });
   const current = idleThread({ id: "still-current", source: "cli" });
-  const { native, openState, createIndex } = createSnapshotFixture("snapshot-read-recovery", [
+  const { native, openState, createIndex, seed } = createSnapshotFixture("snapshot-read-recovery", [
     deleted,
     current,
   ]);
-  const original = createIndex();
-  try {
-    await original.initialize();
+  await seed(async (original) => {
     expect((await original.list({})).sessions).toHaveLength(2);
-  } finally {
-    await original.close();
-  }
-  await closeOpenClawStateDatabaseAsync();
+  });
   native.rows = [current];
 
   for (let restart = 0; restart < 3; restart++) {
@@ -624,19 +612,14 @@ it("persists archives received before saved snapshot restoration", async () => {
   const homeId = await codexCatalogResidentHomeKey({ startOptions });
   const archived = idleThread({ id: "archived-during-restore", source: "cli" });
   const current = idleThread({ id: "still-current", source: "cli" });
-  const { native, openState, readNative, createIndex } = createSnapshotFixture(
+  const { native, openState, readNative, createIndex, seed } = createSnapshotFixture(
     "archive-before-snapshot-restore",
     [archived, current],
     homeId,
   );
-  const original = createIndex();
-  try {
-    await original.initialize();
+  await seed(async (original) => {
     expect((await original.list({})).sessions).toHaveLength(2);
-  } finally {
-    await original.close();
-  }
-  await closeOpenClawStateDatabaseAsync();
+  });
 
   const captured = createDeferred<void>();
   const release = createDeferred<void>();

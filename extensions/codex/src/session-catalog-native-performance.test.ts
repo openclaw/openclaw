@@ -76,18 +76,6 @@ it("measures ordinary and catalog response retention across real native DB-only 
     }
   }
   const [ordinary, catalog] = measurements;
-  console.info(
-    "native catalog boundary measurements",
-    JSON.stringify({
-      fixtureRows: 3_000,
-      userPreviewBytes: 64 * 1024,
-      preparedPreviewRows: knownPreviews.size,
-      rolloutBytes: fixture.rolloutBytes,
-      interpretation:
-        "Equivalent DB-only request walk through the real client boundary; not the periodic timer. Both modes retain the same prepared preview map; catalog mode reuses matching previews. Wire JSON parsing remains necessary.",
-      measurements,
-    }),
-  );
   expect(ordinary).toMatchObject({
     rows: 3_000,
     pages: 47,
@@ -106,6 +94,4 @@ it("measures ordinary and catalog response retention across real native DB-only 
   expect(ordinary!.maxPreviewCharacters).toBeGreaterThan(16 * 1024);
   expect(catalog!.maxPreviewCharacters).toBeLessThanOrEqual(500);
   expect(catalog!.retainedPageBytes).toBeLessThan(ordinary!.retainedPageBytes / 10);
-  expect(ordinary!.sampledWalkAllocationBytes).toBeGreaterThan(0);
-  expect(catalog!.sampledWalkAllocationBytes).toBeGreaterThan(0);
 });

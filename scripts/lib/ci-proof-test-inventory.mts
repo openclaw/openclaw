@@ -460,7 +460,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/session-catalog-listing-cache.test.ts",
   "extensions/codex/src/session-catalog-local-progress.test.ts",
   "extensions/codex/src/session-catalog-node-listing.test.ts",
-  "extensions/codex/src/session-catalog-preview-transitions.test.ts",
   "extensions/codex/src/session-catalog-request-lifetime.test.ts",
   "extensions/codex/src/session-catalog-settings.test.ts",
   "extensions/codex/src/session-catalog-source.test.ts",

@@ -13,6 +13,10 @@ import { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 import { createCodexCatalogHomeResolver } from "./session-catalog-homes.js";
 import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 
+const ownerConfig = (
+  entries: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>,
+): OpenClawConfig => ({ agents: { ownership: "explicit", entries } });
+
 describe("Codex catalog home discovery", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -48,14 +52,9 @@ describe("Codex catalog home discovery", () => {
       const aliasTarget = (home: string) =>
         aliasKind === "agent-directory" ? path.dirname(home) : home;
       await fs.symlink(aliasTarget(homeA), alias, linkType);
-      let config: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            alpha: { agentDir: aliasKind === "agent-directory" ? alias : path.join(root, "agent") },
-          },
-        },
-      };
+      let config = ownerConfig({
+        alpha: { agentDir: aliasKind === "agent-directory" ? alias : path.join(root, "agent") },
+      });
       const factory = createCodexSessionCatalogControl({
         config,
         getRuntimeConfig: () => config,
@@ -78,19 +77,14 @@ describe("Codex catalog home discovery", () => {
         return createClientHarness({
           onWrite: (line, send) => {
             const request = JSON.parse(line) as { id?: number; method: string };
+            const respond = (result: unknown) => send({ id: request.id, result });
             if (request.method === "initialize") {
-              send({
-                id: request.id,
-                result: {
-                  userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
-                  codexHome: physicalHome,
-                },
+              respond({
+                userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
+                codexHome: physicalHome,
               });
             } else if (request.method === "thread/read") {
-              send({
-                id: request.id,
-                result: { thread: { ...threadStartResult(threadId).thread, name: receipt } },
-              });
+              respond({ thread: { ...threadStartResult(threadId).thread, name: receipt } });
             } else if (request.method !== "initialized") {
               throw new Error(`unexpected catalog request: ${request.method}`);
             }
@@ -114,12 +108,14 @@ describe("Codex catalog home discovery", () => {
         await fs.unlink(alias);
         await fs.symlink(aliasTarget(homeB), alias, linkType);
         const candidates = await factory.homesForAgent("alpha");
-        expect(candidates[0]?.sourceHomeId).toBe(captured.sourceHomeId);
-        expect(candidates[0]?.localSessionsRoot).toBe(path.join(canonicalA, "sessions"));
+        expect(candidates[0]).toMatchObject({
+          sourceHomeId: captured.sourceHomeId,
+          localSessionsRoot: path.join(canonicalA, "sessions"),
+          appServer: { start: { homeScope } },
+        });
         expect(
           candidates.some((home) => home.localSessionsRoot === path.join(canonicalB, "sessions")),
         ).toBe(false);
-        expect(candidates[0]?.appServer.start.homeScope).toBe(homeScope);
         if (homeScope === "agent") {
           expect(candidates[0]?.appServer.start.env?.CODEX_HOME).toBeUndefined();
         }
@@ -146,15 +142,10 @@ describe("Codex catalog home discovery", () => {
 
   it("leaves agent runtime preparation cold until that owner requests the catalog", async () => {
     const root = tempDirs.make("codex-catalog-lazy-");
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          alpha: { agentDir: path.join(root, "alpha") },
-          beta: { agentDir: path.join(root, "beta") },
-        },
-      },
-    };
+    const config = ownerConfig({
+      alpha: { agentDir: path.join(root, "alpha") },
+      beta: { agentDir: path.join(root, "beta") },
+    });
     const resolveRuntimeOptions = vi.fn(
       (options: Parameters<typeof resolveCodexSupervisionAppServerRuntimeOptions>[0] = {}) => {
         if (options?.agentDir === path.join(root, "alpha")) {
@@ -196,7 +187,7 @@ describe("Codex catalog home discovery", () => {
     entries.zzselected = { agentDir: selectedDir };
     const unusedHome = path.join(root, "zzzunused", "codex-home");
     entries.zzzunused = { agentDir: path.dirname(unusedHome) };
-    const config: OpenClawConfig = { agents: { ownership: "explicit", entries } };
+    const config = ownerConfig(entries);
     const resolver = createCodexCatalogHomeResolver({
       config,
       getRuntimeConfig: () => config,
