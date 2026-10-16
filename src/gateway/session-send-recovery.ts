@@ -24,6 +24,7 @@ import type { CommunicationEndpoint } from "../sessions/communication-admission.
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import {
   readSessionSendDelivery,
   withSessionSendDelivery,
@@ -70,6 +71,7 @@ function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryE
 export async function recoverSessionSendDeliveries(
   context: GatewayRequestContext,
   signal: AbortSignal,
+  startupTrace?: GatewayStartupTrace,
 ): Promise<void> {
   const runtime = context.recoveryRuntime;
   if (!runtime) {
@@ -97,7 +99,10 @@ export async function recoverSessionSendDeliveries(
         minDelayMs: 5_000,
         maxDelayMs: 10_000,
         shouldRetry: (error) => !signal.aborted && isTransient(error),
-        sleep: (ms) => sleepWithAbort(ms, signal, { ref: false }),
+        sleep: (ms) =>
+          measureStartup(startupTrace, "sidecars.delivery-retry-wait", () =>
+            sleepWithAbort(ms, signal, { ref: false }),
+          ),
         onRetry: ({ err, attempt, delayMs }) => {
           context.logGateway.warn(
             `Session delivery recovery retry after attempt ${attempt} in ${delayMs}ms: ${formatErrorMessageForDisplay(err, formatErrorMessageWithCode(err))}`,
@@ -320,23 +325,25 @@ export async function recoverSessionSendDeliveries(
           (undeliverableRunIds.length > 0
             ? " Updates with replaced endpoints will not be retried automatically."
             : "");
-        const result = await retry(() =>
-          withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-            appendSessionTranscriptReport(scope, {
-              kind: "custom",
-              customTypes: [customType],
-              selectReport: (latest) =>
-                latest?.content === content &&
-                JSON.stringify(latest.details) === JSON.stringify(details)
-                  ? undefined
-                  : {
-                      customType,
-                      content,
-                      details,
-                      display: true,
-                      excludeFromContext: true,
-                    },
-            }),
+        const result = await measureStartup(startupTrace, "sidecars.delivery-notices", () =>
+          retry(() =>
+            withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+              appendSessionTranscriptReport(scope, {
+                kind: "custom",
+                customTypes: [customType],
+                selectReport: (latest) =>
+                  latest?.content === content &&
+                  JSON.stringify(latest.details) === JSON.stringify(details)
+                    ? undefined
+                    : {
+                        customType,
+                        content,
+                        details,
+                        display: true,
+                        excludeFromContext: true,
+                      },
+              }),
+            ),
           ),
         );
         if (!result.ok) {

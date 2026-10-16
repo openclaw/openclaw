@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
@@ -11,6 +12,7 @@ import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
@@ -151,6 +153,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
 });
 
@@ -213,6 +217,34 @@ it("settles replaced-endpoint inputs durably so the second restart is silent", a
       await reports.readLatestSessionTranscriptReport(scope, ["session-send-recovery-blocked"]),
     ).toEqual(notice);
   });
+});
+
+it("attributes blocked-notice work and retry backoff in the startup summary", async () => {
+  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+  const startedAt = Date.now();
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
+  const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
+  const trace = createGatewayStartupTrace(context.logGateway, 0);
+  io.source.mockRejectedValueOnce(new WorkerTaskError("Reader starting", "unavailable"));
+  sourceEntry.sessionId = "replaced-source";
+  io.report.mockImplementation(async () => {
+    vi.advanceTimersByTime(250);
+    return { ok: true };
+  });
+  try {
+    const recovery = trace.measure("sidecars.subagent-recovery", () =>
+      trace.measure("sidecars.delivery-recovery", () =>
+        recoverSessionSendDeliveries(context, controller().signal, trace),
+      ),
+    );
+    await Promise.all([recovery, vi.runAllTimersAsync()]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(info.mock.calls.at(-1)?.[0]).toContain(
+      "deliveryMs=5250.0 deliveryNoticesMs=250.0 retryWaitMs=5000.0",
+    );
+  } finally {
+    trace.close();
+  }
 });
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {
