@@ -1105,7 +1105,7 @@ describe("main-session-restart-recovery", () => {
         await expect(
           markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: tmpDir }),
         ).resolves.toEqual({ marked: 0, skipped: 1 });
-        expect(sessionAccessor.loadSessionEntry(target)?.abortedLastRun).toBe(true);
+        expect(sessionAccessor.loadSessionEntry(target)?.abortedLastRun).toBe(false);
         expect(sessionAccessor.loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
         expect(child.requesterSettleWake?.rearmGeneration).toBe(1);
         expect(callGateway).not.toHaveBeenCalled();
@@ -1407,7 +1407,7 @@ describe("main-session-restart-recovery", () => {
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(result).toEqual({ marked: 0, skipped: 0 });
-    expect(store["agent:main:main"]?.status).toBeUndefined();
+    expect(store["agent:main:main"]?.status).toBe("done");
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
@@ -2612,7 +2612,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendRecoveryNotice).not.toHaveBeenCalled();
     const entry = readEntry();
-    expect(entry?.status).toBeUndefined();
+    expect(entry?.status).toBe("done");
     expect(entry?.pendingFinalDelivery).toBeUndefined();
     expect(entry?.pendingDeliveryNotice).toMatchObject({
       intentId,
