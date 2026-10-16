@@ -428,8 +428,8 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
-Normal logging emits one `client connected` record per admitted connection,
-including CLI and backend clients. It includes the connection ID, client ID and
+Normal logging emits one `client connected` record per admitted operator or node
+connection, including CLI and backend clients. It includes the connection ID, client ID and
 display name, mode, role, authentication method, version, platform, build, remote
 address, and authenticated user when present. This replaces the separate
 `authenticated user connected` and `webchat connected` records; those records
