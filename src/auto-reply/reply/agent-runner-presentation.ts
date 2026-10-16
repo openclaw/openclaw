@@ -33,13 +33,16 @@ export function createAgentTurnPresentation(params: {
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }) {
-  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+  const classifyReplyText = (
+    payload: ReplyPayload,
+    hasHeartbeatToken?: boolean,
+  ): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
-    if (!params.turn.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+    if (!params.turn.isHeartbeat && hasHeartbeatToken !== false && text?.includes("HEARTBEAT_OK")) {
       const stripped = stripHeartbeatToken(text, { mode: "message" });
       if (stripped.didStrip && !params.heartbeatState.didLogStrip) {
         params.heartbeatState.didLogStrip = true;
@@ -115,17 +118,42 @@ export function createAgentTurnPresentation(params: {
     return result;
   };
 
-  const presentPartialReply = async (payload: ReplyPayload, runtime: "cli" | "embedded") => {
-    const classified = classifyReplyText(payload);
+  let partialHeartbeatTail = "";
+  let hasPartialHeartbeatToken = false;
+  let partialTypingLength = 0;
+  let partialTypingCharacter: string | undefined;
+  const presentPartialReply = async (
+    payload: ReplyPayload & Pick<PartialReplyPayload, "delta" | "replace">,
+    runtime: "cli" | "embedded",
+  ) => {
+    const delta = payload.delta;
+    const incremental = runtime === "embedded" && delta !== undefined && !payload.replace;
+    if (!hasPartialHeartbeatToken && !params.turn.isHeartbeat) {
+      const probe = incremental ? partialHeartbeatTail + delta : (payload.text ?? "");
+      hasPartialHeartbeatToken = probe.includes("HEARTBEAT_OK");
+      // Retain overlap for split tokens; a new message can only cause a conservative match.
+      partialHeartbeatTail = probe.slice(-"HEARTBEAT_OK".length + 1);
+    }
+    const classified = classifyReplyText(payload, hasPartialHeartbeatToken);
     if (classified.skip || !classified.text) {
       return runtime === "embedded" ? false : undefined;
     }
-    const textForTyping = classified.text;
+    let textForTyping = classified.text;
+    if (incremental && !hasPartialHeartbeatToken) {
+      const appended = classified.text.length === partialTypingLength + delta.length;
+      const character = /\S/.exec(appended ? delta : classified.text)?.[0];
+      partialTypingCharacter = character ?? (appended ? partialTypingCharacter : undefined);
+      partialTypingLength = classified.text.length;
+      // Typing needs presence, including whitespace appended after visible text, not a snapshot.
+      textForTyping = partialTypingCharacter ?? "";
+    } else {
+      partialTypingLength = 0;
+    }
     let didMaterialize = false;
     let materializedText: string | undefined;
     const materializeText = () => {
       if (!didMaterialize) {
-        const sanitized = sanitizeStreamingText(textForTyping, false);
+        const sanitized = sanitizeStreamingText(classified.text, false);
         materializedText = sanitized.skip ? undefined : sanitized.text;
         didMaterialize = true;
       }

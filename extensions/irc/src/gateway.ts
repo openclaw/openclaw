@@ -19,10 +19,7 @@ export async function startIrcGatewayAccount(ctx: {
   };
 }): Promise<void> {
   const account = ctx.account;
-  const statusSink = createAccountStatusSink({
-    accountId: ctx.accountId,
-    setStatus: ctx.setStatus,
-  });
+  const statusSink = createAccountStatusSink(ctx);
   if (!account.configured) {
     throw new Error(
       `IRC is not configured for account "${account.accountId}" (need host and nick in channels.irc).`,

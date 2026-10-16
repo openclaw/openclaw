@@ -19,8 +19,8 @@ vi.mock("./polling-liveness.js", async (importOriginal) => {
   };
 });
 
-export function installPollingStallWatchdogHarness(initialNow = 0) {
-  watchdogClock.now = initialNow;
+export function installPollingStallWatchdogHarness() {
+  watchdogClock.now = 0;
   const realSetTimeout = globalThis.setTimeout;
   const realClearTimeout = globalThis.clearTimeout;
   const realSetInterval = globalThis.setInterval;

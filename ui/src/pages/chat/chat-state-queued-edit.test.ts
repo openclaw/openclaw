@@ -38,7 +38,7 @@ afterEach(() => {
 
 function createControllerFixture(withClient = false) {
   const controller = createChatState<ChatPageHost>({
-    requestUpdate: () => undefined,
+    invalidate: () => undefined,
     updateComplete: Promise.resolve(true),
   });
   const dispose = controller.dispose;

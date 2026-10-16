@@ -23,7 +23,7 @@
 | state    | internalTable |     1 |          0 |        1 |
 | agent    | table         |    45 |         45 |        0 |
 | agent    | column        |   417 |        381 |       36 |
-| agent    | index         |   101 |         97 |        4 |
+| agent    | index         |   100 |         96 |        4 |
 | agent    | foreignKey    |    28 |         28 |        0 |
 | agent    | check         |    66 |         66 |        0 |
 | agent    | trigger       |    14 |         10 |        4 |

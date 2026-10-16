@@ -456,13 +456,10 @@ describe("cloud worker milestone 2 fault injection", () => {
     secondRelease.resolve();
     await expect(inference).resolves.toEqual(doneOutcome("partitioned reply"));
 
-    const message = transcriptMessage("partitioned user");
-    const commit = current.transcript.commit([
-      message,
+    const committed = await current.transcript.commit([
+      transcriptMessage("partitioned user"),
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
-    message.content[0]!.text = "caller mutation";
-    const committed = await commit;
     expect(current.transcript.baseLeafId).toBe(committed.newLeafId);
     expect(current.transcript.nextSeq).toBe(2);
     for (const delta of ["one", "two", "three"]) {

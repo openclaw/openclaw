@@ -104,7 +104,7 @@ src/tui/tui-pty-local-test-support.ts	1
 src/utils/run-with-concurrency.test.ts	7
 src/worker/worker.runtime.test.ts	1
 test/cli-message-authority.integration.test.ts	1
-test/codex-node-cancellation.integration.test.ts	9
+test/codex-node-cancellation.integration.test.ts	1
 test/cron-message-read.integration.test.ts	4
 test/e2e/qa-lab/runtime/gateway-timeout-recovery-subagent.e2e.test.ts	1
 test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.ts	1

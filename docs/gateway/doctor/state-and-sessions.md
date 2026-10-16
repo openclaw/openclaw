@@ -37,7 +37,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Imports of the pre-June `tasks/runs.sqlite`, `flows/registry.sqlite`, and `plugin-state/state.sqlite` databases are retired. Doctor leaves these files untouched. Older installations that need their records should [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor migrations before installing `latest`; June-and-later releases already use the shared state database.
 
-    The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
+    The JSON plugin index at `plugins/installs.json` is retired. Doctor archives its original bytes before plugin discovery and reports the archive path. Current SQLite plugin indexes and install records remain authoritative; reinstall a missing plugin using its archived package spec.
 
     Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 

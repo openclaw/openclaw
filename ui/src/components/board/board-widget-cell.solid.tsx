@@ -5,7 +5,6 @@ import {
   createMemo,
   createSignal,
   onCleanup,
-  onSettled,
   Show,
   Switch,
   Match,
@@ -70,17 +69,13 @@ function BoardWidgetCellContent(
     get: () => cells.get(host)?.presentationReady ?? false,
   });
   onCleanup(() => cells.delete(host));
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const requestUpdate = () => {
-    if (connected) {
-      setRevision((value) => value + 1);
-    }
-  };
-  let actionError = "";
-  let actionPending = false;
+  const [actionError, setActionError] = createSignal("");
+  const [actionPending, setActionPending] = createSignal(false);
+  const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
+  const [bodyErrored, setBodyErrored] = createSignal(false, { ownedWrite: true });
+  // Signals commit later; admission must reject a second action in the same tick.
+  let actionInFlight = false;
   let menu: MenuHandle | undefined;
-  let widgetRoot: HTMLElement | undefined;
-  let bodyErrored = false;
   let resetBodyError: (() => void) | undefined;
   let connected = true;
   const [renderedMcp, setRenderedMcp] = createSignal(
@@ -142,15 +137,12 @@ function BoardWidgetCellContent(
     widget: () => props.widget,
   });
   const frameError = projectOwner(frame.changes, () => frame.error);
-  const state = createMemo(() => {
-    revision();
-    return {
-      ...appView.snapshot(),
-      error: actionError,
-      pending: actionPending,
-      frameError: frameError.read(),
-    };
-  });
+  const state = createMemo(() => ({
+    ...appView.snapshot(),
+    error: actionError(),
+    pending: actionPending(),
+    frameError: frameError.read(),
+  }));
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
   const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
@@ -159,23 +151,27 @@ function BoardWidgetCellContent(
   );
 
   async function runAction(action: () => Promise<void>, failureMessage?: string) {
-    if (actionPending || props.busy) {
+    if (actionInFlight || props.busy) {
       return;
     }
-    actionPending = true;
-    actionError = "";
-    requestUpdate();
+    actionInFlight = true;
+    setActionPending(true);
+    setActionError("");
     menu?.close();
     try {
       await action();
     } catch (error) {
-      actionError = formatUiError(error);
+      if (connected) {
+        setActionError(formatUiError(error));
+      }
       if (failureMessage) {
         showToast({ message: failureMessage });
       }
     } finally {
-      actionPending = false;
-      requestUpdate();
+      actionInFlight = false;
+      if (connected) {
+        setActionPending(false);
+      }
     }
   }
   function selectMenuItem(value: string | undefined) {
@@ -205,7 +201,7 @@ function BoardWidgetCellContent(
     !props.widget?.viewTicket ||
     props.widget.grantState === "pending" ||
     props.widget.grantState === "rejected" ||
-    bodyErrored ||
+    bodyErrored() ||
     frame.presentationReady;
   cells.set(host, {
     get presentationReady() {
@@ -226,20 +222,11 @@ function BoardWidgetCellContent(
   let previousWidget = untrack(() => props.widget);
   let previousBoardRevision = untrack(() => props.boardRevision);
   createEffect(
-    () =>
-      [
-        props.widget,
-        props.boardRevision,
-        props.callbacks,
-        props.sessionKey,
-        active(),
-        contribution(),
-        gatewayBinding(),
-      ] as const,
+    () => [props.widget, props.boardRevision, active(), contribution(), gatewayBinding()] as const,
     // Owner callbacks intentionally read the current binding captured above.
     () => {
       if (previousBoardRevision !== props.boardRevision) {
-        actionError = "";
+        setActionError("");
       }
       previousBoardRevision = props.boardRevision;
       if (previousWidget && previousWidget !== props.widget) {
@@ -248,7 +235,7 @@ function BoardWidgetCellContent(
           previousWidget.instanceId !== props.widget?.instanceId ||
           previousWidget.revision !== props.widget?.revision
         ) {
-          actionError = "";
+          setActionError("");
         }
         frame.widgetChanged(previousWidget, props.widget);
       }
@@ -260,22 +247,26 @@ function BoardWidgetCellContent(
       if (props.widget?.contentKind === "mcp-app") {
         void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
       }
-      requestUpdate();
     },
   );
   createEffect(
     () =>
       [
-        revision(),
+        widgetRoot(),
         frameError.revision(),
         props.widget,
+        props.boardRevision,
+        props.callbacks,
+        props.sessionKey,
+        gatewayBinding(),
         active(),
         props.loadingCovered,
         props.bridgeEnabled,
         props.widgetFrameUrl,
+        bodyErrored(),
       ] as const,
-    () => {
-      appView.synchronize(props.callbacks, widgetRoot ?? null);
+    ([root]) => {
+      appView.synchronize(props.callbacks, root ?? null);
       frame.update();
       if (props.loadingCovered && presentationReady()) {
         host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
@@ -297,17 +288,13 @@ function BoardWidgetCellContent(
     () => [props.widget, props.widgetFrameUrl, plugins.revision(), gatewayBinding()] as const,
     () => {
       // The first observation belongs to the initial render, including its error fallback.
-      if (observedErrorBinding && bodyErrored) {
-        bodyErrored = false;
+      if (observedErrorBinding && bodyErrored()) {
+        setBodyErrored(false);
         resetBodyError?.();
       }
       observedErrorBinding = true;
     },
   );
-  onSettled(() => {
-    frame.connect();
-    requestUpdate();
-  });
   onCleanup(() => {
     connected = false;
     for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
@@ -348,7 +335,8 @@ function BoardWidgetCellContent(
   const Frame = () =>
     frame.render(() => {
       // Reused widget objects still change with board and gateway bindings.
-      revision();
+      void props.boardRevision;
+      gatewayBinding();
       return props.widget!;
     });
   const Plugin = () => {
@@ -498,7 +486,7 @@ function BoardWidgetCellContent(
   const label = () => props.widget?.title || props.widget?.name || "";
   const scrollable = () =>
     Boolean(
-      bodyErrored ||
+      bodyErrored() ||
       state().error ||
       props.widget?.grantState === "pending" ||
       props.widget?.grantState === "rejected" ||
@@ -555,9 +543,7 @@ function BoardWidgetCellContent(
   return (
     <Show when={props.widget && props.rect && props.callbacks}>
       <section
-        ref={(element) => {
-          widgetRoot = element;
-        }}
+        ref={setWidgetRoot}
         class={[
           "board-widget",
           {
@@ -632,11 +618,8 @@ function BoardWidgetCellContent(
             ),
             (error, reset) => {
               resetBodyError = reset;
-              // Publishing the same failure retriggers the frame that produced it.
-              if (!bodyErrored) {
-                bodyErrored = true;
-                requestUpdate();
-              }
+              // Signal equality keeps repeated fallback renders from republishing the error.
+              setBodyErrored(true);
               return <BoardWidgetError error={error()} />;
             },
           )}

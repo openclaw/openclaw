@@ -81,7 +81,7 @@ export function runWithChatAbortExecution(
     () => {
       settlement.status = "fulfilled";
       settlement.cleanupSettled = true;
-      if (entry.executionSettlement === settlement && entry.registrationCleanupRequested) {
+      if (entry.registrationCleanupRequested) {
         cleanup();
       }
     },
@@ -89,11 +89,7 @@ export function runWithChatAbortExecution(
       // Preserve the rejection; only the resource owner's completed fault can retire custody.
       settlement.status = "rejected";
       settlement.cleanupSettled = error instanceof PluginRuntimeCloseCompletedError;
-      if (
-        settlement.cleanupSettled &&
-        entry.executionSettlement === settlement &&
-        entry.registrationCleanupRequested
-      ) {
+      if (settlement.cleanupSettled && entry.registrationCleanupRequested) {
         cleanup();
       }
     },

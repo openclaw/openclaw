@@ -109,6 +109,8 @@ export function createMountedPanes(
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     pane.context = context;
     pane.sessionKey = sessionKey;
+    // Composer and transcript state belongs to each mounted presentation.
+    pane.presentationId = crypto.randomUUID();
     Object.assign(pane, { agentId: paneAgentId });
     panes.push(pane);
     Reflect.set(pane, "state", undefined);

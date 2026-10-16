@@ -32,12 +32,7 @@ export function buildPluginRequest(
   };
 }
 
-export function createExecApprovalRequest(
-  overrides: Partial<{
-    turnSourceThreadId: string;
-    sessionKey: string;
-  }> = {},
-) {
+export function createExecApprovalRequest() {
   return {
     id: "req-1",
     request: {
@@ -45,8 +40,8 @@ export function createExecApprovalRequest(
       turnSourceChannel: "slack",
       turnSourceTo: "channel:C123",
       turnSourceAccountId: "default",
-      turnSourceThreadId: overrides.turnSourceThreadId ?? "1712345678.123456",
-      sessionKey: overrides.sessionKey ?? "agent:main:slack:channel:c123:thread:1712345678.123456",
+      turnSourceThreadId: "1712345678.123456",
+      sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
     },
     createdAtMs: 0,
     expiresAtMs: 1000,

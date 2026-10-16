@@ -190,6 +190,36 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
   });
 
+  it("retires listeners when an external anchor is replaced or the tooltip disconnects", async () => {
+    const { tooltip, trigger } = createTooltip("Anchor details");
+    const next = document.createElement("button");
+    tooltip.anchor = trigger;
+    document.body.append(trigger, next, tooltip);
+    await commitTooltip(tooltip);
+    focusTrigger(trigger);
+    await expectOpenCount(1);
+
+    tooltip.anchor = next;
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(trigger);
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    await expectOpenCount(0);
+    focusTrigger(next);
+    await expectOpenCount(1);
+
+    tooltip.remove();
+    focusTrigger(next);
+    hoverTrigger(next);
+    vi.advanceTimersByTime(150);
+    document.body.append(tooltip);
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(next);
+    await expectOpenCount(1);
+  });
+
   it("suppresses repeated trigger text before opening and after content updates", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");

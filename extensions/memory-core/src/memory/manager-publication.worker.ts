@@ -3,10 +3,10 @@ import type {
   EngineConnection,
   SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
-  MEMORY_INDEX_VECTOR_TABLE,
   stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
@@ -61,6 +61,7 @@ import {
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex } from "./manager-search-knn.js";
+import { memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -546,9 +547,13 @@ function createPublicationBackend(
         if (!Number.isSafeInteger(dimensions) || dimensions <= 0) {
           throw new Error("Memory vector dimensions must be a positive integer");
         }
-        const { meta, hasIndexedChunks } = readMemoryDatabaseFacts(db);
+        const { meta, hasIndexedChunks, hasVectorTable } = readMemoryDatabaseFacts(db);
         const currentDimensions = meta ? meta.vectorDims : command.input.currentDimensions;
-        if (currentDimensions === dimensions && tableExists(db, MEMORY_INDEX_VECTOR_TABLE)) {
+        if (currentDimensions === dimensions && hasVectorTable) {
+          loadExtension(command.input.state.extensionPath);
+          admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
+            extension: "memory.vector",
+          });
           return { ok: true, value: undefined };
         }
         loadExtension(command.input.state.extensionPath);
@@ -558,6 +563,9 @@ function createPublicationBackend(
             stageOpenClawAgentDatabaseSchemaExtension(db);
             vectorIndex.capability.drop(vectorIndex.index);
             vectorIndex.capability.create(vectorIndex.index, dimensions);
+            admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
+              extension: "memory.vector",
+            });
             if (meta && !meta.vectorDims && !hasIndexedChunks) {
               writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
             }

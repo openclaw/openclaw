@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { on, once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -12,6 +13,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
+import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
@@ -159,7 +161,7 @@ describe("authenticated operator request starts", () => {
       ws = await openOperatorSocket(portClaim.port, token);
       await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
       const { stream } = capture.get();
-      const compressedRequests = ws.extensions.includes("permessage-deflate");
+      expect(ws.extensions).toContain("permessage-deflate");
       // This case isolates cheap-start batching. Other owner cases advance the
       // work clock to prove the elapsed-work fairness boundary independently.
       const now = performance.now();
@@ -192,7 +194,7 @@ describe("authenticated operator request starts", () => {
             }),
             // Chrome compresses small requests whenever the extension is negotiated;
             // the server's outbound threshold cannot keep these frames raw.
-            compressedRequests,
+            true,
           ),
         ),
       );
@@ -422,7 +424,7 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("accepts large post-auth frames without negotiating compression", async () => {
+  it("compresses large frames both ways without stalling on ws zlib streams", async () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
       respond(true, { echoed: (req.params as { text: string }).text });
@@ -434,8 +436,18 @@ describe("authenticated operator request starts", () => {
         handler: registry.gatewayHandlers["test.echo"],
       }),
     );
+    // Real Gateways advertise many plugin methods; push hello past the compression threshold.
+    for (let index = 0; index < 64; index++) {
+      registry.gatewayMethodDescriptors.push(
+        createPluginGatewayMethodDescriptor({
+          pluginId: "request-start-proof",
+          name: `test.padding.hello-method-${index}`,
+          handler: registry.gatewayHandlers["test.echo"],
+        }),
+      );
+    }
     setTestPluginRegistry(registry);
-    const token = "gateway-frame-limit-test-token";
+    const token = "gateway-compression-test-token";
     let capture: ReturnType<typeof captureGatewayConnection> | undefined;
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let ws: WebSocket | undefined;
@@ -447,40 +459,72 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       capture = captureGatewayConnection(portClaim.port);
-      ws = await openOperatorSocket(portClaim.port, token);
-      expect(ws.extensions).toBe("");
+      // Peers may cap the server window; its inflater rejects farther back-references.
+      const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
+        perMessageDeflate: { serverMaxWindowBits: 10 },
+      });
+      ws = socket;
+      trackConnectChallengeNonce(socket);
+      const upgraded = once(socket, "upgrade");
+      await once(socket, "open");
+      const [upgrade] = (await upgraded) as [IncomingMessage];
+      expect(upgrade.headers["sec-websocket-extensions"]).toContain("server_max_window_bits=10");
       const { stream } = capture.get();
-      // Cover both live session/tool events and ordinary final agent results.
-      for (const sizeKiB of [6, 20]) {
-        const id = `small-${sizeKiB}`;
-        const smallText = "x".repeat(sizeKiB * 1024);
-        const smallResponse = onceMessage<{
+      // Device tokens ride in hello; secrets never share a compressed frame.
+      const beforeHello = stream.bytesWritten;
+      const hello = JSON.stringify(await connectOk(socket, { token }));
+      expect(hello.length).toBeGreaterThan(16 * 1024);
+      expect(stream.bytesWritten - beforeHello).toBeGreaterThan(hello.length);
+      const echo = async (id: string, text: string, send = () => {}) => {
+        const response = onceMessage<{
           type: "res";
           id: string;
           ok: boolean;
           payload: { echoed: string };
-        }>(ws, (value) => value.type === "res" && value.id === id);
-        const beforeSmall = stream.bytesWritten;
-        ws.send(
-          JSON.stringify({ type: "req", id, method: "test.echo", params: { text: smallText } }),
-        );
-        await expect(smallResponse).resolves.toMatchObject({
-          ok: true,
-          payload: { echoed: smallText },
-        });
-        expect(stream.bytesWritten - beforeSmall).toBeGreaterThan(smallText.length);
-      }
-      const text = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
-      const response = onceMessage<{
-        type: "res";
-        id: string;
-        ok: boolean;
-        payload: { echoed: string };
-      }>(ws, (value) => value.type === "res" && value.id === "big");
-      const beforeBig = stream.bytesWritten;
-      ws.send(JSON.stringify({ type: "req", id: "big", method: "test.echo", params: { text } }));
-      await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
-      expect(stream.bytesWritten - beforeBig).toBeGreaterThan(text.length);
+        }>(socket, (value) => value.type === "res" && value.id === id);
+        const before = stream.bytesWritten;
+        send();
+        await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
+        return stream.bytesWritten - before;
+      };
+      const request = (id: string, text: string) =>
+        JSON.stringify({ type: "req", id, method: "test.echo", params: { text } });
+      // Live session/tool events stay raw below the threshold.
+      const smallText = "x".repeat(6 * 1024);
+      expect(
+        await echo("small", smallText, () => socket.send(request("small", smallText))),
+      ).toBeGreaterThan(smallText.length);
+      // Compressed requests and replies above the preauth cap.
+      const inlineText = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
+      expect(
+        await echo("inline", inlineText, () => socket.send(request("inline", inlineText))),
+      ).toBeLessThan(inlineText.length / 4);
+      // Repetitive requests inflate far past their frame size.
+      const repetitiveText = "x".repeat(2 * 1024 * 1024);
+      expect(
+        await echo("repetitive", repetitiveText, () =>
+          socket.send(request("repetitive", repetitiveText)),
+        ),
+      ).toBeLessThan(repetitiveText.length / 4);
+      // Repeats farther apart than the negotiated window must not be referenced.
+      const windowText = randomBytes(1536).toString("base64").repeat(16);
+      await echo("window", windowText, () => socket.send(request("window", windowText)));
+      // Barely compressible frames still round-trip.
+      const randomText = randomBytes(384 * 1024).toString("base64");
+      await echo("random", randomText, () => socket.send(request("random", randomText)));
+      // Fragmented compressed requests inflate once the final fragment arrives.
+      const fragmented = request("fragmented", inlineText);
+      const split = fragmented.length >> 1;
+      await echo("fragmented", inlineText, () => {
+        socket.send(fragmented.slice(0, split), { fin: false });
+        socket.send("", { fin: false });
+        socket.send(fragmented.slice(split), { fin: false });
+        socket.send("", { fin: true });
+      });
+      // Inflated size stays bounded by the authenticated frame limit.
+      const closed = once(socket, "close");
+      socket.send(request("bomb", "x".repeat(MAX_PAYLOAD_BYTES)));
+      expect((await closed)[0]).toBe(1009);
     } finally {
       ws?.terminate();
       try {

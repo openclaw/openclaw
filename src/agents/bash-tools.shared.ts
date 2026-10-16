@@ -5,14 +5,9 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "../utils.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/workspace-mounts.js";
 
 const CHUNK_LIMIT = 8 * 1024;
-
-/** Sandbox metadata needed to map host workspaces into container exec calls. */
-type BashSandboxWorkdirMount = {
-  hostPath: string;
-  containerPath: string;
-};
 
 export type BashSandboxConfig = {
   containerName: string;
@@ -23,7 +18,7 @@ export type BashSandboxConfig = {
   discardPreparedWorkdir?: SandboxBackendHandle["discardPreparedWorkdir"];
   workdirRoots?: readonly string[];
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
-  readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
+  readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   env?: Record<string, string>;
   prepareProcessCleanup?: SandboxBackendHandle["prepareProcessCleanup"];
   buildExecSpec?: SandboxBackendHandle["buildExecSpec"];

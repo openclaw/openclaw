@@ -2,8 +2,6 @@ import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import type { CronSchedulerSnapshot } from "../store/scheduler-actor.types.js";
 import type { CronServiceState } from "./state.js";
 
-let snapshotVersion = 0;
-
 /** Resolve host-only configuration before submitting any worker command. */
 export async function captureCronSchedulerSnapshot(
   state: CronServiceState,
@@ -14,8 +12,7 @@ export async function captureCronSchedulerSnapshot(
   const needsDefault =
     !state.store || state.store.jobs.some((job) => !tryResolveCronJobEffectiveAgentId(job));
   return {
-    version: ++snapshotVersion,
-    config: structuredClone({
+    config: {
       cronEnabled: state.deps.cronEnabled,
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
@@ -27,6 +24,6 @@ export async function captureCronSchedulerSnapshot(
       maxMissedJobsPerRestart: state.deps.maxMissedJobsPerRestart,
       missedJobStaggerMs: state.deps.missedJobStaggerMs,
       startupDeferredMissedAgentJobDelayMs: state.deps.startupDeferredMissedAgentJobDelayMs,
-    }),
+    },
   };
 }

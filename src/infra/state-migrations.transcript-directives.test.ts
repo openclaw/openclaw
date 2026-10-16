@@ -10,10 +10,10 @@ import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/sess
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
-  assertAgentDatabaseMaintenanceAuthority,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -589,9 +589,10 @@ describe("historical transcript directive migration", () => {
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const maintenanceAuthority =
+      await import("../state/openclaw-agent-db-maintenance-authority.js");
     const authority = vi
-      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .spyOn(maintenanceAuthority, "assertAgentDatabaseMaintenanceAuthority")
       .mockImplementation(() => {
         originalAssert();
         if (authority.mock.calls.length !== 1) {
@@ -701,9 +702,10 @@ describe("historical transcript directive migration", () => {
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const originalAssert = assertAgentDatabaseMaintenanceAuthority;
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const maintenanceAuthority =
+      await import("../state/openclaw-agent-db-maintenance-authority.js");
     const authority = vi
-      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .spyOn(maintenanceAuthority, "assertAgentDatabaseMaintenanceAuthority")
       .mockImplementation(() => {
         if (!competingLeaseId && new Error().stack?.includes("beforeRename")) {
           openOpenClawStateDatabase({ env })

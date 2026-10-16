@@ -1,24 +1,34 @@
+import { channel } from "node:diagnostics_channel";
+import { totalmem } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import * as workerCpu from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
+import * as spawnDiagnostics from "../process/spawn-diagnostics.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import * as runActivity from "./diagnostic-run-activity.js";
 import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
   peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
+import * as stabilityBundle from "./diagnostic-stability-bundle.js";
+import * as stability from "./diagnostic-stability.js";
 import {
+  diagnosticLogger,
   logMessageQueued,
   logSessionStateChange,
   logWebhookReceived,
@@ -119,6 +129,118 @@ it("preserves independent tool-loop and poll-backoff policy when diagnostic obse
   expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
 });
 
+it("keeps pressure sampling silent and reconciles diagnostic options on one cadence", async () => {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const pressure = channel("openclaw.memory.critical");
+  const critical = vi.fn();
+  const events: DiagnosticEventPayload[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event));
+  const workerSamples = vi.spyOn(workerCpu, "sampleTrackedWorkerMemory");
+  const workerMessageSamples = vi.spyOn(workerMessages, "getWorkerMessageMetrics");
+  const childSamples = vi.spyOn(spawnDiagnostics, "emitChildProcessSpawnSample");
+  const trackActivity = vi.spyOn(runActivity, "startDiagnosticRunActivityTracking");
+  const recordStability = vi.spyOn(stability, "startDiagnosticStabilityRecorder");
+  const fatalHook = vi.spyOn(stabilityBundle, "installDiagnosticStabilityFatalHook");
+  const warn = vi.spyOn(diagnosticLogger, "warn");
+  const readMemoryUsage = process.memoryUsage;
+  const criticalRss = totalmem();
+  Object.assign(
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
+      ...readMemoryUsage(),
+      rss: criticalRss,
+    })),
+    { rss: () => criticalRss },
+  );
+  const first = {
+    emitMemorySample: vi.fn(),
+    sampleLiveness: vi.fn(() => null),
+    getConfig: vi.fn(() => ({})),
+    recoverStuckSession: vi.fn(),
+  };
+  const latest = {
+    emitMemorySample: vi.fn(),
+    sampleLiveness: vi.fn(() => null),
+    getConfig: vi.fn(() => ({})),
+    recoverStuckSession: vi.fn(),
+  };
+  pressure.subscribe(critical);
+  try {
+    setDiagnosticsEnabledForProcess(false);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, first);
+    await clock.advanceBy(30_000);
+    expect(critical).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+    for (const observer of [
+      ...Object.values(first),
+      workerSamples,
+      workerMessageSamples,
+      childSamples,
+      trackActivity,
+      recordStability,
+      fatalHook,
+      warn,
+    ]) {
+      expect(observer).not.toHaveBeenCalled();
+    }
+
+    setDiagnosticsEnabledForProcess(true);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, first);
+    await clock.advanceBy(30_000);
+    expect(first.emitMemorySample).toHaveBeenCalledTimes(1);
+    await clock.advanceBy(15_000);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+    await clock.advanceBy(15_000);
+    expect(first.emitMemorySample).toHaveBeenCalledTimes(1);
+    expect(latest.emitMemorySample).toHaveBeenCalledTimes(1);
+    expect(latest.sampleLiveness).toHaveBeenCalledTimes(1);
+    expect(latest.getConfig).toHaveBeenCalledTimes(1);
+    expect(childSamples).toHaveBeenCalledTimes(2);
+
+    setDiagnosticsEnabledForProcess(false);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+    await waitForDiagnosticEventsDrained();
+    const observed = events.length;
+    await clock.advanceBy(5 * 60_000);
+    await waitForDiagnosticEventsDrained();
+    expect(critical).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(observed);
+    expect(workerSamples).not.toHaveBeenCalled();
+    expect(workerMessageSamples).not.toHaveBeenCalled();
+    expect(latest.emitMemorySample).toHaveBeenCalledTimes(1);
+    expect(latest.sampleLiveness).toHaveBeenCalledTimes(1);
+    expect(latest.getConfig).toHaveBeenCalledTimes(1);
+    expect(latest.recoverStuckSession).not.toHaveBeenCalled();
+    expect(childSamples).toHaveBeenCalledTimes(2);
+
+    setDiagnosticsEnabledForProcess(true);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+    await clock.advanceBy(30_000);
+    expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("heartbeat delayed"));
+    // Explicit heartbeat config is also authoritative; recovery config is a separate lookup.
+    startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: false } }, latest);
+    await clock.advanceBy(30_000);
+    expect(critical).toHaveBeenCalledTimes(3);
+    expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+    expect(workerSamples).not.toHaveBeenCalled();
+    expect(workerMessageSamples).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(childSamples).toHaveBeenCalledTimes(3);
+
+    scheduler.beginClose();
+    await scheduler.stop();
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+    await clock.advanceBy(30_000);
+    expect(critical).toHaveBeenCalledTimes(3);
+    expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+  } finally {
+    pressure.unsubscribe(critical);
+    unsubscribe();
+    await scheduler.stop();
+  }
+});
+
 it("retires interrupted diagnostic observations before re-enable without reviving their authority", async () => {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
@@ -133,7 +255,7 @@ it("retires interrupted diagnostic observations before re-enable without revivin
     const generation = peekDiagnosticSessionState(session)?.generation;
     expect(generation).toBeTypeOf("number");
     setDiagnosticsEnabledForProcess(false);
-    stopGatewayDiagnosticHeartbeat();
+    startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
     logSessionStateChange({ ...session, state: "idle" });
     setDiagnosticsEnabledForProcess(true);
     startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
@@ -152,6 +274,7 @@ it("retires interrupted diagnostic observations before re-enable without revivin
     );
   } finally {
     unsubscribe();
+    await scheduler.stop();
   }
 });
 

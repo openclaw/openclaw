@@ -449,6 +449,7 @@ export function createChannelIngressQueue<
         queueName,
         id: idFrom(id),
         ownerId: normalizePart(claimOptions?.ownerId, `${process.pid}`),
+        laneKey: claimOptions?.laneKey,
         customClock: clock ? true : undefined,
       });
       return row ? claimedRecord<TPayload, TMetadata>(row) : null;

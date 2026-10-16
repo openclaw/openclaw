@@ -733,7 +733,7 @@ CREATE INDEX "idx_agent_session_transcript_archives_retention" ON "session_trans
 
 CREATE INDEX "idx_session_transcript_fts_rows_session_message" ON "session_transcript_fts_rows" (("session_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
+CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_windows_created_at" ON "session_windows" (("created_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
 
@@ -748,8 +748,6 @@ CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC 
 CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (octet_length("event_json")) ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
-
-CREATE INDEX "idx_agent_transcript_event_parent" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("parent_id") ASC NULLS FIRST) WHERE "parent_id" IS NOT NULL;
 
 CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("event_type") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
 

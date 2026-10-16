@@ -319,11 +319,15 @@ describe("link reader document content", () => {
     await Promise.resolve();
     expect(firstImage.hasAttribute("src")).toBe(false);
     expect(secondImage.hasAttribute("src")).toBe(false);
+    firstImage.dispatchEvent(new Event("error"));
+    expect(firstImage.hidden).toBe(false);
 
     mounted.unmount();
     pending.get("https://images.example/second.png")!("blob:second");
     await Promise.resolve();
     expect(secondImage.hasAttribute("src")).toBe(false);
+    secondImage.dispatchEvent(new Event("error"));
+    expect(secondImage.hidden).toBe(false);
   });
 
   it("never creates image requests for unsafe/local sources or activates remote document instructions", () => {
@@ -504,7 +508,7 @@ describe("link reader document content", () => {
     expect(container.querySelector("#note-n1")?.textContent).toContain("A note");
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
-    expect(container.textContent).toContain("This view is incomplete");
+    expect(container.textContent).not.toContain("This view is incomplete");
     expect(container.textContent).toContain("Some comments could not be shown");
     expect(container.textContent).toContain("Some files could not be shown");
     expect(container.textContent).toContain("No text diff available");

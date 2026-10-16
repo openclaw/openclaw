@@ -114,7 +114,7 @@ function ChatHeaderSessionMenuContent(
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState, {
+  const view = useSessionMenuEntries(actions, readState, {
     openInExtra: () => [
       {
         id: "continue-in-terminal",
