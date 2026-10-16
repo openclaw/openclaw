@@ -1,15 +1,14 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { createMemo, flush } from "solid-js";
+import { flush } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { ChatHistoryBoundary } from "../chat/components/chat-history-boundary.tsx";
-import { renderChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
+import { ChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
 
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 
@@ -132,7 +131,7 @@ export function CronRunTranscriptView(props: {
     props.revision();
     return props.controller;
   };
-  const transcript = createMemo(() => renderChatTranscriptFeed(state().messages));
+
   return (
     <>
       {state().entry ? (
@@ -172,7 +171,7 @@ export function CronRunTranscriptView(props: {
               onShowEarlier={() => void props.controller.load(props.controller.nextCursor)}
             />
           ) : undefined}
-          <LitContent render={() => transcript()} />
+          <ChatTranscriptFeed messages={state().messages} />
         </section>
       ) : null}
     </>

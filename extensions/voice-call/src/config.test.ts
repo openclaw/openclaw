@@ -1,8 +1,7 @@
 // Voice Call tests cover config plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { z } from "zod";
+import { z } from "zod";
 import {
-  VoiceCallConfigSchema,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
@@ -17,7 +16,7 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 describe("errand features config", () => {
   it("keeps delivery, callbacks and machine detection disabled unless configured", () => {
-    const config = VoiceCallConfigSchema.parse({});
+    const config = normalizeVoiceCallConfig({});
     expect(config.reports).toEqual({ enabled: false, includeTranscript: true });
     expect(config.live).toEqual({ transcript: false, minIntervalMs: 5000 });
     expect(config.callbacks).toEqual({ enabled: false, windowMinutes: 60 });
@@ -41,16 +40,10 @@ describe("errand features config", () => {
     expect(normalized.callbacks.windowMinutes).toBe(60);
     expect(normalized.voicemail.onMachine).toBe("leave-message");
     expect(normalized.voicemail.holdOpeningMaxMs).toBe(45000);
-    expect(VoiceCallConfigSchema.safeParse({ voicemail: { holdOpeningMaxMs: 0 } }).success).toBe(
-      false,
-    );
-    expect(VoiceCallConfigSchema.safeParse({ callbacks: { windowMinutes: 0 } }).success).toBe(
-      false,
-    );
-    expect(VoiceCallConfigSchema.safeParse({ live: { minIntervalMs: 0 } }).success).toBe(false);
-    expect(
-      VoiceCallConfigSchema.safeParse({ voicemail: { detection: "unsupported" } }).success,
-    ).toBe(false);
+    expect(() => normalizeVoiceCallConfig({ voicemail: { holdOpeningMaxMs: 0 } })).toThrow();
+    expect(() => normalizeVoiceCallConfig({ callbacks: { windowMinutes: 0 } })).toThrow();
+    expect(() => normalizeVoiceCallConfig({ live: { minIntervalMs: 0 } })).toThrow();
+    expect(() => normalizeVoiceCallConfig({ voicemail: { detection: "unsupported" } })).toThrow();
   });
 
   it.each([
@@ -64,12 +57,10 @@ describe("errand features config", () => {
       expect(config.voicemail[key]).toBe(value);
     }
     for (const value of [minimum - step, maximum + step, minimum + 0.5]) {
-      expect(VoiceCallConfigSchema.safeParse({ voicemail: { [key]: value } }).success).toBe(false);
+      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: value } })).toThrow();
     }
     if (step > 1) {
-      expect(VoiceCallConfigSchema.safeParse({ voicemail: { [key]: minimum + 1 } }).success).toBe(
-        false,
-      );
+      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: minimum + 1 } })).toThrow();
     }
   });
 });
@@ -243,21 +234,21 @@ describe("validateProviderConfig", () => {
         },
       } as const;
 
-      const regional = VoiceCallConfigSchema.parse({
+      const regional = normalizeVoiceCallConfig({
         ...baseConfig,
         twilio: { ...baseConfig.twilio, region: "ie1" },
       });
       expect(regional.twilio?.region).toBe("ie1");
-      expect(
-        VoiceCallConfigSchema.safeParse({
+      expect(() =>
+        normalizeVoiceCallConfig({
           ...baseConfig,
           twilio: { ...baseConfig.twilio, region: "de1" },
-        }).success,
-      ).toBe(false);
+        }),
+      ).toThrow();
     });
 
     it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
-      const config = VoiceCallConfigSchema.parse({
+      const config = normalizeVoiceCallConfig({
         enabled: true,
         provider: "twilio",
         fromNumber: "+15550001234",
@@ -360,7 +351,7 @@ describe("validateProviderConfig", () => {
     },
   ] satisfies Array<{
     name: string;
-    input: z.input<typeof VoiceCallConfigSchema>;
+    input: Record<string, unknown>;
     error: string;
   }>)("$name", ({ input, error }) => {
     const config = normalizeVoiceCallConfig({ ...createBaseConfig("twilio"), ...input });
@@ -422,11 +413,11 @@ describe("Tailscale external HTTPS port", () => {
       },
     },
   ])("accepts $name", ({ input }) => {
-    expect(VoiceCallConfigSchema.safeParse(input).success).toBe(true);
+    expect(() => normalizeVoiceCallConfig(input)).not.toThrow();
   });
 
   it.each([0, 1.5, 65_536])("rejects invalid HTTPS port %s", (port) => {
-    expect(VoiceCallConfigSchema.safeParse({ tailscale: { port } }).success).toBe(false);
+    expect(() => normalizeVoiceCallConfig({ tailscale: { port } })).toThrow();
   });
 
   it.each([
@@ -439,10 +430,15 @@ describe("Tailscale external HTTPS port", () => {
       },
     },
   ])("rejects unsupported Funnel port for $name", ({ input }) => {
-    const result = VoiceCallConfigSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(
+    expect.assertions(2);
+    try {
+      normalizeVoiceCallConfig(input);
+    } catch (error) {
+      expect(error).toBeInstanceOf(z.ZodError);
+      if (!(error instanceof z.ZodError)) {
+        throw error;
+      }
+      expect(error.issues).toContainEqual(
         expect.objectContaining({
           path: ["tailscale", "port"],
           message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
@@ -904,19 +900,19 @@ describe("resolveVoiceCallConfig realtime settings", () => {
   });
 
   it("accepts only positive integer realtime idle hangup values", () => {
-    const parsed = VoiceCallConfigSchema.parse({
+    const parsed = normalizeVoiceCallConfig({
       enabled: true,
       provider: "mock",
       realtime: { idleHangupMs: 45_000 },
     });
     expect(resolveVoiceCallConfig(parsed).realtime.idleHangupMs).toBe(45_000);
-    expect(
-      VoiceCallConfigSchema.safeParse({
+    expect(() =>
+      normalizeVoiceCallConfig({
         enabled: true,
         provider: "mock",
         realtime: { idleHangupMs: 0 },
-      }).success,
-    ).toBe(false);
+      }),
+    ).toThrow();
   });
 
   it("rejects invalid realtime consult thinking levels", () => {

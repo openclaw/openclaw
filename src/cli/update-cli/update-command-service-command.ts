@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
@@ -87,15 +88,13 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   if (!entrypoint) {
     return false;
   }
-  const argv = [
-    params.nodeRunner ?? resolveNodeRunner(),
-    entrypoint,
-    "gateway",
-    "install",
-    "--update-executor",
-    "check",
-    "--json",
-  ];
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: params.nodeRunner ?? resolveNodeRunner(),
+    entryPath: entrypoint,
+    execArgv: [],
+    args: ["gateway", "install", "--update-executor", "check", "--json"],
+  });
+  const argv = [invocation.command, ...invocation.args];
   const check = await withUpdateCommandExecutorChild(
     params.executor,
     params.root,
@@ -153,7 +152,7 @@ export async function runUpdatedInstallGatewayCommand(
     onWarnings?: (warnings: string[]) => void;
     /** Receives each completed probe or child phase with its measured wall time. */
     onTimedStep?: (step: UpdateStepResult) => void;
-    onGatewayStartAttempted?: () => void;
+    onGatewayStartAttempted?: (action?: "install" | "restart") => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
   action: "install" | "restart",
@@ -260,8 +259,14 @@ export async function runUpdatedInstallGatewayCommand(
     grant?: UpdateCommandChildGrant,
     bindChild?: (pid: number, argv?: readonly string[]) => void,
   ) => {
-    const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
-    params.onGatewayStartAttempted?.();
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: entrypoint,
+      execArgv: [],
+      args: [...args, ...(grant ? ["--update-executor", "run"] : [])],
+    });
+    const argv = [invocation.command, ...invocation.args];
+    params.onGatewayStartAttempted?.(action);
     return await runSettledGatewayCommand(argv, {
       ...(grant
         ? {
@@ -366,7 +371,7 @@ export async function runUpdatedInstallGatewayCommand(
       : "unverified";
   }
   const operation = installing ? "refresh" : action;
-  const message = `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`;
+  const message = `updated install ${operation} failed: ${formatCommandFailure(res.stdout, res.stderr)} (${entrypoint})`;
   if (
     exited &&
     res.code === 1 &&

@@ -53,7 +53,7 @@ function unmountLitContent(container: HTMLElement | DocumentFragment): void {
 }
 
 /** A top-level Lit caller settles now; nested Solid work settles with its owner. */
-export function flushLegacyContent(): void {
+function flushLegacyContent(): void {
   if (!getOwner() && !currentLitRoots) {
     flush();
   }

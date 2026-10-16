@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { flush } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
@@ -7,6 +6,7 @@ import type { BoardWidgetPageMenu } from "../../components/board/board-widget-ce
 import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -159,7 +159,7 @@ export function createDashboardHarness(
     pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
   };
   const header = async () => {
-    render(
+    renderPaneLegacyContent(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],

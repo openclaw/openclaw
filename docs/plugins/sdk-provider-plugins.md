@@ -149,6 +149,13 @@ a saved policy is not proof that the running Gateway applied it.
 
 ## Submit JSON requests
 
+Bundled Bearer-key providers use `resolveProviderApiKeyHttpRequestConfig` from
+`openclaw/plugin-sdk/provider-http` to resolve current credentials and HTTP
+request policy together. Pass `req`, `provider`, `missingApiKeyMessage`, and the
+usual HTTP configuration options. JSON content type is the default; set
+`jsonContentType: false` for multipart or other non-JSON requests. Provider-specific
+endpoints, extra headers, and request overrides remain plugin-owned.
+
 Use `postJsonResponse` from `openclaw/plugin-sdk/provider-http` when a JSON POST
 returns a complete JSON response. It uses the guarded POST transport, checks the
 HTTP status, reads bounded JSON, and releases the transport before returning or
@@ -580,6 +587,18 @@ This keeps shared request shaping and output normalization active, including
 MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
+
+Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
+through the existing private `provider-stream-shared` seam. Payload composition
+runs defaults before the caller hook and wire constraints after its result settles;
+each adapter keeps its own replacement/null policy. The stream mapper preserves
+synchronous returns without importing the embedded runner. These are bundled
+implementation helpers, not new third-party SDK contracts.
+
+Injected-client adapters also reuse the Anthropic thinking and output-cap owners
+through the private `provider-transport-runtime` seam. Client creation and
+provider-specific defaults stay with the adapter; the shared request builder
+owns sampling restrictions and cache-marker budgeting.
 
 Local provider transports can report a transient wait through the optional
 `StreamOptions.onProviderWait` callback. Pass `"response"` while waiting for a

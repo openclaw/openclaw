@@ -1,10 +1,10 @@
 // Render contract between the transcript projection and the per-session
 // virtualizer host owned by ChatTranscriptController.
 import type { Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
@@ -90,9 +90,9 @@ export type TranscriptRenderSnapshot<T> = {
 };
 
 /** Session-owned deferred measurements after width changes and smooth scrolling. */
-export class TranscriptPresentation implements ReactiveController {
+export class TranscriptPresentation implements SolidController {
   constructor(
-    private readonly host: ReactiveControllerHost & {
+    private readonly host: SolidControllerHost & {
       readonly scrollElement: HTMLDivElement | null;
     },
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,

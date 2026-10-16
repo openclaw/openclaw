@@ -39,7 +39,7 @@ function buildFalMusicRequestBody(
     return {
       prompt: req.prompt,
       ...(req.instrumental === true ? { instrumental: true } : {}),
-      ...(typeof req.durationSeconds === "number"
+      ...(req.durationSeconds !== undefined
         ? { [isStableAudio ? "seconds_total" : "duration"]: req.durationSeconds }
         : {}),
     };
@@ -52,7 +52,7 @@ function buildFalMusicRequestBody(
     ...(lyrics ? { lyrics } : {}),
     ...(req.instrumental === true ? { is_instrumental: true } : {}),
     ...(!lyrics && req.instrumental !== true ? { lyrics_optimizer: true } : {}),
-    ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
+    ...(req.durationSeconds !== undefined ? { duration: req.durationSeconds } : {}),
     audio_setting: {
       sample_rate: 44_100,
       bitrate: 256_000,
@@ -149,7 +149,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
           ...(track.metadata?.url ? { audioUrl: track.metadata.url } : {}),
           instrumental: req.instrumental === true,
           ...(req.format ? { requestedFormat: req.format } : {}),
-          ...(typeof req.durationSeconds === "number"
+          ...(req.durationSeconds !== undefined
             ? { requestedDurationSeconds: req.durationSeconds }
             : {}),
         },

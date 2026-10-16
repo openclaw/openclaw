@@ -1,4 +1,5 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
+cli-invocation.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
@@ -66,15 +67,12 @@ packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
-packages/memory-host-sdk/src/host/memory-schema-fts.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
 packages/memory-host-sdk/src/host/memory-schema.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
-packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
-packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
@@ -366,6 +364,13 @@ src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
 src/infra/database-engine/postgres-schema.ts
+src/infra/database-engine/search.ts
+src/infra/database-engine/sqlite-full-text.ts
+src/infra/database-engine/sqlite-search-schema.ts
+src/infra/database-engine/sqlite-vector-subprocess.ts
+src/infra/database-engine/sqlite-vector-types.ts
+src/infra/database-engine/sqlite-vector.ts
+src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -1618,6 +1623,7 @@ src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
+src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
@@ -1629,6 +1635,7 @@ src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
+src/process/spawn-broker/resource-authority.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts

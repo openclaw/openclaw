@@ -29,6 +29,8 @@ export type CiTimingRun = {
   completeInventory: boolean;
   /** The workflow/job SHA identifies the PR head, while tests run its merge-ref. */
   pullRequestMergeRef?: boolean;
+  /** Historical file durations cannot reprice a changed UI test. */
+  changedUiFiles?: string[];
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
     | { kind: "compact" | "tooling" | "release-packed"; text: string; labels: string[] }
@@ -1030,6 +1032,7 @@ export function refitTestTimings(
     toolingGithub: new Set<number>(),
   };
   const overhead: number[] = [];
+  const changedUiFiles = new Set<string>();
   const observedParents = { blacksmith: new Set<string>(), github: new Set<string>() };
   const runtimeSamples = {
     blacksmith: new Map<string, number[]>(),
@@ -1051,6 +1054,9 @@ export function refitTestTimings(
       retained.logs.push(...run.logs);
       retained.completeInventory = retained.completeInventory && run.completeInventory;
       retained.pullRequestMergeRef ||= run.pullRequestMergeRef;
+      retained.changedUiFiles = [
+        ...new Set([...(retained.changedUiFiles ?? []), ...(run.changedUiFiles ?? [])]),
+      ];
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
@@ -1101,6 +1107,10 @@ export function refitTestTimings(
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
+    }
+    for (const file of run.changedUiFiles ?? []) {
+      current.uiE2e.delete(file);
+      changedUiFiles.add(file);
     }
     for (const profile of ["blacksmith", "github"] as const) {
       recordCompleteParentSamples(
@@ -1222,7 +1232,12 @@ export function refitTestTimings(
       ),
     },
     uiE2e: {
-      fileSeconds: refitMap(samples.uiE2e, previous?.uiE2e.fileSeconds, pruningRunCount("uiE2e")),
+      fileSeconds: refitMap(
+        samples.uiE2e,
+        previous?.uiE2e.fileSeconds,
+        pruningRunCount("uiE2e"),
+        changedUiFiles,
+      ),
       perFileOverheadSeconds: keepOverhead
         ? (oldOverhead ?? 0)
         : Math.round(measuredOverhead * 10) / 10,

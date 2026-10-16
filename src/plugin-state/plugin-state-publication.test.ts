@@ -6,11 +6,11 @@ import {
   type SqliteWorkerOperationContext,
 } from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   capturePluginStateReadDependencies,
@@ -127,7 +127,7 @@ describe("plugin state committed facts", () => {
           namespace: "sibling",
         });
         await store.register("first", { count: 1 });
-        const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
         const initial = await store.entries();
         expect(initial).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).toHaveBeenCalledOnce();
@@ -151,12 +151,12 @@ describe("plugin state committed facts", () => {
           await asyncSibling.register("other", false);
           expect(pendingReads).toHaveLength(1);
           expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 1 } }]);
-          expect(dispatch).toHaveBeenCalledTimes(1);
+          expect(dispatch).not.toHaveBeenCalled();
           dispatch.mockClear();
           await store.register("first", { count: 2 });
           expect(pendingReads).toHaveLength(1);
           expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 2 } }]);
-          expect(dispatch).toHaveBeenCalledTimes(2);
+          expect(dispatch).toHaveBeenCalledOnce();
           dispatch.mockClear();
         } finally {
           stopPending();
@@ -191,7 +191,7 @@ describe("plugin state committed facts", () => {
       native.register("expiring", true, { ttlMs: 10_000 });
       native.register("permanent", true);
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["expiring", "permanent"]);
-      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
       now += 10_000;
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["permanent"]);
       expect(dispatch).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe("plugin state committed facts", () => {
       const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
       const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
       await store.register("key", { count: 1 });
-      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
       const read = async (expected: { count: number } | undefined) => {
         dispatch.mockClear();
         expect(await store.lookup("key")).toEqual(expected);

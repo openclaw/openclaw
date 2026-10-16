@@ -226,12 +226,13 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
   const draft = () => props.library.draft!;
   const disabled = () => !props.library.canEdit || props.library.busy || props.library.loading;
   const support = () => draft().files.find((file) => file.path === draft().selectedFile);
-  const text = () =>
+  const text = createMemo(() =>
     draft().selectedFile === "SKILL.md"
       ? draft().content
       : support()
         ? libraryFileText(support()!)
-        : null;
+        : null,
+  );
   const mutationLocked = () => disabled() || draft().dirty;
   const changeText = (value: string) => {
     if (disabled()) {

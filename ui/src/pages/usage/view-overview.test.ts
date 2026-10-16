@@ -85,9 +85,6 @@ describe("UsageInsights", () => {
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
-    await Promise.all(
-      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
-    );
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -345,7 +342,12 @@ describe("SessionsCard", () => {
       await i18n.setLocale("de");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain("dur:1 Min.");
+      const germanMinute = new Intl.NumberFormat("de", {
+        style: "unit",
+        unit: "minute",
+        unitDisplay: "narrow",
+      }).format(1);
+      expect(row?.querySelector(".session-bar-meta")?.textContent).toContain(`dur:${germanMinute}`);
       expect(value()).toBe("unbekannt");
       expect(average()).toContain("unbekannt");
       setDisplay({ ...base.display, chartMode: "cost" });

@@ -4,11 +4,10 @@ import type { WizardStep } from "../api/types.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/solid-dom.ts";
-import { LitContent } from "../lit/solid-bridge.ts";
-import { renderChannelPicker, type ChannelPickerOption } from "./channel-picker.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
-import { renderSensitiveInput } from "./sensitive-input.ts";
+import { SensitiveInput } from "./sensitive-input.tsx";
+import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
 import "../styles/wizard-step-controls.css";
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
@@ -262,23 +261,17 @@ function TextForm(props: WizardStepControlsProps) {
           />
         }
       >
-        <LitContent
-          render={() =>
-            renderSensitiveInput({
-              id: props.inputId,
-              value: value(),
-              revealed: props.sensitiveRevealed === true,
-              placeholder: props.step.placeholder,
-              disabled: props.busy,
-              invalid: Boolean(props.validationErrorId),
-              describedBy: props.validationErrorId,
-              label: props.step.message
-                ? undefined
-                : props.step.title || t("chat.questions.answer"),
-              onInput: props.onValueChange,
-              onToggle: () => props.onToggleSensitiveVisibility?.(),
-            })
-          }
+        <SensitiveInput
+          id={props.inputId}
+          value={value()}
+          revealed={props.sensitiveRevealed === true}
+          placeholder={props.step.placeholder}
+          disabled={props.busy}
+          invalid={Boolean(props.validationErrorId)}
+          describedBy={props.validationErrorId}
+          label={props.step.message ? undefined : props.step.title || t("chat.questions.answer")}
+          onInput={props.onValueChange}
+          onToggle={() => props.onToggleSensitiveVisibility?.()}
         />
       </Show>
       <Answer
@@ -341,7 +334,7 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
         <Show when={channels()} fallback={<Picker params={params()} />}>
-          <LitContent render={() => renderChannelPicker(params())} />
+          <ChannelPicker {...params()} />
         </Show>
       }
     >

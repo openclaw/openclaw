@@ -13,6 +13,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -134,8 +135,11 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
   }
 
   const entryPath = resolveSelfEntryPath();
-  const defaultServerCommand = entryPath ? process.execPath : "openclaw";
-  const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
+  const defaultInvocation = entryPath
+    ? resolveOpenClawCliInvocation({ entryPath, args: serverArgs, execArgv: [] })
+    : { command: "openclaw", args: serverArgs };
+  const defaultServerCommand = defaultInvocation.command;
+  const defaultServerArgs = defaultInvocation.args;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
   const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");

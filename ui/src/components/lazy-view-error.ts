@@ -1,15 +1,10 @@
 import { emptyLegacyContent, solidContent } from "../lit/solid-content.tsx";
 import {
-  AgentStartupState,
   LazyElementModal,
   LazyElementStateView,
   LazyViewError,
   type LazyElementState,
 } from "./solid/lazy-view-error.tsx";
-
-export function renderAgentStartupState() {
-  return solidContent(AgentStartupState, {});
-}
 
 export function renderLazyElementState(
   state: LazyElementState,
