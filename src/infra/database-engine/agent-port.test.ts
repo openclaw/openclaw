@@ -6,6 +6,7 @@ import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveAgentPortRoots } from "./agent-port.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -20,26 +21,31 @@ it("discovers default, shared auth, explicit session and retained agent stores w
   const registryPath = path.join(stateDir, "state", "openclaw.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: sharedAuth };
   await fs.mkdir(unconfigured, { recursive: true });
-  const bytes = await withDatabaseEngineSelection({ input: undefined }, async () => {
-    const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, ?, 0)",
-    ).run("retired", retired, 21);
-    closeOpenClawStateDatabaseByPath(registryPath);
-    return fs.readFile(registryPath);
-  });
+  const bytes = await withDatabaseEngineSelection(
+    { effectiveEngines: resolveDatabaseFamilyEngines({}) },
+    async () => {
+      const { db } = openOpenClawStateDatabase({ env });
+      db.prepare(
+        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, ?, 0)",
+      ).run("retired", retired, 21);
+      closeOpenClawStateDatabaseByPath(registryPath);
+      return fs.readFile(registryPath);
+    },
+  );
 
-  const roots = await withDatabaseEngineSelection({ input: undefined }, () =>
-    resolveAgentPortRoots({
-      stateDir,
-      env: { ...env, OPENCLAW_STATE_DIR: path.join(root, "unselected") },
-      config: {
-        // Offline source selection remains authoritative while config is being switched.
-        database: { engine: "postgres" },
-        agents: { entries: { selected: { agentDir: externalAgent } } },
-        session: { store: externalSession },
-      },
-    }),
+  const roots = await withDatabaseEngineSelection(
+    { effectiveEngines: resolveDatabaseFamilyEngines({}) },
+    () =>
+      resolveAgentPortRoots({
+        stateDir,
+        env: { ...env, OPENCLAW_STATE_DIR: path.join(root, "unselected") },
+        config: {
+          // Offline source selection remains authoritative while config is being switched.
+          database: { engine: "postgres" },
+          agents: { entries: { selected: { agentDir: externalAgent } } },
+          session: { store: externalSession },
+        },
+      }),
   );
 
   expect(new Set(roots)).toEqual(

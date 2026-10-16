@@ -1,3 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  memoryTextSearchSchema,
+  memoryVectorSearchSchema,
+} from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
@@ -27,8 +33,71 @@ import {
   rebuildAgentPortProjections,
 } from "./agent-port-projections.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import type { SearchSchema } from "./contract.js";
 import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
-import { postgresSearchSql } from "./postgres-search-schema.js";
+import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
+
+const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostData"]> = async (
+  source,
+) => {
+  const row = (
+    await source.db.query<{ definitions: string | null }>(
+      `SELECT to_jsonb(meta)->>'search_extensions' AS definitions
+       FROM ${pgSearchName(source.namespace)}.openclaw_schema_meta AS meta WHERE store = 'agent'`,
+    )
+  ).rows[0];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row?.definitions ?? "{}");
+  } catch {
+    throw new DatabasePortDataError("Malformed agent search-extension metadata");
+  }
+  const definitions = asOptionalRecord(parsed);
+  if (!definitions) {
+    throw new DatabasePortDataError("Invalid agent search-extension metadata");
+  }
+  const schemas: SearchSchema[] = [];
+  for (const [name, definition] of Object.entries(definitions)) {
+    const value = asOptionalRecord(definition);
+    let expected: SearchSchema | undefined;
+    if (name === "memory.text") {
+      const body = asOptionalRecord(asOptionalRecord(value?.text)?.body);
+      const mode = asOptionalRecord(body?.postgres)?.mode;
+      expected = memoryTextSearchSchema(mode === "trigram" ? "trigram" : "unicode61");
+    } else if (name === "memory.vector") {
+      const chunks = asOptionalRecord(asOptionalRecord(value?.vector)?.chunks);
+      const dimensions = asOptionalRecord(chunks?.postgres)?.dimensions;
+      if (
+        typeof dimensions === "number" &&
+        Number.isInteger(dimensions) &&
+        dimensions >= 1 &&
+        dimensions <= 16_000
+      ) {
+        expected = memoryVectorSearchSchema(dimensions);
+      }
+    }
+    if (!expected || !isDeepStrictEqual(definition, expected)) {
+      throw new DatabasePortDataError(
+        "Unknown or changed agent search extension; matching memory owner required",
+      );
+    }
+    schemas.push(expected);
+  }
+  if (!schemas.length) {
+    return undefined;
+  }
+  return (namespace) => {
+    const shared = { text: true, vector: false };
+    return schemas
+      .map((schema) => {
+        const sql = postgresSearchSql(schema, namespace, shared);
+        shared.vector ||= Object.keys(schema.vector ?? {}).length > 0;
+        return sql;
+      })
+      .join("\n;\n");
+  };
+};
 
 export async function loadAgentPortDescriptor(): Promise<PortDescriptor> {
   const catalog = agentPostgresRuntime.expectedCatalog;
@@ -80,6 +149,7 @@ export async function loadAgentPortDescriptor(): Promise<PortDescriptor> {
         USING HINT = 'Repair through the voice store owner.'; END IF;
     END $voice$;\n` + agentPostgresRuntime.sql.slice(...metadata.postData),
     postgresPostData: (namespace) => postgresSearchSql(agentTranscriptSearchSchema, namespace),
+    postgresSourcePostData: agentSourceSearchPostData,
     postgresDerivedTables: ["session_transcript_fts"],
     expectedCatalog: catalog,
     projections: [
@@ -159,36 +229,45 @@ export async function loadAgentPortDescriptor(): Promise<PortDescriptor> {
       if (!agentId) {
         throw new DatabasePortDataError("Private agent copy has no owner");
       }
-      await withDatabaseEngineSelection({ input: undefined }, () =>
-        runWithAgentDatabaseMaintenanceAuthority(
-          {
-            signal: new AbortController().signal,
-            assertOwned: assertCurrent,
-            assertOwnedInTransaction: assertCurrent,
-            renew: assertCurrent,
-          },
-          file,
-          async () => ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false }),
-        ),
+      await withDatabaseEngineSelection(
+        { effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "sqlite" } }) },
+        () =>
+          runWithAgentDatabaseMaintenanceAuthority(
+            {
+              signal: new AbortController().signal,
+              assertOwned: assertCurrent,
+              assertOwnedInTransaction: assertCurrent,
+              renew: assertCurrent,
+            },
+            file,
+            async () => ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false }),
+          ),
       );
     },
     async admit(file, input) {
-      withDatabaseEngineSelection({ input }, () =>
-        withEngineStoreAdmission(() => {
-          using anchor = openNodeSqliteDatabase(file);
-          if (input) {
-            const selected = openAgentEngineStore(anchor, undefined, file, true);
-            if (selected !== anchor) {
-              selected.close();
+      withDatabaseEngineSelection(
+        {
+          effectiveEngines: resolveDatabaseFamilyEngines({
+            database: { engine: input ? "postgres" : "sqlite" },
+          }),
+          postgres: input,
+        },
+        () =>
+          withEngineStoreAdmission(() => {
+            using anchor = openNodeSqliteDatabase(file);
+            if (input) {
+              const selected = openAgentEngineStore(anchor, undefined, file, true);
+              if (selected !== anchor) {
+                selected.close();
+              }
+            } else {
+              const agentId = readExistingAgentSchemaMeta(anchor)?.agentId;
+              if (!agentId) {
+                throw new DatabasePortDataError("Restored agent has no owner");
+              }
+              assertOpenClawAgentSchemaContains(anchor, file, OPENCLAW_AGENT_SCHEMA_SQL);
             }
-          } else {
-            const agentId = readExistingAgentSchemaMeta(anchor)?.agentId;
-            if (!agentId) {
-              throw new DatabasePortDataError("Restored agent has no owner");
-            }
-            assertOpenClawAgentSchemaContains(anchor, file, OPENCLAW_AGENT_SCHEMA_SQL);
-          }
-        }),
+          }),
       );
     },
   };

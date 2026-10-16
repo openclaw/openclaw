@@ -187,14 +187,14 @@ it("protects selected PostgreSQL families before any anchor has been created", a
   await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
     /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
   );
-  // A homogeneous selection passes the mixed-engine guard, but still needs capture support.
+  // Every selected family has matched capture and rollback support.
   await expect(
     assertUpdateDatabaseEngineContexts(
       [postgres],
       ["sqlite", "postgres"],
       ["state", "agent", "workboard", "logbook", "team-reports"],
     ),
-  ).rejects.toThrow(/PostgreSQL agent capture requires agent-family port and exact-backup support/);
+  ).resolves.toBeUndefined();
 });
 
 it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {

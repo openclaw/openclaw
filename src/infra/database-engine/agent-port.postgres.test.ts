@@ -7,6 +7,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { zstdCompressSync } from "node:zlib";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionColdArchivePath } from "../../config/sessions/session-cold-storage-codec.js";
 import { prepareTranscriptPayload } from "../../config/sessions/transcript-payload.js";
@@ -17,12 +18,18 @@ import {
 } from "../../snapshot/database-backup.js";
 import { createLocalSnapshotProvider } from "../../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { createUpdateDatabaseBackup } from "../update-database-backup.js";
+import { admitStoreSearch } from "./adapters.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
+import { withDatabaseEngineSelection } from "./context.js";
 import { materializeDatabasePort } from "./port.worker.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -84,6 +91,8 @@ describe.skipIf(!connection)("agent database port", () => {
       INSERT INTO transcript_rewrite_watermarks VALUES ('session', 'generation', 1);
       INSERT INTO context_engine_turn_outbox (enqueue_sequence, advancement_key, engine_id, session_id, payload_json, created_at)
         VALUES (7, 'first', 'engine', 'session', '{}', 9), (9, 'second', 'engine', 'session', '{}', 1);
+      INSERT INTO memory_entry_origins VALUES ('retained-memory', 'main', 'session', 'agent:main:main', 'owner', 1);
+      INSERT INTO memory_session_tombstones VALUES ('forgotten-session', 'main', 'deleted', 1);
       INSERT INTO cache_entries VALUES ('retained', 'binary', NULL, X'00ff80', NULL, 1);`);
     admitSqliteSchema(source);
     const event = JSON.stringify({
@@ -191,6 +200,49 @@ describe.skipIf(!connection)("agent database port", () => {
       `DELETE FROM "${namespace}".context_engine_turn_outbox WHERE advancement_key = 'retired'`,
     );
     {
+      using anchor = openNodeSqliteDatabase(anchorPath);
+      anchor.exec(
+        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+      );
+      anchor
+        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+        .run(storeId, namespace);
+    }
+    await descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" });
+    const config = { database: { engine: "postgres" as const, postgres: { connection } } };
+    withDatabaseEngineSelection(
+      {
+        effectiveEngines: resolveDatabaseFamilyEngines(config),
+        postgres: { connection: connection!, schemaPrefix: "test" },
+      },
+      () =>
+        withEngineStoreAdmission(() => {
+          using anchor = openNodeSqliteDatabase(anchorPath);
+          const db = openAgentEngineStore(anchor, "main", anchorPath, true);
+          if (!isPostgresSqlConnection(db)) {
+            throw new Error("Expected the admitted PostgreSQL agent owner");
+          }
+          try {
+            admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
+            db.runTransaction(() => {
+              db.prepare(`INSERT INTO memory_index_chunks
+            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+            VALUES ('derived-chunk', 'memory/example.md', 'memory', 1, 1, 'hash', 'none', 'derived search sentinel', ?, 1)`).run(
+                Buffer.alloc(0),
+              );
+            });
+            expect(
+              db
+                .prepare(`SELECT id FROM memory_index_chunks
+          WHERE openclaw_search @@ plainto_tsquery('"${namespace}".openclaw_simple_unaccent', 'sentinel')`)
+                .all(),
+            ).toEqual([{ id: "derived-chunk" }]);
+          } finally {
+            db.close();
+          }
+        }),
+    );
+    {
       using roundtrip = openNodeSqliteDatabase(path.join(directory, "roundtrip.sqlite"));
       expect(
         await materializeDatabasePort({
@@ -204,6 +256,15 @@ describe.skipIf(!connection)("agent database port", () => {
       expect(
         roundtrip.prepare("SELECT event_json, event_zstd FROM transcript_events").get(),
       ).toEqual({ event_json: event, event_zstd: null });
+      expect(
+        roundtrip.prepare("SELECT entry_key, origin_class FROM memory_entry_origins").all(),
+      ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
+      expect(roundtrip.prepare("SELECT session_id FROM memory_session_tombstones").all()).toEqual([
+        { session_id: "forgotten-session" },
+      ]);
+      expect(roundtrip.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
+        count: 0,
+      });
       expect(
         roundtrip
           .prepare(
@@ -219,17 +280,6 @@ describe.skipIf(!connection)("agent database port", () => {
           .get(),
       ).toEqual({ enqueue_sequence: 10 });
     }
-    {
-      using anchor = openNodeSqliteDatabase(anchorPath);
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
-    }
-    await descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" });
-    const config = { database: { engine: "postgres" as const, postgres: { connection } } };
     const anchorBytes = fs.readFileSync(anchorPath);
     for (const registryEngine of ["sqlite", "postgres"]) {
       const stateDir = path.join(directory, `update-state-${registryEngine}`);
@@ -272,13 +322,21 @@ describe.skipIf(!connection)("agent database port", () => {
           .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
           .run(stateStoreId, stateNamespace);
       }
-      const update = await createUpdateDatabaseBackup({
+      const capture = {
         backupRoot: path.join(directory, `update-backup-${registryEngine}`),
         stateDir,
         config,
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         stopped: true,
-      });
+      };
+      if (registryEngine === "sqlite") {
+        // R14 refuses a PostgreSQL-configured update backed by a physical SQLite registry.
+        await expect(createUpdateDatabaseBackup(capture)).rejects.toThrow(
+          /Existing SQLite state data cannot switch engines/,
+        );
+        continue;
+      }
+      const update = await createUpdateDatabaseBackup(capture);
       const retained = update.databases.find((entry) => entry.path === anchorPath);
       expect(retained).toMatchObject({ engine: "postgres", storeId, namespace });
       using updateExport = openNodeSqliteDatabase(
@@ -343,6 +401,27 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ blob: Buffer.from([0, 255, 128]) }]);
       expect(
         (
+          await client.query(
+            `SELECT entry_key, origin_class FROM "${restored.namespace}".memory_entry_origins`,
+          )
+        ).rows,
+      ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
+      expect(
+        (
+          await client.query(
+            `SELECT session_id FROM "${restored.namespace}".memory_session_tombstones`,
+          )
+        ).rows,
+      ).toEqual([{ session_id: "forgotten-session" }]);
+      expect(
+        (
+          await client.query(
+            `SELECT count(*) AS count FROM "${restored.namespace}".memory_index_chunks`,
+          )
+        ).rows,
+      ).toEqual([{ count: "0" }]);
+      expect(
+        (
           await client.query(`SELECT message_id FROM "${restored.namespace}".session_transcript_fts
         WHERE openclaw_search @@ plainto_tsquery('"${restored.namespace}".openclaw_simple_unaccent', 'sentinel')`)
         ).rows,
@@ -356,10 +435,50 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ enqueue_sequence: "11" }]);
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
-    await client.query(`DROP INDEX "${namespace}".idx_agent_context_engine_turn_outbox_engine`);
-    await expect(
-      descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
-    ).rejects.toThrow(/schema drift/);
+    const extensionMetadata = (
+      await client.query<{ search_extensions: string }>(
+        `SELECT search_extensions FROM "${namespace}".openclaw_schema_meta WHERE store = 'agent'`,
+      )
+    ).rows[0]!.search_extensions;
+    for (const extensions of [
+      { "unowned.memory": memoryTextSearchSchema("unicode61") },
+      { "memory.text": { ...memoryTextSearchSchema("unicode61"), mode: "keyword-only" } },
+    ]) {
+      await client.query(
+        `UPDATE "${namespace}".openclaw_schema_meta SET search_extensions = $1 WHERE store = 'agent'`,
+        [JSON.stringify(extensions)],
+      );
+      try {
+        using refused = openNodeSqliteDatabase(":memory:");
+        await expect(
+          materializeDatabasePort({
+            source: { engine: "postgres", db: client, namespace },
+            destination: { engine: "sqlite", db: refused },
+            descriptor,
+            storeId,
+            assertCurrent() {},
+          }),
+        ).rejects.toThrow(/Unknown or changed agent search extension/);
+      } finally {
+        await client.query(
+          `UPDATE "${namespace}".openclaw_schema_meta SET search_extensions = $1 WHERE store = 'agent'`,
+          [extensionMetadata],
+        );
+      }
+    }
+    await client.query(`DROP INDEX "${namespace}".memory_index_chunks_search_gin`);
+    {
+      using refused = openNodeSqliteDatabase(":memory:");
+      await expect(
+        materializeDatabasePort({
+          source: { engine: "postgres", db: client, namespace },
+          destination: { engine: "sqlite", db: refused },
+          descriptor,
+          storeId,
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow(/PostgreSQL catalog differs/);
+    }
     expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
 
     const provider = createLocalSnapshotProvider({

@@ -31,6 +31,10 @@ export type PortDescriptor = PortSchema & {
   activeFragments?: readonly string[];
   /** Engine-owned derived DDL is rendered for the namespace under verification. */
   postgresPostData?: (namespace: string) => string;
+  /** Source-only projections are validated against their owner before omission. */
+  postgresSourcePostData?: (
+    source: Extract<PortEndpoint, { engine: "postgres" }>,
+  ) => Promise<((namespace: string) => string) | undefined>;
   postgresDerivedTables?: readonly string[];
   /** Canonical logical values may have a different physical SQLite encoding. */
   decodeSqlite?: Readonly<Record<string, (row: PortRow) => PortRow>>;

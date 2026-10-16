@@ -387,6 +387,7 @@ async function scan(
 async function catalogEvidence(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  sourceProjection = false,
 ) {
   await endpoint.db.query("SELECT set_config('search_path', $1, false)", [
     quote(endpoint.namespace),
@@ -395,6 +396,7 @@ async function catalogEvidence(
     (await endpoint.db.query(postgresCatalogQuery(endpoint.namespace, true))).rows[0].catalog,
   ).filter((f) => f.table !== "openclaw_schema_meta");
   if (
+    !sourceProjection &&
     facts.some(
       (fact) =>
         fact.kind === "viewDefinition" ||
@@ -413,12 +415,15 @@ async function catalogEvidence(
       "Unknown PostgreSQL trigger or view; complete descriptor coverage required",
     );
   }
-  assertPostgresCatalog(
-    facts.filter(
-      (f) => !f.kind.endsWith("Definition") && !descriptor.postgresDerivedTables?.includes(f.table),
-    ),
-    descriptor.expectedCatalog,
-  );
+  if (!sourceProjection) {
+    assertPostgresCatalog(
+      facts.filter(
+        (f) =>
+          !f.kind.endsWith("Definition") && !descriptor.postgresDerivedTables?.includes(f.table),
+      ),
+      descriptor.expectedCatalog,
+    );
+  }
   const invalid = await endpoint.db.query(
     `SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND NOT c.convalidated UNION ALL SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND NOT i.indisvalid`,
     [endpoint.namespace],
@@ -438,7 +443,9 @@ async function catalogEvidence(
 async function referenceCatalog(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  source?: Extract<Endpoint, { engine: "postgres" }>,
 ) {
+  const sourcePostData = source && (await descriptor.postgresSourcePostData?.(source));
   const reference = { ...endpoint, namespace: `port_verify_${randomUUID().replaceAll("-", "")}` };
   await endpoint.db.query("BEGIN");
   try {
@@ -452,7 +459,12 @@ async function referenceCatalog(
         "\n;\n" +
         (descriptor.postgresPostData?.(reference.namespace) ?? ""),
     );
-    return await catalogEvidence(reference, descriptor);
+    const base = await catalogEvidence(reference, descriptor);
+    if (sourcePostData) {
+      await endpoint.db.query(sourcePostData(reference.namespace));
+      return { base, source: await catalogEvidence(reference, descriptor, true) };
+    }
+    return { base, source: undefined };
   } finally {
     await endpoint.db.query("ROLLBACK");
   }
@@ -489,15 +501,22 @@ export async function inspectDatabasePort(
   let definitions: Awaited<ReturnType<typeof referenceCatalog>> | undefined;
   if (source.engine === "postgres") {
     await assertSourceIdentity(source, descriptor, storeId ?? "");
-    definitions = verifyDefinitions ? await referenceCatalog(source, descriptor) : undefined;
+    definitions =
+      verifyDefinitions || descriptor.postgresSourcePostData
+        ? await referenceCatalog(source, descriptor, source)
+        : undefined;
     await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
   } else {
     source.db.exec("BEGIN");
   }
   try {
-    const catalog = source.engine === "postgres" ? await catalogEvidence(source, descriptor) : [];
+    let catalog =
+      source.engine === "postgres"
+        ? await catalogEvidence(source, descriptor, Boolean(definitions?.source))
+        : [];
     if (definitions) {
-      assertPostgresCatalog(catalog, definitions);
+      assertPostgresCatalog(catalog, definitions.source ?? definitions.base);
+      catalog = definitions.base;
     }
     return {
       catalog,
@@ -580,9 +599,16 @@ export async function materializeDatabasePort(params: {
     }
   }
   assertCurrent();
-  const definitions = await referenceCatalog(postgres, descriptor);
+  const definitions = await referenceCatalog(
+    postgres,
+    descriptor,
+    source.engine === "postgres" ? source : undefined,
+  );
   if (source.engine === "postgres") {
-    assertPostgresCatalog(await catalogEvidence(source, descriptor), definitions);
+    assertPostgresCatalog(
+      await catalogEvidence(source, descriptor, Boolean(definitions.source)),
+      definitions.source ?? definitions.base,
+    );
   }
   if (source.engine === "postgres") {
     await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -620,7 +646,7 @@ export async function materializeDatabasePort(params: {
           "\n;\n" +
           (descriptor.postgresPostData?.(destination.namespace) ?? ""),
       );
-      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions);
+      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions.base);
       await destination.db.query(
         "CREATE TABLE openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
       );

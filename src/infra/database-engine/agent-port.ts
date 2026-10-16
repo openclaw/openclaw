@@ -25,7 +25,7 @@ export async function resolveAgentPortRoots(
     { resolveConfiguredAgentDatabaseTargets },
     { listDefaultAgentDatabasePaths },
     { inspectOpenClawRegisteredAgentDatabases },
-    { resolveDatabaseEngineInput },
+    { resolveDatabaseEngineSelection },
   ] = await Promise.all([
     import("../../agents/auth-profiles/shared-main-dir.js"),
     import("../../config/sessions/targets.js"),
@@ -37,9 +37,7 @@ export async function resolveAgentPortRoots(
   const registered =
     registeredDatabases ??
     (await withDatabaseEngineSelection(
-      getDatabaseEngineSelection() ?? {
-        input: await resolveDatabaseEngineInput(context.config, env),
-      },
+      getDatabaseEngineSelection() ?? (await resolveDatabaseEngineSelection(context.config, env)),
       () =>
         inspectOpenClawRegisteredAgentDatabases({ env, includeIncompatibleSchemaVersions: true }),
     ));

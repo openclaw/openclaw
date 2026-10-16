@@ -99,7 +99,8 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
       await target.db.query(sql, values);
     }
   }
-  // Empty index metadata makes the memory owner rebuild its omitted derived state.
+  // Memory rebuild remains pending its owner entry point (R7b); retain canonical origins
+  // and tombstones, and seed empty metadata so the owner requests reindexing.
   const seed =
     "INSERT INTO memory_index_state (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING";
   if (target.engine === "sqlite") {
