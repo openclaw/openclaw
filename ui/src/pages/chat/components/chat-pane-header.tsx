@@ -81,6 +81,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   renameDisabledReason?: string;
   runningSubagentCount?: number;
   detailsControl?: PaneDetailsProps;
+  onOpenDetails?: (source: HTMLElement) => void;
   conversationVisible?: boolean;
   onToggleConversation?: () => void;
   runAction?: unknown;
@@ -436,6 +437,23 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
           <Show when={props.detailsControl !== undefined}>
             <PaneDetails {...props.detailsControl!} />
+          </Show>
+          {/* The observed row (and its menu) retires offline; cached Details stays local. */}
+          <Show
+            when={
+              !props.session &&
+              (props.mergedChrome || props.detailsControl?.externalTrigger) &&
+              props.onOpenDetails
+            }
+          >
+            <button
+              type="button"
+              class="chat-details-toggle"
+              onClick={(event) => props.onOpenDetails?.(event.currentTarget)}
+            >
+              <Icon name="listChecks" />
+              <span>{t("chat.sessionDetails.title")}</span>
+            </button>
           </Show>
           <LitContent
             value={presentedContent(

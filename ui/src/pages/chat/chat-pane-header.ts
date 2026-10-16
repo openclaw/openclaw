@@ -105,6 +105,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       );
     }
   };
+  private readonly onHeaderDetails = (source: HTMLElement) =>
+    this.headerDetailsRef.value?.open(source);
   private readonly onHeaderCommandPalette = () =>
     window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
   private readonly onHeaderSettingsChange = (patch: Partial<UiSettings>) =>
@@ -581,6 +583,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
+      onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,
       conversationVisible: detailsControl?.conversationVisible,
       onToggleConversation:
         currentLayout && detailsControl?.externalTrigger
@@ -647,10 +650,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,
               onOpenCommandPalette: this.onHeaderCommandPalette,
-              onOpenDetails:
-                detailsControl === undefined
-                  ? undefined
-                  : (source: HTMLElement) => this.headerDetailsRef.value?.open(source),
+              onOpenDetails: detailsControl === undefined ? undefined : this.onHeaderDetails,
               onSettingsChange: this.onHeaderSettingsChange,
               onAction: this.onHeaderAction,
             })

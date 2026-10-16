@@ -170,6 +170,22 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       },
     );
 
+    it("keeps local Details reachable when the mobile session menu is unavailable", async () => {
+      await page.viewport(390, 844);
+      const onOpenDetails = vi.fn();
+      const fixture = mountChatPaneHeader(containers, {
+        mergedChrome: true,
+        narrow: true,
+        session: undefined,
+        onOpenDetails,
+      });
+      const trigger = fixture.container.querySelector<HTMLButtonElement>(".chat-details-toggle")!;
+      await page.elementLocator(trigger).click();
+      expect(onOpenDetails).toHaveBeenCalledWith(trigger);
+      fixture.update({ session: { key: "agent:main:main", kind: "direct", updatedAt: 0 } });
+      expect(fixture.container.querySelector(".chat-details-toggle")).toBeNull();
+    });
+
     it("closes Layout before changing its contents and restores focus on selection and Escape", async () => {
       const observations: Array<{ open: boolean; focused: boolean }> = [];
       const fixture: ReturnType<typeof mountChatPaneHeader> = mountChatPaneHeader(containers, {
