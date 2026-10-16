@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
@@ -264,28 +265,47 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     const generation = entry.generation;
     const stateContext = captureOpenClawStateWorkerContext();
+    let settledYielded: SubagentRunRecord | undefined;
     const isHostCurrent = () => {
       try {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
       } catch {
         return false;
       }
+      const current = getCurrentSubagentRunOwner(runs, entry);
       return (
-        Boolean(getCurrentSubagentRunOwner(runs, entry)) &&
+        current !== undefined &&
         entry.generation === generation &&
-        params.recoveryCurrent?.isHostCurrent() !== false
+        params.recoveryCurrent?.isHostCurrent() !== false &&
+        // Once our settle commits, retries may drain effects only for that terminal.
+        (!settledYielded ||
+          (current.execution.status === "terminal" &&
+            current.pauseReason === undefined &&
+            !current.killIntent &&
+            !current.killReconciliation &&
+            current.endedReason === settledYielded.endedReason &&
+            current.execution.startedAt === settledYielded.execution.startedAt &&
+            current.execution.endedAt === settledYielded.execution.endedAt &&
+            isDeepStrictEqual(current.execution.outcome, settledYielded.execution.outcome)))
       );
     };
     const isCurrent = async () =>
       isHostCurrent() && (await params.recoveryCurrent?.prepare()) !== false && isHostCurrent();
-    const ownedParams = {
+    const ownedParams: SubagentCompletionRequest = {
       ...params,
       expectedEntry: entry,
       recoveryCurrent: {
         prepare: isCurrent,
         isHostCurrent,
-        onPublished: (published: SubagentRunRecord) =>
-          params.recoveryCurrent?.onPublished?.(published),
+        onPublished: (published: SubagentRunRecord) => {
+          if (ownedParams.settleYielded) {
+            settledYielded = published;
+            // The pause is gone after our commit. Retry normal idempotent effects,
+            // not the yield transition; isHostCurrent still rejects any replacement.
+            ownedParams.settleYielded = undefined;
+          }
+          params.recoveryCurrent?.onPublished?.(published);
+        },
       },
     };
     // Each controller attempt owns its terminal transition, while this outer
@@ -308,7 +328,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         source,
         runId: params.runId,
       });
-      scheduleSubagentCompletionRetryAfterRestart(params, source, entry);
+      scheduleSubagentCompletionRetryAfterRestart(ownedParams, source, entry);
     }
   }
 

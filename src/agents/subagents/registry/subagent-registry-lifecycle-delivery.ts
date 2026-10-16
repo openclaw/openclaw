@@ -246,6 +246,15 @@ export const captureSubagentRunResult = async (
             waitForReply: entry.expectsCompletionMessage === true,
             outcome,
             ...(sessionTarget ? { sessionTarget } : {}),
+            // Only unreachable yielded collectors need a historical execution window.
+            ...(entry.collect === true && entry.pauseReason === "sessions_yield"
+              ? {
+                  completedCollectorTurn: {
+                    startedAt: outcome.startedAt ?? entry.execution.startedAt ?? entry.createdAt,
+                    endedAt: outcome.endedAt ?? entry.execution.endedAt ?? Number.NaN,
+                  },
+                }
+              : {}),
           }),
       );
       assertCaptureCurrent();

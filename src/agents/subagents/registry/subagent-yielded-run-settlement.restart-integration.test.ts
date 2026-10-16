@@ -1,15 +1,31 @@
 // Real registry, SQLite and sweeper proof that a yielded run no continuation can reach settles.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
-import { captureSubagentCompletionReply } from "../announce/subagent-announce.js";
+import { captureSubagentCompletionReply as readCompletionReply } from "../announce/subagent-announce-output.js";
+import {
+  captureSubagentCompletionReply,
+  runSubagentAnnounceFlow,
+} from "../announce/subagent-announce.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
   addSubagentRunForTests,
   initSubagentRegistry,
@@ -29,10 +45,71 @@ const YIELDED_REPLY = "Collector reply written before the yield";
 describe("yielded run settlement", () => {
   const fixture = useSubagentRestartRecoveryFixture();
 
-  afterEach(() => {
-    vi.useRealTimers();
+  beforeEach(() => {
+    vi.mocked(captureSubagentCompletionReply).mockReset().mockResolvedValue(undefined);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    resetGatewayWorkAdmission();
+  });
+
+  const useRealCapture = () =>
+    vi.mocked(captureSubagentCompletionReply).mockImplementation(readCompletionReply);
+  const writeYieldedTranscript = async (text = YIELDED_REPLY, laterReplies = 0) => {
+    const sessionId = "sess-legacy-collector";
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: COLLECTOR_KEY,
+      sessionId,
+      lifecycleRevision: "collector-incarnation",
+      defaultSessionId: sessionId,
+    });
+    const target = { agentId: "main", sessionKey: COLLECTOR_KEY, sessionId, storePath };
+    await appendTranscriptMessage(target, {
+      now: T0 - 7 * MINUTE_MS,
+      message: { role: "user", content: "Previous task" },
+    });
+    await appendTranscriptMessage(target, {
+      now: T0 - 6 * MINUTE_MS,
+      message: { role: "assistant", content: "Not the collector result either" },
+    });
+    await appendTranscriptMessage(target, {
+      now: T0 - 5 * MINUTE_MS,
+      message: { role: "user", content: "Collect the findings" },
+    });
+    await appendTranscriptMessage(target, {
+      now: T0 - 4 * MINUTE_MS - 1,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text },
+          { type: "toolCall", id: "yield-1", name: "sessions_yield", arguments: {} },
+        ],
+      },
+    });
+    await appendTranscriptMessage(target, {
+      now: T0 - 4 * MINUTE_MS,
+      message: {
+        role: "toolResult",
+        toolCallId: "yield-1",
+        toolName: "sessions_yield",
+        content: [{ type: "text", text: JSON.stringify({ status: "yielded" }) }],
+      },
+    });
+    for (let i = 0; i < laterReplies; i++) {
+      await appendTranscriptMessage(target, {
+        now: T0 - MINUTE_MS + i * 2,
+        message: { role: "user", content: "Unrelated later turn" },
+      });
+      await appendTranscriptMessage(target, {
+        now: T0 - MINUTE_MS + i * 2 + 1,
+        message: { role: "assistant", content: "Not the collector result" },
+      });
+    }
+    useRealCapture();
+  };
   const persisted = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
   const restartRegistry = async () => {
     await fixture.settle();
@@ -44,7 +121,7 @@ describe("yielded run settlement", () => {
     const tool = createAgentsWaitTool({ agentSessionKey: "agent:main:main", agentId: "main" });
     const result = await tool.execute("wait", { ids: [runId], timeoutSeconds: 0 });
     return result.details as {
-      completed: Array<{ status: string; error?: string }>;
+      completed: Array<{ status: string; error?: string; result?: string }>;
       pending: string[];
     };
   };
@@ -89,17 +166,7 @@ describe("yielded run settlement", () => {
     async ({ outcome, settledOutcome, endedReason, waited: expectedWait }) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(T0);
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: COLLECTOR_KEY,
-        sessionId: "sess-legacy-collector",
-        defaultSessionId: "sess-legacy-collector",
-      });
-      // The fixture stubs reply capture; the collector's last reply is what a capture would read.
-      vi.mocked(captureSubagentCompletionReply).mockImplementation(async (sessionKey) =>
-        sessionKey === COLLECTOR_KEY ? YIELDED_REPLY : undefined,
-      );
+      await writeYieldedTranscript();
       // Controls: yielded rows that a continuation can still reach stay untouched.
       const orchestrator = makeRunRecord({
         runId: "yielded-orchestrator",
@@ -189,6 +256,209 @@ describe("yielded run settlement", () => {
         collectorCompletion: { status: "killed" },
         execution: { outcome: { status: "error", error: "operator" } },
       });
+    },
+  );
+
+  it.each(["done", "timeout"] as const)(
+    "keeps ordinary %s collector capture on the recent transcript path",
+    async (status) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const sessionId = "sess-ordinary-collector";
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey: COLLECTOR_KEY,
+        sessionId,
+        defaultSessionId: sessionId,
+      });
+      // Ordinary fallback capture can read a reply/progress written after a clipped terminal time.
+      await appendTranscriptMessage(
+        { agentId: "main", sessionKey: COLLECTOR_KEY, sessionId, storePath },
+        {
+          now: T0 - 3 * MINUTE_MS,
+          message: {
+            role: "assistant",
+            content:
+              status === "done"
+                ? "Ordinary collector fallback reply"
+                : [{ type: "toolCall", id: "progress-1", name: "read", arguments: {} }],
+          },
+        },
+      );
+      await replaceSessionEntry(
+        { storePath, sessionKey: COLLECTOR_KEY },
+        {
+          sessionId,
+          lifecycleRunId: "ordinary-collector",
+          status,
+          updatedAt: T0,
+          startedAt: T0 - 5 * MINUTE_MS,
+          endedAt: T0 - 4 * MINUTE_MS,
+        },
+      );
+      useRealCapture();
+      await addSubagentRunForTests(
+        makeRunRecord({
+          runId: "ordinary-collector",
+          childSessionKey: COLLECTOR_KEY,
+          requesterAgentId: "main",
+          collect: true,
+          groupId: "group-ordinary",
+          swarmRequesterSessionKey: "agent:main:main",
+          expectsCompletionMessage: false,
+          startedAt: T0 - 5 * MINUTE_MS,
+        }),
+      );
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(persisted("ordinary-collector")?.execution.outcome).toMatchObject({
+        status: status === "done" ? "ok" : "timeout",
+      });
+      expect((await waitSurface("ordinary-collector")).completed).toMatchObject([
+        {
+          status,
+          result:
+            status === "done"
+              ? "Ordinary collector fallback reply"
+              : "1 tool call(s) made without visible output.",
+        },
+      ]);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reads the yielded turn rather than unrelated later turns beyond the recent-message window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T0);
+    await writeYieldedTranscript(YIELDED_REPLY, 65);
+    await addSubagentRunForTests(legacyYieldedCollector({ status: "ok" }));
+    await restartRegistry();
+    await testing.sweepOnceForTests();
+    await fixture.settle();
+    expect((await waitSurface("legacy-yielded-collector")).completed).toMatchObject([
+      { status: "done", result: YIELDED_REPLY },
+    ]);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "NO_REPLY", "HEARTBEAT_OK"])(
+    "preserves intentional empty or silent collector output (%j)",
+    async (reply) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      await writeYieldedTranscript(reply, 1);
+      await addSubagentRunForTests(legacyYieldedCollector({ status: "ok" }));
+      await restartRegistry();
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(persisted("legacy-yielded-collector")?.completion?.resultText).toBe(reply || null);
+      // The existing delivery policy consumes silent tokens rather than exposing them.
+      expect((await waitSurface("legacy-yielded-collector")).completed).toMatchObject([
+        { status: "done", result: "" },
+      ]);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["immediate", "restart"] as const)(
+    "retries a failed postcommit cleanup claim without losing or announcing the collected result (%s)",
+    async (retry) => {
+      vi.useFakeTimers({
+        toFake: retry === "restart" ? ["Date", "setTimeout", "clearTimeout"] : ["Date"],
+      });
+      vi.setSystemTime(T0);
+      await writeYieldedTranscript();
+      await addSubagentRunForTests({
+        ...legacyYieldedCollector({ status: "ok" }),
+        childSessionIdentity: {
+          sessionId: "sess-legacy-collector",
+          lifecycleRevision: "collector-incarnation",
+        },
+        // Isolate postcommit retry from transcript capture: this reply is already frozen.
+        completion: { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
+      });
+      await restartRegistry();
+      const execute = stateWorker.runOpenClawStateWorkerOperation;
+      let injected = 0;
+      let refusedFallback = false;
+      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+        (context, operation, options) =>
+          execute(
+            context,
+            (scope) =>
+              operation({
+                execute: async (command, executeOptions) => {
+                  if (
+                    injected < (retry === "restart" ? 2 : 1) &&
+                    isSubagentRegistryWriteCommand(command) &&
+                    command.input.values.some(
+                      (row) =>
+                        row.run_id === "legacy-yielded-collector" &&
+                        rowToSubagentRunRecord(row)?.browserCleanupDispatchedAt !== undefined,
+                    )
+                  ) {
+                    injected += 1;
+                    if (retry === "restart") {
+                      markGatewayRestartDraining();
+                    }
+                    // Observe the real terminal commit independently before refusing this later write.
+                    expect(persisted("legacy-yielded-collector")).toMatchObject({
+                      collectorCompletion: { status: "done" },
+                      completion: { resultText: YIELDED_REPLY },
+                    });
+                    expect(
+                      persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt,
+                    ).toBeUndefined();
+                    throw new Error("injected postcommit browser claim write failure");
+                  }
+                  if (
+                    retry === "restart" &&
+                    !refusedFallback &&
+                    injected === 2 &&
+                    isSubagentRegistryWriteCommand(command) &&
+                    command.input.values.some(
+                      (row) =>
+                        row.run_id === "legacy-yielded-collector" &&
+                        rowToSubagentRunRecord(row)?.cleanupHandled === false,
+                    )
+                  ) {
+                    refusedFallback = true;
+                    throw new Error("injected restart fallback write refusal");
+                  }
+                  return scope.execute(command, executeOptions);
+                },
+              }),
+            options,
+          ),
+      );
+      await testing.sweepOnceForTests();
+      // The observer retains the first failed root even though the completion owner retries it.
+      await expect(fixture.settle()).rejects.toThrow("Failed to settle subagent cleanup roots");
+      await fixture.settle();
+      if (retry === "restart") {
+        expect(refusedFallback).toBe(true);
+        expect(persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt).toBeUndefined();
+        resetGatewayWorkAdmission();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await fixture.settle();
+      }
+      expect(injected).toBe(retry === "restart" ? 2 : 1);
+      expect(persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt).toBeTypeOf(
+        "number",
+      );
+      expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
+      expect((await waitSurface("legacy-yielded-collector")).completed).toMatchObject([
+        { status: "done", result: YIELDED_REPLY },
+      ]);
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
     },
   );
 
