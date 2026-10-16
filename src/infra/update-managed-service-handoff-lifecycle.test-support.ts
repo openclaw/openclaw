@@ -97,11 +97,31 @@ export type ManagedServiceManagerBoundaryResult = {
   };
 };
 
+function expectHandoff(
+  expect: typeof import("vitest").expect,
+  sentinel: unknown,
+  status: string,
+  reason: string,
+  restoreExit?: number,
+) {
+  const stats: Record<string, unknown> = { reason };
+  if (restoreExit !== undefined) {
+    const step = expect.objectContaining({
+      name: "service-restore",
+      log: { exitCode: restoreExit },
+    });
+    stats.steps = expect.arrayContaining([step]);
+  }
+  expect(sentinel).toMatchObject({ payload: { status, stats } });
+}
+
+type SystemdBoundary = (
+  kind: "systemd",
+  options?: ManagedServiceManagerBoundaryOptions,
+) => Promise<ManagedServiceManagerBoundaryResult>;
+
 export function registerManagedSystemdHandoffConvergenceTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: SystemdBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
@@ -109,49 +129,38 @@ export function registerManagedSystemdHandoffConvergenceTests(
     activeState: string,
     overrides: Omit<ManagedSystemdPostExitState, "activeState"> = {},
   ): ManagedSystemdPostExitState => ({ activeState, mainPid: "none", ...overrides });
+  // KillMode=mixed can leave the exact parked identity in ActiveState=failed.
   const parkedFailure = postExit("failed", { generation: "parked", invocation: "parked" });
-  function expectHandoff(sentinel: unknown, status: string, reason: string, restoreExit?: number) {
-    expect(sentinel).toMatchObject({ payload: { status, stats: { reason } } });
-    if (restoreExit !== undefined) {
-      expect(sentinel).toMatchObject({
-        payload: {
-          stats: {
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: restoreExit } }),
-            ]),
-          },
-        },
+  itUnix.each([
+    [
+      "deactivating stop job",
+      [postExit("deactivating"), postExit("inactive")],
+      100,
+      "show stop show show",
+    ],
+    ["failed parked unit", [parkedFailure], 0, "show stop show"],
+  ] as const)(
+    "accepts the stopped systemd unit: %s",
+    async (_label, observations, delay, commandsExpected) => {
+      const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+        systemdPostExitStates: [...observations],
+        systemdStopDelayMs: delay,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
       });
-    }
-  }
-  itUnix("waits for the exact systemd stop job to finish after parent exit", async () => {
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-      systemdPostExitStates: [postExit("deactivating"), postExit("inactive")],
-      systemdStopDelayMs: 100,
-      updaterExitCode: 0,
-      updaterResult: { status: "ok", mode: "npm" },
-    });
 
-    expect(commands.map((command) => command.split(" ")[1])).toEqual(
-      "show stop show show".split(" "),
-    );
-    expect(state).toMatchObject({ parked: true, postExitShows: 2, stopCompleted: true });
-    expect([state.reset, state.restored]).toEqual([undefined, undefined]);
-    expect(sentinel).toBeNull();
-  });
-
-  itUnix("accepts a failed unit that retained the parked generation after activation", async () => {
-    // KillMode=mixed can leave the exact parked identity in ActiveState=failed.
-    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-      systemdPostExitStates: [parkedFailure],
-      updaterExitCode: 0,
-      updaterResult: { status: "ok", mode: "npm" },
-    });
-
-    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
-    expect(state).toMatchObject({ parked: true, postExitShows: 1, stopCompleted: true });
-    expect(sentinel).toBeNull();
-  });
+      expect(commands.map((command) => command.split(" ")[1])).toEqual(commandsExpected.split(" "));
+      expect(state).toMatchObject({
+        parked: true,
+        postExitShows: observations.length,
+        stopCompleted: true,
+      });
+      if (delay) {
+        expect([state.reset, state.restored]).toEqual([undefined, undefined]);
+      }
+      expect(sentinel).toBeNull();
+    },
+  );
 
   itUnix("restores a failed unit that retained the parked generation", async () => {
     const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
@@ -164,45 +173,30 @@ export function registerManagedSystemdHandoffConvergenceTests(
 
     expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
     expect(state).toMatchObject({ parked: true, restored: true });
-    expectHandoff(sentinel, "skipped", "managed-service-handoff-cancelled", 0);
+    expectHandoff(expect, sentinel, "skipped", "managed-service-handoff-cancelled", 0);
   });
 
   itUnix.each([
-    [
-      "an inactive replacement generation",
-      postExit("inactive", { generation: "replacement", invocation: "replacement" }),
-    ],
-    [
-      "a cleared generation with the parked invocation",
-      postExit("inactive", { generation: "cleared", invocation: "parked" }),
-    ],
-    [
-      "the parked generation with a cleared invocation",
-      postExit("inactive", { generation: "parked", invocation: "cleared" }),
-    ],
-    ["a replacement main PID", postExit("deactivating", { mainPid: "replacement" })],
-    ["an active service", postExit("active", { mainPid: "replacement" })],
-    ["a restarting service", postExit("activating")],
-    [
-      "a failed service with a replacement generation",
-      postExit("failed", { generation: "replacement", invocation: "replacement" }),
-    ],
-    ["an inactive service retaining a main PID", postExit("inactive", { mainPid: "parent" })],
-    ["a replaced service unit", postExit("inactive", { id: "replacement.service" })],
-    ["an unloaded service unit", postExit("inactive", { loadState: "not-found" })],
-  ] as const)(
-    "fails closed after stop completion when systemd reports %s",
-    async (_label, invalidState) => {
-      const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
-        systemdHandoffFailure: true,
-        systemdPostExitStates: [invalidState],
-      });
+    postExit("inactive", { generation: "replacement", invocation: "replacement" }),
+    postExit("inactive", { generation: "cleared", invocation: "parked" }),
+    postExit("inactive", { generation: "parked", invocation: "cleared" }),
+    postExit("deactivating", { mainPid: "replacement" }),
+    postExit("active", { mainPid: "replacement" }),
+    postExit("activating"),
+    postExit("failed", { generation: "replacement", invocation: "replacement" }),
+    postExit("inactive", { mainPid: "parent" }),
+    postExit("inactive", { id: "replacement.service" }),
+    postExit("inactive", { loadState: "not-found" }),
+  ])("fails closed after stop completion when systemd reports %j", async (invalidState) => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdHandoffFailure: true,
+      systemdPostExitStates: [invalidState],
+    });
 
-      expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 2 });
-      expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(0);
-      expectHandoff(sentinel, "error", "managed-service-handoff-restore-failed", 1);
-    },
-  );
+    expect(state).toMatchObject({ parked: true, stopCompleted: true, postExitShows: 2 });
+    expect(commands.filter((command) => command.includes("reset-failed"))).toHaveLength(0);
+    expectHandoff(expect, sentinel, "error", "managed-service-handoff-restore-failed", 1);
+  });
 
   itUnix("rejects an overdue commit before its delayed deadline callback executes", async () => {
     const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
@@ -212,11 +206,8 @@ export function registerManagedSystemdHandoffConvergenceTests(
 
     expect(parentSignal).toBeNull();
     expect(
-      commands.filter((command) => command.includes("stop openclaw-gateway.service")),
-    ).toHaveLength(0);
-    expect(
-      commands.filter((command) => command.includes("start openclaw-gateway.service")),
-    ).toHaveLength(0);
+      commands.filter((command) => /(?:stop|start) openclaw-gateway\.service/.test(command)),
+    ).toEqual([]);
     expect(state).toEqual({});
     expect(sentinel).toMatchObject({
       payload: {
@@ -241,7 +232,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
         undefined,
         undefined,
       ]);
-      expectHandoff(sentinel, "error", "managed-service-handoff-restore-failed");
+      expectHandoff(expect, sentinel, "error", "managed-service-handoff-restore-failed");
     },
   );
 }
@@ -306,26 +297,17 @@ if (${JSON.stringify(kind)} === "systemd") {
       : observation?.mainPid === "replacement" ? ${process.pid}
       : observation?.mainPid === "none" ? 0
       : state.restored ? restoredPid : active ? ${parentPid} : 0;
-    const observedGeneration = state.restored || observation?.generation === "replacement" ? "222"
-      : state.previousGenerationRestored ? "333"
-      : observation?.generation === "parked" ? "111"
-        : observation?.generation === "cleared" ? "0"
-          : active || observation?.activeState === "deactivating" ? "111" : "0";
-    const observedInvocation = state.restored || observation?.invocation === "replacement"
-      ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      : state.previousGenerationRestored ? "cccccccccccccccccccccccccccccccc"
-      : observation?.invocation === "parked" ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        : observation?.invocation === "cleared" ? ""
-          : active || observation?.activeState === "deactivating"
-            ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            : "";
+    const identityIndex = (observed) => state.restored || observed === "replacement" ? 2
+      : state.previousGenerationRestored ? 3
+      : observed === "parked" ? 1 : observed === "cleared" ? 0
+      : active || observation?.activeState === "deactivating" ? 1 : 0;
     process.stdout.write([
       "Id=" + (observation?.id || "openclaw-gateway.service"),
       "LoadState=" + (observation?.loadState || "loaded"),
       "ActiveState=" + (observation?.activeState || (active ? "active" : "inactive")),
       "MainPID=" + observedPid,
-      "ExecMainStartTimestampMonotonic=" + observedGeneration,
-      "InvocationID=" + observedInvocation,
+      "ExecMainStartTimestampMonotonic=" + ["0", "111", "222", "333"][identityIndex(observation?.generation)],
+      "InvocationID=" + ["", "a".repeat(32), "b".repeat(32), "c".repeat(32)][identityIndex(observation?.invocation)],
     ].join("\\n") + "\\n");
   }
   } else {
@@ -339,12 +321,11 @@ if (${JSON.stringify(kind)} === "systemd") {
   if (action === "enable") state.disabled = false;
   if (action === "bootstrap" || action === "kickstart") {
     state.bootstrapAttempts = (state.bootstrapAttempts || 0) + 1;
-    if (state.pendingOperationInProgress > 0) {
-      state.pendingOperationInProgress -= 1;
-      state.operationInProgressObserved = (state.operationInProgressObserved || 0) + 1;
-      process.stderr.write("Bootstrap failed: 37: Operation already in progress\\n");
-      process.exitCode = 37;
-    } else if (!state.unloaded) {
+    if (state.pendingOperationInProgress > 0 || !state.unloaded) {
+      if (state.pendingOperationInProgress > 0) {
+        state.pendingOperationInProgress -= 1;
+        state.operationInProgressObserved = (state.operationInProgressObserved || 0) + 1;
+      }
       process.stderr.write("Bootstrap failed: 37: Operation already in progress\\n");
       process.exitCode = 37;
     } else if (action === "bootstrap" && state.pendingBootstrapFailures > 0) {
@@ -367,13 +348,11 @@ if (${JSON.stringify(kind)} === "systemd") {
       }
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
-    if (state.restored && fault === "missing-restored-pid") {
-      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n}\\n");
-    } else {
-      const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
-      const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
-      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n}\\n");
-    }
+    const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
+    const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
+    const pidLine = state.restored && fault === "missing-restored-pid"
+      ? "" : "\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n";
+    process.stdout.write(args[1] + " = {\\n\\tstate = running\\n" + pidLine + "}\\n");
   }
 }
   `,
@@ -618,10 +597,7 @@ export function createManagedServiceLaunchdClockPreload(params: {
 }
 
 export function registerManagedHandoffOwnerTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: SystemdBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
@@ -652,17 +628,7 @@ export function registerManagedHandoffOwnerTests(
           restored: true,
           healthProbed: true,
         });
-        expect(sentinel).toMatchObject({
-          payload: {
-            status: "error",
-            stats: {
-              reason: "owner_required",
-              steps: expect.arrayContaining([
-                expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-              ]),
-            },
-          },
-        });
+        expectHandoff(expect, sentinel, "error", "owner_required", 0);
         expect(log).toContain("owner_required");
         expect(log).not.toContain("starting managed update command");
       } else {

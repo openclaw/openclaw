@@ -4,10 +4,15 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -28,9 +33,9 @@ const dirs = createTempDirTracker();
 const children = new Set<ReturnType<typeof spawn>>();
 const databaseUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffDatabase);
 const databaseModule = databaseUrl.href;
-const repoRoot = process.cwd();
 const insertSql =
   "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)";
+const inodeOf = ({ dev, ino }: fs.Stats) => ({ dev, ino });
 let root: string;
 let databasePath: string;
 let withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
@@ -54,23 +59,13 @@ afterEach(async () => {
   }
 });
 
-function insertRow(
-  db: DatabaseSync,
-  key: string,
-  owner: string,
-  payload = "{}",
-  updatedAt = 1,
-): void {
+function insertRow(db: DatabaseSync, key: string, owner: string, payload = "{}", updatedAt = 1) {
   db.prepare(insertSql).run(key, owner, payload, updatedAt);
 }
 
 function withSqlite<T>(run: (db: DatabaseSync) => T, readOnly = false): T {
-  const db = new DatabaseSync(databasePath, { readOnly });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(databasePath, { readOnly });
+  return run(db);
 }
 
 function readOwners(): string[] {
@@ -93,8 +88,6 @@ function expectSingleLink(owners: string[]): void {
   expect(fs.statSync(databasePath).nlink).toBe(1);
 }
 
-type RunningChild = ReturnType<typeof spawnFixture>;
-
 function spawnFixture(script: string, args: string[] = []) {
   const child = spawn(
     process.execPath,
@@ -111,60 +104,39 @@ function spawnFixture(script: string, args: string[] = []) {
       databasePath,
       ...args,
     ],
-    { cwd: repoRoot, env: {}, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: process.cwd(), env: {}, stdio: ["ignore", "pipe", "pipe"] },
   );
   children.add(child);
   const closed = once(child, "close");
   void closed.catch(() => undefined);
-  let stdout = "";
-  let stderr = "";
-  child.stdout?.on("data", (chunk) => {
-    stdout = (stdout + chunk.toString()).slice(-64 * 1024);
-  });
-  child.stderr?.on("data", (chunk) => {
-    stderr = (stderr + chunk.toString()).slice(-64 * 1024);
-  });
+  const output = { stdout: "", stderr: "" };
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.on("data", (chunk) => {
+      output[stream] = (output[stream] + chunk.toString()).slice(-64 * 1024);
+    });
+  }
   return {
     child,
     closed,
-    output: () => ({ stdout, stderr }),
+    output,
     waitForMarker: async (marker: string) => {
       const deadline = Date.now() + 10_000;
-      while (!stdout.includes(marker)) {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(`fixture exited before ${marker}: ${JSON.stringify({ stdout, stderr })}`);
-        }
-        if (Date.now() >= deadline) {
+      while (!output.stdout.includes(marker)) {
+        const exited = child.exitCode !== null || child.signalCode !== null;
+        if (exited || Date.now() >= deadline) {
           throw new Error(
-            `fixture timed out before ${marker}: ${JSON.stringify({ stdout, stderr })}`,
+            `fixture ${exited ? "exited" : "timed out"} before ${marker}: ${JSON.stringify(output)}`,
           );
         }
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        });
+        await delay(10);
       }
     },
   };
 }
 
-async function expectSuccessfulExit(fixture: RunningChild, stdout?: string): Promise<void> {
+async function expectSuccessfulExit(fixture: ReturnType<typeof spawnFixture>): Promise<void> {
   expect(await fixture.closed).toEqual([0, null]);
-  expect(fixture.output()).toMatchObject({
-    stderr: "",
-    ...(stdout === undefined ? {} : { stdout }),
-  });
-}
-
-async function killFixture(fixture: RunningChild): Promise<void> {
-  if (fixture.child.exitCode === null && fixture.child.signalCode === null) {
-    fixture.child.kill("SIGKILL");
-  }
-  await Promise.race([
-    fixture.closed,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("fixture did not close after SIGKILL")), 5_000);
-    }),
-  ]);
+  expect(fixture.output.stderr).toBe("");
 }
 
 it("does not create a database for an absent read", () => {
@@ -172,42 +144,35 @@ it("does not create a database for an absent read", () => {
   expect(fs.existsSync(databasePath)).toBe(false);
 });
 
-it("publishes a complete private single-link database", () => {
-  // Windows privacy comes from the DACL; masking owner-write makes the stage read-only.
-  const umask = process.umask(process.platform === "win32" ? 0o077 : 0o777);
-  try {
-    publish("first");
-  } finally {
-    process.umask(umask);
-  }
-
-  const stat = fs.statSync(databasePath);
-  if (process.platform !== "win32") {
-    expect(stat.mode & 0o777).toBe(0o600);
-  }
-  expectSingleLink(["first"]);
-  expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
-});
-
-it("uses synchronous directory spelling for synchronous durability receipts", () => {
-  // Windows native realpath expands short aliases that ordinary realpath may preserve.
-  // Model that spelling difference without replacing the directory or its identity.
-  const nativeRealpath = fs.realpathSync.native;
-  vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
-    const result = nativeRealpath(...args);
-    return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
-  });
-
-  publish("alias-owner");
-  expectSingleLink(["alias-owner"]);
-});
-
-it("publishes when the parent file ID exceeds Number's exact range", () => {
-  mockLargeDirectoryId(root);
-
-  publish("exact-owner");
-  expectSingleLink(["exact-owner"]);
-});
+it.each(["private", "directory-alias", "large-file-id"] as const)(
+  "publishes a complete private single-link database (%s)",
+  (mode) => {
+    const umask = process.umask();
+    try {
+      if (mode === "private") {
+        // Windows privacy comes from the DACL; owner-write must survive the umask.
+        process.umask(process.platform === "win32" ? 0o077 : 0o777);
+      } else if (mode === "directory-alias") {
+        // Model Windows short-alias spelling without replacing the directory identity.
+        const nativeRealpath = fs.realpathSync.native;
+        vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+          const result = nativeRealpath(...args);
+          return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
+        });
+      } else {
+        mockLargeDirectoryId(root);
+      }
+      publish(mode);
+    } finally {
+      process.umask(umask);
+    }
+    if (process.platform !== "win32") {
+      expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
+    }
+    expectSingleLink([mode]);
+    expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "repairs an interrupted legacy initializer that wins exclusive creation",
@@ -273,24 +238,13 @@ it.each(["file", "parent"] as const)(
     if (process.platform === "win32" && target === "parent") {
       expect(initialize).toThrow(expect.objectContaining({ code: "EPERM" }));
       assert(originalFile, "fixture did not capture the created descriptor");
-      expect(fs.statSync(root)).toMatchObject({
-        dev: originalParent.dev,
-        ino: originalParent.ino,
-      });
-      expect(fs.statSync(databasePath)).toMatchObject({
-        dev: originalFile.dev,
-        ino: originalFile.ino,
-        size: 0,
-        nlink: 1,
-      });
+      const fileIdentity = { ...inodeOf(originalFile), nlink: 1 };
+      expect(fs.statSync(root)).toMatchObject(inodeOf(originalParent));
+      expect(fs.statSync(databasePath)).toMatchObject({ ...fileIdentity, size: 0 });
       expect(fs.readFileSync(databasePath, "utf8")).toBe("");
       vi.restoreAllMocks();
       publish("recovered");
-      expect(fs.statSync(databasePath)).toMatchObject({
-        dev: originalFile.dev,
-        ino: originalFile.ino,
-        nlink: 1,
-      });
+      expect(fs.statSync(databasePath)).toMatchObject(fileIdentity);
       expect(readOwners()).toEqual(["recovered"]);
     } else {
       expect(initialize).toThrow(/changed during initialization/);
@@ -338,12 +292,11 @@ it("lets competing first writers converge on one complete database", async () =>
   const script = `
       (await openDatabase())(true, db => db.prepare(${JSON.stringify(insertSql)})
         .run(process.argv[2], process.argv[2], "{}", 1));
-      process.stdout.write("done");
     `;
   const first = spawnFixture(script, ["first"]);
   const second = spawnFixture(script, ["second"]);
-  await expectSuccessfulExit(first, "done");
-  await expectSuccessfulExit(second, "done");
+  await expectSuccessfulExit(first);
+  await expectSuccessfulExit(second);
   expectSingleLink(["first", "second"]);
 });
 
@@ -355,32 +308,27 @@ it.skipIf(process.platform !== "win32")(
         const fs = require("node:fs");
         const { parentPort, workerData } = require("node:worker_threads");
         (async () => {
-          const { register } = await import(workerData.loader);
-          register({ tsconfig: workerData.tsconfig });
-          const { createManagedHandoffLeaseDatabase } = await import(workerData.module);
-          const target = workerData.databasePath;
-          if (workerData.first) {
-            const link = fs.linkSync;
-            fs.linkSync = (from, to) => {
-              link(from, to);
-              if (to === target) {
+          const { register } = await import(${JSON.stringify(import.meta.resolve("tsx/esm/api"))});
+          register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
+          const { createManagedHandoffLeaseDatabase } = await import(${JSON.stringify(databaseModule)});
+          const target = ${JSON.stringify(databasePath)};
+          const method = workerData.first ? "linkSync" : "openSync";
+          const original = fs[method];
+          fs[method] = (file, ...args) => {
+            try {
+              const result = original(file, ...args);
+              if (workerData.first && args[0] === target) {
                 parentPort.postMessage("published");
                 Atomics.wait(new Int32Array(workerData.gate), 0, 0);
               }
-            };
-          } else {
-            const open = fs.openSync;
-            fs.openSync = (file, ...args) => {
-              try {
-                return open(file, ...args);
-              } catch (error) {
-                if (file === target + ".lock" && error.code === "EEXIST") {
-                  parentPort.postMessage("contended");
-                }
-                throw error;
+              return result;
+            } catch (error) {
+              if (!workerData.first && file === target + ".lock" && error.code === "EEXIST") {
+                parentPort.postMessage("contended");
               }
-            };
-          }
+              throw error;
+            }
+          };
           const owner = workerData.first ? "first" : "second";
           createManagedHandoffLeaseDatabase(target)(true, db =>
             db.prepare(${JSON.stringify(insertSql)}).run(owner, owner, "{}", 1));
@@ -391,14 +339,7 @@ it.skipIf(process.platform !== "win32")(
       const worker = new Worker(source, {
         eval: true,
         execArgv: [],
-        workerData: {
-          first,
-          gate: gate.buffer,
-          databasePath,
-          module: databaseModule,
-          loader: import.meta.resolve("tsx/esm/api"),
-          tsconfig: path.resolve("tsconfig.json"),
-        },
+        workerData: { first, gate: gate.buffer },
       });
       const exited = once(worker, "exit");
       void exited.catch(() => undefined);
@@ -417,8 +358,7 @@ it.skipIf(process.platform !== "win32")(
       expect(await second.ready).toEqual(["contended"]);
       Atomics.store(gate, 0, 1);
       Atomics.notify(gate, 0);
-      expect(await first.exited).toEqual([0]);
-      expect(await second.exited).toEqual([0]);
+      expect(await Promise.all([first.exited, second.exited])).toEqual([[0], [0]]);
       expectSingleLink(["first", "second"]);
     } finally {
       Atomics.store(gate, 0, 1);
@@ -438,9 +378,7 @@ it("ordinary readers observe no lease while a real peer initializes the schema",
         expect(stat.mode & 0o777).toBe(0o600);
       }
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1);
-    });
+    await delay(1);
   } while (writer.child.exitCode === null && writer.child.signalCode === null);
   await expectSuccessfulExit(writer);
   expectSingleLink([]);
@@ -466,7 +404,8 @@ it("recovers the same inode when its first writer crashes before schema initiali
   const before = fs.statSync(databasePath);
   expect(before).toMatchObject({ size: 0, nlink: 1 });
   expect(store.read(root)).toEqual({ kind: "absent" });
-  await killFixture(writer);
+  writer.child.kill("SIGKILL");
+  await withTestTimeout(writer.closed, 5_000, "fixture did not close after SIGKILL");
   publish("recovered");
   expect(fs.statSync(databasePath).ino).toBe(before.ino);
   expect(readOwners()).toEqual(["recovered"]);
@@ -554,64 +493,46 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     expect(databaseIdentity.parentIdentity).toMatch(
       numeric ? /:168040561096346660$/ : new RegExp(`:${initialInode}$`),
     );
-    const childKey = `${spawnerKey}/.openclaw-update-child-${randomUUID()}${identityLess ? "" : `-lineage-${childLineageDigest(parent.lease, spawner.lease, parent.lease, databaseIdentity)}`}`;
-    const childPayload = identityLess
-      ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
-      : payload;
-    withSqlite((db) => insertRow(db, childKey, runId, childPayload, 2));
-    const grant: UpdateCommandChildGrant = {
-      runId,
-      root,
-      databasePath,
-      parent: parent.lease,
-      childKey,
-      ...(identityLess
-        ? {}
+    const makeGrant = (
+      sender: ManagedHandoffLease,
+      identity: typeof databaseIdentity,
+      legacy = false,
+    ): UpdateCommandChildGrant => {
+      const childKey = `${sender.key}/.openclaw-update-child-${randomUUID()}${legacy ? "" : `-lineage-${childLineageDigest(parent.lease, sender, parent.lease, identity)}`}`;
+      const childPayload = legacy
+        ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
+        : payloadFor(sender.executor, sender.action);
+      withSqlite((db) => insertRow(db, childKey, runId, childPayload, sender.updatedAt + 1));
+      const grant = { runId, root, databasePath, parent: parent.lease, childKey };
+      return legacy
+        ? grant
         : {
-            databaseIdentity,
+            ...grant,
+            databaseIdentity: identity,
             originalParent: parent.lease,
-            spawner: spawner.lease,
+            spawner: sender,
             originalChildKey: childKey,
-          }),
+          };
     };
+    const grant = makeGrant(spawner.lease, databaseIdentity, identityLess);
     const resolve = () => resolveUpdateCommandChildBinding(grant, runId, root);
     const admitted = await resolve();
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
     expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
-    const descendantKey = `${childKey}/.openclaw-update-child-${randomUUID()}-lineage-${childLineageDigest(parent.lease, admitted.child, parent.lease, admitted.databaseIdentity)}`;
-    withSqlite((db) =>
-      insertRow(
-        db,
-        descendantKey,
-        runId,
-        payloadFor(admitted.child.executor, admitted.child.action),
-        3,
-      ),
-    );
-    const descendantGrant = {
-      ...grant,
-      originalParent: parent.lease,
-      spawner: admitted.child,
-      databaseIdentity: admitted.databaseIdentity,
-      originalChildKey: descendantKey,
-      childKey: descendantKey,
-    };
+    const descendantGrant = makeGrant(admitted.child, admitted.databaseIdentity);
     const resolveDescendant = async () => {
       // Model the next receiver's parent PID without booting another source runtime.
       const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
       assert(descriptor);
-      Object.defineProperty(process, "ppid", {
-        configurable: true,
-        value: admitted.child.executor.pid,
-      });
+      Object.defineProperty(process, "ppid", { value: admitted.child.executor.pid });
       try {
         return await resolveUpdateCommandChildBinding(descendantGrant, runId, root);
       } finally {
         Object.defineProperty(process, "ppid", descriptor);
       }
     };
-    expect((await resolveDescendant()).child.key).toBe(descendantKey);
+    expect((await resolveDescendant()).child.key).toBe(descendantGrant.childKey);
     parentInode += identityLess ? 1n : -1n;
     expect(numericIdentity(root)).toMatch(
       identityLess ? /:9007199254740992$/ : /:168040561096346660$/,

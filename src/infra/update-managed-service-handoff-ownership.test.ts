@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough, type Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -125,12 +126,8 @@ function withStateDatabase<T>(
   run: (db: DatabaseSync) => T,
   readOnly = true,
 ): T {
-  const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly });
+  return run(db);
 }
 
 async function snapshotStateDatabase(env: NodeJS.ProcessEnv) {
@@ -398,23 +395,19 @@ fs.appendFileSync = function(file, data, ...args) {
   }
   await fs.writeFile(
     helperParamsPath,
-    `${JSON.stringify(
-      {
-        ...helperParams,
-        parentPid,
-        parentStartIdentity: String(parentStartIdentity),
-        commandArgv: [
-          testNodeExecPath,
-          "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
-        ],
-        triageCommandArgv: [testNodeExecPath, "-e", "process.exit(0)", "--"],
-        logPath,
-        sensitivePaths: [],
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      ...helperParams,
+      parentPid,
+      parentStartIdentity: String(parentStartIdentity),
+      commandArgv: [
+        testNodeExecPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
+      ],
+      triageCommandArgv: [testNodeExecPath, "-e", "process.exit(0)", "--"],
+      logPath,
+      sensitivePaths: [],
+    }),
   );
 
   const helper = spawn(testNodeExecPath, [helperScriptPath, helperParamsPath], {
@@ -432,11 +425,7 @@ fs.appendFileSync = function(file, data, ...args) {
   helper.stderr?.on("data", (chunk: Buffer | string) => {
     stderr += chunk.toString();
   });
-  const resultPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      helper.once("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
+  const resultPromise = once(helper, "close");
   const updateExited = params.observeUpdateExit
     ? awaitGateBeforeSettlement(
         waitForHandoffLine(helper.stdout, "UPDATER_EXIT_RECORDED"),
@@ -455,8 +444,7 @@ fs.appendFileSync = function(file, data, ...args) {
     await committed;
     parent.stdin.end();
     await params.whileHelperRunning?.({ env, logPath, updateExited });
-    const result = await resultPromise;
-    expect(result).toEqual({ code: params.commandExitCode ?? 1, signal: null });
+    expect(await resultPromise).toEqual([params.commandExitCode ?? 1, null]);
     await parentClosed;
     return {
       env,
@@ -536,9 +524,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
           await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
             "managed update update command exited code=7",
           );
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 100);
-          });
+          await delay(100);
           assert(claimant, "expected the ownership claimant transaction to remain open");
           claimant.exec("COMMIT;");
           claimantTransactionOpen = false;
@@ -595,31 +581,29 @@ describe("managed service update handoff state ownership and sentinel persistenc
       watchdogKilledRunner: boolean;
     };
     expect(runner.pid).toBeGreaterThan(0);
-    expect(runner.watchdogKilledRunner).toBe(false);
-    expect(runner.leaseAtGate.owner).toBe(handoffId);
+    expect(runner).toMatchObject({
+      watchdogKilledRunner: false,
+      leaseAtGate: { owner: handoffId },
+    });
     const leaseAtGate = JSON.parse(runner.leaseAtGate.payload_json);
     expect(leaseAtGate).toMatchObject({
       version: 2,
       action: { kind: "update" },
+      executor: { pid: runnerFault === "closed-gate" ? runner.pid : leaseAtGate.helper.pid },
     });
-    expect(leaseAtGate.executor.pid).toBe(
-      runnerFault === "closed-gate" ? runner.pid : leaseAtGate.helper.pid,
-    );
     await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
       runnerFault === "closed-gate"
         ? "ERR_STREAM_WRITE_AFTER_END"
         : "process start identity is unavailable",
     );
 
-    const leaseDatabase = new DatabaseSync(leaseDatabasePath, { readOnly: true });
-    try {
+    {
+      using leaseDatabase = new DatabaseSync(leaseDatabasePath, { readOnly: true });
       expect(
         leaseDatabase
           .prepare("SELECT owner FROM managed_update_handoffs WHERE install_root = ?")
           .get(leaseKey),
       ).toBeUndefined();
-    } finally {
-      leaseDatabase.close();
     }
 
     expect(readRestartSentinelPayload(env)).toMatchObject(
@@ -761,9 +745,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
         whileHelperRunning: !duringUpdate
           ? undefined
           : async ({ env: stateEnv }) => {
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, 50);
-              });
+              await delay(50);
               replaceRestartSentinelRow(stateEnv, newerSentinel);
             },
       });
