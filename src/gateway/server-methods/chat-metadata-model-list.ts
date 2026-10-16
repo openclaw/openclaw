@@ -65,6 +65,11 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
       visibility(config.agents?.defaults?.models),
       visibility(config.agents?.entries?.[source.agentId]?.models),
     ],
+    // Selection policy may name any provider's models, including by pattern.
+    modelPolicy: [
+      config.agents?.defaults?.modelPolicy,
+      config.agents?.entries?.[source.agentId]?.modelPolicy,
+    ],
     plugins: {
       enabled: config.plugins?.enabled,
       allow: config.plugins?.allow?.filter((id) => pluginIds.includes(id)),

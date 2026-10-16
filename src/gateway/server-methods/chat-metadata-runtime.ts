@@ -386,16 +386,25 @@ export function createGatewayChatMetadataRuntime(params: {
       readAuthStore: () => AuthProfileStore;
     }
   >();
-  const retainedModelsList = (key: string) => {
+  const retainedModelsList = async (key: string, request: PreparedModelsListRequest) => {
     const published = publishedModelLists.get(key);
-    return (
-      published &&
-      retainPublishedModelsList(published.result, published.source, {
-        config: deps.getConfig(),
-        agentId: published.source.agentId,
-        authStore: published.readAuthStore(),
-      })
-    );
+    if (!published) {
+      return undefined;
+    }
+    // A requester's personal accounts select a private projection; only a requester still
+    // without account links may reuse the shared list.
+    if (
+      request.requesterProfileId &&
+      request.params.view !== "provider-config" &&
+      (await listUserProfileAuthLinksAsync(request.requesterProfileId)).length > 0
+    ) {
+      return undefined;
+    }
+    return retainPublishedModelsList(published.result, published.source, {
+      config: deps.getConfig(),
+      agentId: published.source.agentId,
+      authStore: published.readAuthStore(),
+    });
   };
   const readModelsList = async (
     request: PreparedModelsListRequest,
@@ -416,7 +425,7 @@ export function createGatewayChatMetadataRuntime(params: {
       !current ||
       !authStoresCurrent(current.facts, deps) ||
       current.facts.agents.some((agent) => !agent.owner.isCurrent());
-    const retained = rebuilding ? retainedModelsList(key) : undefined;
+    const retained = rebuilding ? await retainedModelsList(key, request) : undefined;
     if (retained) {
       return retained;
     }
@@ -433,7 +442,7 @@ export function createGatewayChatMetadataRuntime(params: {
       const fallback =
         (error instanceof PreparedModelRuntimePublicationSupersededError ||
           error instanceof ChatMetadataSnapshotUnavailableError) &&
-        retainedModelsList(key);
+        (await retainedModelsList(key, request));
       if (fallback) {
         return fallback;
       }
