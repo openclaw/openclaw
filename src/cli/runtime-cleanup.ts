@@ -3,7 +3,6 @@ import {
   hasProviderTransportDispatcherPool,
   stopActiveManagedProviderLocalServices,
 } from "../agents/provider-runtime-lifecycle.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
@@ -68,7 +67,8 @@ export async function runCliDisposer(
   const token = Symbol(name);
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
+      const { formatErrorMessage } = await import("../infra/errors.js");
       // Observe failures even after the reporting deadline, without blocking later teardown.
       console.error(`CLI cleanup failed: ${name}: ${formatErrorMessage(error)}`);
     })
