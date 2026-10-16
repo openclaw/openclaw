@@ -151,6 +151,15 @@ export function publishSqliteDatabaseFact(
   return true;
 }
 
+export function revokeSqliteDatabaseAdmissionFacts(record: Admission): void {
+  // Corruption can follow native close; shared cells also revoke retained physical facts.
+  for (const fact of record.facts.values()) {
+    Atomics.store(new Int32Array(fact.current), 0, 0);
+  }
+  advanceSqliteDatabaseGeneration(record, "schemaRevision");
+  advanceSqliteDatabaseGeneration(record, "factRevision");
+}
+
 // Bucket snapshots bound copy-on-write work without retaining a history of revisions.
 const EMPTY_WRITE_SCOPE_BUCKETS = Array.from(
   { length: 128 },

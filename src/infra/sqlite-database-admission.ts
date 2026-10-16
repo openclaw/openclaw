@@ -24,6 +24,7 @@ import {
   readSqliteDatabaseGeneration,
   advanceSqliteDatabaseGeneration,
   publishSqliteDatabaseFact,
+  revokeSqliteDatabaseAdmissionFacts,
   isSqliteDatabaseAdmissionRetired as isRetired,
   type Admission,
   type SqliteDatabaseAdmissions,
@@ -120,7 +121,11 @@ const reader = createSqliteDatabaseAdmissionReader({
   pathAdmission,
   exchange,
   publishFact,
-  retain: retainReference,
+  retain: (record) => {
+    if (state.registry.changeReferences(record, 1)) {
+      exchange(record);
+    }
+  },
   release: releaseReference,
 });
 const { activePathAdmission, withPathAdmission } = reader;
@@ -431,12 +436,6 @@ function releaseReference(record: Admission): void {
   }
 }
 
-function retainReference(record: Admission): void {
-  if (state.registry.changeReferences(record, 1)) {
-    exchange(record);
-  }
-}
-
 function publishFact<T>(
   record: Admission,
   key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "lifetime" | "writer">,
@@ -694,12 +693,7 @@ function revoke(record: Admission | undefined, location = record?.location): voi
     state.seals.invalidate(location, record);
   }
   if (record) {
-    // A corruption report can follow native close; shared cells also revoke retained physical facts.
-    for (const fact of record.facts.values()) {
-      Atomics.store(new Int32Array(fact.current), 0, 0);
-    }
-    advanceSqliteDatabaseGeneration(record, "schemaRevision");
-    advanceSqliteDatabaseGeneration(record, "factRevision");
+    revokeSqliteDatabaseAdmissionFacts(record);
   }
 }
 
