@@ -6,7 +6,10 @@ import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
+import {
+  createCanonicalFixtureSkill,
+  createFixtureSkillEntry,
+} from "../../../skills/test-support/test-helpers.js";
 import { runSkillExperienceReview } from "../../../skills/workshop/experience-review.js";
 import { createExperienceReviewCandidate } from "../../../skills/workshop/experience-review.test-support.js";
 import {
@@ -144,21 +147,13 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
           skills: [{ name: "smaug" }],
           resolvedSkills: [
-            {
+            createCanonicalFixtureSkill({
               name: "smaug",
               description: "Host copy",
-              disableModelInvocation: false,
               filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
               baseDir: "/Users/alice/.openclaw/skills/smaug",
               source: "openclaw-workspace",
-              sourceInfo: {
-                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-                source: "openclaw-workspace",
-                scope: "project",
-                origin: "top-level",
-                baseDir: "/Users/alice/.openclaw/skills/smaug",
-              },
-            },
+            }),
           ],
         },
       },

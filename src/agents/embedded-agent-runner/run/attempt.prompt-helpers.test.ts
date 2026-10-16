@@ -143,6 +143,12 @@ describe("buildAfterTurnRuntimeContext", () => {
       ...overrides,
     };
   }
+  const runtime = (overrides: Partial<RuntimeAttempt>, activeAgentId?: string) =>
+    buildAfterTurnRuntimeContext({
+      attempt: runtimeAttempt(overrides),
+      ...runtimeDirectories,
+      activeAgentId,
+    });
 
   it("preserves session-id-scoped processes with borrowed policy", () => {
     resetProcessRegistryForTests();
@@ -163,14 +169,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       other.scopeKey = "agent:main";
       addSession(other);
 
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: runtimeAttempt({
+      const legacy = runtime(
+        {
           sessionId: "session-123",
           sandboxSessionKey: "agent:main",
-        }),
-        ...runtimeDirectories,
-        activeAgentId: "main",
-      });
+        },
+        "main",
+      );
 
       expect(legacy.activeProcessSessions).toHaveLength(1);
       expect(legacy.activeProcessSessions).toMatchObject([
@@ -183,19 +188,16 @@ describe("buildAfterTurnRuntimeContext", () => {
   });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:locked",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as OpenClawConfig,
-        modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-      }),
-      ...runtimeDirectories,
+    const runtimeContext = runtime({
+      sessionKey: "agent:main:session:locked",
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      } as OpenClawConfig,
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     });
 
     expect(runtimeContext.modelSelectionLocked).toBe(true);
@@ -206,24 +208,21 @@ describe("buildAfterTurnRuntimeContext", () => {
   });
 
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        trigger: "heartbeat",
-        inputProvenance: { kind: "external_user" },
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
-              },
-              compaction: { model: "summary" },
+    const legacy = runtime({
+      trigger: "heartbeat",
+      inputProvenance: { kind: "external_user" },
+      sessionKey: "agent:main:session:abc",
+      authProfileId: "openai:p1",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
             },
+            compaction: { model: "summary" },
           },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
+        },
+      } as OpenClawConfig,
     });
 
     expect(legacy.provider).toBe("openrouter");

@@ -1,6 +1,6 @@
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   onInternalDiagnosticEvent,
@@ -18,8 +18,9 @@ import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
@@ -39,20 +40,30 @@ const hoisted = getHoisted();
 const tempPaths: string[] = [];
 
 function catalogProbeTools() {
-  return [
-    {
-      name: "tool_search",
-      description: "tool-search control surface",
-      parameters: { type: "object", properties: {} },
-      execute: async () => "",
-    },
-    {
-      name: "cataloged_probe_tool",
-      description: "deferred behind the catalog",
-      parameters: { type: "object", properties: {} },
-      execute: async () => "",
-    },
-  ];
+  return (
+    [
+      ["tool_search", "tool-search control surface"],
+      ["cataloged_probe_tool", "deferred behind the catalog"],
+    ] as const
+  ).map(([name, description]) => ({
+    name,
+    description,
+    parameters: { type: "object", properties: {} },
+    execute: async () => "",
+  }));
+}
+
+function runAttempt(
+  options: Omit<
+    Parameters<typeof createContextEngineAttemptRunner>[0],
+    "contextEngine" | "tempPaths"
+  >,
+) {
+  return createContextEngineAttemptRunner({
+    contextEngine: createContextEngineBootstrapAndAssemble(),
+    tempPaths,
+    ...options,
+  });
 }
 
 function requireAttemptCatalogRef(): ToolSearchCatalogRef {
@@ -111,10 +122,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       expect(getInternalToolExecutionPreparer(source)).toBeDefined();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue([source]);
       const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
-      await createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
+      await runAttempt({
         sessionKey: "agent:main:main",
-        tempPaths,
         createSession: () => {
           const session = createDefaultEmbeddedSession();
           const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
@@ -146,16 +155,14 @@ describe("runEmbeddedAttempt tool boundaries", () => {
                       },
                     ]
                   : [{ type: "text", text: "Denied as expected." }];
-              const message: AssistantMessage = {
-                role: "assistant",
+              const message = makeAgentAssistantMessage({
                 content,
                 api: options.model.api,
                 provider: options.model.provider,
                 model: options.model.id,
-                usage: createZeroUsageFixture(),
                 stopReason: turn === 1 ? "toolUse" : "stop",
                 timestamp: Date.now(),
-              };
+              });
               const stream = createAssistantMessageEventStream();
               queueMicrotask(() => {
                 stream.push({ type: "done", reason: turn === 1 ? "toolUse" : "stop", message });
@@ -257,10 +264,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         include: ["run.completed"],
       });
 
-      const attempt = createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
+      const attempt = runAttempt({
         sessionKey: "agent:main:telegram:direct:123",
-        tempPaths,
         attemptOverrides: {
           runId,
           abortSignal: abortController.signal,
@@ -311,14 +316,12 @@ describe("runEmbeddedAttempt tool boundaries", () => {
   ])(
     "keeps Ultra logical at $provider effort boundaries",
     async ({ provider, expected, compat }) => {
-      await createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
+      await runAttempt({
         sessionKey: "agent:main:main",
-        tempPaths,
         attemptOverrides: {
           disableTools: false,
           thinkLevel: "ultra",
-          model: {
+          model: makeProviderModelFixture({
             id: "synthetic-model",
             provider,
             name: "Synthetic model",
@@ -326,11 +329,9 @@ describe("runEmbeddedAttempt tool boundaries", () => {
             baseUrl: "https://example.invalid/v1",
             reasoning: true,
             compat,
-            input: ["text"],
             contextWindow: 8192,
             maxTokens: 2048,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
+          }),
         },
       });
 
@@ -385,22 +386,19 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         clock += 37;
       });
       getHoisted().createOpenClawCodingToolsMock.mockReturnValue([createStubTool("read")]);
-      const attempt = createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
+      const attempt = runAttempt({
         sessionKey: "agent:main:bundle-timing",
-        tempPaths,
         attemptOverrides: {
           disableTools: false,
           config: { tools: { codeMode: true } },
         },
       });
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           acquired.promise,
-          attempt.then(() => {
-            throw new Error("Attempt completed before bundle acquisition");
-          }),
-        ]);
+          attempt,
+          "Attempt completed before bundle acquisition",
+        );
         clock += 6_000;
         release.resolve();
         const result = await attempt;
@@ -465,10 +463,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
             completed.push({ event, privateData });
           }
         });
-        const attempt = createContextEngineAttemptRunner({
-          contextEngine: createContextEngineBootstrapAndAssemble(),
+        const attempt = runAttempt({
           sessionKey: `agent:main:lsp-acquisition-${kind}`,
-          tempPaths,
           attemptOverrides: { runId, abortSignal: controller.signal, disableTools: false },
         });
         const outcome = attempt.then(
@@ -476,12 +472,11 @@ describe("runEmbeddedAttempt tool boundaries", () => {
           (error: unknown) => error,
         );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             acquired.promise,
-            outcome.then(() => {
-              throw new Error("Attempt completed before LSP acquisition");
-            }),
-          ]);
+            outcome,
+            "Attempt completed before LSP acquisition",
+          );
           controller.abort(reason);
           await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce(), { timeout: 1_000 });
           expect(cleanup).toHaveBeenCalledExactlyOnceWith(kind);

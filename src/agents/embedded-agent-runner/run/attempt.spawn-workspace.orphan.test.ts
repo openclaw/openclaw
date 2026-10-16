@@ -6,7 +6,6 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import {
   completedStream,
   useContextEngineAttemptHarness,
-  type ContextEngineAttemptOptions as AttemptOptions,
 } from "./attempt-context-engine.test-support.js";
 import {
   createDefaultEmbeddedSession,
@@ -32,7 +31,7 @@ function orphanLeaf(olderPrompt: string) {
   };
 }
 
-function installOrphanMetadata(olderPrompt: string, entries: Array<{ id: string }>) {
+function installOrphanMetadata<T extends { id: string }>(olderPrompt: string, entries: T[]) {
   const history = [
     orphanLeaf(olderPrompt),
     {
@@ -49,24 +48,26 @@ function installOrphanMetadata(olderPrompt: string, entries: Array<{ id: string 
   );
 }
 
-function captureOrphanPrompt(olderPrompt: string) {
-  const seen: { modelInputPrompt?: string } = {};
-  const sessionPrompt: NonNullable<AttemptOptions["sessionPrompt"]> = async (session, prompt) => {
-    seen.modelInputPrompt = prompt;
-    const prefix = `${orphanMarker}\n${olderPrompt}\n\n`;
-    const activePrompt = prompt.startsWith(prefix)
-      ? prompt.slice(prefix.length)
-      : "missing-active-prompt";
-    session.messages = [
-      ...session.messages,
-      { role: "assistant", content: `stub-provider-target=${activePrompt}`, timestamp: 2 },
-    ];
-  };
-  return { seen, sessionPrompt };
-}
-
-function expectOrphanReply(messages: readonly AgentMessage[], latestPrompt: string) {
-  const assistant = messages.find((message) => message.role === "assistant");
+async function expectOrphanRepair(olderPrompt: string, latestPrompt: string) {
+  let modelInputPrompt: string | undefined;
+  const result = await runAttempt({
+    attemptOverrides: { prompt: latestPrompt },
+    sessionPrompt: async (session, prompt) => {
+      modelInputPrompt = prompt;
+      const prefix = `${orphanMarker}\n${olderPrompt}\n\n`;
+      const activePrompt = prompt.startsWith(prefix)
+        ? prompt.slice(prefix.length)
+        : "missing-active-prompt";
+      session.messages = [
+        ...session.messages,
+        { role: "assistant", content: `stub-provider-target=${activePrompt}`, timestamp: 2 },
+      ];
+    },
+  });
+  const repairedPrompt = `${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`;
+  expect(result.finalPromptText).toBe(repairedPrompt);
+  expect(modelInputPrompt).toBe(repairedPrompt);
+  const assistant = result.messagesSnapshot.find((message) => message.role === "assistant");
   expect(assistant?.content).toBe(`stub-provider-target=${latestPrompt}`);
   expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
 }
@@ -128,30 +129,30 @@ describe("runEmbeddedAttempt orphan user recovery", () => {
   it("repairs an orphaned user message behind non-message session metadata before the provider", async () => {
     const olderPrompt = "OLD_TURN_76888: answer the orphaned queued turn";
     const latestPrompt = "LATEST_TURN_76888: answer only the active channel prompt";
-    const repairedPrompt = `${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`;
     const modelSnapshotData = { provider: "deepseek", modelId: "deepseek-chat" };
-    const modelEntry = {
-      id: "model-leaf",
-      parentId: "thinking-leaf",
-      type: "model_change",
-      provider: "deepseek",
-      modelId: "deepseek-chat",
-    };
-    const modelSnapshotEntry = {
-      id: "model-snapshot-leaf",
-      parentId: "model-leaf",
-      type: "custom",
-      customType: "model-snapshot",
-      data: modelSnapshotData,
-    };
-    const labelEntry = {
-      id: "label-leaf",
-      parentId: "model-snapshot-leaf",
-      type: "label",
-      targetId: "model-snapshot-leaf",
-      label: "model snapshot",
-    };
-    installOrphanMetadata(olderPrompt, [modelEntry, modelSnapshotEntry, labelEntry]);
+    installOrphanMetadata(olderPrompt, [
+      {
+        id: "model-leaf",
+        parentId: "thinking-leaf",
+        type: "model_change",
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+      },
+      {
+        id: "model-snapshot-leaf",
+        parentId: "model-leaf",
+        type: "custom",
+        customType: "model-snapshot",
+        data: modelSnapshotData,
+      },
+      {
+        id: "label-leaf",
+        parentId: "model-snapshot-leaf",
+        type: "label",
+        targetId: "model-snapshot-leaf",
+        label: "model snapshot",
+      },
+    ]);
     const replayedEntries: string[] = [];
     hoisted.sessionManager.appendThinkingLevelChange.mockImplementation(async (level) => {
       replayedEntries.push(`thinking:${String(level)}`);
@@ -171,18 +172,7 @@ describe("runEmbeddedAttempt orphan user recovery", () => {
       replayedEntries.push(`label:${String(args[0])}/${String(args[1])}`);
       return "replayed-label";
     });
-    const { seen, sessionPrompt } = captureOrphanPrompt(olderPrompt);
-
-    const result = await runAttempt({
-      attemptOverrides: {
-        prompt: latestPrompt,
-      },
-      sessionPrompt,
-    });
-
-    expect(result.finalPromptText).toBe(repairedPrompt);
-    expect(seen.modelInputPrompt).toBe(repairedPrompt);
-    expectOrphanReply(result.messagesSnapshot, latestPrompt);
+    await expectOrphanRepair(olderPrompt, latestPrompt);
     expect(replayedEntries).toEqual([
       "thinking:high",
       "model:deepseek/deepseek-chat",
@@ -194,30 +184,20 @@ describe("runEmbeddedAttempt orphan user recovery", () => {
   it("does not abort orphan repair for a dangling trailing label", async () => {
     const olderPrompt = "OLD_TURN_76888: dangling label repair";
     const latestPrompt = "LATEST_TURN_76888: answer after dangling label";
-    const labelEntry = {
-      id: "label-leaf",
-      parentId: "thinking-leaf",
-      type: "label",
-      targetId: "missing-entry",
-      label: "stale label",
-    };
-    installOrphanMetadata(olderPrompt, [labelEntry]);
+    installOrphanMetadata(olderPrompt, [
+      {
+        id: "label-leaf",
+        parentId: "thinking-leaf",
+        type: "label",
+        targetId: "missing-entry",
+        label: "stale label",
+      },
+    ]);
     hoisted.sessionManager.appendThinkingLevelChange.mockResolvedValue("replayed-thinking");
     hoisted.sessionManager.appendLabelChangeAsync.mockImplementation((targetId: unknown) => {
       throw new Error(`Entry ${String(targetId)} not found`);
     });
-    const { seen, sessionPrompt } = captureOrphanPrompt(olderPrompt);
-
-    const result = await runAttempt({
-      attemptOverrides: {
-        prompt: latestPrompt,
-      },
-      sessionPrompt,
-    });
-
-    expect(result.finalPromptText).toBe(`${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`);
-    expect(seen.modelInputPrompt).toBe(result.finalPromptText);
-    expectOrphanReply(result.messagesSnapshot, latestPrompt);
+    await expectOrphanRepair(olderPrompt, latestPrompt);
     expect(hoisted.sessionManager.appendLabelChangeAsync).not.toHaveBeenCalled();
   });
 

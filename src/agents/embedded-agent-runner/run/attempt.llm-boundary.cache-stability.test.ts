@@ -8,6 +8,7 @@ import {
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,7 +16,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { Model, UserMessage } from "../../../llm/types.js";
+import type { UserMessage } from "../../../llm/types.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -46,6 +47,7 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "../../tool-search-catalog.js";
 import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
@@ -79,18 +81,42 @@ const answer = makeAgentAssistantMessage({
   content: [{ type: "text", text: "I understand." }],
   timestamp: TS + 1,
 });
-const model = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: "gpt-5.5",
   name: "GPT-5.5",
   api: "openai-completions",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
-  maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+});
+
+type TransportApi = "anthropic-messages" | "openai-responses";
+type RequestContext = Parameters<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>[1];
+async function captureTransport(api: TransportApi, context: RequestContext) {
+  if (api === "anthropic-messages") {
+    return (
+      await captureAnthropicRequest("transport", {
+        model: { id: "claude-opus-5" },
+        cacheRetention: "none",
+        context,
+      })
+    ).payload;
+  }
+  let payload: Record<string, unknown> | undefined;
+  const stream = await createOpenAIResponsesTransportStreamFn()(
+    { ...model, api, reasoning: true },
+    context,
+    {
+      apiKey: "fixture-transport-value",
+      onPayload(value) {
+        payload = value as Record<string, unknown>;
+        throw new Error("stop after payload capture");
+      },
+    },
+  );
+  expect((await stream.result()).stopReason).toBe("error");
+  return expectDefined(payload, "captured native Responses payload");
+}
 const carrier = (content: string, timestamp = TS): AgentMessage => ({
   role: "custom",
   customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -213,27 +239,7 @@ describe("prompt-cache boundary regressions", () => {
                 }),
               ),
             };
-            if (api === "anthropic-messages") {
-              const request = await captureAnthropicRequest("transport", {
-                model: { id: "claude-opus-5" },
-                cacheRetention: "none",
-                context,
-              });
-              requests.push(request.payload);
-            } else {
-              const result = await createOpenAIResponsesTransportStreamFn()(
-                { ...model, api, reasoning: true },
-                context,
-                {
-                  apiKey: "fixture-transport-value",
-                  onPayload(payload) {
-                    requests.push(payload as Record<string, unknown>);
-                    throw new Error("stop after payload capture");
-                  },
-                },
-              );
-              expect((await result.result()).stopReason).toBe("error");
-            }
+            requests.push(await captureTransport(api, context));
             clearToolSearchCatalog({ catalogRef });
             projection.commit();
             await persistSessionSystemPrompt(lease.state, (customType, data) =>
@@ -359,35 +365,11 @@ describe("prompt-cache boundary regressions", () => {
           inHistorySystemUpdates: true,
           appendOnlyRuntimeContext: true,
         };
-        const captureRequest = async (history: AgentMessage[]) => {
-          const context = {
+        const captureRequest = (history: AgentMessage[]) =>
+          captureTransport(api, {
             systemPrompt: "Stable system prompt",
             messages: convertToLlm(normalizeMessagesForLlmBoundary(history, boundaryOptions)),
-          };
-          if (api === "openai-responses") {
-            let payload: Record<string, unknown> | undefined;
-            const stream = await createOpenAIResponsesTransportStreamFn()(
-              { ...model, api, reasoning: true },
-              context,
-              {
-                apiKey: "fixture-transport-value",
-                onPayload(value) {
-                  payload = value as Record<string, unknown>;
-                  throw new Error("stop after payload capture");
-                },
-              },
-            );
-            expect((await stream.result()).stopReason).toBe("error");
-            return expectDefined(payload, "captured native Responses payload");
-          }
-          return (
-            await captureAnthropicRequest("transport", {
-              model: { id: "claude-opus-5" },
-              cacheRetention: "none",
-              context,
-            })
-          ).payload;
-        };
+          });
         const firstBoundary = convertToLlm(
           normalizeMessagesForLlmBoundary(messages, boundaryOptions),
         );
@@ -497,24 +479,18 @@ describe("prompt-cache boundary regressions", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     const input = { text: "describe this", timestamp: TS, idempotencyKey: "cache-99495:user" };
-    let resolveMedia!: (input: UserTurnInput) => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const media = new Promise<UserTurnInput>((resolve) => {
-      resolveMedia = resolve;
-    });
+    const started = createDeferred();
+    const media = createDeferred<UserTurnInput>();
     const recorder = createUserTurnTranscriptRecorder({
       input,
       target,
       resolveInput: async () => {
-        markStarted();
-        return await media;
+        started.resolve();
+        return await media.promise;
       },
     });
     const persistence = recorder.persistFallback();
-    await started;
+    await started.promise;
     await persistUserTurnTranscript({ ...target, input });
     recorder.markRuntimePersisted(recorder.message);
     const runtimeMessage = mergePreparedUserTurnMessageForRuntime({
@@ -524,7 +500,7 @@ describe("prompt-cache boundary regressions", () => {
     const sent = normalizeMessagesForLlmBoundary([runtimeMessage], options);
     recorder.markSentToProvider?.();
     const mediaPath = path.join(dir, "image.png");
-    resolveMedia({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
+    media.resolve({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
     await persistence;
     const persisted = (await loadTranscriptEvents(target))
       .map((entry) => entry as { message?: AgentMessage })

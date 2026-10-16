@@ -29,6 +29,10 @@ const stamped = (text: string, time = timestamp) =>
   `${buildTimestampPrefix(new Date(time), options)}${text}`;
 const timestampedTextAssistant = (text: string, time: number) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: time });
+const operatorUser = (message: { content: string; timestamp: number }, turnScoped: boolean) => ({
+  ...user(message.content, message.timestamp),
+  operatorMessage: { turnScoped },
+});
 const conversation =
   'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\n';
 
@@ -51,60 +55,47 @@ describe("normalizeMessagesForLlmBoundary", () => {
     });
     expect(projected).toEqual([
       user("Earlier question"),
-      {
-        role: "user",
-        content: "Preserve this update",
-        timestamp: update.timestamp,
-        operatorMessage: { turnScoped: false },
-      },
-      {
-        role: "user",
-        content: "Current facts",
-        timestamp: runtime.timestamp,
-        operatorMessage: { turnScoped: true },
-      },
+      operatorUser({ content: "Preserve this update", timestamp: update.timestamp }, false),
+      operatorUser({ content: "Current facts", timestamp: runtime.timestamp }, true),
     ]);
   });
 
-  it.each(["aborted"] as const)(
-    "keeps prior-turn runtime context before the next user after a %s assistant",
-    (stopReason) => {
-      const firstUser = user("First question");
-      const firstRuntime = buildRuntimeContextCustomMessage("First turn facts", undefined, true)!;
-      const boundaryOptions = { sessionVersion: 4, inHistorySystemUpdates: true };
-      const first = normalizeMessagesForLlmBoundary([firstUser, firstRuntime], boundaryOptions);
-      const interrupted = [
-        makeAgentAssistantMessage({
-          content: [],
-          stopReason,
-          errorMessage: "Interrupted request",
-        }),
-      ];
-      const second = normalizeMessagesForLlmBoundary(
-        [
-          firstUser,
-          firstRuntime,
-          ...interrupted,
-          user("Second question", timestamp + 1),
-          buildRuntimeContextCustomMessage("Second turn facts", undefined, true)!,
-        ],
-        boundaryOptions,
-      );
-      expect(second.slice(0, first.length)).toEqual(first);
-      const oldContextIndex = second.findIndex(
-        (message) => "content" in message && message.content === "First turn facts",
-      );
-      const nextUserIndex = second.findIndex(
-        (message) => "content" in message && message.content === "Second question",
-      );
-      expect(oldContextIndex).toBe(1);
-      expect(nextUserIndex).toBeGreaterThan(oldContextIndex);
-      expect(second.at(-1)).toMatchObject({
-        content: "Second turn facts",
-        operatorMessage: { turnScoped: true },
-      });
-    },
-  );
+  it("keeps prior-turn runtime context before the next user after an aborted assistant", () => {
+    const firstUser = user("First question");
+    const firstRuntime = buildRuntimeContextCustomMessage("First turn facts", undefined, true)!;
+    const boundaryOptions = { sessionVersion: 4, inHistorySystemUpdates: true };
+    const first = normalizeMessagesForLlmBoundary([firstUser, firstRuntime], boundaryOptions);
+    const interrupted = [
+      makeAgentAssistantMessage({
+        content: [],
+        stopReason: "aborted",
+        errorMessage: "Interrupted request",
+      }),
+    ];
+    const second = normalizeMessagesForLlmBoundary(
+      [
+        firstUser,
+        firstRuntime,
+        ...interrupted,
+        user("Second question", timestamp + 1),
+        buildRuntimeContextCustomMessage("Second turn facts", undefined, true)!,
+      ],
+      boundaryOptions,
+    );
+    expect(second.slice(0, first.length)).toEqual(first);
+    const oldContextIndex = second.findIndex(
+      (message) => "content" in message && message.content === "First turn facts",
+    );
+    const nextUserIndex = second.findIndex(
+      (message) => "content" in message && message.content === "Second question",
+    );
+    expect(oldContextIndex).toBe(1);
+    expect(nextUserIndex).toBeGreaterThan(oldContextIndex);
+    expect(second.at(-1)).toMatchObject({
+      content: "Second turn facts",
+      operatorMessage: { turnScoped: true },
+    });
+  });
 
   it("keeps projected operator bytes and user identity unchanged on a second normalization", () => {
     const content = "## Markers\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> is literal system text.";
@@ -125,12 +116,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       ],
     };
     const first = normalizeMessagesForLlmBoundary([user("Question"), update], boundaryOptions);
-    expect(first[1]).toEqual({
-      role: "user",
-      content,
-      timestamp: 2,
-      operatorMessage: { turnScoped: false },
-    });
+    expect(first[1]).toEqual(operatorUser({ content, timestamp: 2 }, false));
     expect(normalizeMessagesForLlmBoundary(first, boundaryOptions)).toEqual(first);
     expect(findActiveUserMessageIndex(first)).toBe(0);
   });
