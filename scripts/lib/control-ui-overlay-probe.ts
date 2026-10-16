@@ -41,15 +41,16 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
         }
         let readyAt: number | undefined;
         const started = performance.now();
-        const check = () => {
+        const observer = new MutationObserver(() => {
           if (document.querySelector(contentSelector)) {
             readyAt ??= performance.now();
           }
-        };
-        const observer = new MutationObserver(check);
+        });
         observer.observe(document, { subtree: true, childList: true });
         trigger.click();
-        check();
+        if (document.querySelector(contentSelector)) {
+          readyAt ??= performance.now();
+        }
         await new Promise(requestAnimationFrame);
         const frameMs = performance.now() - started;
         observer.disconnect();
