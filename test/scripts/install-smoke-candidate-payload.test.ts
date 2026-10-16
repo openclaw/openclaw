@@ -77,7 +77,7 @@ async function sealFixture() {
   const fixture = createFixture();
   const manifest = await seal(fixture);
   const manifestPath = path.join(fixture.payloadDir, "install-smoke-candidate-payload.json");
-  return { ...fixture, manifest, manifestPath, manifestSha256: sha256(manifestPath) };
+  return { ...fixture, manifest, manifestSha256: sha256(manifestPath) };
 }
 
 function seal(fixture: ReturnType<typeof createFixture>) {

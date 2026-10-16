@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { withinTest } from "../helpers/promise.js";
 
@@ -10,7 +10,6 @@ type ScriptResult = {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
-  timedOut: boolean;
 };
 
 type GatewayFrame = {
@@ -63,13 +62,8 @@ async function listenGateway(params: {
   server = createServer();
   wss = new WebSocketServer({ server });
   wss.on("connection", (ws: WebSocket) => {
-    ws.on("message", (data: RawData) => {
-      const text = Array.isArray(data)
-        ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
-        : Buffer.isBuffer(data)
-          ? data.toString("utf8")
-          : Buffer.from(data).toString("utf8");
-      const frame = JSON.parse(text) as GatewayFrame;
+    ws.on("message", (data) => {
+      const frame = JSON.parse(data.toString()) as GatewayFrame;
       if (frame.type !== "req") {
         return;
       }
@@ -120,7 +114,7 @@ async function runGateway(mode: PayloadMode, signal: AbortSignal, status: number
   const invokeParams: InvokeParams[] = [];
   const url = await listenGateway({ mode, invokeParams });
   const result = await runScriptRaw(gatewayArgs(url), signal);
-  expect(result).toMatchObject({ signal: null, status, timedOut: false });
+  expect(result).toMatchObject({ signal: null, status });
   const report: Report = JSON.parse(result.stdout);
   return { report, invokeParams };
 }
@@ -149,7 +143,6 @@ async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promi
         signal: childSignal,
         stdout: stdout.text(),
         stderr: stderr.text(),
-        timedOut: false,
       });
     });
   });
@@ -180,7 +173,6 @@ describe("ios-node-e2e", () => {
     expect({ ...result, stderr: result.stderr.trim() }).toEqual({
       signal: null,
       status: 1,
-      timedOut: false,
       stdout: "",
       stderr: error,
     });
