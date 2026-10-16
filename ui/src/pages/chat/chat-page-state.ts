@@ -220,14 +220,25 @@ export function createChatPageState(
     }
     // A queued commit may observe newer route data than its rendered frame.
     if (data && routeHandoffRendered && renderedSnapshot?.options.pane.data === data) {
-      queueMicrotask(() => {
-        if (!disposed && props.presented && paneData() === data && consumedDraftData !== data) {
-          draftFocus.beforeDraftCleanup(data);
-          consumedDraftData = data;
-          updateRoute(data.sessionKey, true, data.face ?? "chat");
-          invalidate();
-        }
-      });
+      const pane = retainedSessions.findPane(renderedSnapshot.layout.activePaneId, data.sessionKey);
+      const draftRouteHref = routeHref;
+      if (pane) {
+        // The page frame can commit before the pane has applied its route draft.
+        void Promise.resolve(pane.updateComplete).then(() => {
+          if (
+            !disposed &&
+            conversationPresented() &&
+            window.location.href === draftRouteHref &&
+            paneData() === data &&
+            consumedDraftData !== data
+          ) {
+            draftFocus.beforeDraftCleanup(data);
+            consumedDraftData = data;
+            updateRoute(data.sessionKey, true, data.face ?? "chat");
+            invalidate();
+          }
+        });
+      }
     }
     const singlePane = singleBoundPane();
     const singleColumn = splitLayout?.columns[0];
