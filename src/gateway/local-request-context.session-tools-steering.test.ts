@@ -50,8 +50,8 @@ describe("sessions_send steering custody", () => {
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
-      await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
-        expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+      await withParticipantSessionToolsFixture(async ({ cfg, turn, alice }) => {
+        expect(await turn.steer(alice)).toMatchObject({ status: "accepted" });
         await withDelayedSessionToolsSteering(
           cfg,
           async (receiver) => {
@@ -61,9 +61,9 @@ describe("sessions_send steering custody", () => {
               ...(reportSettlement ? { idempotencyKey: "participant-delayed-steer" } : {}),
             }).execute("participant-steer", {
               sessionKey: PARTICIPANT_SHARED,
-              user: bob.profileId,
+              user: alice.profileId,
               message: reportSettlement
-                ? "Bob's accepted steering survives the sending turn"
+                ? "Alice's accepted steering survives the sending turn"
                 : "Accepted guidance whose backend omits settlement",
               mode: "steer",
               timeoutSeconds: 0,
@@ -76,7 +76,7 @@ describe("sessions_send steering custody", () => {
             turn.complete();
             if (!reportSettlement) {
               await setImmediate();
-              const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
+              const releases = turn.releaseCounts.get(alice.profileId) ?? 0;
               if (outcome === "abort") {
                 expect(receiver.abort()).toBe(true);
               } else {
@@ -87,11 +87,11 @@ describe("sessions_send steering custody", () => {
               }
               // Join the already-resolved custody continuation, without a timed wait or polling.
               await setImmediate();
-              expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
+              expect(turn.releaseCounts.get(alice.profileId)).toBeGreaterThan(releases);
               return;
             }
             if (outcome === "source revoked") {
-              turn.revoke(bob.profileId);
+              turn.revoke(alice.profileId);
               await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
@@ -114,7 +114,7 @@ describe("sessions_send steering custody", () => {
               expect(messages[0]).toMatchObject({
                 role: "user",
                 content: expect.stringContaining(
-                  "Bob's accepted steering survives the sending turn",
+                  "Alice's accepted steering survives the sending turn",
                 ),
                 provenance: { kind: "inter_session", sourceTool: "sessions_send" },
               });

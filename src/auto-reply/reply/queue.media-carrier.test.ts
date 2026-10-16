@@ -70,6 +70,12 @@ describe("followup prompt metadata carrier", () => {
       prompt: "  preserve this caption\n",
       messageId: "media-fallback",
     });
+    Object.assign(run.run, {
+      agentId: "main",
+      sessionKey: key,
+      messageProvider: "telegram",
+      senderId: "media-requester",
+    });
     run.images = [{ type: "image", data: "inline-png", mimeType: "image/png" }];
     run.imageOrder = ["offloaded", "inline"];
     run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
@@ -127,8 +133,8 @@ describe("followup prompt metadata carrier", () => {
       expect(reject).toHaveBeenCalledOnce();
       expect(persist).not.toHaveBeenCalled();
       operation.complete();
-      await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledOnce());
       const fallback = await delivered.promise;
+      expect(runFollowup).toHaveBeenCalledOnce();
       expect({
         text: fallback.prompt,
         images: fallback.images,

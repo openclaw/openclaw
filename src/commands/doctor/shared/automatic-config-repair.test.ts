@@ -272,6 +272,7 @@ describe("automatic config repair", () => {
             await commitAutomaticConfigRepair(plan, snapshot);
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.browser).toEqual({ executablePath: "${BROWSER_BIN}" });
+            expect(saved.messages.queue.allowCollaborativeSteering).toBe(true);
             const reloaded = await readConfigFileSnapshot();
             expect(reloaded.valid).toBe(true);
             expect(reloaded.sourceConfig.browser?.executablePath).toBe(
@@ -285,15 +286,19 @@ describe("automatic config repair", () => {
     });
   });
 
-  it.each(["${STARTUP_MEMORY_KEY}", "$${STARTUP_MEMORY_KEY}"])(
-    "preserves a moved %s reference through Doctor repair",
-    async (apiKey) => {
+  it.each([
+    { apiKey: "${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: false },
+    { apiKey: "$${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: true },
+  ])(
+    "preserves a moved $apiKey reference and explicit steering $allowCollaborativeSteering through Doctor repair",
+    async ({ apiKey, allowCollaborativeSteering }) => {
       await withDoctorConfigPreflightHome(async (home) => {
         await withEnvAsync(
           { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", STARTUP_MEMORY_KEY: "fixture-memory-key" },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
               agents: { defaults: { memorySearch: { remote: { apiKey } } } },
+              messages: { queue: { allowCollaborativeSteering } },
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
@@ -308,6 +313,9 @@ describe("automatic config repair", () => {
             await commitAutomaticConfigRepair(plan, snapshot);
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.memory.search.remote.apiKey).toBe(apiKey);
+            expect(saved.messages.queue.allowCollaborativeSteering).toBe(
+              allowCollaborativeSteering,
+            );
             const reloaded = await readConfigFileSnapshot();
             expect(reloaded.valid).toBe(true);
             expect(reloaded.sourceConfig.memory?.search?.remote?.apiKey).toBe(
@@ -357,6 +365,7 @@ describe("automatic config repair", () => {
         });
         expect(resolved?.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(resolved?.sourceConfig.agents?.entries?.work).toEqual({ name: "Operator" });
+        expect(resolved?.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBeUndefined();
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });

@@ -2,7 +2,7 @@
 summary: "Steer an active run without changing queue mode"
 read_when:
   - Using /steer or /tell while an agent is already running
-  - Comparing /steer with /queue modes
+  - Comparing /steer, /followup, and /queue modes
   - Deciding whether to steer the current run or an ACP session
 title: "Steer"
 sidebarTitle: "Steer"
@@ -34,6 +34,31 @@ Behavior:
 - Uses the active runtime's steering path, so the model sees the guidance at
   the next supported runtime boundary.
 
+With `messages.queue.allowCollaborativeSteering: false`, steering another person’s
+active turn is refused and the message is not queued. The runtime offers
+`/followup <message>` to request a separate turn. This applies to `/steer` and
+`/tell` as well as ordinary steering input. See [Steering scope](/concepts/queue-steering#scope).
+
+## One message as a new turn
+
+Use `/followup <message>` when this message should start a separate turn instead
+of changing work in progress:
+
+```text
+/followup review the completed patch and summarize the remaining risks
+```
+
+When the session is busy, the message waits behind current and already-queued
+work. When it is idle with no queued work, normal admission starts it immediately.
+It does not answer a pending question, join a collect batch, or change the saved
+`/queue` mode. The new turn keeps its submitter and uses the policy applicable
+when it is admitted.
+
+OpenClaw reports whether the message was queued, started, or rejected. A queued
+notice means the message entered the queue, not that it changed the active run.
+Queue capacity and cancellation still apply. This command also works in
+`openclaw chat` and `openclaw tui --local`.
+
 ## Steer vs queue
 
 `/queue steer` makes normal inbound messages try to steer the active run when
@@ -51,6 +76,7 @@ policy without forwarding a Gateway command.
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.
+- `/followup <message>` when only this message should wait for its own turn.
 - `/queue steer` when you want future normal messages to steer active runs by
   default.
 - `/queue collect` or `/queue followup` when future normal messages should wait

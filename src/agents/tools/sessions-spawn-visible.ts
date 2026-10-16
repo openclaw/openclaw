@@ -17,10 +17,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
@@ -42,6 +39,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/sub
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -189,9 +187,8 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
 
-  const resolveGatewayContext =
-    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const { gatewayContextResolver: resolveGatewayContext, requester } =
+    captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -551,8 +548,7 @@ export async function maybeSpawnVisibleSession(params: {
                     assertDispatchCurrent,
                     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
                   },
-                  undefined,
-                  resolveGatewayContext,
+                  { gatewayContextResolver: resolveGatewayContext, requester },
                 ),
               )
             ).response;

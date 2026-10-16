@@ -22,7 +22,7 @@ import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
 import { prepareConfiguredCommandOwnerAuthority } from "../state/user-channel-identity-operations.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,

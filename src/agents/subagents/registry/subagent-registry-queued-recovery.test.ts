@@ -3,7 +3,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
+import type { GatewayInstanceAgentDispatchOptions } from "../../../gateway/server-instance-runtime.types.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -14,6 +16,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -215,6 +218,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
             groupId: "retained-group",
             queued: true,
             queuedLaunch: {
+              requesterRecovery: {},
               request: { sessionKey: childSessionKey },
               timeoutMs: 100,
               schedulerGroupKey: "retained-group",
@@ -320,6 +324,141 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   },
 );
 
+it.each([
+  "accepted",
+  "captured system",
+  "requester unavailable",
+  "operator unavailable",
+  "legacy unclassified",
+  "malformed capture",
+  "malformed operator",
+] as const)("restores queued requester custody with an explicit %s outcome", async (outcome) => {
+  const { refusal, manager } = createRegistrationFixture();
+  refusal.descriptor = false;
+  const runId = "queued-requester-custody";
+  const childSessionKey = "agent:main:subagent:queued-requester-custody";
+  const requesterFacts = {
+    sessionKey: "agent:main:slack:channel:human",
+    messageProvider: "slack",
+    senderId: "bob",
+  };
+  await manager.registerSubagentRun({
+    runId,
+    childSessionKey,
+    childAgentId: "main",
+    sessionEntry: fixture,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "Recover the original human requester",
+    cleanup: "keep",
+    collect: true,
+    groupId: runId,
+    queued: true,
+    queuedLaunch: {
+      request: { sessionKey: childSessionKey, idempotencyKey: runId, message: "Queued work" },
+      ...(outcome === "legacy unclassified"
+        ? {}
+        : {
+            requesterRecovery:
+              outcome === "captured system"
+                ? {}
+                : {
+                    facts: outcome === "requester unavailable" ? null : requesterFacts,
+                    ...(outcome === "operator unavailable"
+                      ? { operator: { kind: "unavailable" as const } }
+                      : {}),
+                  },
+          }),
+      timeoutMs: 100,
+      schedulerGroupKey: runId,
+      maxConcurrent: 1,
+    },
+  });
+  if (outcome === "malformed capture" || outcome === "malformed operator") {
+    await mutateSubagentRuns([runId], (rows) => {
+      const draft = structuredClone(expectDefined(rows.get(runId), "persisted queued run"));
+      const launch = expectDefined(draft.queuedLaunch, "persisted queued descriptor");
+      // Model corrupted retained bytes without widening the typed producer contract.
+      Object.defineProperty(launch, "requesterRecovery", {
+        value: outcome === "malformed capture" ? [] : { facts: requesterFacts, operator: null },
+        enumerable: true,
+      });
+      return { value: undefined, postimages: new Map([[runId, draft]]) };
+    });
+  }
+  subagentRuns.clear();
+  const gateway = sessionSharingTestContext(vi.fn());
+  const resolver = () => gateway;
+  let acceptedOptions: GatewayInstanceAgentDispatchOptions | undefined;
+  const settled = createDeferred<string>();
+  vi.mocked(callGateway).mockReset().mockResolvedValue({});
+  const recovery = createMockGatewayRecoveryRuntime();
+  vi.mocked(recovery.dispatchAgent).mockImplementation(async (_request, _timeout, options) => {
+    acceptedOptions = options;
+    options?.assertAdmissionCurrent?.();
+    settled.resolve("accepted");
+    return { runId, status: "accepted" };
+  });
+  gateway.recoveryRuntime = recovery;
+  const settleRootWork = observeRootWork();
+  const started = vi.fn(manager.startQueuedSubagentRun);
+  const restorer = createRestorer({
+    getGatewayContextResolver: () => resolver,
+    startQueuedSubagentRun: started,
+    settleFailedQueuedSubagentLaunch: async (id, error) => {
+      const recorded = await manager.settleFailedQueuedSubagentLaunch(id, error);
+      settled.resolve(error);
+      return recorded;
+    },
+  });
+  try {
+    await restorer.restoreOnce();
+    await restorer.activate();
+    const result = await settled.promise;
+    if (outcome === "accepted" || outcome === "captured system") {
+      expect(result).toBe("accepted");
+      await settleRootWork(true);
+      expect(started).toHaveBeenCalledOnce();
+      if (outcome === "captured system") {
+        expect(acceptedOptions?.agentToolCaller).toBeUndefined();
+      } else {
+        const caller = expectDefined(
+          acceptedOptions?.agentToolCaller,
+          "accepted requester custody",
+        );
+        expect(caller.requesterOrigin).toEqual(requesterFacts);
+        expect(caller.assertCurrent).not.toThrow();
+      }
+      expect(acceptedOptions?.assertAdmissionCurrent).not.toThrow();
+    } else {
+      const error =
+        outcome === "legacy unclassified" || outcome === "malformed capture"
+          ? "Queued requester recovery source is unavailable; submit a new request."
+          : outcome === "requester unavailable"
+            ? "Queued requester identity could not be retained; submit a new request."
+            : outcome === "malformed operator"
+              ? "Queued operator recovery source is invalid; submit a new request."
+              : "Queued operator authority cannot be recovered; submit a new request.";
+      expect(result).toBe(error);
+      await expect(settleRootWork(true)).rejects.toMatchObject({
+        errors: expect.arrayContaining([expect.objectContaining({ message: error })]),
+      });
+      expect(recovery.dispatchAgent).not.toHaveBeenCalled();
+      expect(started).not.toHaveBeenCalled();
+      expect((await readStored()).get(runId)).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error", error } },
+        collectorCompletion: { status: "failed" },
+      });
+    }
+    expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
+  } finally {
+    restorer.reset();
+    releaseSwarmRun(runId);
+    await settleRootWork();
+  }
+});
+
 it("settles an acknowledged queued launch failure through its captured native registry owner", async () => {
   const { refusal, manager } = createRegistrationFixture();
   refusal.descriptor = false;
@@ -341,6 +480,7 @@ it("settles an acknowledged queued launch failure through its captured native re
       groupId: "acknowledged-launch-group",
       queued: true,
       queuedLaunch: {
+        requesterRecovery: {},
         request: { sessionKey: childSessionKey },
         timeoutMs: 100,
         schedulerGroupKey: "acknowledged-launch-group",
@@ -388,6 +528,7 @@ it("leaves an acknowledged collector rekey with its launch owner during restore 
     groupId: "restore-rekey",
     queued: true,
     queuedLaunch: {
+      requesterRecovery: {},
       request: { sessionKey: childSessionKey },
       timeoutMs: 100,
       schedulerGroupKey: "restore-rekey",

@@ -83,6 +83,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "reply",
             project: projectToolAuthority,
             projectAsync: async (overlay) => projectToolAuthority(overlay),
@@ -173,6 +174,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project: firstProject,
             projectAsync: async (overlay) => firstProject(overlay),
@@ -194,6 +196,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project: secondProject,
             projectAsync: async (overlay) => secondProject(overlay),
@@ -266,6 +269,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance: admittedRun,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project: ownerProject,
             projectAsync: async (overlay) => ownerProject(overlay),
@@ -281,6 +285,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance: replacementRun,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project: replacementProject,
             projectAsync: async (overlay) => replacementProject(overlay),
@@ -401,6 +406,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance: currentRun,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project,
             projectAsync: async (overlay) => project(overlay),
@@ -543,6 +549,7 @@ describe("Talk client agent consult admission", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project,
             projectAsync: async (overlay) => project(overlay),

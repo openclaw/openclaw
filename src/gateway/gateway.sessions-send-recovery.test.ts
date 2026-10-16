@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
@@ -10,7 +10,44 @@ import {
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+function writeToolCall(response: ServerResponse, name: string, params: Record<string, unknown>) {
+  const id = randomUUID();
+  const args = JSON.stringify(params);
+  const item = {
+    type: "function_call",
+    id: "fc_" + id,
+    call_id: "call_" + id,
+    name,
+    arguments: args,
+    status: "completed",
+  };
+  writeOpenAiResponsesSse(response, [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, arguments: "", status: "in_progress" },
+    },
+    {
+      type: "response.function_call_arguments.done",
+      item_id: item.id,
+      output_index: 0,
+      arguments: args,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_" + id,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      },
+    },
+  ]);
+}
 
 // Real public sessions_send, real provider socket, cold Gateway process restart.
 // The provider deliberately holds only the first target turn before restart.
@@ -25,6 +62,7 @@ it(
       const target = "agent:main:dashboard:peer-target";
       let hold = true;
       let held = false;
+      let recoveredThemeCalls = 0;
       const providerServer = createServer((request, response) => {
         void (async () => {
           const chunks: Buffer[] = [];
@@ -49,11 +87,11 @@ it(
           );
           const text = JSON.stringify(input[userIndex]?.content ?? "");
           requests.push(text.slice(0, 500));
+          const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
           const sendMarker = text.match(
             /SEND_(PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE)/u,
           )?.[1];
           if (sendMarker) {
-            const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
             if (outputIndex > userIndex) {
               const output = JSON.parse(input[outputIndex]!.output!) as {
                 status?: string;
@@ -69,43 +107,11 @@ it(
               });
             } else {
               expect(body.tools?.some((tool) => tool.name === "sessions_send")).toBe(true);
-              const id = randomUUID();
-              const args = JSON.stringify({
+              writeToolCall(response, "sessions_send", {
                 sessionKey: target,
                 message: sendMarker,
                 timeoutSeconds: 0,
               });
-              const item = {
-                type: "function_call",
-                id: "fc_" + id,
-                call_id: "call_" + id,
-                name: "sessions_send",
-                arguments: args,
-                status: "completed",
-              };
-              writeOpenAiResponsesSse(response, [
-                {
-                  type: "response.output_item.added",
-                  output_index: 0,
-                  item: { ...item, arguments: "", status: "in_progress" },
-                },
-                {
-                  type: "response.function_call_arguments.done",
-                  item_id: item.id,
-                  output_index: 0,
-                  arguments: args,
-                },
-                { type: "response.output_item.done", output_index: 0, item },
-                {
-                  type: "response.completed",
-                  response: {
-                    id: "resp_" + id,
-                    status: "completed",
-                    output: [item],
-                    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-                  },
-                },
-              ]);
             }
             return;
           }
@@ -116,6 +122,21 @@ it(
           const marker = text
             .match(/PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE/gu)
             ?.at(-1);
+          if (marker === "PEER_UPDATE_1") {
+            if (outputIndex > userIndex) {
+              const output: unknown = JSON.parse(input[outputIndex]!.output!);
+              expect(output).toMatchObject({
+                current: { mode: "dark", scope: "profile" },
+                application: "saved",
+              });
+            } else {
+              expect(body.tools?.some((tool) => tool.name === "theme")).toBe(true);
+              recoveredThemeCalls++;
+              expect(recoveredThemeCalls).toBe(1);
+              writeToolCall(response, "theme", { action: "set", mode: "dark" });
+              return;
+            }
+          }
           if (marker) {
             observed.push(marker);
           }
@@ -158,16 +179,24 @@ it(
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+      const deviceIdentity = generateStoredDeviceIdentity();
       const connect = () =>
         acquireGatewayTestClient(
           {
-            deviceIdentity: null,
+            deviceIdentity,
+            env: gateway.state.env,
             url: gateway.url,
             token: gateway.gatewayToken,
-            clientName: "cli",
-            mode: "cli",
+            clientName: "test",
+            mode: "test",
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
+            // Reconnect with explicit credentials; this fixture has no local token cache.
+            hostDeps: {
+              loadDeviceAuthToken: () => null,
+              storeDeviceAuthToken: () => {},
+              clearDeviceAuthToken: () => {},
+            },
           },
           {
             timeoutMs: 30_000,
@@ -224,6 +253,17 @@ it(
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
         client = await connect();
+        const requester = await client.request<{ profile: { id: string } }>(
+          "users.self",
+          {},
+          { signal },
+        );
+        const preferencesBefore = await client.request(
+          "users.prefs.get",
+          { keys: ["ui.themeMode"] },
+          { signal },
+        );
+        expect(preferencesBefore).toEqual({ status: "ok", entries: {} });
         for (const key of [target, source, resetSource, revokedSource]) {
           await client.request(
             "sessions.create",
@@ -304,6 +344,14 @@ it(
             ]),
           { timeout: 60_000, interval: 200 },
         );
+        expect(recoveredThemeCalls).toBe(1);
+        expect(await client.request("users.self", {}, { signal })).toMatchObject({
+          profile: { id: requester.profile.id },
+        });
+        // Read the exact original person's durable effect independently of model output.
+        expect(
+          await client.request("users.prefs.get", { keys: ["ui.themeMode"] }, { signal }),
+        ).toEqual({ status: "ok", entries: { "ui.themeMode": "dark" } });
         const after = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
           "chat.history",
           { sessionKey: target },
@@ -358,6 +406,7 @@ it(
             firstPid,
             finalPid: gateway.child?.pid,
             observed,
+            recoveredThemeCalls,
           }),
         );
       } catch (error) {

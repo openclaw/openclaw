@@ -753,7 +753,13 @@ describe("Code Mode swarm host bridge", () => {
       collectorRecord({
         swarmLaunchPending: true,
         swarmLaunchRequestFingerprint: collectorFingerprint(),
-        queuedLaunch: { request: {}, timeoutMs: 1, schedulerGroupKey: "group", maxConcurrent: 1 },
+        queuedLaunch: {
+          requesterRecovery: {},
+          request: {},
+          timeoutMs: 1,
+          schedulerGroupKey: "group",
+          maxConcurrent: 1,
+        },
       }),
     );
     const harness = createSwarmHarness();

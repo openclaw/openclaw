@@ -8,6 +8,7 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { captureRequesterOrigin, hasSameRequesterOrigin } from "../../agents/requester-origin.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -310,6 +311,11 @@ it.each([
 it("classifies a refused raw projection as an authority mismatch before backend invocation", async () => {
   const sessionId = "refused-projection";
   const sessionKey = "agent:main:refused-projection";
+  const requesterOrigin = captureRequesterOrigin({
+    sessionKey,
+    messageProvider: "telegram",
+    senderId: "refused-requester",
+  })!;
   const queueMessage = vi.fn(async () => {});
   const handle = {
     ...createEmbeddedRunHandle({ runId: "refused-run", toolAuthorityFingerprint: "creator" }),
@@ -326,6 +332,7 @@ it("classifies a refused raw projection as an authority mismatch before backend 
       sessionKey,
       embeddedRunToolAuthorityBinding: () => ({
         source: "attempt",
+        acceptsRequesterOrigin: (incoming) => hasSameRequesterOrigin(requesterOrigin, incoming),
         assertActive: () => {},
         project: () => undefined,
         projectAsync: async () => {
@@ -359,7 +366,13 @@ it.each([
     const sessionId = `talk-policy-${backend}-${revoked}`;
     const sessionKey = `agent:main:${sessionId}`;
     const run = createQueueTestRun({ prompt: "preserve this Talk input" });
-    Object.assign(run.run, { agentId: "main", sessionId, sessionKey });
+    Object.assign(run.run, {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "talk-requester",
+    });
     const operation = createTestReplyOperation({ sessionId, sessionKey });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
     const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
@@ -399,6 +412,8 @@ it.each([
     operation.setPhase("running");
     setActiveEmbeddedRun(sessionId, handle, sessionKey);
     let overlay: ReplyToolAuthorityOverlay = {
+      messageProvider: "telegram",
+      senderId: "talk-requester",
       senderIsOwner: false,
       disableTools: false,
       traceAuthorized: false,

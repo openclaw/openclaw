@@ -18,12 +18,14 @@ import { recordSessionHumanDirectMessage } from "../../sessions/session-state-ev
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
+import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
 import { resolveAgentRunContext } from "./run-context.js";
@@ -50,21 +52,36 @@ export function prepareCommandSessionRecoveryEntry(
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
   const operatorSource =
-    entry.restartRecoveryDeliveryRunId !== runId &&
-    ((!sourceOptions.sourceRunId &&
-      (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")) ||
-      (sourceOptions.sourceRunId === runId &&
-        opts.inputProvenance?.kind === "inter_session" &&
-        opts.inputProvenance.sourceTool === "subagent_settle"))
+    entry.restartRecoveryDeliveryRunId !== runId
       ? createRestartRecoveryOperatorSource({
           authority: opts.operatorAuthority,
           entry: { ...entry, sessionId },
           agentId: params.agentId,
           sessionKey: params.sessionKey,
-          sourceRunId: runId,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
           inputProvenance: opts.inputProvenance,
+          requesterOrigin: opts.requesterOrigin,
         })
       : undefined;
+  const requesterSource =
+    entry.restartRecoveryDeliveryRunId !== runId
+      ? createRestartRecoveryRequesterSource({
+          requesterOrigin: opts.requesterOrigin,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
+        })
+      : undefined;
+  const sourceIngress =
+    sourceOptions.sourceIngress ??
+    (opts.inputProvenance && opts.inputProvenance.kind !== "external_user"
+      ? ("internal" as const)
+      : (operatorSource?.snapshot.sourceIngress ??
+        (requesterSource?.requesterOrigin.messageProvider &&
+        !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
+          ? ("channel" as const)
+          : ("internal" as const))));
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -93,11 +110,18 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        ...(requesterSource
+          ? {
+              requesterSource,
+              sourceRunId: requesterSource.sourceRunId,
+              sourceIngress,
+            }
+          : {}),
         ...(operatorSource
           ? {
               operatorSource,
-              sourceRunId: runId,
-              sourceIngress: sourceOptions.sourceIngress ?? operatorSource.snapshot.sourceIngress,
+              sourceRunId: operatorSource.sourceRunId,
+              sourceIngress,
             }
           : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,

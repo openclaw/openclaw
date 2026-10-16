@@ -132,6 +132,19 @@ const createHandlersHarness = (
 };
 
 describe("tui-event-handlers: handleAgentEvent", () => {
+  it.each([true, false])(
+    "reports actual explicit followup starts only in local=%s mode",
+    (localMode) => {
+      const { chatLog, handleAgentEvent } = createHandlersHarness({ localMode });
+      handleAgentEvent({ data: { phase: "start", explicitFollowup: true } });
+      if (localMode) {
+        expect(chatLog.addSystem).toHaveBeenCalledWith("Your followup has started.");
+      } else {
+        expect(chatLog.addSystem).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("retires a gap-recovery run only after authoritative history reports completion", async () => {
     const { state, loadHistory, reconcileHistoryAfterGap, setActivityStatus, dispose } =
       createHandlersHarness({ activeChatRunId: "run-gap" });

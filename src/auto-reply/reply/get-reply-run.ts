@@ -1,4 +1,5 @@
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -11,13 +12,16 @@ import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-conte
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const readAdmissionConfig = createRuntimeConfigReader(params.cfg);
   const context = await prepareReplyRunContext(params);
   if (context.kind === "reply") {
     return context.reply;
   }
   const execute = async () => {
     const admission = await prepareReplyRunAdmission(context);
-    return admission.kind === "reply" ? admission.reply : executePreparedReplyRun(admission);
+    return admission.kind === "reply"
+      ? admission.reply
+      : executePreparedReplyRun(admission, readAdmissionConfig);
   };
 
   const dispatchRuntime = getPreparedReplyDispatchRuntime();

@@ -120,7 +120,7 @@ describe("handleCompactCommand", () => {
     expect(call.senderId).toBe("owner");
     expect(call.ownerNumbers).toHaveLength(16);
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
-    expect(call).not.toHaveProperty("senderIsOwner");
+    expect(call.senderIsOwner).toBe(true);
     expect(params.command.ownerList).toEqual(ownerIds);
     expect(call.senderName).toBe("Alice");
     expect(call.senderUsername).toBe("alice_u");

@@ -269,13 +269,22 @@ whose current communication policies and visibility permit delivery. It reuses
 the original input identity, preserving per-target order and consumption
 deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
 revoked access, or a policy requiring fresh approval prevents automatic recovery.
-Inputs saved by older versions without delivery ownership remain available for
-inspection, not automatic retry. In history, `queued` means an input has current
+Recovery preserves the original requester and rechecks its captured authentication
+basis. Current destination tool permissions apply to the recovered execution;
+operator restrictions and revocation remain with the operator authority owner.
+Inputs saved by older versions without delivery ownership or a captured requester
+basis remain available for inspection, not automatic retry. Missing or revoked
+requester authority produces a notice asking for a new request. In history, `queued` means an input has current
 custody, not that the model is executing it; an input that remains `interrupted`
 is saved but is not being retried. A display-only notice distinguishes changed
 sessions, denied communication, and unavailable admission without feeding those
 diagnostics back to the model. Task continuations and steering retain their
 separate lifecycle owners.
+
+Private delivery and authentication facts follow the saved message's existing
+retention, including its transcript copy after consumption. They are excluded from
+display history and model input. A transcript copy cannot authorize recovery;
+only the exact unconsumed pending input can be re-admitted.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
@@ -395,7 +404,7 @@ A child report also goes to its recipient once, without an automatic acknowledgm
 
 Isolated scheduled jobs can wait for an inline reply, but receive no detached reply turns or failure notifications. A send from such a job does not generate a target announcement either; separately registered task completion retains its own delivery owner.
 
-These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
 An operator with `operator.sessions.write` can use `mode: "notify"` for an authorized session they own, including an owned child. Notifications retain the requester's current authority and target-session checks before queueing. They remain in memory and do not start a run.
 

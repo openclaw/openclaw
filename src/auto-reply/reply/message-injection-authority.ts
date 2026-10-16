@@ -121,6 +121,15 @@ export class MessageInjectionAuthorityError extends Error {
   }
 }
 
+/** The input belongs to another requester and may be admitted as a separate turn. */
+export class MessageInjectionRequesterMismatchError extends Error {
+  override name = "MessageInjectionRequesterMismatchError";
+
+  constructor() {
+    super("Steering requires the active turn's authenticated requester");
+  }
+}
+
 /** The caller remains valid, but this target can no longer receive its input. */
 export class MessageInjectionTargetUnavailableError extends Error {
   constructor(message: string) {

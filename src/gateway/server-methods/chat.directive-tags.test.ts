@@ -18,7 +18,10 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
@@ -50,6 +53,7 @@ import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloa
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
   getActiveSessionWorkAdmissionCount,
+  getSessionWorkAdmissionRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
@@ -83,6 +87,7 @@ import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
@@ -147,7 +152,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
-    lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
+    lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
     lastDispatchUserTurnInput: undefined as unknown,
     modelCatalog: null as ModelCatalogEntry[] | null,
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
@@ -1226,6 +1231,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
+      await getSessionWorkAdmissionRelease({
+        scope: mockState.storePath,
+        identities: [requestedSessionId],
+      });
     } else {
       expect(response).toEqual([
         false,
@@ -4155,18 +4164,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
-    expect(mockState.lastDispatchUserTurnInput).toEqual({
-      role: "user",
-      content: "bench update",
-      timestamp: expect.any(Number),
-      idempotencyKey: "idem-system-provenance-acp:user",
-      __openclaw: {
-        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    expect(mockState.lastDispatchUserTurnInput).toEqual(
+      createExpectedAcpUserTurn({
+        content: "bench update",
+        idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
-        transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-      },
-      provenance,
-    });
+        provenance,
+      }),
+    );
   });
 
   it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
@@ -4307,16 +4312,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual({
-        role: "user",
-        content: "bridge image",
-        timestamp: expect.any(Number),
-        idempotencyKey: "idem-user-transcript-acp-images:user",
-        __openclaw: {
-          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-          transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-        },
-      });
+      expect(mockState.lastDispatchUserTurnInput).toEqual(
+        createExpectedAcpUserTurn({
+          content: "bridge image",
+          idempotencyKey: "idem-user-transcript-acp-images:user",
+        }),
+      );
     });
   });
 

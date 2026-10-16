@@ -9,7 +9,6 @@ import {
   MessageInjectionAuthorityError,
   MessageInjectionWithdrawnError,
 } from "../../auto-reply/reply/message-injection-authority.js";
-import type { ReplyMessageInjectionOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -70,6 +69,7 @@ import {
 } from "./force-clear-session-state.js";
 import {
   createEmbeddedMessageInjectionQueue,
+  createQueueFailureOutcome,
   prepareEmbeddedInjectionAuthority,
   resolveEmbeddedInjection,
   type EmbeddedInjectionPreparation,
@@ -94,12 +94,13 @@ import {
   type ActiveEmbeddedRunSnapshot,
   type AbortAndDrainEmbeddedAgentRunResult,
   type AbandonedEmbeddedRun,
+  type EmbeddedAgentMessageInjectionOptions,
+  type EmbeddedAgentQueueFailureReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedRunCompletionClaim,
   type EmbeddedRunCompletionRegistration,
   type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
-  type EmbeddedAgentQueueFailureReason,
   type EmbeddedAgentQueueMessageOutcome,
   type PreparedEmbeddedAgentQueueMessage,
 } from "./run-state.js";
@@ -126,29 +127,6 @@ export type EmbeddedRunTimeoutRecoveryMarker = {
   recoveryToken: symbol;
 };
 
-function createQueueFailureOutcome(
-  sessionId: string,
-  reason: EmbeddedAgentQueueFailureReason,
-  errorMessage?: string,
-): EmbeddedAgentQueueMessageOutcome {
-  return {
-    queued: false,
-    sessionId,
-    reason,
-    gatewayHealth: "live",
-    ...(errorMessage ? { errorMessage } : {}),
-  };
-}
-
-export function formatEmbeddedAgentQueueFailureSummary(
-  outcome: EmbeddedAgentQueueMessageOutcome,
-): string | undefined {
-  if (outcome.queued) {
-    return undefined;
-  }
-  const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
-  return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
-}
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   const abandonedRun = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId);
   if (!abandonedRun) {
@@ -300,7 +278,7 @@ export function restoreEmbeddedRunTimeoutAbandonment(
 export function queueEmbeddedAgentMessageWithOutcome(
   sessionId: string,
   text: string,
-  options?: ReplyMessageInjectionOptions,
+  options?: EmbeddedAgentMessageInjectionOptions,
 ): EmbeddedAgentQueueMessageOutcome {
   const prepared = prepareEmbeddedAgentQueueMessage(sessionId, options);
   if (prepared.kind === "complete") {
@@ -400,7 +378,7 @@ function clearEmbeddedRunAbortability(
 export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
-  options?: ReplyMessageInjectionOptions,
+  options?: EmbeddedAgentMessageInjectionOptions,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
   return queueEmbeddedAgentMessageAsync(sessionId, text, options);
 }
@@ -445,7 +423,7 @@ export async function claimPendingEmbeddedAgentQuestionAnswer(
 export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
-  options: ReplyMessageInjectionOptions | undefined,
+  options: EmbeddedAgentMessageInjectionOptions | undefined,
   canInject: () => boolean,
   sourcePreparation?: EmbeddedInjectionPreparation,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
@@ -511,7 +489,7 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
     text = (await sourcePreparation?.prepareMessage?.()) ?? text;
     assertCurrent();
     const authority =
-      options?.toolAuthorityOverlay || sourcePreparation
+      options?.toolAuthorityOverlay || options?.requesterToolAuthority || sourcePreparation
         ? await prepareEmbeddedInjectionAuthority(sessionId, options, canInject, sourcePreparation)
         : undefined;
     assertCurrent();
@@ -679,7 +657,7 @@ const queueEmbeddedAgentMessageAsync = createEmbeddedMessageInjectionQueue(async
 
 function prepareEmbeddedAgentQueueMessage(
   sessionId: string,
-  options?: ReplyMessageInjectionOptions,
+  options?: EmbeddedAgentMessageInjectionOptions,
   sourceCanInject?: () => boolean,
   prepared?: { fingerprint?: string; preparation: EmbeddedInjectionPreparation },
   sourcePreparation?: EmbeddedInjectionPreparation,
@@ -709,8 +687,24 @@ function prepareEmbeddedAgentQueueMessage(
     return reject("no_active_run");
   }
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
-  if (sourceCanInject && handle.messageInjectionV2?.version !== 2) {
+  if (
+    (sourceCanInject || options?.requesterToolAuthority) &&
+    handle.messageInjectionV2?.version !== 2
+  ) {
     return reject("guarded_injection_unsupported");
+  }
+  if (options?.requesterToolAuthority) {
+    try {
+      if (
+        !registration?.toolAuthority?.acceptsRequesterOrigin(
+          options.requesterToolAuthority.requesterOrigin,
+        )
+      ) {
+        return reject("requester_origin_mismatch");
+      }
+    } catch {
+      return reject("requester_origin_mismatch");
+    }
   }
   const injection = resolveEmbeddedInjection(
     sessionId,
@@ -743,19 +737,29 @@ function prepareEmbeddedAgentQueueMessage(
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
   const ownedOperation =
     operation && getAttachedBackend(operation) === handle ? operation : undefined;
-  const { toolAuthorityOverlay, ...backendOptions } = options ?? { steeringMode: "all" as const };
-  if (toolAuthorityOverlay) {
-    // An overlay is caller evidence; a supplied raw hash cannot override it.
+  const { toolAuthorityOverlay, requesterToolAuthority, ...backendOptions } = options ?? {
+    steeringMode: "all" as const,
+  };
+  if (toolAuthorityOverlay || requesterToolAuthority) {
+    // Prepared caller evidence takes precedence over a supplied raw hash.
     try {
       backendOptions.toolAuthorityFingerprint = prepared
         ? prepared.fingerprint
-        : registration?.toolAuthority
-          ? registration.toolAuthority.project(toolAuthorityOverlay)
-          : ownedOperation?.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+        : requesterToolAuthority
+          ? registration?.toolAuthority?.projectRequester?.(requesterToolAuthority)
+          : toolAuthorityOverlay &&
+            (registration?.toolAuthority
+              ? registration.toolAuthority.project(toolAuthorityOverlay)
+              : ownedOperation?.projectToolAuthorityFingerprint(toolAuthorityOverlay));
     } catch {
       backendOptions.toolAuthorityFingerprint = undefined;
     }
-    if (!backendOptions.toolAuthorityFingerprint) {
+    if (
+      !backendOptions.toolAuthorityFingerprint ||
+      (requesterToolAuthority &&
+        backendOptions.toolAuthorityFingerprint !==
+          (handle.toolAuthorityFingerprint ?? ownedOperation?.toolAuthorityFingerprint))
+    ) {
       return reject("tool_authority_mismatch");
     }
   }
@@ -768,12 +772,14 @@ function prepareEmbeddedAgentQueueMessage(
     const activeFingerprint = normalizeOptionalString(handle.toolAuthorityFingerprint);
     // Projected caller authority takes precedence over raw route-mismatch proof.
     const pendingInputAuthorityProven =
-      (!toolAuthorityOverlay || deliveryModeMismatch === "input_visibility_mismatch") &&
+      ((!toolAuthorityOverlay && !requesterToolAuthority) ||
+        deliveryModeMismatch === "input_visibility_mismatch") &&
       (deliveryModeMismatch !== "input_visibility_mismatch" ||
         handle.messageInjectionV2?.version === 2) &&
       activeFingerprint &&
       (normalizeOptionalString(backendOptions.toolAuthorityFingerprint) === activeFingerprint ||
         (!toolAuthorityOverlay &&
+          !requesterToolAuthority &&
           normalizeOptionalString(options?.pendingInputAuthorityFingerprint) ===
             activeFingerprint));
     diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
@@ -1547,3 +1553,5 @@ async function forceClearEmbeddedAgentRun(
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+export { formatEmbeddedAgentQueueFailureSummary } from "./message-injection-target.js";

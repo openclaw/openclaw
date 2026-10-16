@@ -67,6 +67,33 @@ function createOperatorAuthority() {
 }
 
 describe("followup queue authority", () => {
+  it("keeps different original requesters in separate collected turns on the same route", async () => {
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+      const run = createRun({
+        prompt: `${senderId} request ${index}`,
+        originatingChannel: "telegram",
+        originatingTo: "shared-chat",
+      });
+      run.run.senderId = "shared-receiver";
+      run.run.requesterOrigin = {
+        sessionKey: "agent:research:telegram:group:requesters",
+        messageProvider: "telegram",
+        senderId,
+      };
+      q.add(run);
+    }
+    q.start();
+    await q.done.promise;
+    expect(q.calls).toHaveLength(2);
+    expect(q.calls[0]?.prompt).toContain("alice request 0");
+    expect(q.calls[0]?.prompt).not.toContain("bob request");
+    expect(q.calls[1]?.prompt).toContain("bob request 1");
+    expect(q.calls[1]?.prompt).toContain("bob request 2");
+    expect(q.calls[1]?.prompt).not.toContain("alice request");
+    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
+  });
+
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
     const conversationToolPolicy = {
@@ -230,65 +257,76 @@ describe("followup queue authority", () => {
     }
   });
 
-  it("keeps original grant revocation effective after collect retires an older client cancel", async () => {
-    const key = "test-collect-operator-revocation";
-    const source = createOperatorAuthority();
-    const firstCancel = new AbortController();
-    const secondCancel = new AbortController();
-    const effects: string[] = [];
-    const observations: boolean[] = [];
-    try {
-      for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
-        enqueueFollowupRun(
-          key,
-          {
-            ...createRun({ prompt: `request ${index}` }),
-            operatorAuthority: source.authority,
-            abortSignal,
-          },
-          createQueueSettings(),
-        );
-      }
-      source.releaseRequest();
-      scheduleFollowupDrain(key, async (run) => {
-        const prepared = prepareChannelRunAdmission({
-          cfg: {},
-          runId: "collected-operator-revocation",
-          agentId: "agent",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: run.operatorAuthority,
-        });
-        try {
-          await admitFollowupRunLifecycle(run);
-          const context = await prepared.admit("embedded");
-          const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
-          firstCancel.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
-          assertCurrent();
-          effects.push("before revocation");
-          await Promise.resolve();
-          source.controller.abort();
-          observations.push(resolveFollowupAbortSignal(run)?.aborted === true);
-          try {
-            assertCurrent();
-            effects.push("after revocation");
-          } catch {
-            // The real admitted-run guard must reject before the modeled effect.
-          }
-        } finally {
-          prepared.close();
-          completeFollowupRunLifecycle(run);
+  it.for(["older client", "latest client", "operator grant"] as const)(
+    "keeps %s cancellation effective after collect admission",
+    async (cancellation, { signal }) => {
+      const key = `test-collect-operator-revocation-${cancellation}`;
+      const source = createOperatorAuthority();
+      const firstCancel = new AbortController();
+      const secondCancel = new AbortController();
+      const done = createDeferredCore();
+      const effects: string[] = [];
+      try {
+        for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
+          enqueueFollowupRun(
+            key,
+            {
+              ...createRun({ prompt: `request ${index}` }),
+              operatorAuthority: source.authority,
+              abortSignal,
+            },
+            createQueueSettings(),
+          );
         }
-      });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(observations).toEqual([false, true]);
-      expect(effects).toEqual(["before revocation"]);
-      expect(source.references()).toBe(0);
-    } finally {
-      clearFollowupQueue(key);
-    }
-  });
+        source.releaseRequest();
+        scheduleFollowupDrain(key, async (run) => {
+          const prepared = prepareChannelRunAdmission({
+            cfg: {},
+            runId: "collected-operator-revocation",
+            agentId: "agent",
+            ingressKind: "channel",
+            boundary: "auto-reply.agent-runner",
+            operatorAuthority: run.operatorAuthority,
+          });
+          try {
+            await admitFollowupRunLifecycle(run);
+            const context = await prepared.admit("embedded");
+            const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
+            const performEffect = (label: string) => {
+              assertCurrent();
+              resolveFollowupAbortSignal(run)?.throwIfAborted();
+              effects.push(label);
+            };
+            performEffect("before cancellation");
+            const controller =
+              cancellation === "operator grant"
+                ? source.controller
+                : cancellation === "older client"
+                  ? firstCancel
+                  : secondCancel;
+            controller.abort();
+            expect(resolveFollowupAbortSignal(run)?.aborted).toBe(true);
+            if (cancellation === "operator grant") {
+              // Revoked operator authority must reject independently of the client signal.
+              expect(assertCurrent).toThrow();
+            }
+            expect(() => performEffect("after cancellation")).toThrow();
+          } catch (error) {
+            done.reject(error);
+          } finally {
+            prepared.close();
+            completeFollowupRunLifecycle(run);
+            done.resolve();
+          }
+        });
+        await withinTest(done.promise, signal);
+        expect(effects).toEqual(["before cancellation"]);
+        expect(source.references()).toBe(0);
+      } finally {
+        clearFollowupQueueForTest(key);
+      }
+    },
+  );
 
   it.each(["old", "new", "summarize"] as const)(
     "releases original source holds exactly once across %s overflow and queue clearing",

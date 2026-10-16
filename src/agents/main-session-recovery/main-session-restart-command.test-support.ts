@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -6,7 +7,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
-import type { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  type loadSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
@@ -28,6 +32,11 @@ import {
   markGatewayRestartDraining,
 } from "../../process/gateway-work-admission.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type { RequesterOrigin } from "../requester-origin.js";
+import {
+  createRestartRecoveryRequesterSource,
+  readRestartRecoveryRequesterSource,
+} from "../requester-run-recovery-source.js";
 import type { SessionEntryFixture } from "../subagent-test-fixtures.test-helpers.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
@@ -38,6 +47,7 @@ import type {
 
 async function runRecoveryCommandDuringStop(params: {
   entry: InternalSessionEntry;
+  requesterOrigin: RequesterOrigin;
   runId: string;
   sessionKey: string;
   storePath: string;
@@ -55,6 +65,7 @@ async function runRecoveryCommandDuringStop(params: {
   ]);
   const opts = {
     message: "Resume the interrupted task.",
+    requesterOrigin: params.requesterOrigin,
     abortSignal: params.signal,
     mainRestartRecoveryAdmitted: true,
     mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
@@ -185,6 +196,26 @@ export function registerAcceptedRecoveryStopCase(params: {
         restartRecoveryDeliverySourceRunId: "source-main",
         restartRecoveryDeliveryContext: discordDeliveryContext,
       });
+      const entry = expectDefined(readEntry(), "interrupted source session");
+      const requesterSource = expectDefined(
+        createRestartRecoveryRequesterSource({
+          agentId: "main",
+          sessionKey,
+          sourceRunId: "source-main",
+          entry,
+          requesterOrigin: {
+            sessionKey: "agent:research:telegram:group:requesters",
+            messageProvider: "telegram",
+            accountId: "work",
+            senderId: "bob",
+          },
+        }),
+        "original channel requester source",
+      );
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { ...entry, restartRecoveryRequesterSource: requesterSource },
+      );
       await writeTranscript(sessionsDir, "main-session", [
         { role: "user", content: "recover without losing the owner" },
       ]);
@@ -221,6 +252,23 @@ export function registerAcceptedRecoveryStopCase(params: {
         });
         options?.onAccepted?.({ runId, status: "accepted" });
         const admittedEntry = readEntry()!;
+        const requesterTarget = expectDefined(
+          options?.restartRecoveryRequesterTarget,
+          "successor dispatch requester custody",
+        );
+        expect(requesterTarget).toEqual({
+          agentId: "main",
+          sessionKey,
+          sessionId: "main-session",
+          storePath,
+          sourceRunId: "source-main",
+          recoveryRunId: runId,
+        });
+        const requesterOrigin = expectDefined(
+          readRestartRecoveryRequesterSource({ ...requesterTarget, entry: admittedEntry }),
+          "requester restored from the successor's current claim",
+        );
+        expect(requesterOrigin).toEqual(requesterSource.requesterOrigin);
         const terminalEvents: Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"][] =
           [];
         const terminalObserved =
@@ -238,6 +286,7 @@ export function registerAcceptedRecoveryStopCase(params: {
         // Observe the expected rejection immediately, then join its real lifecycle settlement.
         const commandSettlement = runRecoveryCommandDuringStop({
           entry: admittedEntry,
+          requesterOrigin,
           runId,
           sessionKey,
           storePath,
@@ -319,12 +368,14 @@ export function registerAcceptedRecoveryStopCase(params: {
           }),
         ]);
         expect(persistedEntries[0]?.status).toBeUndefined();
+        expect(persistedEntries[0]?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(persistedEntries[0]).toMatchObject({
           mainRestartRecovery: { cycleId: "interrupted-cycle", chargedAttempts: 1 },
           restartRecoveryRuns: [
             { runId: "recovery-main", lifecycleGeneration: getAgentEventLifecycleGeneration() },
           ],
         });
+        expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(readEntry()).toMatchObject({
           status: "interrupted",
           abortedLastRun: true,
@@ -350,8 +401,10 @@ export function registerAcceptedRecoveryStopCase(params: {
               gatewayRuntime,
             }),
           ).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
           expect(readEntry()).toMatchObject({
             status: "interrupted",
+            restartRecoveryDeliverySourceRunId: "source-main",
             mainRestartRecovery: { chargedAttempts: attempt },
           });
           expect(dispatchAgent).toHaveBeenCalledTimes(attempt);

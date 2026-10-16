@@ -16,6 +16,7 @@ import {
   bindPreparedToolAuthority,
   createLegacyToolAuthorityQueuePreflight,
 } from "../../agents/harness/tool-authority-preparation.js";
+import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
@@ -392,11 +393,12 @@ async function beginPreparedReplyMessageInjectionTarget(
   const owner = target[replyMessageInjectionTargetOwner];
   const {
     canAdmit,
-    toolAuthorityOverlay,
+    toolAuthorityOverlay: incomingOverlay,
+    allowCollaborativeSteering,
     toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
-    allowPendingUserInputAnswer,
+    allowPendingUserInputAnswer: requestedPendingUserInputAnswer,
     inboundAudio,
     ...backendOptions
   } = options ?? {};
@@ -427,9 +429,63 @@ async function beginPreparedReplyMessageInjectionTarget(
       outcome: Promise.resolve(failure),
     };
   }
-  const projectedToolAuthorityFingerprint = toolAuthorityOverlay
-    ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
+  const incomingRequester =
+    allowCollaborativeSteering === false && incomingOverlay
+      ? resolveRequesterPrincipalKey({
+          ...incomingOverlay,
+          messageChannel: incomingOverlay.originatingChannel,
+        })
+      : undefined;
+  if (
+    allowCollaborativeSteering === false &&
+    backendOptions.isInboundUserMessage &&
+    (!incomingOverlay?.inputProvenance ||
+      incomingOverlay.inputProvenance.kind === "external_user") &&
+    incomingRequester &&
+    owner.requesterPrincipalKey &&
+    incomingRequester !== owner.requesterPrincipalKey
+  ) {
+    assertSourceCurrent?.();
+    // Refusal belongs to this live target. A vanished or unavailable backend still
+    // returns its existing fallback decision, without lending another turn's identity.
+    const availability =
+      canAdmit?.() === false
+        ? { reason: "injection_unavailable" as const }
+        : owner.resolve({ inboundAudio, assertCurrent: assertSourceCurrent });
+    return {
+      targetRunId: target.runId,
+      acceptance: Promise.resolve(false),
+      outcome: Promise.resolve({
+        status: "rejected",
+        reason:
+          "injection" in availability ? "collaborative_steering_disabled" : availability.reason,
+      }),
+    };
+  }
+  let selectedOverlay = incomingOverlay;
+  let allowPendingUserInputAnswer = requestedPendingUserInputAnswer;
+  let projectedToolAuthorityFingerprint = selectedOverlay
+    ? await owner.projectToolAuthorityFingerprintAsync(selectedOverlay)
     : backendOptions.toolAuthorityFingerprint;
+  if (
+    allowCollaborativeSteering &&
+    backendOptions.isInboundUserMessage &&
+    incomingOverlay &&
+    (!projectedToolAuthorityFingerprint ||
+      projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
+  ) {
+    const collaborativeOverlay = { ...incomingOverlay, allowCollaborativeSteering: true as const };
+    const incumbentFingerprint =
+      await owner.projectToolAuthorityFingerprintAsync(collaborativeOverlay);
+    if (incumbentFingerprint && incumbentFingerprint !== projectedToolAuthorityFingerprint) {
+      selectedOverlay = collaborativeOverlay;
+      projectedToolAuthorityFingerprint = incumbentFingerprint;
+      // Collaboration permits ordinary input, not answering or canceling another
+      // requester's pending question. Compatible input keeps its strict preparation.
+      allowPendingUserInputAnswer = false;
+    }
+  }
+  const toolAuthorityOverlay = selectedOverlay;
   const sourceBound =
     assertCurrent !== undefined ||
     (toolAuthorityPreparation !== undefined && toolAuthorityPreparation.authorityKind !== "run");
@@ -486,6 +542,7 @@ async function beginPreparedReplyMessageInjectionTarget(
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =
+      allowPendingUserInputAnswer !== false &&
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
       (resolved.reason === "tool_authority_mismatch" ||

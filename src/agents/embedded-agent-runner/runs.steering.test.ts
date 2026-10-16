@@ -145,6 +145,8 @@ describe("embedded-agent active-run steering", () => {
     async (input) => {
       const runId = "hidden-question-owner",
         ownerRun = createQueueTestRun({ prompt: "pending question" });
+      ownerRun.run.messageProvider = "telegram";
+      ownerRun.run.senderId = "question-owner";
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(ownerRun));
       const fingerprint = await operation.bindToolAuthorityRouteAsync({
@@ -188,6 +190,8 @@ describe("embedded-agent active-run steering", () => {
           ? { images }
           : {
               toolAuthorityOverlay: {
+                messageProvider: "telegram",
+                senderId: "question-owner",
                 senderIsOwner: false,
                 disableTools: !authorized,
                 traceAuthorized: false,

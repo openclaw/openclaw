@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../../infra/agent-events.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
@@ -8,12 +9,11 @@ import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
-const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
-  emitAgentEvent: vi.fn(),
+const { lifecycleLog } = vi.hoisted(() => ({
   lifecycleLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+const emitAgentEvent = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => lifecycleLog,
 }));
@@ -98,6 +98,7 @@ describe("createAgentCommandLifecycle", () => {
     });
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
     expect(event.data.error).toMatch(/installation may have changed.*gateway restart/i);
     expect(JSON.stringify(event)).not.toContain(missingChunk);
     expect(JSON.stringify(event)).not.toContain(importingChunk);
@@ -190,6 +191,7 @@ describe("createAgentCommandLifecycle", () => {
         }),
       );
       const event = emitAgentEvent.mock.calls[0]?.[0];
+      assert.isDefined(event, "Expected the lifecycle owner to emit an event");
       if (phase === "finishing") {
         expect(event.data).not.toHaveProperty("executionSettled");
       }
@@ -285,6 +287,7 @@ describe("createAgentCommandLifecycle", () => {
     }
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
     expect(event.data.error).toContain("The provider failed.");
     expect(event.data.error).toContain("Authorization: Bearer");
     expect(JSON.stringify(event)).not.toContain(secret);
@@ -332,6 +335,7 @@ describe("createAgentCommandLifecycle", () => {
 
       expect(emitAgentEvent).toHaveBeenCalledOnce();
       const event = emitAgentEvent.mock.calls[0]?.[0];
+      assert.isDefined(event, "Expected the lifecycle owner to emit an event");
       expect(event.data.error).toContain(error.message);
       expect(event.data.error).toContain("an earlier request timed out and was aborted");
       if (kind === "timeout") {
@@ -364,6 +368,7 @@ describe("createAgentCommandLifecycle", () => {
     lifecycle.emitBasicError(error);
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
     expect(event.data.error).toContain(
       renderFailoverCodeUserCopy("selected_auth_profile_unavailable"),
     );
@@ -431,6 +436,7 @@ describe("createAgentCommandLifecycle", () => {
     });
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
     expect(event.data).toMatchObject({
       phase: "error",
       error: "delivery failed",
@@ -476,6 +482,7 @@ describe("createAgentCommandLifecycle", () => {
     lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
 
     const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event, "Expected the lifecycle owner to emit an event");
     expect(event.data).toMatchObject({ phase: "error", aborted: false, stopReason: "error" });
     expect(JSON.stringify(event)).not.toContain(secret);
     for (const field of [

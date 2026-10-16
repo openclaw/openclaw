@@ -127,7 +127,8 @@ export function createInternalAgentTurnFacade(
             getAgentEventLifecycleGeneration() === lifecycleGeneration &&
             owner.lifecycleGeneration === lifecycleGeneration &&
             (expectedAgentId === undefined || owner.agentId === expectedAgentId) &&
-            owner.sessionId === expectedSessionId &&
+            // Execution owns later session adoption; preparation still binds the requested identity.
+            (owner.executionStarted === true || owner.sessionId === expectedSessionId) &&
             owner.sessionKey === expectedSessionKey &&
             !owner.controller.signal.aborted &&
             owner.registrationCleanupRequested !== true

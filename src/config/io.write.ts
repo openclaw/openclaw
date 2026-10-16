@@ -33,6 +33,7 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import { applyMessageQueueDefaults } from "./defaults.js";
 import {
   readConfigWriteMigrationFacts,
   preserveDeferredPluginMigrationConfig,
@@ -193,8 +194,7 @@ export async function writeConfigFileFromContext(
     ...(options.unsetPaths ?? []),
   ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
-  // Doctor repairs need the same authored projection so roster moves preserve nested includes.
-  // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
+  // Preserve roster includes during Doctor repairs; bootstrap rosters use explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     const webhookMigration = hasAuthoredIncludes
       ? projectWebhookMigrationIncludeWrite(authoredSourceConfig, authoredConfig)
@@ -282,7 +282,7 @@ export async function writeConfigFileFromContext(
   const materialized = stampConfigWriteMetadata(
     snapshot.exists
       ? validatedCandidate
-      : initializeNativeSessionCatalogPreferences(validatedCandidate),
+      : applyMessageQueueDefaults(initializeNativeSessionCatalogPreferences(validatedCandidate)),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
     deps.env,
@@ -324,7 +324,6 @@ export async function writeConfigFileFromContext(
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = hashConfigRaw(snapshot.raw);
-  const changedPathCount = changedPaths.size;
   const previousBytes =
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
   const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
@@ -378,7 +377,7 @@ export async function writeConfigFileFromContext(
         configPath,
         previousHash: previousHash ?? null,
         nextHash,
-        changedPathCount,
+        changedPathCount: changedPaths.size,
       }),
     );
   };
@@ -410,7 +409,7 @@ export async function writeConfigFileFromContext(
     previousBytes,
     nextBytes,
     previousMetadata: resolveConfigStatMetadata(previousStat),
-    changedPathCount,
+    changedPathCount: changedPaths.size,
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,

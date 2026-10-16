@@ -29,7 +29,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("denies native spawn at final admission when another person steers the parent", async () => {
+it("denies native spawn at final admission after its parent turn ends", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const entered = createDeferredCore();
   const resume = createDeferredCore();
@@ -133,10 +133,11 @@ it("denies native spawn at final admission when another person steers the parent
             ]);
             await expect(
               turn.steer({ profileId: "bob", senderId: "bob-sender", name: "Bob" }),
-            ).resolves.toMatchObject({ status: "accepted" });
+            ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+            expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
+            turn.complete();
             resume.resolve();
-            const ambiguity =
-              /Alice \(user: alice\).*Bob \(user: bob\).*Use sessions_spawn with the requester's requester_profile\.id as user/;
+            const ended = /turn has ended/;
             const expectDenied = (response: Awaited<ReturnType<typeof invoke>>, reason: RegExp) => {
               expect(JSON.parse(response.stdout)).toMatchObject({
                 hookSpecificOutput: {
@@ -147,12 +148,10 @@ it("denies native spawn at final admission when another person steers the parent
               });
               expect(response.exitCode).toBe(0);
             };
-            expectDenied(await pending, ambiguity);
+            expectDenied(await pending, ended);
             for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
-              expectDenied(await invoke(name, `ambiguous-${name}`), ambiguity);
+              expectDenied(await invoke(name, `ended-${name}`), ended);
             }
-            turn.complete();
-            expectDenied(await invoke("Agent", "ended-spawn"), /turn has ended/);
           } finally {
             resume.resolve();
             relay.unregister();

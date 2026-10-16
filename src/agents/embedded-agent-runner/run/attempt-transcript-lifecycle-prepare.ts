@@ -5,7 +5,6 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
 import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
@@ -204,6 +203,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
           env: Object.freeze({ ...(options.env ?? process.env) }),
           path: resolveOpenClawAgentSqlitePath(options),
         };
+        const { createSessionActorFactory } =
+          await import("../../../config/sessions/session-actor-durable.js");
+        assertCurrent();
         let identity = readDatabasePathIdentitySync(database.path);
         if (identity.key.startsWith("path:")) {
           await prepareSessionEntryReplacementDatabase(database, assertCurrent);

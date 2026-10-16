@@ -275,6 +275,7 @@ plugins, and installed skills.
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
+    | `/followup <message>` | Run this message as a new turn, waiting behind current and already-queued work. Leaves the stored queue mode unchanged. See [Queue](/concepts/queue) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
 
     <AccordionGroup>

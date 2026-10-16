@@ -14,6 +14,7 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import {
   attachToolAllowlistIntersection,
@@ -21,7 +22,7 @@ import {
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
@@ -30,6 +31,7 @@ import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
+import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
@@ -53,6 +55,7 @@ import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
   bindSourceReplyDeliveryRuntime,
@@ -67,7 +70,10 @@ import {
   shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
 
-export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) {
+export async function executePreparedReplyRun(
+  state: PreparedReplyRunAdmission,
+  readAdmissionConfig: () => OpenClawConfig,
+) {
   const {
     context,
     resolvedThinkLevel,
@@ -298,11 +304,25 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
     ...(transportThreadId ? { threadId: transportThreadId } : {}),
   };
+  const requesterOrigin =
+    readUserTurnRequesterOrigin(opts?.userTurnTranscriptRecorder) ??
+    captureRequesterOrigin({
+      ...resolveInboundReplyToolAuthorityOverlay({
+        ctx: sessionCtx,
+        sessionEntry: preparedSessionState.sessionEntry,
+        senderIsOwner: command.senderIsOwner,
+        operatorAuthority: opts?.operatorAuthority,
+        disableTools: false,
+      }),
+      sessionKey,
+      operatorProfileId: opts?.operatorAuthority?.profileId,
+    });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
+          requesterOrigin,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
@@ -373,6 +393,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   });
   const followupRun = {
     prompt: queuedBody,
+    readAdmissionConfig,
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,
       admissionRunId: sourceMessageId,
@@ -458,7 +479,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       conversationRoutePeerId: sessionCtx.ConversationRoutePeerId,
+      requesterOrigin,
       conversationToolPolicy: sessionCtx.ConversationToolPolicy,
+      conversationId: sessionCtx.ChatId,
+      messageThreadId: sessionCtx.MessageThreadId,
+      operatorProfileId: opts?.operatorAuthority?.profileId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??

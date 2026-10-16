@@ -321,6 +321,9 @@ export function createReplyOperation(params: {
     get toolAuthorityFingerprint() {
       return toolAuthority.toolAuthorityFingerprint;
     },
+    get requesterPrincipalKey() {
+      return toolAuthority.requesterPrincipalKey;
+    },
     get personalToolParticipants() {
       return toolAuthority.personalToolParticipants;
     },
@@ -415,6 +418,10 @@ export function createReplyOperation(params: {
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
     projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
+    projectRequesterToolAuthorityFingerprint:
+      toolAuthority.projectRequesterToolAuthorityFingerprint,
+    projectRequesterToolAuthorityFingerprintAsync:
+      toolAuthority.projectRequesterToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {

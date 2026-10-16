@@ -1,4 +1,5 @@
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
+import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import { FollowupRunDeferredError, type FollowupRun } from "./types.js";
 
 const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
@@ -213,6 +214,31 @@ export function completeFollowupRuns(
         throw error;
       }
       onError(error);
+    }
+  }
+}
+
+/** A policy refusal consumes transport custody without granting execution custody. */
+export async function refuseCollaborativeSteering(
+  run: FollowupLifecycleRun & Pick<FollowupRun, "userTurnTranscriptRecorder">,
+  state: ReplyOperationRunState | undefined,
+  consumeParked?: () => void,
+): Promise<void> {
+  if (state) {
+    state.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+  }
+  const recorder = run.userTurnTranscriptRecorder;
+  recorder?.markBlocked();
+  try {
+    recorder?.finishPendingInput?.("cancelled");
+    await recorder?.waitForPendingInputSettlement?.();
+    await admitFollowupRunLifecycle(run);
+  } finally {
+    // Abandonment reopens ingress for replay; this input has a terminal policy decision.
+    if (consumeParked) {
+      consumeParked();
+    } else {
+      completeFollowupRunLifecycle(run, "consumed");
     }
   }
 }

@@ -278,6 +278,7 @@ src/agents/model-selection-shared.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
+src/agents/requester-origin.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
 src/agents/plugin-model-catalog.read-operation.ts
@@ -1351,6 +1352,7 @@ src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
 src/plugins/compat/async-sqlite-preparation-records.ts
 src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
+src/plugins/compat/channel-prepared-tool-policy-record.ts
 src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts

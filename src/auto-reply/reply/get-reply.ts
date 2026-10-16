@@ -8,16 +8,12 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import {
   WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
@@ -25,7 +21,6 @@ import {
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
-import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -69,6 +64,7 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import {
   applyLinkUnderstandingIfNeeded,
+  canReadReplyAttachmentPaths,
   applyMediaUnderstandingIfNeeded,
   hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
@@ -84,7 +80,6 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyHeartbeatPendingFinalDelivery,
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
@@ -101,7 +96,6 @@ import {
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
@@ -994,65 +988,29 @@ async function resolveReplyFromConfig(
     stagedAttachmentPaths = stageResult.staged;
   }
 
-  if (enableLocalPathSelfServe && resolvedOpts?.disableTools !== true) {
-    const policySessionKey = resolveRuntimePolicySessionKey({
+  if (
+    enableLocalPathSelfServe &&
+    resolvedOpts?.disableTools !== true &&
+    (await canReadReplyAttachmentPaths({
       cfg,
       agentId,
-      ctx: sessionCtx,
       sessionKey,
-    });
-    const sandboxed = (
-      await resolveSandboxRuntimeStatusAsync({
-        cfg,
-        agentId,
-        sessionKey,
-        classificationSessionKey: policySessionKey,
-        ...(policySessionKey === sessionKey ? { preparedSessionEntry: sessionEntry } : {}),
-      })
-    ).sandboxed;
-    if (
-      (sandboxed && stagedAttachmentPaths.size > 0) ||
-      (!sandboxed && resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId }))
-    ) {
-      const capabilityProfile = await prepareConversationCapabilityProfile({
-        config: cfg,
-        sessionKey: policySessionKey,
-        runSessionKey: policySessionKey === sessionKey ? undefined : sessionKey,
-        agentId,
-        agentAccountId: sessionCtx.AccountId,
-        messageProvider: resolveOriginMessageProvider({
-          originatingChannel: sessionCtx.OriginatingChannel,
-          provider: sessionCtx.Provider ?? sessionCtx.Surface,
-        }),
-        conversationToolPolicy: sessionCtx.ConversationToolPolicy,
-        groupId: resolveGroupSessionKey(sessionCtx)?.id,
-        groupChannel:
-          normalizeOptionalString(sessionCtx.GroupChannel) ??
-          normalizeOptionalString(sessionCtx.GroupSubject),
-        groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
-        spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
-        senderId: normalizeOptionalString(sessionCtx.SenderId),
-        senderName: normalizeOptionalString(sessionCtx.SenderName),
-        senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
-        senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-        senderIsOwner: command.senderIsOwner,
-        modelProvider: runProvider,
-        modelId: runModel,
-        workspaceDir,
-        runtimeToolAllowlist: resolvedOpts?.toolsAllow,
-        inheritRuntimeToolAllowlist: true,
-        inputProvenance: sessionCtx.InputProvenance,
-      });
-      if (
-        projectConversationToolNames({ capabilityProfile, toolNames: ["read"], warn: () => {} })
-          .length === 1
-      ) {
-        enableLocalPathSelfServe(
-          [finalized, sessionCtx],
-          stagedAttachmentPaths.size > 0 ? stagedAttachmentPaths : undefined,
-        );
-      }
-    }
+      sessionCtx,
+      workspaceDir,
+      stagedAttachmentCount: stagedAttachmentPaths.size,
+      spawnedBy: sessionEntry.spawnedBy,
+      senderIsOwner: command.senderIsOwner,
+      modelProvider: runProvider,
+      modelId: runModel,
+      operatorProfileId: resolvedOpts?.operatorAuthority?.profileId,
+      toolsAllow: resolvedOpts?.toolsAllow,
+      sessionEntry,
+    }))
+  ) {
+    enableLocalPathSelfServe(
+      [finalized, sessionCtx],
+      stagedAttachmentPaths.size > 0 ? stagedAttachmentPaths : undefined,
+    );
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");

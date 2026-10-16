@@ -318,6 +318,7 @@ describe("MCP HTTP work ownership", () => {
           context: { sessionKey: "agent:main:scope-proof", senderIsOwner: true },
           runtimeOwnerToken: runtime.ownerToken,
           admittedRunContext,
+          toolPolicyConfig: {},
         }),
       );
       const captureKey = `capture-${runId}`;

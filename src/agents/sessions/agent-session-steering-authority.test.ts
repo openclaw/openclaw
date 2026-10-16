@@ -4,11 +4,7 @@ import {
   bindMessageInjectionAdmission,
   MessageInjectionAcceptedUnconfirmedError,
 } from "../../auto-reply/reply/message-injection-authority.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import type {
-  ReplyBackendMessageInjectionV2,
-  ReplyToolAuthorityOverlay,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   replyRunRegistry,
@@ -16,6 +12,10 @@ import {
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { testing } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -265,11 +265,7 @@ it.each([
           }
           return result;
         });
-      const overlay: ReplyToolAuthorityOverlay = {
-        senderIsOwner: true,
-        disableTools: false,
-        traceAuthorized: false,
-      };
+      const overlay = toolAuthorityOverlay(run);
       try {
         const accepted =
           surface === "registry"
@@ -343,13 +339,7 @@ it.each([
         provider: run.run.provider,
         model: run.run.model,
       });
-      const overlay: ReplyToolAuthorityOverlay = {
-        ...run.run,
-        originatingChannel: run.originatingChannel,
-        senderIsOwner: true,
-        disableTools: false,
-        traceAuthorized: false,
-      };
+      const overlay = toolAuthorityOverlay(run);
       const { session } = await createTestSession();
       const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       const recorderEntered = createDeferredCore();

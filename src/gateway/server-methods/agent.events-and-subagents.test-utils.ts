@@ -24,6 +24,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { registerAgentOwnerPolicyCases } from "./agent.owner-policy.test-support.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -333,47 +334,7 @@ describe("gateway agent handler", () => {
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it("forwards admin caller ownership to ingress agent runs", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "owner tool check",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-admin-sender-owner",
-      },
-      {
-        reqId: "admin-sender-owner",
-        client: operatorWriteCliClient(["operator.admin"]),
-      },
-    );
-
-    expect(await waitForAgentCommandCall()).toMatchObject({
-      senderIsOwner: true,
-      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
-    });
-
-    mocks.agentCommand.mockClear();
-    await invokeAgent(
-      {
-        message: "non-owner tool check",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-write-sender-owner",
-      },
-      {
-        reqId: "write-sender-owner",
-        client: backendGatewayClient(),
-      },
-    );
-
-    expect(await waitForAgentCommandCall()).toMatchObject({
-      senderIsOwner: false,
-      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: false } } },
-    });
-  });
+  registerAgentOwnerPolicyCases();
 
   it("enables Gateway-bound plugin runtimes for ingress agent runs", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });

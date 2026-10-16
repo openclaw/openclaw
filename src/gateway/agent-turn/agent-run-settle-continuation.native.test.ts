@@ -373,7 +373,7 @@ describe("requester-settle processing survives later user turns", () => {
     await original.recorder!.persistApproved();
     expect(
       original.recorder!.getPendingInputMessage!()?.["__openclaw"]?.sessionSendDelivery,
-    ).toEqual(delivery);
+    ).toEqual({ ...delivery, operatorSource: null });
     await completeUserTurnProcessing(
       original.recorder,
       buildAgentRunTerminalOutcome({ status: "ok" }),

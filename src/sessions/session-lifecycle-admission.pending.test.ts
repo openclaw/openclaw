@@ -18,6 +18,7 @@ import {
   observeSessionWorkAdmissionReleases,
   captureGatewaySessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
+  runWithoutInheritedSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
 
@@ -271,7 +272,9 @@ it("serializes pending owners in FIFO order without blocking other owners", asyn
   }
 });
 
-it("lets an inherited owner finish ahead of its queued successor", async ({ signal }) => {
+it("keeps nested work reentrant while independent successors retain FIFO and current authority", async ({
+  signal,
+}) => {
   const target = {
     scope: "nested-owner.sqlite",
     identities: ["nested-owner-session"],
@@ -281,26 +284,58 @@ it("lets an inherited owner finish ahead of its queued successor", async ({ sign
     assertAllowed: () => {},
   };
   const outer = await beginSessionWorkAdmission(target);
-  const validateFollower = vi.fn();
-  const follower = beginSessionWorkAdmission({ ...target, assertAllowed: validateFollower });
+  const order: string[] = [];
+  const follower = beginSessionWorkAdmission({
+    ...target,
+    assertAllowed: () => {
+      order.push("follower");
+    },
+  });
+  let detached: ReturnType<typeof beginSessionWorkAdmission> | undefined;
+  let allowed = true;
   try {
     await withinTest(
       outer.run(async () => {
-        const inner = await beginSessionWorkAdmission(target);
+        detached = runWithoutInheritedSessionWorkAdmissions(() =>
+          beginSessionWorkAdmission({
+            ...target,
+            assertAllowed: () => {
+              if (!allowed) {
+                throw new Error("successor authority revoked");
+              }
+              order.push("detached");
+            },
+          }),
+        );
+        void detached.catch(() => {});
+        const inner = await beginSessionWorkAdmission({
+          ...target,
+          assertAllowed: () => {
+            order.push("nested");
+          },
+        });
         inner.release();
       }),
       signal,
     );
     expect(outer.isActive()).toBe(true);
-    expect(validateFollower).not.toHaveBeenCalled();
+    expect(order).toEqual(["nested"]);
+    outer.release();
+    const next = await withinTest(follower, signal);
+    expect(order).toEqual(["nested", "follower"]);
+    allowed = false;
+    next.release();
+    await expect(detached).rejects.toThrow("successor authority revoked");
+    expect(order).toEqual(["nested", "follower"]);
   } finally {
     outer.release();
-    await follower.then(
-      (lease) => lease.release(),
-      () => {},
-    );
+    for (const attempt of [follower, detached]) {
+      await attempt?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
   }
-  expect(validateFollower).toHaveBeenCalled();
 });
 
 it.for(["caller abort", "Stop"])(

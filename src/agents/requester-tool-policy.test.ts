@@ -242,8 +242,14 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
     expect(result.inheritedToolPolicySource).toBe("sender");
 
+    const requesterOrigin = {
+      sessionKey: targetSessionKey,
+      messageProvider: "discord",
+      senderId: "alice",
+    };
     const snapshot = prepareReplyToolAuthority({
       run: {
+        requesterOrigin,
         config: config(),
         sessionKey: targetSessionKey,
         sessionId: registration.targetSessionId,
@@ -261,6 +267,20 @@ describe("resolveRequesterToolPolicies", () => {
     });
     try {
       const currentFingerprint = await snapshot.fingerprintAsync();
+      const route = { provider: consumption.provider, model: consumption.model };
+      const allowedProjection = await snapshot.projectRequesterAsync(
+        { requesterOrigin, config: config() },
+        route,
+      );
+      const deniedProjection = await snapshot.projectRequesterAsync(
+        {
+          requesterOrigin,
+          config: config({ tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } } }),
+        },
+        route,
+      );
+      expect(deniedProjection).not.toBe(allowedProjection);
+      expect(snapshot.fingerprint(route)).toBe(currentFingerprint);
       current = false;
       expect(snapshot.fingerprint()).not.toBe(currentFingerprint);
     } finally {
@@ -503,6 +523,76 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.inheritedToolPolicySource).toBe("sender");
   });
 
+  it.each([false, true])(
+    "applies current requester policy to a fresh child followup while retaining its ceiling (delegated=%s)",
+    async (delegated) => {
+      const requesterSessionKey = "agent:front:discord:direct:alice";
+      const childSessionKey = "agent:worker:subagent:policy-admission";
+      await writeSession(childSessionKey, {
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: delegated ? ["message", "write"] : ["message"],
+        ...(delegated
+          ? {
+              delegatedToolPolicy: {
+                requesterSessionKey,
+                targetAgentId: "worker",
+                deny: ["message"],
+                requesterDeny: ["message", "write"],
+              },
+            }
+          : {}),
+      });
+      const cfg = config({
+        agents: {
+          entries: {
+            front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
+            worker: {},
+          },
+        },
+      });
+      const request = {
+        agentId: "worker",
+        sessionKey: childSessionKey,
+        requesterOrigin: {
+          sessionKey: requesterSessionKey,
+          messageProvider: "discord",
+          senderId: "alice",
+        },
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceSessionKey: requesterSessionKey,
+          sourceTool: "sessions_send",
+        },
+      };
+      const admitted = await withPreparedSessionCapabilityRead(() =>
+        resolveRequesterToolPolicies({ config: cfg, ...request }),
+      );
+      expect(admitted.senderPolicy).toBeUndefined();
+      expect(admitted.inheritedToolPolicy).toEqual({ deny: ["message"] });
+
+      const nextConfig = config({
+        ...cfg,
+        tools: {
+          ...cfg.tools,
+          toolsBySender: { ...cfg.tools?.toolsBySender, "id:alice": { deny: ["exec"] } },
+        },
+      });
+      const next = await withPreparedSessionCapabilityRead(() =>
+        resolveRequesterToolPolicies({ config: nextConfig, ...request }),
+      );
+
+      expect(next.senderPolicy).toEqual({ deny: ["exec"] });
+      expect(next.inheritedToolPolicy).toEqual({ deny: ["message"] });
+      expect(next.inheritedToolPolicySource).toBe("sender");
+      expect(admitted.senderPolicy).toBeUndefined();
+      expect(admitted.inheritedToolPolicy).toEqual({ deny: ["message"] });
+    },
+  );
+
   it("fails closed when a trusted internal handoff has no configuration", () => {
     expect(() =>
       resolveRequesterToolPolicies({
@@ -534,9 +624,14 @@ describe("resolveRequesterToolPolicies", () => {
 
     const result = await withPreparedSessionCapabilityRead(() =>
       resolveRequesterToolPolicies({
-        config: config(),
+        config: config({ tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } } }),
         agentId: "main",
         sessionKey: completionOwnerSessionKey,
+        requesterOrigin: {
+          sessionKey: controllerSessionKey,
+          messageProvider: "discord",
+          senderId: "alice",
+        },
         ...completionHandoffFacts(childSessionKey, completionOwnerSessionKey),
         inputProvenance: {
           kind: "inter_session",

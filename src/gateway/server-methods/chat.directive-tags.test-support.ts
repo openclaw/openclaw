@@ -21,6 +21,7 @@ import {
   type GatewayPluginMetadataOwner,
 } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -32,6 +33,31 @@ import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+export function createExpectedAcpUserTurn(params: {
+  content: string;
+  idempotencyKey: string;
+  senderIsOwner?: boolean;
+  provenance?: InputProvenance;
+}) {
+  return {
+    role: "user",
+    content: params.content,
+    timestamp: expect.any(Number),
+    idempotencyKey: params.idempotencyKey,
+    __openclaw: {
+      chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      requesterOrigin: {
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        chatType: "direct",
+      },
+      ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
+      transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
+    },
+    ...(params.provenance ? { provenance: params.provenance } : {}),
+  };
+}
 
 export function expectManagedAudioBlock(
   block: Record<string, unknown> | undefined,

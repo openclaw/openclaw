@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
@@ -16,9 +17,48 @@ import {
 } from "../tokens.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import {
+  type CompactionNoticePhase,
+  createCompactionNoticePayload,
+  shouldNotifyUserAboutCompaction,
+} from "./compaction-notice.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
+
+export function createReplyCompactionNotices(params: {
+  cfg: OpenClawConfig;
+  currentMessageId?: string;
+  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+  opts: Pick<GetReplyOptions, "onBlockReply"> | undefined;
+}) {
+  const pendingCompactionNotices: ReplyPayload[] = [];
+  const sendDirectCompactionNotice = async (phase: CompactionNoticePhase, text?: string) => {
+    if (
+      phase !== "context_bounded" &&
+      phase !== "degraded" &&
+      !shouldNotifyUserAboutCompaction(params.cfg)
+    ) {
+      return;
+    }
+    const noticePayload = createCompactionNoticePayload({
+      phase,
+      text,
+      currentMessageId: params.currentMessageId,
+      applyReplyToMode: params.applyReplyToMode,
+    });
+    try {
+      if (params.opts?.onBlockReply) {
+        await params.opts.onBlockReply(noticePayload);
+      } else {
+        pendingCompactionNotices.push(noticePayload);
+      }
+    } catch (err) {
+      logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
+    }
+  };
+  return { pendingCompactionNotices, sendDirectCompactionNotice };
+}
 
 export async function deliverPreparedBlockReply(
   opts: Pick<GetReplyOptions, "onPreparedBlockReply" | "onBlockReply"> | undefined,

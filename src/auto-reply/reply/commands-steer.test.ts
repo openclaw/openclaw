@@ -1,4 +1,4 @@
-// Tests /steer target capture, prepared-path continuation, and visible fallback.
+// Tests explicit continuation commands, target capture, and prepared-path handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -6,6 +6,8 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
+import { handleFollowupCommand } from "./commands-followup.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -189,5 +191,48 @@ describe("handleSteerCommand", () => {
     expect(params.ctx.BodyForAgent).toBe("keep going");
     expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(queueMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleFollowupCommand", () => {
+  it.each(["text", "native"] as const)(
+    "preserves authorized %s intent while forwarding only the message without an early ack",
+    async (source) => {
+      const message = "review the result\n\n    keep the formatting";
+      const params = buildParams(`/followup ${message}`);
+      params.ctx.CommandSource = source;
+      params.rootCtx = { ...params.ctx };
+      params.sessionEntry = { sessionId: "session-followup", updatedAt: 1, queueMode: "collect" };
+
+      expect(await handleFollowupCommand(params, true)).toEqual({
+        shouldContinue: true,
+        queueModeOverride: "followup",
+      });
+      for (const ctx of [params.ctx, params.rootCtx]) {
+        expect(ctx.Body).toBe(message);
+        expect(ctx.BodyForAgent).toBe(message);
+        expect(isExplicitFollowupCommandTurn(ctx)).toBe(true);
+        expect(ctx.CommandTurn).toMatchObject({
+          source,
+          authorized: true,
+          commandName: "followup",
+        });
+      }
+      expect(params.command.commandBodyNormalized).toBe(message);
+      expect(params.sessionEntry.queueMode).toBe("collect");
+    },
+  );
+
+  it("returns usage without dispatching an empty followup or accepting unauthorized input", async () => {
+    expect(await handleFollowupCommand(buildParams("/followup"), true)).toEqual({
+      shouldContinue: false,
+      reply: { text: "Usage: /followup <message>" },
+    });
+    const params = buildParams("/followup private instruction");
+    params.command.isAuthorizedSender = false;
+    params.ctx.CommandAuthorized = false;
+    expect(await handleFollowupCommand(params, true)).toEqual({ shouldContinue: false });
+    expect(isExplicitFollowupCommandTurn(params.ctx)).toBe(false);
+    expect(params.ctx.Body).toBe("/followup private instruction");
   });
 });

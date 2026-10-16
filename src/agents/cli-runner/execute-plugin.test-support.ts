@@ -1,3 +1,7 @@
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
@@ -33,6 +37,7 @@ export async function createExecution(
 ) {
   const runId = options.runId ?? `plugin-owner-${++nextRunId}`;
   const config = options.config ?? { tools: { exec: { security: "full", ask: "off" } } };
+  setRuntimeConfigSnapshot(config);
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
   activeAdmissions.push(admission);
   const context = buildPreparedCliRunContext({
@@ -139,6 +144,7 @@ export function closePluginTestAdmissions(): void {
     admission.close();
   }
   resetAdjustedParamsByToolCallIdForTests();
+  clearRuntimeConfigSnapshot();
 }
 
 export function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {

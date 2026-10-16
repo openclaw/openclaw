@@ -266,7 +266,6 @@ src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
-src/auto-reply/reply/dispatch-acp.ts
 src/auto-reply/reply/dispatch-from-config.abort-and-dedupe.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts
 src/auto-reply/reply/dispatch-from-config.base.test-utils.ts

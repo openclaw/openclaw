@@ -13,6 +13,7 @@ export type LocalRunState = {
   managedMediaUrls: Set<string>;
   lastBroadcastText?: string;
   question?: string;
+  explicitFollowup?: true;
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;

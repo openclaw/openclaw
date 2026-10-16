@@ -27,6 +27,7 @@ import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
@@ -93,6 +94,10 @@ export type AgentRunMessageContext = {
 };
 
 export type AgentRunChannelContext = {
+  requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string;
+  /** Original authenticated conversation, independent of destination routing. */
+  conversationId?: string | null;
   /** Canonical transport channel when it differs from the tool-policy provider. */
   messageChannel?: string;
   messageProvider?: string;

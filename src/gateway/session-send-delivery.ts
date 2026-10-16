@@ -54,7 +54,7 @@ export function readSessionSendDeliveryAdmission(params: {
 
 export function readSessionSendDelivery(
   message: PersistedUserTurnMessage,
-): SessionSendDelivery | undefined {
+): (SessionSendDelivery & { operatorSource?: unknown }) | undefined {
   const value = message["__openclaw"]?.sessionSendDelivery;
   const endpoint = (entry: unknown): entry is SessionSendDeliveryEndpoint =>
     isRecord(entry) &&
@@ -84,5 +84,7 @@ export function readSessionSendDelivery(
     target: value.target,
     sandboxed: value.sandboxed,
     message: value.message,
+    // The operator recovery owner validates its own bounded representation.
+    operatorSource: value.operatorSource,
   };
 }

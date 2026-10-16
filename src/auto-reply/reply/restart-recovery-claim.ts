@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   getRestartRecoveryPendingFinalSourceRunId,
@@ -41,52 +42,21 @@ import {
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  UserTurnTranscriptRecorder,
-  UserTurnTranscriptTarget,
-} from "../../sessions/user-turn-transcript.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
-import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
+import type {
+  ReplyRestartRecoveryClaimController,
+  ReplyRestartRecoveryClaimParams,
+} from "./restart-recovery-claim.types.js";
 import { readReplyAdmissionSession } from "./restart-recovery-placement.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
-export function createReplyRestartRecoveryClaimController(params: {
-  agentId: string;
-  acquireSessionActor: () => Promise<
-    | {
-        actor: SessionActor;
-        target: SessionEntryTargetPatchScope;
-      }
-    | undefined
-  >;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  inputProvenance?: InputProvenance;
-  admissionRunId?: unknown;
-  executionRunId?: string;
-  lifecycleGeneration: string | undefined;
-  getEntry: () => SessionEntry | undefined;
-  getSessionId: () => string;
-  isRestartAbort: () => boolean;
-  resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
-  requesterAccountId?: unknown;
-  requesterSenderId?: unknown;
-  resolveUserTurnTarget?: (params: {
-    entry: SessionEntry;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) => UserTurnTranscriptTarget | undefined;
-  sessionKey?: string;
-  setEntry: (entry: SessionEntry) => void;
-  sameChannelThreadRequired?: boolean;
-  sourceTurnId?: unknown;
-  strandedReplyRetry?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  storePath?: string;
-}): ReplyRestartRecoveryClaimController {
+export function createReplyRestartRecoveryClaimController(
+  params: ReplyRestartRecoveryClaimParams,
+): ReplyRestartRecoveryClaimController {
+  const requesterOrigin = params.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: params.requesterOrigin })
+    : undefined;
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   // The retry shares delivery correlation with its parent, but owns one internal admission.
   const strandedRetryRunId =
@@ -493,6 +463,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     const hasDeliveryClaim = Boolean(
       recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
     );
+    const claimSourceRunId =
+      transfersControlUiClaim || operatorSource
+        ? recoveryRunId
+        : recoverableDeliveryContext
+          ? sourceTurnId
+          : undefined;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -506,12 +482,16 @@ export function createReplyRestartRecoveryClaimController(params: {
       restartRecoveryDeliveryRequestFingerprint: undefined,
       restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
       restartRecoveryOperatorSource: operatorSource,
-      restartRecoveryDeliverySourceRunId:
-        transfersControlUiClaim || operatorSource
-          ? recoveryRunId
-          : recoverableDeliveryContext
-            ? sourceTurnId
-            : undefined,
+      restartRecoveryRequesterSource: claimSourceRunId
+        ? createRestartRecoveryRequesterSource({
+            requesterOrigin,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: claimSourceRunId,
+          })
+        : undefined,
+      restartRecoveryDeliverySourceRunId: claimSourceRunId,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),

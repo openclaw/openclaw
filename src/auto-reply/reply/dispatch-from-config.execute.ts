@@ -14,10 +14,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isFileLogLevelEnabled } from "../../logging/logger.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   isCommandReplyForDelivery,
+  markReplyPayloadForSourceSuppressionDelivery,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -87,6 +90,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let didDeliverVisiblePartialReply = false;
   let replyResolverError: string | undefined;
   const pendingToolProgress = new Set<Promise<void>>();
+  let explicitFollowupStartNotice: Promise<void> | undefined;
   const {
     onBlockReply,
     onPreparedBlockReply,
@@ -155,10 +159,30 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             allowWhenToolSummariesHidden:
               params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
           };
+          const replyOptions = state.getReplyOptions();
           const result = await replyResolver(
             ctx,
             {
-              ...state.getReplyOptions(),
+              ...replyOptions,
+              ...observeAgentRunStart(replyOptions, () => {
+                if (
+                  !explicitFollowupStartNotice &&
+                  isExplicitFollowupCommandTurn(ctx) &&
+                  state.replyOperationRunState.admission?.status !== "accepted"
+                ) {
+                  // The synchronous start callback retains completion ownership; delivery
+                  // joins the existing progress lifecycle without waiting for the answer.
+                  explicitFollowupStartNotice = Promise.resolve(
+                    onBlockReply(
+                      markReplyPayloadForSourceSuppressionDelivery({
+                        text: "Your followup has started.",
+                        isStatusNotice: true,
+                      }),
+                    ),
+                  );
+                  trackDispatchLifecycleWork(explicitFollowupStartNotice, "delivery");
+                }
+              }),
               preparedTtsPreferences: state.preparedTtsPreferences,
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
@@ -190,6 +214,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ? undefined
                 : wrapProgressCallback(params.replyOptions?.onPartialReply, {
                     onForward: async () => {
+                      await explicitFollowupStartNotice;
                       if (!state.deliverStandaloneCommentaryProgress) {
                         return;
                       }
@@ -457,8 +482,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 forwardToolProgress(() => state.onApprovalEventFromReplyOptions?.(payload)),
               onPatchSummary: (payload) =>
                 forwardToolProgress(() => state.onPatchSummaryFromReplyOptions?.(payload)),
-              onBlockReply,
-              onPreparedBlockReply,
+              onBlockReply: (payload, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onBlockReply(payload, context))
+                  : onBlockReply(payload, context),
+              onPreparedBlockReply: (plan, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onPreparedBlockReply(plan, context))
+                  : onPreparedBlockReply(plan, context),
             },
             state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig,
           );
@@ -482,6 +513,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     try {
       return await resolverWork;
     } finally {
+      await explicitFollowupStartNotice;
       await flushBlockTtsText();
     }
   }).catch(async (error: unknown) => {

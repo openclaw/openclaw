@@ -1,10 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { markRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
+import { createRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { appendTranscriptMessage, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -209,7 +215,7 @@ describe("typed restart recovery operator admission", () => {
             runtime.recovery.dispatchAgent(request, undefined, {
               restartRecoveryOperatorTarget: fixture.target,
             }),
-          ).rejects.toThrow("dispatch does not match its operator claim");
+          ).rejects.toThrow("dispatch does not match its source claim");
           expect(startTurn).not.toHaveBeenCalled();
         } finally {
           runtime.close();
@@ -218,9 +224,37 @@ describe("typed restart recovery operator admission", () => {
     },
   );
 
-  it.each(["authenticated operator", "legacy claim"] as const)(
-    "applies the actual admin-method fence to a %s principal",
-    async (source) => {
+  it.each([
+    { source: "authenticated operator", operator: true, requester: "absent", expected: "accepted" },
+    { source: "legacy claim", operator: false, requester: "absent", expected: "scope refusal" },
+    { source: "matching requester", operator: true, requester: "matching", expected: "accepted" },
+    {
+      source: "native queued requester",
+      operator: true,
+      requester: "matching",
+      expected: "accepted",
+    },
+    {
+      source: "native queued mismatched requester",
+      operator: true,
+      requester: "different",
+      expected: "identity refusal",
+    },
+    {
+      source: "mismatched requester",
+      operator: true,
+      requester: "different",
+      expected: "identity refusal",
+    },
+    {
+      source: "requester without operator authority",
+      operator: false,
+      requester: "matching",
+      expected: "identity refusal",
+    },
+  ] as const)(
+    "applies recovery admission and the actual admin-method fence to $source",
+    async ({ source, operator, requester, expected }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const context = createDirectChatContext({ trackExecution: trackAsyncWork });
         const profile = ensureProfileForEmail("runtime-recovery@example.test");
@@ -230,6 +264,22 @@ describe("typed restart recovery operator admission", () => {
           profileId: profile.id,
           config: {},
         });
+        if (requester !== "absent") {
+          await replaceSessionEntry(fixture.target, {
+            ...fixture.entry,
+            restartRecoveryRequesterSource: expectDefined(
+              createRestartRecoveryRequesterSource({
+                ...fixture.target,
+                entry: fixture.entry,
+                requesterOrigin: {
+                  sessionKey: fixture.target.sessionKey,
+                  operatorProfileId: requester === "matching" ? profile.id : "another-requester",
+                },
+              }),
+              "host-captured requester source",
+            ),
+          });
+        }
         const registry = createGatewayMethodRegistry([
           {
             name: "cron.add",
@@ -244,6 +294,12 @@ describe("typed restart recovery operator admission", () => {
           isDispatchAvailable: () => true,
         });
         startTurn.mockImplementation(async ({ principal, io }) => {
+          if (requester === "matching") {
+            expect(principal?.internal?.agentToolCaller?.requesterOrigin).toMatchObject({
+              sessionKey: fixture.target.sessionKey,
+              operatorProfileId: profile.id,
+            });
+          }
           const authorization = authorizeGatewayMethod(
             "cron.add",
             principal,
@@ -264,18 +320,40 @@ describe("typed restart recovery operator admission", () => {
           expectedExistingSessionId: fixture.target.sessionId,
           idempotencyKey: fixture.target.recoveryRunId,
         };
-        const options = {
-          restartRecoveryOperatorTarget:
-            source === "authenticated operator" ? fixture.target : undefined,
-        };
+        const queued = source.startsWith("native queued");
+        const retained = queued
+          ? expectDefined(await fixture.restore(), "queued source authority")
+          : undefined;
+        const options = queued
+          ? {
+              operatorRunAuthority: retained?.authority,
+              agentToolCaller: {
+                agentId: "main",
+                sessionKey: fixture.target.sessionKey,
+                requesterOrigin: {
+                  sessionKey: fixture.target.sessionKey,
+                  operatorProfileId: requester === "matching" ? profile.id : "another-requester",
+                },
+              },
+            }
+          : {
+              restartRecoveryOperatorTarget: operator ? fixture.target : undefined,
+              restartRecoveryRequesterTarget: requester !== "absent" ? fixture.target : undefined,
+            };
         try {
           const result = runtime.recovery.dispatchAgent(request, undefined, options);
-          if (source === "authenticated operator") {
+          if (expected === "accepted") {
             await expect(result).resolves.toMatchObject({ status: "ok" });
+            expect(startTurn).toHaveBeenCalledOnce();
+          } else if (expected === "identity refusal") {
+            await expect(result).rejects.toThrow("requester has no matching operator authority");
+            expect(startTurn).not.toHaveBeenCalled();
           } else {
             await expect(result).rejects.toThrow("missing scope: operator.admin");
+            expect(startTurn).toHaveBeenCalledOnce();
           }
         } finally {
+          retained?.release();
           runtime.close();
         }
       });
@@ -320,6 +398,8 @@ describe("typed restart recovery operator admission", () => {
       const entered = createDeferred<AgentTurnPrincipal>();
       const finish = createDeferred();
       let execution: Promise<void> | undefined;
+      let admissionCurrent = true;
+      let executionStarted = false;
       startTurn.mockImplementation(({ principal, io }) => {
         execution = (async () => {
           const currentPrincipal = expectDefined(principal, "typed recovery principal");
@@ -330,13 +410,32 @@ describe("typed restart recovery operator admission", () => {
               runId: fixture.target.recoveryRunId,
             },
           );
+          if (boundary === "registration replaced") {
+            expect(registration.markExecutionStarted()).toBe(true);
+            io.emitExecutionStarted?.();
+          }
           entered.resolve(currentPrincipal);
           await finish.promise;
           io.emitFinal([true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined]);
         })();
         return execution;
       });
-      const options = { restartRecoveryOperatorTarget: fixture.target, expectFinal: true };
+      const options = {
+        restartRecoveryOperatorTarget: fixture.target,
+        expectFinal: true,
+        ...(boundary === "registration replaced"
+          ? {
+              assertAdmissionCurrent: () => {
+                if (!admissionCurrent) {
+                  throw new Error("Recovery admission ended after execution started");
+                }
+              },
+              onExecutionStarted: () => {
+                executionStarted = true;
+              },
+            }
+          : {}),
+      };
       const pending = runtime.recovery.dispatchAgent(
         {
           message: "Continue the interrupted turn",
@@ -360,6 +459,27 @@ describe("typed restart recovery operator admission", () => {
         );
         expect(authority.assertCurrent).not.toThrow();
         if (boundary === "registration replaced") {
+          expect(executionStarted).toBe(true);
+          expect(registration.entry.executionStarted).toBe(true);
+          const accepted = await acceptCompactionSuccessor({
+            currentTarget: fixture.target,
+            expectedEntry: {
+              sessionId: fixture.entry.sessionId,
+              lifecycleRevision: fixture.entry.lifecycleRevision,
+              activeWriterRunId: fixture.entry.activeWriterRunId,
+            },
+            assertActive: authority.assertCurrent,
+            result: {
+              ok: true,
+              compacted: true,
+              result: { sessionId: "runtime-successor", tokensBefore: 120, tokensAfter: 42 },
+            },
+          });
+          // Match the execution owner's onSessionIdChanged on this same registration.
+          registration.entry.sessionId = accepted.entry.sessionId;
+          expect(authority.assertCurrent).not.toThrow();
+          admissionCurrent = false;
+          expect(authority.assertCurrent).not.toThrow();
           // Same correlation identity cannot transfer the old registration's authority.
           context.chatAbortControllers.set(fixture.target.recoveryRunId, {
             ...registration.entry,
@@ -382,10 +502,13 @@ describe("typed restart recovery operator admission", () => {
         }
       } finally {
         finish.resolve();
-        await pending.catch(() => undefined);
-        await execution;
-        registration.cleanup();
-        runtime.close();
+        try {
+          await pending.catch(() => undefined);
+          await execution;
+        } finally {
+          registration.cleanup();
+          runtime.close();
+        }
       }
     });
   });

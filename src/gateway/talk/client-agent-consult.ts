@@ -235,6 +235,7 @@ export function createTalkClientAgentConsultRunner(params: {
             // Source authority belongs to prepared admission, not loose runtime
             // params. Direct attempts also do not implement reply tracing.
             const {
+              sessionKey: _sessionKey,
               operatorAuthority: _operatorAuthority,
               traceAuthorized: _traceAuthorized,
               originatingChannel: _originatingChannel,

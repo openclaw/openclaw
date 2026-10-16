@@ -310,6 +310,7 @@ describe("cloud worker run ownership", () => {
             const project = (_overlay: ReplyToolAuthorityOverlay) => "worker-turn-authority";
             return {
               source: "reply",
+              acceptsRequesterOrigin: () => false,
               project,
               projectAsync: async (overlay) => project(overlay),
               assertActive: () => {},

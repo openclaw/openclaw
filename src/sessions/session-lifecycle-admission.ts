@@ -404,6 +404,11 @@ export function observeSessionWorkAdmissionReleases(
   };
 }
 
+/** Accepted independent executions retain their own leases, not their caller's nested-work exemption. */
+export function runWithoutInheritedSessionWorkAdmissions<T>(run: () => T): T {
+  return CURRENT_SESSION_WORK_ADMISSIONS.exit(run);
+}
+
 export async function beginSessionWorkAdmission(params: {
   agentId?: string;
   statePath?: string;

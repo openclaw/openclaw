@@ -4,6 +4,7 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
 import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
+import { applyMessageQueueDefaults } from "../../../config/defaults.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   omitDeferredPluginMigrationConfig,
@@ -98,13 +99,16 @@ async function planConfigRepair(
       pluginContracts,
     }),
   );
+  const migrated = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.sourceConfig,
+    nextConfig: migration.next ?? snapshot.sourceConfig,
+    pending: deferredPluginMigrations ?? [],
+  });
+  // Include the Doctor default in this write so a later write does not rotate
+  // the original backup. Read-only backup projection keeps its existing shape.
   const config = inheritLegacyDefaultAgentId(
     migration.next ?? snapshot.sourceConfig,
-    preserveDeferredPluginMigrationConfig({
-      sourceConfig: snapshot.sourceConfig,
-      nextConfig: migration.next ?? snapshot.sourceConfig,
-      pending: deferredPluginMigrations ?? [],
-    }),
+    pluginContracts ? applyMessageQueueDefaults(migrated) : migrated,
   );
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
@@ -142,7 +146,13 @@ async function planConfigRepair(
   return {
     config,
     writeConfig,
-    changes: [...migration.changes, ...(migration.warnings ?? [])],
+    changes: [
+      ...migration.changes,
+      ...(migration.warnings ?? []),
+      ...(config === migrated
+        ? []
+        : ["Set messages.queue.allowCollaborativeSteering to true (default)."]),
+    ],
     snapshot: {
       ...snapshot,
       sourceConfig: config,

@@ -31,6 +31,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
+- `allowCollaborativeSteering: true`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
@@ -50,10 +51,9 @@ Messages from channels using durable ingress admission, including Discord and Te
 
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
-Gateway input retains its authenticated operator and original scope ceiling while
-queued or delegated to a child. Collecting messages or steering an active run
-requires compatible operator sources and tool permissions; other input waits in
-FIFO order instead of borrowing the active or newest sender's permissions.
+Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
+
+By default, admitted human input in the same conversation can steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Set `messages.queue.allowCollaborativeSteering: false` to refuse another person’s steering attempt without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -67,6 +67,7 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
+      allowCollaborativeSteering: true,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect", x: "followup" },
@@ -127,6 +128,21 @@ For mode selection, OpenClaw resolves:
 4. Default `steer`.
 
 For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
+
+## One-message followup
+
+`/followup <message>` sends just that message as a new turn without changing the
+stored queue mode. It waits behind active and already-queued work, stays separate
+from collect batches, and bypasses pending-question answering. If the session has
+no active or queued work, it starts through normal admission. The turn retains
+its submitter and resolves current policy when admitted.
+
+The queued notice appears only after enqueue succeeds. If the message starts
+immediately, its start notice appears when execution starts, before the answer.
+Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
+rules still apply. Gateway-backed chat and the local embedded TUI support this
+command. See [Steer](/tools/steer#one-message-as-a-new-turn) for the contrast with
+steering the active run.
 
 ## Per-session overrides
 

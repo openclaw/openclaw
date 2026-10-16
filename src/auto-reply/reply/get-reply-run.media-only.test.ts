@@ -4,24 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
-import { createCronTool } from "../../agents/tools/cron-tool.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-import {
-  getCronManagementAuthority,
-  withCronManagementGrant,
-} from "../../gateway/cron-creator-authority-grant.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
 import {
   enqueueSystemEvent,
   enqueueSystemEventEntry,
@@ -460,112 +444,12 @@ function requireRunReplyAgentCall(index = 0) {
 }
 
 describe("runPreparedReply media-only handling", () => {
-  registerPendingRequesterAuthorityCases({ runPrepared, loadSessionEntryMock });
-  it.each([
-    "owner-alias",
-    "non-owner",
-    "heartbeat",
-    "room-event",
-    "spawned",
-    "inter-session",
-    "replay",
-    "revoked-before-bind",
-    "revoked",
-  ] as const)(
-    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
-    async (kind) => {
-      const runId = "discord-owner-management";
-      const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      const admitted = kind === "owner-alias" || kind === "revoked";
-      setRuntimeConfigSnapshot(cfg);
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      const identity: AgentRuntimeIdentity = {
-        kind: "agentRuntime",
-        agentId: "default",
-        sessionKey: "agent:default:discord:channel:123",
-        operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...authority },
-      };
-      const calls: string[] = [];
-      vi.mocked(runReplyAgent).mockImplementationOnce(async ({ opts }) => {
-        await withGatewayToolCallerIdentity(
-          { ...identity, approvalAuthority: authority },
-          async () => {
-            if (kind === "revoked-before-bind") {
-              setRuntimeConfigSnapshot({});
-            }
-            const tool = createCronTool(
-              { runId: opts?.runId, agentSessionKey: identity.sessionKey },
-              {
-                callGatewayTool: async <T>(method: string) => {
-                  const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
-                  if (!admitted) {
-                    expect(grant).toBeUndefined();
-                    calls.push("restricted");
-                    return { jobs: [], total: 0, hasMore: false } as T;
-                  }
-                  expect(grant, "configured owner must receive a management grant").toBeDefined();
-                  return await withCronManagementGrant(grant!, identity, method, async () => {
-                    const assertActive = getCronManagementAuthority(identity)!;
-                    assertActive();
-                    await Promise.resolve();
-                    if (kind === "revoked") {
-                      setRuntimeConfigSnapshot({});
-                    }
-                    assertActive();
-                    calls.push(method);
-                    return { jobs: [], total: 0, hasMore: false } as T;
-                  });
-                },
-              },
-            );
-            if (kind === "revoked") {
-              await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
-                "Automation admin grant",
-              );
-            } else {
-              await tool.execute("list", { action: "list" });
-            }
-          },
-        );
-        return undefined;
-      });
-      try {
-        const params = ownerParams();
-        params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner";
-        await runPrepared({
-          ...params,
-          conversation: undefined,
-          cfg,
-          ...turn("list automations", {
-            ...createProviderSurface("discord"),
-            ChatType: "group",
-            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
-            InputProvenance:
-              kind === "inter-session"
-                ? { kind: "inter_session", sourceTool: "sessions_send" }
-                : undefined,
-            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-          }),
-          sessionEntry:
-            kind === "spawned"
-              ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-              : undefined,
-          opts: {
-            runId,
-            isHeartbeat: kind === "heartbeat",
-            suppressNextUserMessagePersistence: kind === "replay",
-          },
-        });
-        expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
-      } finally {
-        releaseAgentRunDelegatedAuthority(authority);
-        clearRuntimeConfigSnapshot();
-      }
-    },
-  );
+  registerPendingRequesterAuthorityCases({
+    runPrepared,
+    loadSessionEntryMock,
+    requireRunReplyAgentCall,
+    turn,
+  });
   beforeAll(async () => {
     // Preload the runtime seams directly so test setup does not need a synthetic
     // reply turn with registry and session side effects.
@@ -1862,6 +1746,14 @@ describe("runPreparedReply media-only handling", () => {
       }),
       timestamp: expect.any(Number),
       __openclaw: {
+        requesterOrigin: {
+          sessionKey: "session-key",
+          messageProvider: "telegram",
+          chatType: "group",
+          senderName: "Keśava",
+          senderId: undefined,
+          operatorProfileId: undefined,
+        },
         senderIsOwner: false,
         senderName: "Keśava",
         transport: {

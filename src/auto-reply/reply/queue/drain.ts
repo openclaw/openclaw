@@ -43,7 +43,7 @@ import {
   assertSingleAdmissionOwner,
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
-  getFollowupOriginRouting,
+  resolveOriginRoutingMetadata,
   hasExclusiveTurnAdmission,
   hasPreparedCurrentTurnImages,
   prepareNextDeliveryGroup,
@@ -184,23 +184,6 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
       kickFollowupDrainIfIdle(key);
     }
   };
-}
-
-function resolveOriginRoutingMetadata(items: FollowupRun[]) {
-  const source =
-    items.find((item) => item.originatingChannel && item.originatingTo) ??
-    items.find(
-      (item) =>
-        item.originatingChannel ||
-        item.originatingTo ||
-        item.originatingAccountId ||
-        item.originatingThreadId != null ||
-        item.originatingChatId ||
-        item.originatingReplyToId ||
-        item.originatingReplyToMode ||
-        item.originatingChatType,
-    );
-  return source ? getFollowupOriginRouting(source) : {};
 }
 
 function resolveCollectedSourceText(
@@ -362,6 +345,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     return {
       ...transcriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
@@ -373,6 +357,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     input: {
       ...initialTranscriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,
@@ -691,6 +676,7 @@ async function runSyntheticOverflowSummary(params: {
       text: params.prompt,
       idempotencyKey: `followup-overflow:${params.source.run.sessionId}:${routeHash}:${params.source.messageId ?? params.source.enqueuedAt}:${promptHash}`,
       senderIsOwner: params.source.run.senderIsOwner,
+      requesterOrigin: params.source.run.requesterOrigin,
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
@@ -705,6 +691,7 @@ async function runSyntheticOverflowSummary(params: {
   await params.runFollowup({
     prompt: params.prompt,
     sourceTurnId: runtimeMetadata.sourceTurnId,
+    readAdmissionConfig: params.source.readAdmissionConfig,
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,

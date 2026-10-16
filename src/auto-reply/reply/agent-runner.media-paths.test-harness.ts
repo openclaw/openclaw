@@ -204,8 +204,11 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
-function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
-  const followupRun = createMockFollowupRun(overrides);
+function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0] = {}) {
+  const followupRun = createMockFollowupRun({
+    ...overrides,
+    run: { senderId: "alice", ...overrides.run },
+  });
   followupRun.run.thinkingCatalog = [
     {
       provider: followupRun.run.provider,

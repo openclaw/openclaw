@@ -1,11 +1,16 @@
 /**
  * Canonical requester-scoped policy resolution for external and delegated runs.
- * Sender-dependent policy resolves once at trusted ingress; verified descendants
- * consume the persisted effective parent projection instead of guessing identity.
+ * Native admissions resolve current configuration for preserved requester facts.
+ * Spawned-child envelopes keep their separate inherited-authority contract.
  */
+import { normalizeChatType } from "../channels/chat-type.js";
+import { resolveLegacyConversationToolPolicy } from "../channels/inbound-event/legacy-tool-policy.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -15,6 +20,8 @@ import {
   resolveDelegatedExecutionToolPolicy,
   type DelegatedToolPolicy,
 } from "./delegated-tool-policy.js";
+import type { RequesterOrigin } from "./requester-origin.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
@@ -52,7 +59,30 @@ type RequesterToolPolicyResolution = {
 
 type SenderPolicyMode = "always" | "when-sender-id" | "never";
 
+/** Current owner authority may accompany an internal origin without a provider. */
+export function isInternalOwnerRequester(params: {
+  requesterOrigin?: RequesterOrigin;
+  messageProvider?: string | null;
+  messageChannel?: string | null;
+  senderIsOwner?: boolean;
+}): boolean {
+  // An inherited origin cannot be reclassified by the destination's route.
+  const requesterMessageProvider = normalizeMessageChannel(
+    params.requesterOrigin
+      ? params.requesterOrigin.messageProvider
+      : (params.messageProvider ?? params.messageChannel),
+  );
+  return (
+    params.senderIsOwner === true &&
+    (requesterMessageProvider === INTERNAL_MESSAGE_CHANNEL ||
+      (params.requesterOrigin !== undefined && !requesterMessageProvider))
+  );
+}
+
 type RequesterToolPolicyParams = {
+  requesterOrigin?: RequesterOrigin;
+  conversationId?: string | null;
+  chatType?: string;
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -227,8 +257,8 @@ function resolveDelegatedPolicy(
       store: subagentStore,
     });
     if (ownEnvelope) {
-      // Senderless child and trusted-operator resumes keep the spawn-time requester snapshot.
-      // Later toolsBySender edits are non-retroactive; current non-sender restrictions layer later.
+      // The child keeps its persisted execution ceiling. An origin-bearing
+      // admission also resolves current requester permissions below.
       const executionPolicy = resolveDelegatedExecutionToolPolicy({
         config: params.config,
         ...ownEnvelope,
@@ -244,6 +274,54 @@ function resolveDelegatedPolicy(
     }
   }
   return { delegated: false };
+}
+
+/** Resolve conversation configuration for one admission without acquiring child lineage. */
+export function resolveRequesterConversationToolPolicy(
+  params: RequesterToolPolicyParams,
+): SandboxToolPolicy | undefined {
+  const requester = params.requesterOrigin ?? params;
+  const senderPolicyMode = params.senderPolicyMode ?? "always";
+  const channel = normalizeMessageChannel(requester.messageProvider);
+  const direct = normalizeChatType(requester.chatType) === "direct";
+  const configuredDirectPolicy =
+    direct && channel && params.config && requester.conversationId
+      ? getLoadedChannelPlugin(channel)?.security?.resolveDirectToolPolicy?.({
+          cfg: params.config,
+          accountId: requester.accountId,
+          conversationId: requester.conversationId,
+          senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
+          senderId: requester.senderId,
+          senderName: requester.senderName,
+          senderUsername: requester.senderUsername,
+          senderE164: requester.senderE164,
+        })
+      : undefined;
+  // Legacy plugins retain the original request's execution-local snapshot.
+  // New delegation admissions carry requester facts, never this policy.
+  const legacyPolicy = resolveLegacyConversationToolPolicy(params.conversationPolicy);
+  return (
+    legacyPolicy ??
+    (direct
+      ? pickSandboxToolPolicy(configuredDirectPolicy)
+      : resolveGroupToolPolicy({
+          config: params.config,
+          sessionKey:
+            params.requesterOrigin?.sessionKey ?? params.groupPolicySessionKey ?? params.sessionKey,
+          spawnedBy: params.requesterOrigin ? undefined : params.spawnedBy,
+          messageProvider: requester.messageProvider ?? undefined,
+          groupId: requester.groupId,
+          groupChannel: requester.groupChannel,
+          groupSpace: requester.groupSpace,
+          accountId: requester.accountId,
+          requireConfiguredAccount: params.requireConfiguredGroupAccount,
+          senderId: requester.senderId,
+          senderName: requester.senderName,
+          senderUsername: requester.senderUsername,
+          senderE164: requester.senderE164,
+          senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
+        }))
+  );
 }
 
 /** Confirms that an exact consumed completion capability also owns persisted requester lineage. */
@@ -264,7 +342,7 @@ export function hasVerifiedRequesterCompletionHandoff(
   return delegatedPolicy.delegated && delegatedPolicy.source === "completion-handoff";
 }
 
-/** Resolve sender/group policy or a verified inherited projection, never both. */
+/** Resolve current requester permissions alongside any persisted child execution envelope. */
 export function resolveRequesterToolPolicies(
   params: RequesterToolPolicyParams,
 ): RequesterToolPolicyResolution {
@@ -285,54 +363,51 @@ export function resolveRequesterToolPolicies(
           store: subagentStore,
         })
       : undefined;
+  // Preserved origin supplies requester facts for a new admission without
+  // replacing the child's persisted ceiling or its explicit delegation grant.
+  const resolveCurrentRequesterPolicy =
+    !delegatedPolicy.delegated ||
+    (delegatedPolicy.source === "persisted-child" && params.requesterOrigin !== undefined);
+  const requester = params.requesterOrigin ?? params;
+  const senderPolicyMode = params.senderPolicyMode ?? "always";
+  const shouldResolveSenderPolicy =
+    senderPolicyMode === "always" ||
+    (senderPolicyMode === "when-sender-id" && Boolean(requester.senderId));
+  const groupPolicy = resolveCurrentRequesterPolicy
+    ? resolveRequesterConversationToolPolicy(params)
+    : undefined;
+  const senderPolicy =
+    resolveCurrentRequesterPolicy && shouldResolveSenderPolicy
+      ? resolveSenderToolPolicy({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: requester.sessionKey,
+          messageProvider: requester.messageProvider,
+          senderId: requester.senderId,
+          senderName: requester.senderName,
+          senderUsername: requester.senderUsername,
+          senderE164: requester.senderE164,
+        })
+      : undefined;
   if (delegatedPolicy.delegated) {
-    // The persisted projection already includes both global and group sender policy.
-    // Re-resolving either without external identity would incorrectly select its wildcard.
+    // Senderless resumes and verified completion handoffs retain their snapshot;
+    // resolving them without requester identity would select an unrelated wildcard.
     return {
       delegated: true,
       requesterPolicySource: delegatedPolicy.source,
+      groupPolicy,
+      senderPolicy,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
       inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
       delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
-      inheritedToolPolicySource: delegatedPolicy.inheritedToolPolicySource,
+      inheritedToolPolicySource:
+        toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
+          ? "sender"
+          : delegatedPolicy.inheritedToolPolicySource,
       subagentStore,
     };
   }
-  const senderPolicyMode = params.senderPolicyMode ?? "always";
-  const shouldResolveSenderPolicy =
-    senderPolicyMode === "always" ||
-    (senderPolicyMode === "when-sender-id" && Boolean(params.senderId));
-  const groupPolicy =
-    params.conversationPolicy ??
-    resolveGroupToolPolicy({
-      config: params.config,
-      sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
-      spawnedBy: params.spawnedBy,
-      messageProvider: params.messageProvider ?? undefined,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requireConfiguredAccount: params.requireConfiguredGroupAccount,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
-    });
-  const senderPolicy = shouldResolveSenderPolicy
-    ? resolveSenderToolPolicy({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        messageProvider: params.messageProvider,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      })
-    : undefined;
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
     cfg: params.config,
     store: subagentStore,
@@ -348,6 +423,7 @@ export function resolveRequesterToolPolicies(
       toolPolicyRestrictsTools(senderPolicy)
         ? "sender"
         : undefined,
+
     subagentPolicy,
     inheritedToolPolicy: resolveInheritedToolPolicyForSession(params.config, subagentSessionKey, {
       store: subagentStore,

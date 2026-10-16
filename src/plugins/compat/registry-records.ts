@@ -6,6 +6,7 @@ import { ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS } from "./async-sqlite-preparat
 import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
+import { CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD } from "./channel-prepared-tool-policy-record.js";
 import { CRON_STORE_PATH_COMPAT_RECORD } from "./cron-store-path-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
@@ -61,6 +62,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   RUNTIME_CONFIG_COMPAT_RECORD,
   ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
+  CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD,
   {
     code: "plugin-sdk-session-header-link",
     status: "deprecated",

@@ -387,6 +387,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   forceRestartSafeTools?: boolean;
   runId: string;
   operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
+  requesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
@@ -401,6 +402,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryHarnessCompletion"
   | "restartRecoveryForceSafeTools"
   | "restartRecoveryOperatorSource"
+  | "restartRecoveryRequesterSource"
   | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
@@ -425,6 +427,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryDeliveryRunId: params.runId,
       restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
       restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
+      restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
@@ -452,6 +455,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoveryDeliveryRunId: createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
     restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
+    restartRecoveryRequesterSource: createsScopedDeliveryClaim ? params.requesterSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode

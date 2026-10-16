@@ -753,7 +753,7 @@ describe("theme RPC", () => {
     },
   );
 
-  it("keeps every personal theme action scoped to the selected accepted turn participant", async () => {
+  it("keeps personal theme actions with each admitted requester across rejected steering", async () => {
     const owner = { profileId: requesterProfileId, senderId: "alice-sender", name: "Alice" };
     const steerer = { profileId: otherProfileId, senderId: "bob-sender", name: "Bob" };
     const synthetic = client();
@@ -775,67 +775,65 @@ describe("theme RPC", () => {
       await expect(execute({ action: "get" }, owner.senderId)).rejects.toThrow(
         `Alice (user: ${owner.profileId})`,
       );
-      for (const action of actions) {
-        await expect(execute(action, steerer.profileId)).rejects.toThrow();
-      }
-      expect(getUserPreferences(otherProfileId)).toEqual({});
-
       const readPreferences = userPreferences.getCanonicalUserPreferences;
       vi.spyOn(userPreferences, "getCanonicalUserPreferences").mockImplementationOnce(
         async (...args) => {
           const snapshot = await readPreferences(...args);
-          expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+          expect(await turn.steer(steerer)).toMatchObject({
+            status: "rejected",
+            reason: "tool_authority_mismatch",
+          });
           return snapshot;
         },
       );
-      await expect(execute({ action: "set", id: "tide" })).rejects.toThrow(
-        `Alice (user: ${owner.profileId})`,
-      );
+      expect(await execute({ action: "set", id: "rose" })).toMatchObject({
+        current: { id: "rose", mode: "dark" },
+      });
       for (const action of actions) {
         for (const call of [
-          () => execute(action),
-          () => withoutGatewayToolCallerIdentity(() => execute(action)),
+          () => execute(action, steerer.profileId),
+          () => withoutGatewayToolCallerIdentity(() => execute(action, steerer.profileId)),
         ]) {
-          await expect(call()).rejects.toThrow(
-            `Alice (user: ${owner.profileId}), Bob (user: ${steerer.profileId})`,
-          );
+          await expect(call()).rejects.toThrow();
         }
         await expect(execute(action, "nonparticipant")).rejects.toThrow(
-          `Alice (user: ${owner.profileId}), Bob (user: ${steerer.profileId})`,
+          `Alice (user: ${owner.profileId})`,
         );
         await expect(execute(action, steerer.senderId)).rejects.toThrow(
           "User is not a participant",
         );
       }
-      expect(getUserPreferences(requesterProfileId)).toEqual({ "ui.themeMode": "dark" });
+      expect(getUserPreferences(requesterProfileId)).toEqual({
+        "ui.theme": "rose",
+        "ui.themeMode": "dark",
+      });
       expect(getUserPreferences(otherProfileId)).toEqual({});
+      turn.complete();
+      await expect(execute({ action: "get" }, owner.profileId)).rejects.toThrow();
+    });
 
-      for (const { person, id, mode } of [
-        { person: steerer, id: "tide", mode: "light" },
-        { person: owner, id: "rose", mode: "dark" },
-      ]) {
-        for (const action of ["set", "list", "get"]) {
-          expect(
-            await execute({ action, ...(action === "set" ? { id, mode } : {}) }, person.profileId),
-          ).toMatchObject({ current: { id, mode } });
-        }
-        expect(getUserPreferences(person.profileId)).toEqual({
-          "ui.theme": id,
-          "ui.themeMode": mode,
-        });
+    await withPersonalToolTurn({ owner: steerer }, async (turn) => {
+      synthetic.internal = { syntheticClient: true, agentRuntimeIdentity: turn.runtimeIdentity };
+      for (const action of ["set", "list", "get"]) {
+        expect(
+          await execute(
+            { action, ...(action === "set" ? { id: "tide", mode: "light" } : {}) },
+            steerer.profileId,
+          ),
+        ).toMatchObject({ current: { id: "tide", mode: "light" } });
       }
       const imported = expectDefined(actions[3], "import action");
       expect(await execute(imported, steerer.profileId)).toMatchObject({
         current: { id: "user/personal" },
       });
-      expect(getUserPreferences(requesterProfileId)).not.toHaveProperty(
-        "ui.themeDefinition.personal",
-      );
+      expect(getUserPreferences(requesterProfileId)).toEqual({
+        "ui.theme": "rose",
+        "ui.themeMode": "dark",
+      });
       expect(getUserPreferences(otherProfileId)).toMatchObject({
         "ui.themeDefinition.personal": imported.definition,
         "ui.theme": "user/personal",
       });
-
       const saved = getUserPreferences(otherProfileId);
       const revokeBeforeCommit = vi.fn(() => turn.revoke(steerer.profileId));
       beforeWorkerCommit(revokeBeforeCommit);
@@ -849,12 +847,9 @@ describe("theme RPC", () => {
           "Bob's access changed; ask them again",
         );
       }
-      expect(await execute({ action: "get" }, owner.profileId)).toMatchObject({
-        current: { id: "rose" },
-      });
       turn.complete();
       expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
-      await expect(execute({ action: "get" }, owner.profileId)).rejects.toThrow();
+      await expect(execute({ action: "get" }, steerer.profileId)).rejects.toThrow();
     });
   });
 

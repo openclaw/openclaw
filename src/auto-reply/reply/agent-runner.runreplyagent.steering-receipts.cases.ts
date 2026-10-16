@@ -41,7 +41,10 @@ type SteeringReceiptFixture = {
     attachSteerBackend?: boolean;
   }) => { followupRun: FollowupRun; run: () => Promise<unknown> };
   makeSessionEntry: (overrides?: Partial<SessionEntry>) => SessionEntry;
-  makeSessionFixture: (overrides?: Partial<SessionEntry>) => Promise<{
+  makeSessionFixture: (
+    overrides?: Partial<SessionEntry>,
+    sessionKey?: string,
+  ) => Promise<{
     sessionEntry: SessionEntry;
     sessionStore: Record<string, SessionEntry>;
     storePath: string;
@@ -55,6 +58,70 @@ export function registerSteeringReceiptCases({
   makeSessionFixture,
   state,
 }: SteeringReceiptFixture): void {
+  it.each([false, true])(
+    "refuses another human's steer without leaving drainable work (explicit command: %s)",
+    async (explicitCommand) => {
+      const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+      vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
+      const runState: ReplyOperationRunState = {};
+      const onAdopted = vi.fn();
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const active = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      const candidate = createMinimalRun({
+        isActive: true,
+        shouldSteer: true,
+        resolvedQueueMode: "steer",
+        bindActiveAuthority: false,
+        sessionCtx: {
+          Provider: "telegram",
+          SenderId: "bob",
+          ...(explicitCommand
+            ? { CommandSource: "text" as const, CommandAuthorized: true, Body: "/steer stop" }
+            : {}),
+        },
+        runOverrides: {
+          messageProvider: "telegram",
+          config: { messages: { queue: { allowCollaborativeSteering: false } } },
+        },
+        opts: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { onAdopted, onAbandoned, onSettled },
+        },
+      });
+      await active.bindToolAuthoritySnapshotAsync(
+        prepareReplyToolAuthority({
+          ...candidate.followupRun,
+          run: { ...candidate.followupRun.run, senderId: "alice" },
+        }),
+      );
+      active.setPhase("running");
+      try {
+        await candidate.run();
+        expect(runState.admission).toEqual({
+          status: "skipped",
+          reason: "collaborative-steering-disabled",
+        });
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(onAdopted).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        expect(onAbandoned).not.toHaveBeenCalled();
+        expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+        active.complete();
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      } finally {
+        active.complete();
+        clearFollowupQueue("main");
+        clearFollowupDrainCallback("main");
+      }
+    },
+  );
+
   it("queues instead of steering when privilege facts differ on the active route", async ({
     signal,
   }) => {
@@ -86,6 +153,7 @@ export function registerSteeringReceiptCases({
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
+      runOverrides: { config: { messages: { queue: { allowCollaborativeSteering: false } } } },
       bindActiveAuthority: false,
       opts: {
         onBlockReply,
@@ -232,13 +300,17 @@ export function registerSteeringReceiptCases({
   }) => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
     vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: undefined,
-      restartRecoveryDeliveryRunId: "active-recovery",
-      restartRecoveryDeliverySourceRunId: "active-source",
-    });
+    const sessionKey = "agent:main:main";
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+      {
+        status: undefined,
+        restartRecoveryDeliveryRunId: "active-recovery",
+        restartRecoveryDeliverySourceRunId: "active-source",
+      },
+      sessionKey,
+    );
     const active = createReplyOperation({
-      sessionKey: "main",
+      sessionKey,
       sessionId: "session",
       resetTriggered: false,
     });
@@ -259,6 +331,8 @@ export function registerSteeringReceiptCases({
       sessionEntry,
       sessionStore,
       storePath,
+      sessionKey,
+      runOverrides: { agentId: "main" },
     };
     const first = createMinimalRun({
       ...common,
@@ -304,7 +378,7 @@ export function registerSteeringReceiptCases({
         signal,
       );
       await replaceSessionEntry(
-        { storePath, sessionKey: "main" },
+        { storePath, sessionKey },
         {
           ...sessionEntry,
           restartRecoveryDeliveryReceiptState: "delivered-terminal",
@@ -316,8 +390,12 @@ export function registerSteeringReceiptCases({
       await Promise.all([firstRun, secondRun]);
 
       expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-      expect(secondState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(getExistingFollowupQueue("main")?.items).toEqual([
+      expect(secondState.admission).toEqual({
+        status: "accepted",
+        mode: "followup",
+        reason: "steering-unavailable",
+      });
+      expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([
         expect.objectContaining({
           messageId: "second-parked-input",
           prompt: "answer the second input",
@@ -326,8 +404,8 @@ export function registerSteeringReceiptCases({
     } finally {
       firstAcceptance.resolve(true);
       await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearFollowupQueue("main");
-      clearFollowupDrainCallback("main");
+      clearFollowupQueue(sessionKey);
+      clearFollowupDrainCallback(sessionKey);
       active.complete();
     }
   });
@@ -391,7 +469,9 @@ export function registerSteeringReceiptCases({
         runId: undefined,
       });
       expect(runState.admission).toEqual(
-        enqueued ? { status: "accepted", mode: "followup" } : undefined,
+        enqueued
+          ? { status: "accepted", mode: "followup", reason: "steering-unavailable" }
+          : undefined,
       );
       expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
       active.complete();
@@ -439,7 +519,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -530,7 +614,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -574,7 +662,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });

@@ -15,7 +15,6 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
@@ -24,13 +23,14 @@ import { beginReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 
 afterEach(() => {
   testing.resetReplyRunRegistry();
   vi.restoreAllMocks();
 });
 
-const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+const defaultOverlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
 
 async function createPolicyOperation(
   name: string,
@@ -78,7 +78,7 @@ async function createPolicyOperation(
   const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-  return { operation, fingerprint, policyKey, policyEntry };
+  return { operation, fingerprint, policyKey, policyEntry, overlay: toolAuthorityOverlay(run) };
 }
 
 function attachPreparedNativeBackend(
@@ -126,10 +126,12 @@ it.each(["worker", "compatibility"] as const)(
       const sourcePreparation = {
         assertCurrent: vi.fn(),
         prepareCurrent: vi.fn(async () =>
-          assertSourcePolicy(await source.operation.projectToolAuthorityFingerprintAsync(overlay)),
+          assertSourcePolicy(
+            await source.operation.projectToolAuthorityFingerprintAsync(source.overlay),
+          ),
         ),
         compatAssertCurrent: vi.fn(() =>
-          assertSourcePolicy(source.operation.projectToolAuthorityFingerprint(overlay)),
+          assertSourcePolicy(source.operation.projectToolAuthorityFingerprint(source.overlay)),
         ),
       };
       if (kind === "worker") {
@@ -156,7 +158,7 @@ it.each(["worker", "compatibility"] as const)(
           "overlay with retained source",
           {
             isInboundUserMessage: true,
-            toolAuthorityOverlay: overlay,
+            toolAuthorityOverlay: target.overlay,
             toolAuthorityPreparation: sourcePreparation,
           },
         );
@@ -224,9 +226,8 @@ it.each([
           { sessionId: "unrelated-policy", updatedAt: 1 },
         );
       }
-      const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
-        "retained-policy",
-        {
+      const { operation, fingerprint, policyKey, policyEntry, overlay } =
+        await createPolicyOperation("retained-policy", {
           mainAlias: true,
           ...(multipleStores
             ? {
@@ -235,8 +236,7 @@ it.each([
                   change === "missing-store" ? defaultStorePath : configuredStorePath,
               }
             : {}),
-        },
-      );
+        });
       let atBackend = false;
       const effect = attachPreparedNativeBackend(operation, fingerprint, () => {
         atBackend = true;
@@ -365,7 +365,7 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
       {
         isInboundUserMessage: true,
         toolAuthorityFingerprint: "policy",
-        ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
+        ...(kind === "with-overlay" ? { toolAuthorityOverlay: defaultOverlay } : {}),
         assertCurrent: separateCaller ? assertSource : undefined,
         toolAuthorityPreparation: {
           ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),

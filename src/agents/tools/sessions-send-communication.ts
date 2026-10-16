@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
@@ -601,6 +602,7 @@ export async function prepareSessionsSendCommunication(params: {
       return dispatch();
     };
     return {
+      admissionConfig: captureRuntimeConfig(currentConfig),
       assertCurrent,
       refresh,
       callGateway,

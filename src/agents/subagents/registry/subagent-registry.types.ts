@@ -4,8 +4,10 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
+import type { QueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
@@ -111,6 +113,12 @@ export type SwarmStructuredOutputState = {
 
 type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
+  /** A captured empty source is system work; legacy absence cannot establish a requester. */
+  requesterRecovery?: {
+    /** Null records requester facts that could not fit the bounded restart source. */
+    facts?: RequesterOrigin | null;
+    operator?: QueuedOperatorRecoverySource;
+  };
   /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
   authorization?: SubagentLaunchAuthorization;
   timeoutMs: number;

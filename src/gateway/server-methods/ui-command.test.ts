@@ -154,7 +154,7 @@ describe("ui.command gateway method", () => {
     { backendKind: "cli", hiddenQuestion: false },
     { backendKind: "embedded", hiddenQuestion: true },
   ] as const)(
-    "routes personal screen requests only to the selected accepted $backendKind turn participant (hidden question: $hiddenQuestion)",
+    "routes personal screen requests only to the admitted $backendKind requester (hidden question: $hiddenQuestion)",
     async ({ backendKind, hiddenQuestion }) => {
       const owner = {
         profileId: "alice",
@@ -217,45 +217,54 @@ describe("ui.command gateway method", () => {
         expectRejected(await execute(owner.senderId), "Alice (user: alice)");
         expectRejected(await execute(steerer.profileId));
 
-        expect(await turn.steer(steerer, { scopes: ["operator.read"] })).toMatchObject({
+        expect(await turn.steer(owner, { scopes: ["operator.read"] })).toMatchObject({
           status: "rejected",
           reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
         });
         expectTarget(await execute(), "alice-tab");
         expectRejected(await execute(steerer.profileId));
-        expect(await turn.steer(steerer, { reject: true })).toMatchObject({
+        expect(await turn.steer(owner, { reject: true })).toMatchObject({
           status: "rejected",
           reason: "runtime_rejected",
         });
         expectTarget(await execute(), "alice-tab");
 
-        expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-        expect(() => selectedOwner.assertCurrent()).toThrow("Alice (user: alice)");
-        const ambiguous = await execute();
-        expectRejected(ambiguous, "Alice (user: alice)");
-        expectRejected(ambiguous, "Bob (user: bob)");
-        expectTarget(await execute(steerer.profileId), "bob-tab");
+        expect(await turn.steer(steerer)).toMatchObject({
+          status: "rejected",
+          reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
+        });
+        expect(() => selectedOwner.assertCurrent()).not.toThrow();
+        expectTarget(await execute(), "alice-tab");
+        expectRejected(await execute(steerer.profileId), "Alice (user: alice)");
+        expectRejected(await execute("nonparticipant"), "Alice (user: alice)");
+        expect(await turn.steer({ ...owner, senderId: "alice-reconnected" })).toMatchObject({
+          status: "accepted",
+        });
         expectTarget(await execute(owner.profileId), "alice-tab");
-        const unknown = await execute("nonparticipant");
-        expectRejected(unknown, "Alice (user: alice)");
-        expectRejected(unknown, "Bob (user: bob)");
+        turn.revoke(owner.profileId);
+        expect(() => selectedOwner.assertCurrent()).toThrow("Alice's access changed");
+        expectRejected(await execute(owner.profileId), "Alice's access changed; ask them again");
+        turn.complete();
+        expect(turn.releaseCounts.get(owner.profileId)).toBe(1);
+        expectRejected(await execute(owner.profileId));
+      });
+      await withPersonalToolTurn({ owner: steerer, backendKind, hiddenQuestion }, async (turn) => {
+        expectTarget(await execute(), "bob-tab");
+        expectTarget(await execute(steerer.profileId), "bob-tab");
+        expectRejected(await execute(owner.profileId), "Bob (user: bob)");
         expectRejected(await execute(steerer.senderId), "Bob (user: bob)");
-
         expect(
           await turn.steer({
             ...steerer,
             gatewayUiCommandTarget: { connId: "bob-other-tab", profileId: "bob" },
           }),
         ).toMatchObject({ status: "accepted" });
-        expectTarget(await execute(steerer.profileId), "bob-other-tab");
-        expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
-
+        expectTarget(await execute(steerer.profileId), "bob-tab");
         turn.revoke(steerer.profileId);
         expectRejected(await execute(steerer.profileId), "Bob's access changed; ask them again");
-        expectTarget(await execute(owner.profileId), "alice-tab");
         turn.complete();
-        expect(turn.releaseCounts.get(steerer.profileId)).toBe(2);
-        expectRejected(await execute(owner.profileId));
+        expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
+        expectRejected(await execute(steerer.profileId));
       });
     },
   );
@@ -314,16 +323,17 @@ describe("ui.command gateway method", () => {
         expect(rejected.broadcastToConnIds).not.toHaveBeenCalled();
       }
       runtimeClient.internal.agentRuntimeIdentity = turn.runtimeIdentity;
-      expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-      const ambiguous = await request();
-      expect(ambiguous.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringMatching(/Alice \(user: alice\).*Bob \(user: bob\)/),
-        }),
+      expect(await turn.steer(steerer)).toMatchObject({
+        status: "rejected",
+        reason: "tool_authority_mismatch",
+      });
+      const unchanged = await request();
+      expect(unchanged.respond).toHaveBeenCalledWith(true, { ok: true });
+      expect(unchanged.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "ui.command",
+        expect.any(Object),
+        new Set(["alice-tab"]),
       );
-      expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
       turn.complete();
       const ended = await request();
       expect(ended.respond).toHaveBeenCalledWith(

@@ -7,7 +7,7 @@ import {
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -127,9 +127,15 @@ it.each([
   },
 );
 
-it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
-  "retains original operator recovery custody only for the exact requester settle source: %s",
-  (sourceTool) => {
+it.each([
+  { sourceTool: "subagent_settle", requesterProfileId: undefined, retained: true },
+  { sourceTool: "subagent_announce", requesterProfileId: undefined, retained: false },
+  { sourceTool: "sessions_send", requesterProfileId: undefined, retained: false },
+  { sourceTool: "subagent_settle", requesterProfileId: "another-operator", retained: false },
+  { sourceTool: "sessions_send", requesterProfileId: "original-operator", retained: true },
+])(
+  "binds operator recovery custody for $sourceTool from $requesterProfileId",
+  ({ sourceTool, requesterProfileId, retained }) => {
     const runId = "announce:requester-settle:main:agent:main:main:child-run";
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "original-operator",
@@ -169,6 +175,14 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
       opts: {
         message: "Child completed",
         operatorAuthority,
+        ...(requesterProfileId
+          ? {
+              requesterOrigin: {
+                sessionKey: "agent:main:main",
+                operatorProfileId: requesterProfileId,
+              },
+            }
+          : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
@@ -177,7 +191,7 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
         },
       },
     });
-    if (sourceTool !== "subagent_settle") {
+    if (!retained) {
       expect(nextEntry.restartRecoveryOperatorSource).toBeUndefined();
       return;
     }
@@ -195,6 +209,76 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
           scopes: ["operator.read"],
           controlUiAdmin: false,
         },
+      },
+    });
+  },
+);
+
+it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
+  "binds requester facts to the existing %s command recovery claim",
+  (kind) => {
+    const requesterOrigin = {
+      sessionKey: "agent:research:telegram:group:requesters",
+      messageProvider: "telegram",
+      senderId: "bob",
+    };
+    const entry: InternalSessionEntry = {
+      sessionId: "destination-session",
+      lifecycleRevision: "destination-lifecycle",
+      updatedAt: 1,
+      ...(kind === "recovery"
+        ? {
+            restartRecoveryDeliveryRunId: "current-run",
+            restartRecoveryDeliverySourceRunId: "original-run",
+            restartRecoverySourceIngress: "internal" as const,
+            restartRecoveryRequesterSource: {
+              agentId: "main",
+              sessionKey: "agent:main:destination",
+              sessionId: "destination-session",
+              lifecycleRevision: "destination-lifecycle",
+              sourceRunId: "original-run",
+              requesterOrigin: { ...requesterOrigin, senderId: "original-requester" },
+            },
+          }
+        : {}),
+    };
+    const prepared = prepareCommandSessionRecoveryEntry({
+      agentId: "main",
+      sessionKey: "agent:main:destination",
+      sessionId: entry.sessionId,
+      entry,
+      runId: "current-run",
+      now: 2,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      isSessionRollover: false,
+      opts: {
+        message: "continue accepted work",
+        requesterOrigin,
+        ...(kind === "channel"
+          ? {}
+          : {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
+              },
+            }),
+        ...(kind === "generated-media"
+          ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
+          : {}),
+      },
+    });
+    requesterOrigin.senderId = "replacement";
+    expect(prepared.nextEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "current-run",
+      restartRecoveryDeliverySourceRunId: kind === "recovery" ? "original-run" : "current-run",
+      restartRecoverySourceIngress: kind === "channel" ? "channel" : "internal",
+      restartRecoveryRequesterSource: {
+        agentId: "main",
+        sessionKey: "agent:main:destination",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        sourceRunId: kind === "recovery" ? "original-run" : "current-run",
+        requesterOrigin: { senderId: kind === "recovery" ? "original-requester" : "bob" },
       },
     });
   },

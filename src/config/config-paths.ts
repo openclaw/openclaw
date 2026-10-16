@@ -37,7 +37,11 @@ export function parseConfigPath(
   return { ok: true, path: parts };
 }
 
-export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
+export function setConfigValueAtPath(
+  root: PathNode,
+  path: readonly string[],
+  value: unknown,
+): void {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
     throw new Error("Config path must contain at least one segment");
@@ -102,7 +106,7 @@ export function unsetConfigValueAtPath(
   return true;
 }
 
-export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
+export function getConfigValueAtPath(root: PathNode, path: readonly string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
     if (!isPlainObject(cursor) || !Object.hasOwn(cursor, key)) {

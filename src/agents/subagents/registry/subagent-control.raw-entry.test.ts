@@ -1,6 +1,7 @@
 // The shared fixture installs registry mocks before these consumers are evaluated.
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueFollowupRun } from "../../../auto-reply/reply/queue.js";
@@ -25,6 +26,10 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
 import {
@@ -33,7 +38,13 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
+import { captureRequesterOrigin } from "../../requester-origin.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
@@ -372,7 +383,23 @@ it("numbers watched raw children independently and keeps their completion owner"
 });
 
 it("steers its watched raw child while another agent has a newer row", async () => {
-  const { send } = await prepareWatchedRawChildren();
+  const { cfg, children, send } = await prepareWatchedRawChildren();
+  const parentKey = children.get("main")!.parentKey;
+  const requesterOrigin = captureRequesterOrigin({
+    sessionKey: parentKey,
+    messageProvider: "telegram",
+    senderId: "alice",
+  });
+  const sessionFile = path.join(fixture.stateDir, "main-global.jsonl");
+  const admission = prepareAgentRunAdmission({
+    cfg,
+    operationalRunInstance: createOperationalRunInstanceRef("main-1"),
+    facts: {
+      agentId: "main",
+      runId: "main-1",
+      ingress: { kind: "system", state: "present", boundary: "raw-child-steering-test" },
+    },
+  });
   const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async () => {});
   const handle: EmbeddedAgentQueueHandle = {
     ...createEmbeddedRunHandle({ runId: "main-1", queueMessage }),
@@ -385,18 +412,43 @@ it("steers its watched raw child while another agent has a newer row", async () 
       },
     },
   };
-  setActiveEmbeddedRun("main-global", handle, "global", undefined, "main");
   try {
-    const sent = await send("main", "main-turn", "steer");
-    expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
-      status: "accepted",
-      targetDisposition: "steered",
-    });
-    expect(queueMessage).toHaveBeenCalledOnce();
-    expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
-    expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
+    await withPreparedEmbeddedRunToolAuthority(
+      { admittedRunContext: await admission.admit("embedded", "raw-child-steering-test") },
+      {
+        agentId: "main",
+        runId: "main-1",
+        sessionId: "main-global",
+        sessionKey: "global",
+        sessionFile,
+        workspaceDir: fixture.stateDir,
+        config: cfg,
+        provider: "openai",
+        modelId: "gpt-test",
+        requesterOrigin,
+      },
+      undefined,
+      async (prepared) => {
+        handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+        setActiveEmbeddedRun("main-global", handle, "global", sessionFile, "main");
+        const sent = await withoutGatewayToolCallerIdentity(() =>
+          withGatewayToolCallerIdentity(
+            { agentId: "main", sessionKey: parentKey, requesterOrigin },
+            () => send("main", "main-turn", "steer"),
+          ),
+        );
+        expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
+          status: "accepted",
+          targetDisposition: "steered",
+        });
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
+        expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
+      },
+    );
   } finally {
     clearActiveEmbeddedRun("main-global", handle, "global");
+    admission.close();
   }
 });
 

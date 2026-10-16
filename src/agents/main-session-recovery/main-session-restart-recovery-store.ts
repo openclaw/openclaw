@@ -22,6 +22,7 @@ import {
   readAdmittedHarnessCompletionInputAsync,
 } from "../agent-harness-completion-recovery.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
+import { readRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
@@ -531,6 +532,13 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
+      const requesterOrigin = expectedRecoverySourceRunId
+        ? readRestartRecoveryRequesterSource({
+            ...target,
+            entry,
+            sourceRunId: expectedRecoverySourceRunId,
+          })
+        : undefined;
       if (
         !harnessCompletion &&
         entry.restartRecoverySourceIngress === "internal" &&
@@ -548,9 +556,9 @@ export async function recoverStore(params: {
             storePath: params.storePath,
             gatewayRuntime: params.gatewayRuntime,
           });
-          if (!completionSource || !entry.restartRecoveryOperatorSource) {
+          if (!completionSource || (!entry.restartRecoveryOperatorSource && !requesterOrigin)) {
             throw new Error(
-              "Requester settle recovery lacks its original cohort or operator authority",
+              "Requester settle recovery lacks its original cohort or requester identity",
             );
           }
           completionSource();
@@ -565,6 +573,7 @@ export async function recoverStore(params: {
       if (
         !recoverableHarnessCompletion &&
         !completionSource &&
+        !requesterOrigin &&
         requiresDelegatedRecoverySource(entry, source)
       ) {
         const tombstone = await tombstoneMainRestartRecoveryWithNotice({

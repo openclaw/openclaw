@@ -44,7 +44,7 @@ export function registerParticipantSpawnCases(options: {
   const { createBoundParent, createBoundGateway, runEmbeddedAgent, parentSessionKey, parentRunId } =
     options;
   it.each([false, true])(
-    "spawns for the named participant and transfers custody (visible=%s)",
+    "spawns for its original requester and transfers custody (visible=%s)",
     async (visible) => {
       const settleRootWork = observeRootWork();
       const aliceSource = createSpawnOperatorSource("alice");
@@ -61,7 +61,7 @@ export function registerParticipantSpawnCases(options: {
         name: "Bob",
         operatorAuthority: bobSource.authority,
       };
-      const bound = await createBoundParent(aliceSource.authority);
+      const bound = await createBoundParent(bobSource.authority);
       assignSessionOwner(
         { agentId: "main", storePath: bound.storePath, sessionKey: parentSessionKey },
         {
@@ -109,7 +109,7 @@ export function registerParticipantSpawnCases(options: {
         await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
           withPersonalToolTurn(
             {
-              owner: alice,
+              owner: bob,
               sessionKey: parentSessionKey,
               sessionId: "parent-session",
               runId: parentRunId,
@@ -176,12 +176,16 @@ export function registerParticipantSpawnCases(options: {
                   ...details,
                 };
               };
-              const steered = await turn.steer(bob);
-              expect(steered, JSON.stringify(steered)).toMatchObject({ status: "accepted" });
+              const steered = await turn.steer(alice);
+              expect(steered, JSON.stringify(steered)).toMatchObject({
+                status: "rejected",
+                reason: "tool_authority_mismatch",
+              });
+              expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe("bob");
               const existingKeys = await keys();
-              await expect(invoke()).rejects.toThrow(/Alice.*Bob|Bob.*Alice/);
+              await expect(invoke("alice")).rejects.toThrow(/not a participant/i);
               expect(await keys()).toEqual(existingKeys);
-              await spawn("alice", "alice");
+              await spawn(undefined, "bob");
               const bobChild = await spawn("bob", "bob");
               turn.complete();
               bound.admission.close();
@@ -209,11 +213,11 @@ export function registerParticipantSpawnCases(options: {
     },
   );
 
-  it("keeps a queued child's named participant authority after the turn closes", async () => {
+  it("keeps a queued child's requester authority after the turn closes", async () => {
     const settleRootWork = observeRootWork();
     const aliceSource = createSpawnOperatorSource("alice");
     const bobSource = createSpawnOperatorSource("bob");
-    const bound = await createBoundParent(aliceSource.authority);
+    const bound = await createBoundParent(bobSource.authority);
     const { context, runtime } = await createBoundGateway(bound);
     const groupId = "participant-queued";
     const capacity = createDeferred();
@@ -245,10 +249,10 @@ export function registerParticipantSpawnCases(options: {
         withPersonalToolTurn(
           {
             owner: {
-              profileId: "alice",
-              senderId: "alice",
-              name: "Alice",
-              operatorAuthority: aliceSource.authority,
+              profileId: "bob",
+              senderId: "bob",
+              name: "Bob",
+              operatorAuthority: bobSource.authority,
             },
             sessionKey: parentSessionKey,
             sessionId: "parent-session",
@@ -258,12 +262,16 @@ export function registerParticipantSpawnCases(options: {
           },
           async (turn) => {
             const steered = await turn.steer({
-              profileId: "bob",
-              senderId: "bob",
-              name: "Bob",
-              operatorAuthority: bobSource.authority,
+              profileId: "alice",
+              senderId: "alice",
+              name: "Alice",
+              operatorAuthority: aliceSource.authority,
             });
-            expect(steered, JSON.stringify(steered)).toMatchObject({ status: "accepted" });
+            expect(steered, JSON.stringify(steered)).toMatchObject({
+              status: "rejected",
+              reason: "tool_authority_mismatch",
+            });
+            expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe("bob");
             const result = await createBoundSpawnInvocation(bound, {
               collect: true,
               groupId,

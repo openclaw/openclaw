@@ -157,24 +157,36 @@ export function matchesSessionPendingInputRequest(
     return true;
   }
   const metadata = asOptionalRecord(message["__openclaw"]);
-  const transport = asOptionalRecord(metadata?.transport);
-  if (!metadata || !transport || !Object.hasOwn(transport, "clients")) {
+  if (!metadata) {
+    return false;
+  }
+  const legacyMetadata = { ...metadata };
+  // Shipped collected receipts predate requester provenance. Only a consumed
+  // receipt can match this old shape; it returns an outcome, never live custody.
+  delete legacyMetadata.requesterOrigin;
+  const legacyMessage = { ...message };
+  if (Object.keys(legacyMetadata).length) {
+    legacyMessage["__openclaw"] = legacyMetadata;
+  } else {
+    delete legacyMessage["__openclaw"];
+  }
+  if (receipt.request_hash === resolvePendingInputRequestHash(legacyMessage)) {
+    return true;
+  }
+  const transport = asOptionalRecord(legacyMetadata.transport);
+  if (!transport || !Object.hasOwn(transport, "clients")) {
     return false;
   }
   // v2026.9.4 Gateway inputs have no client sources. Preserve every other
   // request field while reconstructing their original serialized shape.
   const legacyTransport = { ...transport };
   delete legacyTransport.clients;
-  const legacyMetadata = { ...metadata };
   if (Object.keys(legacyTransport).length) {
     legacyMetadata.transport = legacyTransport;
   } else {
     delete legacyMetadata.transport;
   }
-  const legacyMessage = { ...message };
-  if (Object.keys(legacyMetadata).length) {
-    legacyMessage["__openclaw"] = legacyMetadata;
-  } else {
+  if (!Object.keys(legacyMetadata).length) {
     delete legacyMessage["__openclaw"];
   }
   return receipt.request_hash === resolvePendingInputRequestHash(legacyMessage);

@@ -656,12 +656,20 @@ describe("public yielded settle replay with real Gateway admission", () => {
 
   it.for([
     "visible final",
+    "channel visible final",
     "progress only",
     "missing original authority",
     "unconsumed revoked cohort",
   ] as const)(
     "recovers public work once through a sibling and reconciles its %s",
     async (reply, { signal }) => {
+      const channelRequester = reply === "channel visible final";
+      const visibleFinal = reply === "visible final" || channelRequester;
+      const requesterOrigin = {
+        sessionKey: requesterSessionKey,
+        messageProvider: "telegram",
+        senderId: "settle-channel-bob",
+      };
       const sibling = {
         ...child,
         runId: `${child.runId}-public-sibling`,
@@ -751,60 +759,73 @@ describe("public yielded settle replay with real Gateway admission", () => {
         role: "operator",
         authMethod: "token",
       });
-      const originalSource = await captureGatewayOperatorRunAuthority({
-        client: captureAgentTurnPrincipal(client),
-        context: kernel.gatewayRequestContext,
-        sourceAuthority: null,
-      });
-      expect(originalSource?.authority.recoverySnapshot).toBeDefined();
-      await updateSessionEntry(scope, () => ({
-        createdActor: { type: "human", source: "profile", id: profile.id },
-      }));
-      const original = inProcessDispatch
-        .withOperatorToolGatewayAuthority(
+      const originalSource = channelRequester
+        ? undefined
+        : await captureGatewayOperatorRunAuthority({
+            client: captureAgentTurnPrincipal(client),
+            context: kernel.gatewayRequestContext,
+            sourceAuthority: null,
+          });
+      if (!channelRequester) {
+        expect(originalSource?.authority.recoverySnapshot).toBeDefined();
+        await updateSessionEntry(scope, () => ({
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        }));
+      }
+      const dispatchOriginal = () =>
+        inProcessDispatch.dispatchGatewayMethodInProcess<Record<string, unknown>>(
+          "agent",
           {
-            authenticatedUserProfile: client.authenticatedUserProfile,
-            scopes: ["operator.write"],
-            operatorRunAuthority: originalSource!.authority,
+            sessionKey: requesterSessionKey,
+            idempotencyKey: runId,
+            message: "Review the child result, finish verification, and land the requested change.",
+            deliver: false,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: child.childSessionKey,
+              sourceChannel: "internal",
+              sourceTool: "subagent_settle",
+            },
           },
-          () =>
-            inProcessDispatch.dispatchGatewayMethodInProcess<Record<string, unknown>>(
-              "agent",
-              {
-                sessionKey: requesterSessionKey,
-                idempotencyKey: runId,
-                message:
-                  "Review the child result, finish verification, and land the requested change.",
-                deliver: false,
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceSessionKey: child.childSessionKey,
-                  sourceChannel: "internal",
-                  sourceTool: "subagent_settle",
-                },
-              },
-              {
-                expectFinal: true,
-                forceSyntheticClient: true,
-                operatorRoleActor: { kind: "system" },
-                settleWakeReplay: {
-                  sourceSessionKeys: [child.childSessionKey, sibling.childSessionKey],
-                  assertCurrent: () => {
-                    if (subagentRuns.get(child.runId) !== child) {
-                      throw new SubagentCompletionSourceChangedError(
-                        "Synthetic cohort was replaced",
-                      );
-                    }
+          {
+            expectFinal: true,
+            forceSyntheticClient: true,
+            operatorRoleActor: { kind: "system" },
+            ...(channelRequester
+              ? {
+                  agentToolCaller: {
+                    agentId: "main",
+                    sessionKey: requesterSessionKey,
+                    requesterOrigin,
                   },
-                },
-                resolveGatewayContext: () => kernel.gatewayRequestContext,
+                }
+              : {}),
+            settleWakeReplay: {
+              sourceSessionKeys: [child.childSessionKey, sibling.childSessionKey],
+              assertCurrent: () => {
+                if (subagentRuns.get(child.runId) !== child) {
+                  throw new SubagentCompletionSourceChangedError("Synthetic cohort was replaced");
+                }
               },
-            ),
-        )
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
+            },
+            resolveGatewayContext: () => kernel.gatewayRequestContext,
+          },
         );
+      const original = (
+        channelRequester
+          ? dispatchOriginal()
+          : inProcessDispatch.withOperatorToolGatewayAuthority(
+              {
+                authenticatedUserProfile: client.authenticatedUserProfile,
+                scopes: ["operator.write"],
+                operatorRunAuthority: originalSource!.authority,
+              },
+              dispatchOriginal,
+            )
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
       try {
         await Promise.race([
@@ -823,17 +844,29 @@ describe("public yielded settle replay with real Gateway admission", () => {
           drainTimeoutMs: 0,
         });
         await original;
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+        const interruptedEntry = loadSessionEntryReadOnly(scope);
+        expect(interruptedEntry).toMatchObject({
           status: "interrupted",
           abortedLastRun: true,
           restartRecoveryRuns: [expect.objectContaining({ runId })],
-          restartRecoveryOperatorSource: {
+        });
+        if (channelRequester) {
+          expect(interruptedEntry?.restartRecoveryOperatorSource).toBeUndefined();
+          expect(interruptedEntry?.restartRecoveryRequesterSource).toMatchObject({
+            sourceRunId: runId,
+            requesterOrigin,
+          });
+        } else {
+          expect(interruptedEntry?.restartRecoveryOperatorSource).toMatchObject({
             sourceRunId: runId,
             snapshot: { profileId: profile.id, scopes: ["operator.write"] },
-          },
-        });
-        if (reply === "missing original authority" || reply === "unconsumed revoked cohort") {
-          await updateSessionEntry(scope, () => ({ restartRecoveryOperatorSource: undefined }));
+          });
+        }
+        if (reply === "missing original authority") {
+          await updateSessionEntry(scope, () => ({
+            restartRecoveryOperatorSource: undefined,
+            restartRecoveryRequesterSource: undefined,
+          }));
         }
         if (reply === "unconsumed revoked cohort") {
           for (const entry of [child, sibling]) {
@@ -859,9 +892,15 @@ describe("public yielded settle replay with real Gateway admission", () => {
           const command = input as AgentCommandOpts;
           expect(command.sessionId).toBe(requesterSessionId);
           expect(command.runId).not.toBe(runId);
-          expect(command.operatorAuthority?.profileId).toBe(profile.id);
-          expect(command.operatorAuthority?.scopes).toEqual(["operator.write"]);
-          command.operatorAuthority!.assertCurrent();
+          if (channelRequester) {
+            expect(command.operatorAuthority).toBeUndefined();
+            expect(command.requesterOrigin).toEqual(requesterOrigin);
+            expect(command.senderIsOwner).toBe(false);
+          } else {
+            expect(command.operatorAuthority?.profileId).toBe(profile.id);
+            expect(command.operatorAuthority?.scopes).toEqual(["operator.write"]);
+            command.operatorAuthority!.assertCurrent();
+          }
           recoveryRunId = command.runId;
           expect(command.message).toContain("restart");
           expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(
@@ -870,12 +909,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
           command.onExecutionStarted?.();
           resumed.resolve();
           await resumedRelease.promise;
-          const rawEvidence: AgentDeliveryEvidence =
-            reply === "visible final"
-              ? finalResult()
-              : {
-                  payloads: [{ text: "Still checking the change.", isCommentary: true }],
-                };
+          const rawEvidence: AgentDeliveryEvidence = visibleFinal
+            ? finalResult()
+            : {
+                payloads: [{ text: "Still checking the change.", isCommentary: true }],
+              };
           // The controlled command uses the same durable final projection and
           // claim cleanup as real command finalization; Gateway admission stays real.
           await updateSessionEntry(scope, (entry) => ({
@@ -889,9 +927,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
             status: "done",
             endedAt: Date.now(),
           }));
-          return reply === "visible final"
-            ? finalResult()
-            : { payloads: [], meta: { durationMs: 1 } };
+          return visibleFinal ? finalResult() : { payloads: [], meta: { durationMs: 1 } };
         });
         recovery = recoverRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
@@ -936,12 +972,12 @@ describe("public yielded settle replay with real Gateway admission", () => {
         // Restart removed the old Gateway's dedupe cache. The already-admitted
         // settle batch must recognize its completed successor instead of rerunning.
         const completedReplay = wake(sibling);
-        expect(await completedReplay.result).toBe(reply === "visible final");
+        expect(await completedReplay.result).toBe(visibleFinal);
         expect(agentCommandMock).toHaveBeenCalledTimes(2);
         const persistedWake = loadSubagentRegistryFromSqlite().get(
           child.runId,
         )?.requesterSettleWake;
-        if (reply === "visible final") {
+        if (visibleFinal) {
           expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
             delivered: true,
             requesterVisibleFinalDelivered: true,

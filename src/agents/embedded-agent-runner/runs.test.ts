@@ -25,6 +25,7 @@ import {
 } from "../../logging/diagnostic.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
 import { EMBEDDED_RUN_WAITERS } from "./run-state.js";
@@ -457,6 +458,11 @@ describe("embedded run ownership", () => {
   });
 
   it("publishes completion authority and fences later session owners", async () => {
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "completion-requester",
+    })!;
     const first = createRunHandle({ runId: "first" });
     const oldClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "first");
     let published = false;
@@ -471,6 +477,7 @@ describe("embedded run ownership", () => {
         sessionKey,
         embeddedRunToolAuthorityBinding: () => ({
           source: "reply",
+          acceptsRequesterOrigin: (incoming) => hasSameRequesterOrigin(requesterOrigin, incoming),
           project: () => "authority",
           projectAsync: async () => "authority",
           assertActive: () => {},

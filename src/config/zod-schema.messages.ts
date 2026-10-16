@@ -43,6 +43,7 @@ const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegat
 export const QueueSchema = z
   .strictObject({
     mode: QueueModeSchema.optional(),
+    allowCollaborativeSteering: z.boolean().optional(),
     byChannel: QueueModeBySurfaceSchema,
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),

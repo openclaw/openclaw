@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { MessageClientSource } from "../chat/message-client-source.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { AttachedChatWorkContext } from "../chat/work-context.js";
@@ -45,7 +46,10 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
   provenance?: InputProvenance;
-  __openclaw?: Record<string, unknown> & { humanMentions?: readonly HumanMention[] };
+  __openclaw?: Record<string, unknown> & {
+    humanMentions?: readonly HumanMention[];
+    requesterOrigin?: RequesterOrigin;
+  };
 };
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
@@ -70,6 +74,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   /** Bounded display fallback for replies whose target is outside loaded history. */
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
+  /** Host-captured requester facts; recovery still requires exact accepted-input custody. */
+  requesterOrigin?: RequesterOrigin;
   provenance?: InputProvenance;
   /** Identity is producer-owned attribution; labels remain editable display metadata. */
   sender?: {

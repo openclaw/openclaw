@@ -1,3 +1,7 @@
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import {
   abortEmbeddedAgentRun,
@@ -5,12 +9,17 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../agents/harness/tool-authority.runtime.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
-import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -262,9 +271,6 @@ export async function withDelayedSessionToolsSteering(
         },
       ),
   };
-  withoutGatewayToolCallerIdentity(() =>
-    setActiveEmbeddedRun(target.sessionId, handle, target.sessionKey, undefined, target.agentId),
-  );
   const cancel = async () => {
     if (listeners.size === 0) {
       return;
@@ -273,38 +279,81 @@ export async function withDelayedSessionToolsSteering(
     await settled.promise;
   };
   let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
+  const source = getGatewayToolCallerIdentity();
+  if (!source?.requesterOrigin || !source.operatorAuthority) {
+    throw new Error("Expected the admitted personal-tool requester");
+  }
+  const runId = "participant-steering-target";
+  const sessionFile = "/tmp/participant-shared.jsonl";
+  const admission = prepareAgentRunAdmission({
+    cfg,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    operatorAuthority: source.operatorAuthority,
+    facts: {
+      agentId: target.agentId,
+      runId,
+      ingress: { kind: "system", state: "present", boundary: "session-tools-steering-test" },
+    },
+  });
   try {
-    await run({
-      pendingCount: () => queued.length,
-      cancel,
-      end: () => clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey),
-      abort: () => abortEmbeddedAgentRun(target.sessionId),
-      replace: () => {
-        const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
-        replacement = next;
-        withoutGatewayToolCallerIdentity(() =>
-          setActiveEmbeddedRun(target.sessionId, next, target.sessionKey),
+    await withPreparedEmbeddedRunToolAuthority(
+      { admittedRunContext: await admission.admit("embedded", "session-tools-steering-test") },
+      {
+        ...target,
+        runId,
+        sessionFile,
+        workspaceDir: "/tmp/session-tools-steering-test",
+        config: cfg,
+        provider: "openai",
+        modelId: "gpt-test",
+        requesterOrigin: source.requesterOrigin,
+      },
+      undefined,
+      async (prepared) => {
+        handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+        setActiveEmbeddedRun(
+          target.sessionId,
+          handle,
+          target.sessionKey,
+          sessionFile,
+          target.agentId,
+        );
+        await withGatewayToolCallerIdentity(source, () =>
+          run({
+            pendingCount: () => queued.length,
+            cancel,
+            end: () => clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey),
+            abort: () => abortEmbeddedAgentRun(target.sessionId),
+            replace: () => {
+              const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
+              replacement = next;
+              withoutGatewayToolCallerIdentity(() =>
+                setActiveEmbeddedRun(target.sessionId, next, target.sessionKey),
+              );
+            },
+            commit: async () => {
+              const entry = queued[0];
+              if (!entry) {
+                throw new Error("Expected an accepted steering message");
+              }
+              await persistAgentSessionMessage(manager, entry.message, {
+                invalidateSerializedPrefixCache: true,
+              });
+              await entry.recorder.waitForRuntimePersistence();
+              queued.shift();
+              emit({ type: "message_end", message: entry.message });
+              await settled.promise;
+            },
+          }),
         );
       },
-      commit: async () => {
-        const entry = queued[0];
-        if (!entry) {
-          throw new Error("Expected an accepted steering message");
-        }
-        await persistAgentSessionMessage(manager, entry.message, {
-          invalidateSerializedPrefixCache: true,
-        });
-        await entry.recorder.waitForRuntimePersistence();
-        queued.shift();
-        emit({ type: "message_end", message: entry.message });
-        await settled.promise;
-      },
-    });
+    );
   } finally {
     await cancel();
     clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey);
     if (replacement) {
       clearActiveEmbeddedRun(target.sessionId, replacement, target.sessionKey);
     }
+    admission.close();
   }
 }

@@ -232,8 +232,11 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     "active source tombstone",
     "unrelated tombstone",
     "caller revoked",
+    "source canceled",
+    "backend unavailable",
+    "backend replaced",
   ] as const)(
-    "rechecks terminal admission after awaited projection: %s",
+    "rechecks collaborative admission after awaited projection: %s",
     async (change, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const initial = { sessionId: "session-1", updatedAt: 1 };
@@ -243,9 +246,12 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         await upsertSessionEntryCore(scope, initial);
         let callerCurrent = true;
         const refusal = new Error("caller authority revoked during projection");
+        const source = new AbortController();
+        let available = true;
         const entered = createDeferred();
         const resume = createDeferred();
         const params = makeStarterParams({ entry: initial });
+        params.abortSignal = source.signal;
         params.session.sessionKey = sessionKey;
         params.session.storePath = storePath;
         params.assertCurrent = () => {
@@ -260,17 +266,18 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
         });
         operation.bindToolAuthoritySnapshot({
           fingerprint: () => "authority",
-          project: () => "authority",
-          projectAsync: async () => {
+          project: (caller) => (caller.allowCollaborativeSteering ? "authority" : "caller-policy"),
+          projectAsync: async (caller) => {
             entered.resolve();
             await withinTest(resume.promise, signal);
-            return "authority";
+            return caller.allowCollaborativeSteering ? "authority" : "caller-policy";
           },
         });
         operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
         const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-          async (_text, _options, assertCurrent) => {
+          async (_text, options, assertCurrent) => {
             assertCurrent();
+            expect(options?.isInboundUserMessage).toBe(false);
           },
         );
         operation.attachBackend({
@@ -278,7 +285,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           runId: "active-run",
           toolAuthorityFingerprint: "authority",
           cancel() {},
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+          messageInjectionV2: { version: 2, isAvailable: () => available, queueMessage },
         });
         operation.setPhase("running");
         replyRunRegistry.bindSourceTurnId(operation, "source-1");
@@ -315,10 +322,23 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             });
           }
           callerCurrent = change !== "caller revoked";
+          if (change === "source canceled") {
+            source.abort(refusal);
+          } else if (change === "backend unavailable") {
+            available = false;
+          } else if (change === "backend replaced") {
+            operation.attachBackend({
+              kind: "embedded",
+              runId: "replacement-run",
+              toolAuthorityFingerprint: "authority",
+              cancel() {},
+              messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+            });
+          }
           resume.resolve();
           const result = await outcome;
           sql.expectIdle();
-          if (change === "caller revoked") {
+          if (change === "caller revoked" || change === "source canceled") {
             expect(result).toEqual({ error: refusal });
             expect(queueMessage).not.toHaveBeenCalled();
           } else if (change === "normal" || change === "unrelated tombstone") {
@@ -329,6 +349,16 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             }
             await expect(result.attempt.outcome).resolves.toMatchObject({ status: "accepted" });
             expect(queueMessage).toHaveBeenCalledOnce();
+          } else if (change === "backend unavailable" || change === "backend replaced") {
+            if (!("attempt" in result) || !result.attempt) {
+              throw new Error("Expected a rejected stale-target attempt", { cause: result });
+            }
+            await expect(result.attempt.acceptance).resolves.toBe(false);
+            await expect(result.attempt.outcome).resolves.toEqual({
+              status: "rejected",
+              reason: change === "backend replaced" ? "no_active_run" : "injection_unavailable",
+            });
+            expect(queueMessage).not.toHaveBeenCalled();
           } else {
             expect(result).toEqual({ attempt: undefined });
             expect(queueMessage).not.toHaveBeenCalled();

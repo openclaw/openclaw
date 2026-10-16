@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
+  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -20,6 +21,7 @@ import {
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../agents/harness/gateway-question.test-support.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-tool.test-support.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -132,7 +134,9 @@ async function withCliQuestionLoopback(
       id: string;
       response: Promise<McpResponse>;
     }>;
-    answer: (overlay?: ReplyToolAuthorityOverlay) => Promise<boolean>;
+    answer: (
+      overlay?: ReplyToolAuthorityOverlay,
+    ) => ReturnType<typeof claimPendingAgentQuestionAnswerFromCaller>;
     retire: (id: string) => void;
     manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"];
     holdNextHello: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["holdNextHello"];
@@ -151,12 +155,22 @@ async function withCliQuestionLoopback(
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
           ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-          agents: { defaults: { workspace: dir }, entries: { main: {} } },
+          agents: {
+            defaults: { workspace: dir, model: "test-cli/test-model" },
+            entries: { main: {} },
+          },
           plugins: { enabled: false },
           tools: { profile: "full" },
         };
         // Config identity is stable: tools/list must seed the same cache used by tools/call.
         setRuntimeConfigSnapshot(config);
+        const operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "question-owner",
+          scopes: ["operator.admin"],
+          gatewayAccessGrant: null,
+          modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
+          assertCurrent: () => signal.throwIfAborted(),
+        });
         await ensureMcpLoopbackServer();
         const { getActiveMcpLoopbackRuntime } = await import("./mcp-http.loopback-runtime.js");
         const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "loopback runtime");
@@ -220,6 +234,7 @@ async function withCliQuestionLoopback(
                 const source = new AbortController();
                 const admission = prepareAgentRunAdmission({
                   cfg: config,
+                  operatorAuthority,
                   facts: {
                     runId,
                     agentId: "main",
@@ -237,6 +252,8 @@ async function withCliQuestionLoopback(
                   timeoutMs: 60_000,
                   abortSignal: AbortSignal.any([signal, source.signal]),
                   messageProvider: "webchat",
+                  operatorProfileId: operatorAuthority.profileId,
+                  requesterModel: { provider: "test-cli", model: "test-model" },
                   senderIsOwner: true,
                   toolsAllow: originalToolsAllow,
                 });
@@ -288,7 +305,7 @@ async function withCliQuestionLoopback(
                 claimPendingAgentQuestionAnswerFromCaller({
                   sessionKey,
                   text: "Staging",
-                  caller: overlay,
+                  caller: { ...overlay, operatorAuthority },
                   persist,
                   assertSourceCurrent: () => {},
                 }),

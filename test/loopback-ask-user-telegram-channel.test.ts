@@ -71,6 +71,7 @@ const questionArgs = {
 };
 const caller: ReplyToolAuthorityOverlay = {
   messageProvider: "telegram",
+  senderId: "1",
   senderIsOwner: true,
   toolsAllow: ["ask_user"],
   disableTools: false,
@@ -279,6 +280,7 @@ describe("loopback ask_user Telegram channel transport", () => {
                   timeoutMs: 60_000,
                   abortSignal: source.signal,
                   messageProvider: "telegram",
+                  senderId: "1",
                   currentChannelId: "1",
                   agentAccountId: "default",
                   senderIsOwner: true,

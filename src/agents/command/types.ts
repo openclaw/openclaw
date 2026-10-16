@@ -28,6 +28,7 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-c
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ReplyExpectation } from "../reply-completion.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type {
@@ -147,6 +148,8 @@ export type AgentCommandOpts = {
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Host-captured requester identity for policy resolution across internal continuations. */
+  requesterOrigin?: RequesterOrigin;
   lane?: string;
   swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
@@ -280,6 +283,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
   operatorAuthority: undefined,
+  requesterOrigin: undefined,
   privateCompletion: undefined,
   replyExpectation: undefined,
   skillLibraryAuthoring: undefined,

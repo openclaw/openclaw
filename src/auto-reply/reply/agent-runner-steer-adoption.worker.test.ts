@@ -4,8 +4,12 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,6 +33,7 @@ import { createTypingSignaler } from "./typing-mode.js";
 
 afterEach(() => {
   testing.resetReplyRunRegistry();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
 
@@ -50,6 +55,12 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       prompt: "use the new requirements",
       messageId: "incoming-steer",
       originatingChannel: "webchat",
+    });
+    run.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "steering-requester",
+      scopes: ["operator.read", "operator.write"],
+      source: {},
+      assertCurrent() {},
     });
     Object.assign(run.run, {
       agentId: "main",
@@ -150,6 +161,12 @@ it.for(
         prompt: "keep this incoming request visible",
         messageId,
         originatingChannel: "webchat",
+      });
+      run.operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "steering-requester",
+        scopes: ["operator.read", "operator.write"],
+        source: {},
+        assertCurrent() {},
       });
       Object.assign(run.run, {
         agentId: "main",
@@ -305,7 +322,11 @@ it.for(
           expect([...retained]).toEqual([]);
         } else {
           expect(delivered).toEqual([]);
-          expect(resultState.admission).toEqual({ status: "accepted", mode: "followup" });
+          expect(resultState.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
+          });
           expect([...retained]).toEqual([run]);
           expect(run.steerPending).toBeUndefined();
           operation.complete();

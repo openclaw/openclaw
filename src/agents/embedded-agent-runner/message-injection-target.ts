@@ -8,7 +8,6 @@ import {
   type ReplyBackendHandle,
   type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
-  type ReplyMessageInjectionOptions,
   type ReplyToolAuthorityPreparation,
 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveReplyBackendMessageInjectionRejection } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
@@ -41,7 +40,9 @@ import {
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
   resolveActiveEmbeddedRunRecoveryBlocker,
   type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentMessageInjectionOptions,
   type EmbeddedAgentQueueMessageOutcome,
+  type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
 import { isEmbeddedRunHandleAbortable } from "./runs.probes.js";
 
@@ -117,6 +118,12 @@ export function captureDirectEmbeddedMessageInjectionTarget(
     sourceTurnId: toolAuthority.sourceTurnId,
     [replyMessageInjectionTargetOwner]: {
       backendIdentity: handle,
+      get toolAuthorityFingerprint() {
+        return backend.toolAuthorityFingerprint;
+      },
+      get requesterPrincipalKey() {
+        return toolAuthority.requesterPrincipalKey;
+      },
       acceptParticipant: (overlay) => toolAuthority.personalToolParticipants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
         try {
@@ -227,7 +234,7 @@ export type EmbeddedInjectionPreparation = Pick<
 type EmbeddedInjectionTask = (
   sessionId: string,
   text: string,
-  options: ReplyMessageInjectionOptions | undefined,
+  options: EmbeddedAgentMessageInjectionOptions | undefined,
   canInject: (() => boolean) | undefined,
   sourcePreparation: EmbeddedInjectionPreparation | undefined,
   release: () => void,
@@ -238,7 +245,7 @@ export function createEmbeddedMessageInjectionQueue(consume: EmbeddedInjectionTa
   return (
     sessionId: string,
     text: string,
-    options?: ReplyMessageInjectionOptions,
+    options?: EmbeddedAgentMessageInjectionOptions,
     canInject?: () => boolean,
     sourcePreparation?: EmbeddedInjectionPreparation,
   ): Promise<EmbeddedAgentQueueMessageOutcome> => {
@@ -262,7 +269,7 @@ export function createEmbeddedMessageInjectionQueue(consume: EmbeddedInjectionTa
 
 export async function prepareEmbeddedInjectionAuthority(
   sessionId: string,
-  options?: ReplyMessageInjectionOptions,
+  options?: EmbeddedAgentMessageInjectionOptions,
   canInject?: () => boolean,
   sourcePreparation?: EmbeddedInjectionPreparation,
 ): Promise<{ fingerprint?: string; preparation: EmbeddedInjectionPreparation } | undefined> {
@@ -290,13 +297,18 @@ export async function prepareEmbeddedInjectionAuthority(
     assertCurrent();
     await sourcePreparation?.prepareCurrent();
     const overlay = options?.toolAuthorityOverlay;
-    const fingerprint = overlay
-      ? await (
-          registration?.toolAuthority
-            ? registration.toolAuthority.projectAsync(overlay)
-            : ownedOperation?.projectToolAuthorityFingerprintAsync(overlay)
-        )?.catch(() => undefined)
-      : options?.toolAuthorityFingerprint;
+    const requester = options?.requesterToolAuthority;
+    const fingerprint = requester
+      ? await registration?.toolAuthority
+          ?.projectRequesterAsync?.(requester)
+          ?.catch(() => undefined)
+      : overlay
+        ? await (
+            registration?.toolAuthority
+              ? registration.toolAuthority.projectAsync(overlay)
+              : ownedOperation?.projectToolAuthorityFingerprintAsync(overlay)
+          )?.catch(() => undefined)
+        : options?.toolAuthorityFingerprint;
     assertCurrent();
     return fingerprint;
   };
@@ -310,11 +322,14 @@ export async function prepareEmbeddedInjectionAuthority(
           assertCurrent();
           sourcePreparation?.compatAssertCurrent?.();
           const overlay = options?.toolAuthorityOverlay;
-          const projected = overlay
-            ? registration?.toolAuthority
-              ? registration.toolAuthority.project(overlay)
-              : ownedOperation?.projectToolAuthorityFingerprint(overlay)
-            : options?.toolAuthorityFingerprint;
+          const requester = options?.requesterToolAuthority;
+          const projected = requester
+            ? registration?.toolAuthority?.projectRequester?.(requester)
+            : overlay
+              ? registration?.toolAuthority
+                ? registration.toolAuthority.project(overlay)
+                : ownedOperation?.projectToolAuthorityFingerprint(overlay)
+              : options?.toolAuthorityFingerprint;
           if (projected !== fingerprint) {
             throw new Error("Queued caller tool authority changed during preparation");
           }
@@ -339,7 +354,7 @@ function bindEmbeddedMessageInjection(
   guarded: NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>,
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
-  options?: ReplyMessageInjectionOptions,
+  options?: EmbeddedAgentMessageInjectionOptions,
 ): EmbeddedMessageInjection | undefined {
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
@@ -352,11 +367,23 @@ function bindEmbeddedMessageInjection(
     if (sourceCanInject && !sourceCanInject()) {
       return false;
     }
+    if (
+      options?.requesterToolAuthority &&
+      !registration?.toolAuthority?.acceptsRequesterOrigin(
+        options.requesterToolAuthority.requesterOrigin,
+      )
+    ) {
+      return false;
+    }
     const overlay = options?.toolAuthorityOverlay;
-    if (overlay) {
-      const projected = registration?.toolAuthority
-        ? registration.toolAuthority.project(overlay)
-        : ownedOperation?.projectToolAuthorityFingerprint(overlay);
+    const requester = options?.requesterToolAuthority;
+    if (overlay || requester) {
+      const projected = requester
+        ? registration?.toolAuthority?.projectRequester?.(requester)
+        : overlay &&
+          (registration?.toolAuthority
+            ? registration.toolAuthority.project(overlay)
+            : ownedOperation?.projectToolAuthorityFingerprint(overlay));
       if (
         !projected ||
         projected !== (handle.toolAuthorityFingerprint ?? ownedOperation?.toolAuthorityFingerprint)
@@ -401,7 +428,7 @@ export function resolveEmbeddedInjection(
   handle: EmbeddedAgentQueueHandle,
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
-  injectionOptions?: ReplyMessageInjectionOptions,
+  injectionOptions?: EmbeddedAgentMessageInjectionOptions,
 ): EmbeddedMessageInjection | undefined {
   try {
     const guarded = handle.messageInjectionV2;
@@ -452,4 +479,28 @@ export function resolveEmbeddedInjection(
     );
     return undefined;
   }
+}
+
+export function createQueueFailureOutcome(
+  sessionId: string,
+  reason: EmbeddedAgentQueueFailureReason,
+  errorMessage?: string,
+): EmbeddedAgentQueueMessageOutcome {
+  return {
+    queued: false,
+    sessionId,
+    reason,
+    gatewayHealth: "live",
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
+
+export function formatEmbeddedAgentQueueFailureSummary(
+  outcome: EmbeddedAgentQueueMessageOutcome,
+): string | undefined {
+  if (outcome.queued) {
+    return undefined;
+  }
+  const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
+  return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }

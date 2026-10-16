@@ -1,5 +1,6 @@
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
 import {
   prepareSessionsSendCommunication,
@@ -21,6 +22,7 @@ import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   readSessionSendDelivery,
@@ -31,6 +33,7 @@ import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
 class SessionSendEndpointChangedError extends Error {}
+class SessionSendRequesterUnavailableError extends Error {}
 
 function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryEndpoint): boolean {
   return (
@@ -112,6 +115,7 @@ export async function recoverSessionSendDeliveries(
         sourceSessionKey: string;
         reason:
           | "endpoint-replaced"
+          | "requester-unavailable"
           | "permission-denied"
           | "transient-admission"
           | "store-unavailable"
@@ -131,6 +135,7 @@ export async function recoverSessionSendDeliveries(
             let communication:
               | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
               | undefined;
+            let operator: RestoredGatewayOperatorAuthority | undefined;
             try {
               const load = async (
                 endpoint: SessionSendDeliveryEndpoint,
@@ -209,6 +214,46 @@ export async function recoverSessionSendDeliveries(
                 communication!.assertCurrent();
               };
               guard();
+              const savedOrigin = input.message["__openclaw"]?.requesterOrigin;
+              const requesterOrigin = decodeRequesterOrigin(savedOrigin);
+              if (
+                (savedOrigin !== undefined && !requesterOrigin) ||
+                delivery.operatorSource === undefined
+              ) {
+                throw new SessionSendRequesterUnavailableError();
+              }
+              let accepted = false;
+              const assertRequesterCurrent = () => {
+                signal.throwIfAborted();
+                // Admission transfers custody to the turn. Pending consumption and
+                // closing this communication lease must not revoke accepted work.
+                if (!accepted) {
+                  guard();
+                }
+              };
+              try {
+                if (delivery.operatorSource !== null) {
+                  const { restoreGatewayQueuedOperatorRecovery } =
+                    await import("./operator-run-recovery.js");
+                  operator = await restoreGatewayQueuedOperatorRecovery({
+                    source: delivery.operatorSource,
+                    context,
+                    assertCurrent: assertRequesterCurrent,
+                  });
+                }
+                if (
+                  requesterOrigin?.operatorProfileId &&
+                  requesterOrigin.operatorProfileId !== operator?.authority.profileId
+                ) {
+                  throw new SessionSendRequesterUnavailableError();
+                }
+              } catch (error) {
+                if (isTransient(error)) {
+                  throw error;
+                }
+                throw new SessionSendRequesterUnavailableError(undefined, { cause: error });
+              }
+              guard();
               await withSessionSendDelivery({ delivery, acceptedMessage: input.message }, () =>
                 runtime.dispatchAgent(
                   {
@@ -226,10 +271,23 @@ export async function recoverSessionSendDeliveries(
                     lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
                   },
                   undefined,
-                  { signal, assertAdmissionCurrent: guard },
+                  {
+                    signal,
+                    assertAdmissionCurrent: assertRequesterCurrent,
+                    operatorRunAuthority: operator?.authority,
+                    agentToolCaller: requesterOrigin
+                      ? {
+                          agentId: delivery.source.agentId,
+                          sessionKey: delivery.source.sessionKey,
+                          requesterOrigin,
+                        }
+                      : undefined,
+                  },
                 ),
               );
+              accepted = true;
             } finally {
+              operator?.release();
               communication?.close();
             }
           });
@@ -244,14 +302,16 @@ export async function recoverSessionSendDeliveries(
             reason:
               error instanceof SessionSendEndpointChangedError
                 ? "endpoint-replaced"
-                : error instanceof SessionCommunicationDeniedError
-                  ? "permission-denied"
-                  : isTransient(error)
-                    ? "transient-admission"
-                    : error instanceof SessionStoreUnavailableError ||
-                        error instanceof AgentDatabaseAdmissionError
-                      ? "store-unavailable"
-                      : "unknown",
+                : error instanceof SessionSendRequesterUnavailableError
+                  ? "requester-unavailable"
+                  : error instanceof SessionCommunicationDeniedError
+                    ? "permission-denied"
+                    : isTransient(error)
+                      ? "transient-admission"
+                      : error instanceof SessionStoreUnavailableError ||
+                          error instanceof AgentDatabaseAdmissionError
+                        ? "store-unavailable"
+                        : "unknown",
             attempts,
           });
           const causes = [
@@ -273,6 +333,8 @@ export async function recoverSessionSendDeliveries(
               const description = {
                 "endpoint-replaced":
                   "the source or destination session was reset, archived, or replaced",
+                "requester-unavailable":
+                  "original requester authority is unavailable; submit a new request",
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",

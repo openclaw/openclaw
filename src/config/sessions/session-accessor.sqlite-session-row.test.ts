@@ -293,7 +293,7 @@ describe("SQLite session row persistence", () => {
     expect(persisted).not.toHaveProperty("label");
   });
 
-  it("persists private workspace intent but excludes runtime-only resolved skills from SQLite JSON", async () => {
+  it("persists private source and workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-sqlite-session-skills-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:runtime-skills";
@@ -314,6 +314,13 @@ describe("SQLite session row persistence", () => {
         name: "session-startup",
         titleSource: "Start work",
       },
+      restartRecoveryRequesterSource: {
+        agentId: "main",
+        sessionKey,
+        sessionId: "runtime-skills-session",
+        sourceRunId: "original-run",
+        requesterOrigin: { sessionKey, operatorProfileId: "original-requester" },
+      },
       skillsSnapshot: {
         prompt: "compact skill prompt",
         skills: [{ name: "demo" }],
@@ -331,7 +338,11 @@ describe("SQLite session row persistence", () => {
       .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
       .get(sessionKey) as { entry_json: string };
     const persisted = JSON.parse(row.entry_json) as InternalSessionEntry;
-    for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
+    for (const key of [
+      "pendingProjectGitUrl",
+      "pendingWorktree",
+      "restartRecoveryRequesterSource",
+    ] as const) {
       expect(persisted[key]).toEqual(entry[key]);
       expect(loadSessionEntry({ agentId: "main", env, sessionKey })?.[key]).toEqual(entry[key]);
       expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);

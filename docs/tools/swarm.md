@@ -304,6 +304,10 @@ The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
 `sessions_yield` to wait for collector children. They do not send completion notifications.
 
+If OpenClaw cannot recover the requester for a queued collector after a restart,
+it records a failed launch and asks you to submit the task again. This can affect
+queued collectors created by older versions.
+
 Embedded and CLI-backed collector turns are not offered `sessions_yield`. If an
 override reaches the tool, it returns an error explaining that collector results
 are collected explicitly. A collector that nevertheless yields through another

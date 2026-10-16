@@ -352,6 +352,8 @@ describe("tui command handlers", () => {
 
   it.each([
     { command: "/side check this", local: true },
+    { command: "/followup next task", local: true },
+    { command: "/followup next task", local: false },
     { command: "/not-a-real-command", local: true },
     { command: "/goal status", local: false },
     { command: "/model default", local: true },
@@ -375,6 +377,29 @@ describe("tui command handlers", () => {
     expect(h.runUsageCostCommand).not.toHaveBeenCalled();
     expect(h.addSystem).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "waits for actual local=%s followup admission before displaying queue feedback",
+    async (local) => {
+      const send = createDeferred<{ runId: string; status: string }>();
+      const h = createTuiCommandHandlersHarness({
+        opts: { local },
+        sendChat: vi.fn(() => send.promise),
+      });
+      const pending = h.handleCommand("/followup next task");
+      expect(h.addSystem).not.toHaveBeenCalled();
+      send.resolve({ runId: "queued-followup", status: "queued" });
+      await pending;
+      if (local) {
+        expect(h.addSystem).toHaveBeenCalledWith(
+          "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+        );
+      } else {
+        expect(h.addSystem).not.toHaveBeenCalled();
+      }
+      expect(h.patchSession).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["/goal start ship", "/usage cost"])(
     "runs local %s for the selected global agent",

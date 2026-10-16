@@ -12,6 +12,14 @@ describe("parseCommand", () => {
     expect(parseCommand("/ELEV full")).toEqual({ name: "elevated", args: "full" });
     expect(parseCommand("/t high")).toEqual({ name: "think", args: "high" });
     expect(parseCommand("/side check this")).toEqual({ name: "btw", args: "check this" });
+    expect(parseCommand("/followup first\nsecond")).toEqual({
+      name: "followup",
+      args: "first\nsecond",
+    });
+    for (const local of [false, true]) {
+      expect(helpText({ local })).toContain("/followup <message>");
+      expect(getSlashCommands({ local }).some((command) => command.name === "followup")).toBe(true);
+    }
     expect(parseCommand("/compact: focus on decisions")).toEqual({
       name: "compact",
       args: "focus on decisions",

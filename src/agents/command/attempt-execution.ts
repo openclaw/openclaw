@@ -229,6 +229,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         : undefined,
   });
   const toolContext = {
+    requesterOrigin: params.opts.requesterOrigin,
+    operatorProfileId: params.opts.operatorAuthority?.profileId,
+    conversationId: params.opts.requesterOrigin?.conversationId ?? params.runContext.chatId,
+    chatType: params.opts.requesterOrigin?.chatType,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,

@@ -37,7 +37,7 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
-import { resolveSlashCommandName } from "./commands-slash-parse.js";
+import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
 import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
@@ -238,9 +238,16 @@ export async function handleInlineActions(
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
   const explicitSkillReferenceBody = command.commandBodyNormalized;
+  const isExplicitFollowup =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") !== null;
   const hasSkillReferences =
-    command.isAuthorizedSender && hasSkillReferenceCandidate(explicitSkillReferenceBody);
+    !isExplicitFollowup &&
+    command.isAuthorizedSender &&
+    hasSkillReferenceCandidate(explicitSkillReferenceBody);
   const hasSkillSlashCandidate =
+    !isExplicitFollowup &&
     command.isAuthorizedSender &&
     slashCommandName !== null &&
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
@@ -452,6 +459,7 @@ export async function handleInlineActions(
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.
   const inlineCommand =
+    !isExplicitFollowup &&
     allowTextCommands &&
     command.isAuthorizedSender &&
     !skillInvocation &&

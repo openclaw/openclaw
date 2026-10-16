@@ -95,8 +95,9 @@ describe("CronService authenticated channel requester", () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
     const runId = "cron-requester-mcp-commit";
+    const config = {};
     const admission = prepareAgentRunAdmission({
-      cfg: {},
+      cfg: config,
       operationalRunInstance: createOperationalRunInstanceRef(runId),
       facts: {
         runId,
@@ -133,6 +134,7 @@ describe("CronService authenticated channel requester", () => {
           },
           runtimeOwnerToken: "cron-requester-mcp-commit-runtime",
           admittedRunContext: admitted,
+          toolPolicyConfig: config,
           cronRequesterGrantIssuer: expectDefined(
             captureCronRequesterGrantIssuer(runId),
             "native requester issuer",

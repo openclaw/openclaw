@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe("setupCommand", () => {
-  it("writes gateway.mode=local on first run", async () => {
+  it("writes the local Gateway and collaborative steering defaults on first run", async () => {
     await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const effects = await observeSetupOwners();
@@ -58,6 +58,7 @@ describe("setupCommand", () => {
         gateway: {
           mode: "local",
         },
+        messages: { queue: { allowCollaborativeSteering: true } },
       });
       expect(effects.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({

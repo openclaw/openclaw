@@ -78,6 +78,12 @@ export function registerPluginOnlyCallerIdentityCase({
         personalToolParticipants: undefined,
         personalToolSelection: undefined,
         personalToolUser: undefined,
+        requesterOrigin: expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:alice",
+          messageProvider: "discord-voice",
+          accountId: "work",
+          messageThreadId: "42",
+        }),
         sessionEventDelivery: undefined,
         sessionEventSettings: { permissionMode: undefined },
         sessionEventToolsAllow: ["file_fetch"],

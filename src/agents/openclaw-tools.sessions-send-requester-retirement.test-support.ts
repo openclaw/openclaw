@@ -1,6 +1,8 @@
 import { expect, it, vi, type MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
@@ -10,6 +12,7 @@ import {
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
@@ -19,11 +22,14 @@ import {
 } from "./admitted-run-context.js";
 import {
   clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "./embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
@@ -46,6 +52,33 @@ export type GatewayCall = {
   params?: Record<string, unknown>;
   onAccepted?: (payload: unknown) => void;
 };
+
+type AgentCallParams = {
+  extraSystemPrompt?: string;
+  inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+};
+export function readSessionsSendAgentParams(call: GatewayCall): AgentCallParams {
+  return (call.params ?? {}) as AgentCallParams;
+}
+export async function writeSessionsSendCoordinationEntry(
+  config: OpenClawConfig,
+  sessionKey: string,
+  entry: SessionEntry,
+  storePath?: string,
+) {
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (!agentId) {
+    throw new Error(`Expected an agent-scoped fixture key: ${sessionKey}`);
+  }
+  await replaceSessionEntry(
+    {
+      agentId,
+      sessionKey,
+      storePath: storePath ?? resolveSessionStorePathCore(config.session?.store, { agentId }),
+    },
+    entry,
+  );
+}
 
 /** Reuse the coordination suite's transport and state fixture for post-commit retirement. */
 export function registerSessionsSendRequesterRetirementTests({
@@ -140,7 +173,13 @@ export function registerSessionsSendRequesterRetirementTests({
           spawnMode: "session",
           expectsCompletionMessage: true,
         });
-        setActiveEmbeddedRun(childSessionId, handle, childSessionKey);
+        await setSessionsSendTestActiveRun(
+          childSessionId,
+          handle,
+          childSessionKey,
+          requesterSessionKey,
+          config,
+        );
       } else {
         await addSubagentRunForTests({
           runId: "retiring-original-child-run",
@@ -207,6 +246,7 @@ export function registerSessionsSendRequesterRetirementTests({
                 admittedRunContext,
                 agentId: "main",
                 sessionKey: requesterSessionKey,
+                requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
               }),
               () =>
                 createSessionsSendTool({

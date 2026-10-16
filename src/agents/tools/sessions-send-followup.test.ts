@@ -180,6 +180,7 @@ describe("followup retained session authorization", () => {
       request,
       {
         cfg: mocks.config(),
+        admissionConfig: mocks.config(),
         callGateway,
         runId: input.runId,
         sessionKey: input.targetSessionKey,

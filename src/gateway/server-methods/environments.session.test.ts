@@ -94,30 +94,28 @@ describe("conversation environment presentation participants", () => {
   }
 
   it.each(["desktop", "portal"] as const)(
-    "rejects ambiguous %s presentation before creating an environment, but permits creation without presentation",
+    "keeps %s presentation with the owner after rejecting another person's steering",
     async (presentation) => {
       const test = fixture();
       await withPersonalToolTurn({ owner }, async (turn) => {
-        expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+        expect(await turn.steer(steerer)).toMatchObject({
+          status: "rejected",
+          reason: "tool_authority_mismatch",
+        });
+        expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe(owner.profileId);
         await test.call(presentation);
-        expect(test.create).not.toHaveBeenCalled();
-        expect(test.provision).not.toHaveBeenCalled();
-        expect(test.context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(test.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringMatching(
-              /without presentation.*screen.*desktop_show.*portal_show.*environmentId.*requester_profile.id/s,
-            ),
-          }),
-        );
-        await test.call();
-        expect(test.respond).toHaveBeenLastCalledWith(
           true,
           expect.objectContaining({
             environment: expect.objectContaining({ status: "available" }),
           }),
+        );
+        expect(test.context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+          "ui.command",
+          expect.objectContaining({
+            command: expect.objectContaining({ panel: presentation, open: true }),
+          }),
+          new Set([owner.gatewayUiCommandTarget.connId]),
         );
         expect(test.provision).toHaveBeenCalledOnce();
       });
@@ -141,7 +139,7 @@ describe("conversation environment presentation participants", () => {
     expect(test.provision).toHaveBeenCalledOnce();
   });
 
-  it("reports dispatch-time ambiguity and cancels the reserved environment before allocation", async () => {
+  it("cancels the reserved environment before allocation when the requester loses access", async () => {
     const test = fixture();
     await withPersonalToolTurn({ owner }, async (turn) => {
       const reserve = support.testState.store.createSessionAttachmentIntent.bind(
@@ -150,7 +148,7 @@ describe("conversation environment presentation participants", () => {
       vi.spyOn(support.testState.store, "createSessionAttachmentIntent").mockImplementation(
         async (...args) => {
           const reservation = await reserve(...args);
-          expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+          turn.revoke(owner.profileId);
           return reservation;
         },
       );
@@ -159,7 +157,7 @@ describe("conversation environment presentation participants", () => {
       expect(test.respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ message: expect.stringMatching(/Several people.*Alice.*Bob/s) }),
+        expect.objectContaining({ message: expect.stringContaining("Profile access revoked") }),
       );
       expect(test.context.broadcastToConnIds).not.toHaveBeenCalled();
       expect(test.provision).not.toHaveBeenCalled();

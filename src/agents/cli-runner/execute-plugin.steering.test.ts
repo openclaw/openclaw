@@ -109,6 +109,8 @@ it("steers configured, session and explicit inputs through current authority int
       runtimePolicySessionKey: policyKey,
       workspaceDir: root,
       cwd: root,
+      messageProvider: "webchat",
+      senderId: "owner",
       senderIsOwner: true,
       traceAuthorized: false,
     });

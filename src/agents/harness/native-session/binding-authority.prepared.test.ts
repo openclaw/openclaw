@@ -2,10 +2,13 @@ import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
 import { createTestReplyOperation } from "../../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { testing } from "../../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../../auto-reply/reply/reply-tool-authority.test-support.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -113,11 +116,9 @@ it.each([
       assertCurrent() {},
       compatAssertCurrent,
       async prepareCurrent() {
-        const projected = await operation.projectToolAuthorityFingerprintAsync({
-          senderIsOwner: run.run.senderIsOwner === true,
-          disableTools: false,
-          traceAuthorized: false,
-        });
+        const projected = await operation.projectToolAuthorityFingerprintAsync(
+          toolAuthorityOverlay(run),
+        );
         if (projected !== admitted) {
           throw new Error("policy no longer matches");
         }

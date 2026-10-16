@@ -5,6 +5,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { COMMAND_ADMISSION_OWNER } from "../../agents/agent-command-admission-owner.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import * as recoveryLifecycle from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -26,6 +27,7 @@ import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import * as sessionWorkAdmission from "../../sessions/session-lifecycle-admission.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitTestReplyTurn, createSessionStore } from "./reply-turn-admission.test-support.js";
@@ -378,6 +380,40 @@ it.each(["started", "cancelled", "replaced"] as const)(
     expect(owner.isActive()).toBe(true);
   },
 );
+
+it("keeps a detached followup behind a direct command without a reply operation", async ({
+  signal,
+}) => {
+  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
+  const command = await f.begin({ owner: COMMAND_ADMISSION_OWNER });
+  const waiting = createDeferred();
+  const readOwnerRelease = sessionWorkAdmission.getSessionWorkAdmissionOwnerRelease;
+  vi.spyOn(sessionWorkAdmission, "getSessionWorkAdmissionOwnerRelease").mockImplementation(
+    (params) => {
+      const released = readOwnerRelease(params);
+      if (params.owner === COMMAND_ADMISSION_OWNER && params.phase === "acquired" && released) {
+        waiting.resolve();
+      }
+      return released;
+    },
+  );
+  const pending = f.wait({ kind: "queued_followup" });
+  await withinTest(
+    awaitGateBeforeSettlement(
+      waiting.promise,
+      pending.settled,
+      "Followup did not wait for the command owner",
+    ),
+    signal,
+  );
+  expect(pending.result).toBeUndefined();
+  expect(pending.failure).toBeUndefined();
+  expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+  command.release();
+  await withinTest(pending.settled, signal);
+  expect(pending.failure).toBeUndefined();
+  expect(pending.result).toMatchObject({ status: "owned" });
+});
 
 it("preserves live recovery authority while monitoring", async () => {
   const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });

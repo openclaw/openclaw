@@ -33,6 +33,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { runWithoutInheritedSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -63,7 +64,10 @@ import { projectWithdrawnAgentInput } from "./agent-run-dispatch-outcome.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
-import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
+import {
+  resolveGatewayPluginSubagentToolPolicy,
+  settleUnstartedGatewayFollowup,
+} from "./agent-run-subagent.js";
 import {
   annotateAgentRunUserTurnPrompt,
   finalizePreparedAgentRunUserTurn,
@@ -71,11 +75,14 @@ import {
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
+  const { entry, cleanup } = params.prepared.activeRunAbort;
   // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
-  return await runWithChatAbortExecution(
-    params.prepared.activeRunAbort.entry,
-    () => runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params)),
-    params.prepared.activeRunAbort.cleanup,
+  return await runWithoutInheritedSessionWorkAdmissions(() =>
+    runWithChatAbortExecution(
+      entry,
+      () => runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params)),
+      cleanup,
+    ),
   );
 }
 
@@ -126,6 +133,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     const assertDispatchCurrent = () => {
       params.assertContextCurrent?.();
       prepared.operatorAuthority?.assertCurrent();
+      prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -345,19 +353,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const ingressAgentId = params.resolvedSessionKey
           ? params.activeSessionAgentId
           : params.agentId;
-        // Plugin-owned additive grants stay internal to the authenticated in-process run.
-        // Public agent params cannot supply them, and normal tool policy still filters them.
-        const runtimePluginToolGrant =
-          params.client?.internal?.agentRunTracking === "plugin_subagent" &&
-          params.client.internal.pluginRuntimeOwnerId ===
-            params.client.internal.runtimePluginToolGrant?.pluginId
-            ? params.client.internal.runtimePluginToolGrant
-            : undefined;
-        const pluginSubagentToolsAllow =
-          params.client?.internal?.agentRunTracking === "plugin_subagent" &&
-          Array.isArray(params.client.internal.pluginSubagentToolsAllow)
-            ? [...params.client.internal.pluginSubagentToolsAllow]
-            : undefined;
+        const { runtimePluginToolGrant, pluginSubagentToolsAllow } =
+          resolveGatewayPluginSubagentToolPolicy(params.client);
         const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
           collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
@@ -534,6 +531,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,
+                requesterOrigin: prepared.userTurn.requesterOrigin,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
                 skipInitialSessionTouch: params.skipAgentInitialSessionTouch,

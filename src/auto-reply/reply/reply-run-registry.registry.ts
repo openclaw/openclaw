@@ -175,6 +175,12 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return {
       [replyMessageInjectionTargetOwner]: {
         backendIdentity: backend,
+        get toolAuthorityFingerprint() {
+          return backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint;
+        },
+        get requesterPrincipalKey() {
+          return operation.requesterPrincipalKey;
+        },
         acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),
