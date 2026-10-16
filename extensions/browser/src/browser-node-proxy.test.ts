@@ -212,6 +212,7 @@ describe("Browser node proxy nested watchdogs", () => {
       command: "browser.proxy.upload.v1",
       params: preparedUpload,
     });
+    expect(readGatewayCall().node.params.body).toMatchObject({ ref: "e12" });
     expect(readGatewayCall().node.params.body).not.toHaveProperty("paths");
   });
 
