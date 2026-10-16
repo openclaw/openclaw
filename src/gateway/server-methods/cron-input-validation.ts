@@ -345,6 +345,7 @@ export async function captureCronUpdatedInferenceBinding(
         agentId,
         provider: selection.provider,
         modelId: selection.modelId,
+        authProfileId: selection.profileId,
       })
     : undefined;
   if (!model || (cliExecution && !nextJob.inferenceBinding) || !selection?.profileId) {

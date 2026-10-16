@@ -2137,7 +2137,7 @@ describe("cron method validation", () => {
   // edit must accept the same model ref instead of demanding a stored account.
   const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
   const embeddedModelRef = "anthropic/claude-opus-4-6";
-  function cliBackedModelConfig(): OpenClawConfig {
+  function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
     return {
       agents: {
         ownership: "explicit",
@@ -2145,7 +2145,7 @@ describe("cron method validation", () => {
         defaults: {
           model: { primary: cliBackedModelRef, fallbacks: [] },
           models: {
-            [cliBackedModelRef]: { agentRuntime: { id: "claude-cli" } },
+            [cliBackedModelRef]: { agentRuntime: { id: runtime } },
             [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
           },
         },
@@ -2190,6 +2190,28 @@ describe("cron method validation", () => {
       createCronJob(),
     );
     expect(refused.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  it("keeps explicit native-account validation when automatic routing defaults to CLI", async () => {
+    const cfg = cliBackedModelConfig("auto");
+    cfg.auth = {
+      order: { anthropic: ["anthropic:cli"] },
+      profiles: {
+        "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
+        "anthropic:missing-api": { provider: "anthropic", mode: "api_key" },
+      },
+    };
+    setRuntimeConfig(cfg);
+
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@anthropic:missing-api`) },
+      createCronJob(),
+    );
+    expect(refused.context.committedUpdates).toEqual([]);
     expectResponseError(refused.respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "is unavailable",
