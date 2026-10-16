@@ -19,8 +19,9 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownDomMedia } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { mountLitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountLitContent } from "../../../lit/solid-content.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -161,7 +162,7 @@ function DisclosureContent(props: {
   forwarded: boolean;
   children: JSX.Element;
 }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
   let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
@@ -207,7 +208,7 @@ type MarkdownContentProps = {
 /** Both transcript text and legacy slots share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
   const solidOwner = getOwner();
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
   const markdown = createMarkdownRef(() => {
     const connected = presented();

@@ -12,10 +12,8 @@ import {
   hasCommittedOutboundDeliveryEvidence,
   getAutomaticDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
-import {
-  hasIntentionalSilentAgentPayload,
-  hasVisibleAgentPayload,
-} from "../../embedded-agent-runner/message-visibility.js";
+import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
+import type { ReplyExpectation } from "../../reply-completion.js";
 import {
   buildRequesterCompletionDeliveryResult,
   hasMessagingToolDeliveryToSource,
@@ -29,11 +27,11 @@ type DirectAnnounceResponseContext = {
   params: {
     sourceTool?: string;
     expectsCompletionMessage: boolean;
-    requireVisibleReply?: boolean;
     requesterIsSubagent: boolean;
   };
   parentOnly: boolean;
   requesterSessionBound: boolean;
+  replyExpectation: ReplyExpectation | undefined;
   deliveryTarget: Parameters<typeof hasMessagingToolDeliveryToSource>[1];
   shouldDeliverAgentFinal: boolean;
   requiresMessageToolDelivery: boolean;
@@ -65,6 +63,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     params,
     parentOnly,
     requesterSessionBound,
+    replyExpectation,
     deliveryTarget,
     shouldDeliverAgentFinal,
     requiresMessageToolDelivery,
@@ -109,44 +108,34 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const terminalReply = normalizeAgentRunTerminalReplySnapshot(
+      directAnnounceResult?.meta?.terminalReply,
+    );
+    const hasIntentionalSilentCompletionReply = terminalReply?.disposition === "silent";
     const hasVisibleNonSilentGatewayPayload = Boolean(
       directAnnounceResult &&
+      !hasIntentionalSilentCompletionReply &&
       hasVisibleAgentPayload(directAnnounceResult, {
         includeErrorPayloads: false,
         includeReasoningPayloads: false,
         requireTerminalContent: true,
-        includeSilentReplyPayloads: false,
       }),
     );
-    const hasIntentionalSilentCompletionReply = Boolean(
-      directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
-    );
-    // Command delivery strips NO_REPLY payloads; the producer-owned terminal
-    // snapshot preserves intentional silence through that normalization.
-    const terminalReply = normalizeAgentRunTerminalReplySnapshot(
-      directAnnounceResult?.meta?.terminalReply,
-    );
-    // A yielded private turn may intentionally stay silent, but a failed or
-    // empty turn must not consume the batch as though its final was delivered.
+    // Only a completed external turn may satisfy its reply obligation with silence.
     const requesterCompletedSuccessfully =
       directAnnounceRecord?.status === "ok" &&
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
+    const acceptsIntentionalSilentCompletion =
+      replyExpectation !== "result-required" &&
+      requesterCompletedSuccessfully &&
+      hasIntentionalSilentCompletionReply &&
+      directAnnounceResult?.meta?.yielded !== true &&
+      directAnnounceResult?.meta?.continuationPending !== true;
     const requiresSettleReply =
-      requesterSessionBound &&
-      params.sourceTool === "subagent_settle" &&
-      !(
-        requesterCompletedSuccessfully &&
-        (terminalReply
-          ? terminalReply.disposition === "silent"
-          : hasIntentionalSilentCompletionReply) &&
-        !hasVisibleNonSilentGatewayPayload &&
-        directAnnounceResult?.meta?.yielded !== true &&
-        directAnnounceResult?.meta?.continuationPending !== true
-      );
+      params.sourceTool === "subagent_settle" && !acceptsIntentionalSilentCompletion;
     const requiresAutomaticFinalReceipt =
-      shouldDeliverAgentFinal &&
-      (params.expectsCompletionMessage || params.requireVisibleReply || requiresSettleReply);
+      shouldDeliverAgentFinal && (params.expectsCompletionMessage || requiresSettleReply);
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
@@ -267,7 +256,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
           // effects. Retain the completion for explicit recovery instead.
           disposition: "permanent_failure",
         };
-        return subagentDirectMessageCompletionRequiresMessageTool
+        return subagentDirectMessageCompletionRequiresMessageTool &&
+          (!hasIntentionalSilentCompletionReply ||
+            textCompletionDirectDeliveryKind === "failed_notice")
           ? tryTextCompletionDirectDelivery(
               textCompletionDirectDeliveryKind,
               directAnnounceResult ?? undefined,
@@ -278,7 +269,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
       const hasVisibleCompletionReply =
         hasRequesterVisibleFinalDelivery ||
-        (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
+        (!shouldDeliverAgentFinal && hasMessagingToolDelivery) ||
         // Nested requesters and internal sessions observe the final in their transcript.
         // Unresolved external origins still require delivery evidence.
         (!requiresMessageToolDelivery &&
@@ -291,17 +282,14 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
                 ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
                 : !origin?.to,
             )));
-      const acceptsIntentionalSilentCompletion =
-        hasIntentionalSilentCompletionReply && !isSubagentCompletion;
       if (
         !hasVisibleCompletionReply &&
-        (params.requireVisibleReply ||
+        !acceptsIntentionalSilentCompletion &&
+        (replyExpectation === "result-required" ||
           requiresSettleReply ||
           (params.expectsCompletionMessage &&
             (shouldDeliverAgentFinal ||
-              (!requiresMessageToolDelivery &&
-                !hasCompletionSideEffect &&
-                !acceptsIntentionalSilentCompletion))))
+              (!requiresMessageToolDelivery && !hasCompletionSideEffect))))
       ) {
         return missingVisibleReplyResult();
       }
@@ -323,6 +311,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
       !hasVisibleNonSilentGatewayPayload &&
+      (!hasIntentionalSilentCompletionReply ||
+        textCompletionDirectDeliveryKind === "failed_notice") &&
       !hasMessagingToolDelivery
     ) {
       return tryTextCompletionDirectDelivery(

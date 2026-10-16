@@ -101,6 +101,7 @@ describe("Codex migration discovery deadline with real request owner", () => {
   let workspace: Awaited<ReturnType<typeof tempWorkspace>>;
 
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS", "30000");
     sleepMock.mockClear();
     activationMock.mockClear();
     callCount.count = 0;
@@ -112,11 +113,13 @@ describe("Codex migration discovery deadline with real request owner", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     await workspace?.cleanup();
   });
 
-  it("keeps request allowances bounded when the wall clock rewinds 120s", async () => {
+  it("keeps request allowances within the 30s discovery budget after a 120s rewind", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
@@ -159,11 +162,12 @@ describe("Codex migration discovery deadline with real request owner", () => {
       reportDir: undefined,
     } as unknown as MigrationProviderContext;
 
-    await applyCodexMigrationPlan({ ctx, plan });
+    const result = await applyCodexMigrationPlan({ ctx, plan });
 
+    expect(result.items).toMatchObject([{ status: "migrated", reason: "already active" }]);
     expect(armedDelays.delays.length).toBeGreaterThanOrEqual(2);
     for (const d of armedDelays.delays) {
-      expect(d).toBeLessThanOrEqual(60_000);
+      expect(d).toBeLessThanOrEqual(30_000);
     }
   }, 15_000);
 });

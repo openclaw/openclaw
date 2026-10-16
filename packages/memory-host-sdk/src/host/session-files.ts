@@ -8,6 +8,7 @@ import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-
 import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
+import { prepareAssistantTranscriptText } from "./openclaw-runtime-session-visibility.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -22,7 +23,6 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
@@ -433,9 +433,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
       DIRECT_CRON_PROMPT_RE.test(normalized) ||
       isHeartbeatUserMessage({ role, content: normalized }, HEARTBEAT_PROMPT))
   ) {
-    return null;
-  }
-  if (isSilentReplyPayloadText(normalized)) {
     return null;
   }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
@@ -862,8 +859,14 @@ async function buildSessionEntryFromSource(
       ) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
-      if (rawText === null) {
+      if ("display" in message && message.display === false) {
+        continue;
+      }
+      const rawText = prepareAssistantTranscriptText(
+        message,
+        collectRawSessionText(message.content) ?? undefined,
+      );
+      if (rawText === undefined) {
         continue;
       }
 

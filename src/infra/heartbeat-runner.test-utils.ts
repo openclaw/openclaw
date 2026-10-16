@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, vi } from "vitest";
 import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -55,6 +56,14 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+export function setHeartbeatSilentCompletion(options: InternalGetReplyOptions | undefined): void {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.replyCompletion = { expectation: "optional", outcome: "silent" };
+  options?.onDeliberateSilentTerminalReply?.();
 }
 
 /** Set the invocation's execution receipt without replacing its admission state. */

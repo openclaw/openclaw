@@ -56,7 +56,13 @@ function installHookReplyRuntime() {
     params.onExecutionPhase?.({ phase: "model_call_started" });
     await params.onExecutionStarted?.();
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-    return { payloads: [{ text: "Hook event observed" }], meta: { durationMs: 1 } };
+    return {
+      payloads: [{ text: "Hook event observed" }],
+      meta: {
+        durationMs: 1,
+        terminalReply: { disposition: "visible", text: "Hook event observed" },
+      },
+    };
   });
 }
 

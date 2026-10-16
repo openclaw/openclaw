@@ -655,11 +655,19 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       item?.type === "agentMessage"
         ? this.assistantProjection.assistantTextByItem.get(item.id)
         : undefined;
-    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
-      await this.assistantProjection.handleAssistantDelta({
-        itemId: item.id,
-        delta: item.text.slice(streamed.length),
-      });
+    if (
+      streamed &&
+      typeof item?.text === "string" &&
+      item.text.startsWith(streamed) &&
+      (notification || item.text !== streamed)
+    ) {
+      await this.assistantProjection.handleAssistantDelta(
+        {
+          itemId: item.id,
+          delta: item.text.slice(streamed.length),
+        },
+        true,
+      );
     }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,

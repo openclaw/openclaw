@@ -250,7 +250,10 @@ placement, presentation, visibility, and the accessibility fallbacks that hide
 artwork stay under the viewer's control. Like a custom upload, the image is
 dimmed under a theme-colored overlay sized from the palette's text contrast, so
 busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
-the most detail. The built-in images are lossless WebP files of about 20–35 KiB.
+the most detail. Above the default **Image visibility**, the overlay thins
+toward the fixed cap every background image shares, reaching it at 100%, so a
+dark palette no longer hides a dark image a viewer has asked to see. The
+built-in images are lossless WebP files of about 20–35 KiB.
 
 Include the definition JSON and every declared SVG and background in the published
 package's `files` list. OpenClaw's bundled metadata copier and runtime package builder

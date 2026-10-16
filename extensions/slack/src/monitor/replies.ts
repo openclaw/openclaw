@@ -8,12 +8,7 @@ import {
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  type ChunkMode,
-} from "openclaw/plugin-sdk/reply-chunking";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   getReplyPayloadTtsSupplement,
@@ -168,10 +163,7 @@ export async function deliverReplies(params: {
       replyToCurrent: payload.replyToCurrent,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
-    const textRaw =
-      reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
-        ? reply.trimmedText
-        : undefined;
+    const textRaw = reply.hasText ? reply.trimmedText : undefined;
     const { authoredTextPlacement, segments } = prepared.resolveDelivery();
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
@@ -405,10 +397,7 @@ export async function deliverSlackSlashReplies(params: {
       continue;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
-    const textRaw =
-      reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
-        ? reply.trimmedText
-        : undefined;
+    const textRaw = reply.hasText ? reply.trimmedText : undefined;
     const materializeAuthoredText = hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
