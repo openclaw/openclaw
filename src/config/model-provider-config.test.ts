@@ -25,6 +25,7 @@ afterEach(() =>
 );
 
 describe("resolveMergedModelProviderModels", () => {
+  const stripOpenai = (id: string) => id.replace(/^openai\//u, "");
   it.each([
     {
       name: "explicit headers and API win while omitted fields are filled",
@@ -38,7 +39,7 @@ describe("resolveMergedModelProviderModels", () => {
         }),
       ],
       key: "gpt-5.5",
-      normalize: (id: string) => id.replace(/^openai\//u, ""),
+      normalize: stripOpenai,
       expected: model("openai/gpt-5.5", {
         api: "openai-responses",
         baseUrl: "https://relay.example.test/v1",
@@ -53,7 +54,7 @@ describe("resolveMergedModelProviderModels", () => {
         model("openai/gpt-5.5", { headers: { "x-route": "custom" } }),
       ],
       key: "gpt-5.5",
-      normalize: (id: string) => id.replace(/^openai\//u, ""),
+      normalize: stripOpenai,
       expected: model("gpt-5.5", { api: "openai-responses", headers: { "x-route": "custom" } }),
     },
     ...[false, true].map((reverse) => {
@@ -83,9 +84,7 @@ type SelectionCase = {
   name: string;
   rows: ModelDefinitionConfig[];
   canonicalize?: (id: string) => string;
-  queries: Array<
-    [id: string, row: number | undefined, route?: "none" | "present", provider?: string]
-  >;
+  queries: [id: string, row: number | undefined, route?: "none" | "present", provider?: string][];
   unchangedId?: string;
   ambientAliases?: boolean;
 };
@@ -119,7 +118,7 @@ const selectionCases: SelectionCase[] = [
         baseUrl: "https://legacy.example.test/v1",
       });
       return {
-        name: `exact before legacy (reversed=${reverse}, headers=${headers ? "empty" : "omitted"})`,
+        name: `exact before legacy (${reverse}, ${headers ? "empty" : "omitted"})`,
         rows: reverse ? [exact, legacy] : [legacy, exact],
         queries: [
           ["Model", reverse ? 0 : 1, "none"],
@@ -188,10 +187,11 @@ describe("configured model row precedence", () => {
           new Map([["custom", { aliases: { latest: "Model" } }]]),
         );
       }
+      const custom = { baseUrl: "", models: rows };
       const route = createModelProviderRouteOverrideResolver({
         provider: "custom",
         canonicalizeModelId: canonicalize,
-        authoredConfig: { models: { providers: { custom: { baseUrl: "", models: rows } } } },
+        authoredConfig: { models: { providers: { custom } } },
       });
       for (const [id, index, presence, provider = "custom"] of queries) {
         expect(findConfiguredProviderModel({ models: rows }, provider, id, canonicalize)).toEqual(
@@ -290,14 +290,14 @@ describe("createModelProviderRouteOverrideResolver", () => {
   it.each([
     ["empty metadata", {}, "none"],
     ["provider request timeout", {}, "present", 90],
-    ["affirmative reasoning support", { supportsReasoningEffort: true }, "none"],
+    ["reasoning supported", { supportsReasoningEffort: true }, "none"],
     [
-      "native reasoning efforts",
+      "native efforts",
       { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       "none",
     ],
     ["disabled reasoning", { supportsReasoningEffort: false }, "present"],
-    ["malformed reasoning support", { supportsReasoningEffort: "true" }, "present"],
+    ["malformed reasoning", { supportsReasoningEffort: "true" }, "present"],
     ["empty effort list", { supportedReasoningEfforts: [] }, "present"],
     ["disabled effort", { supportedReasoningEfforts: ["none"] }, "present"],
     ["malformed effort", { supportedReasoningEfforts: ["high", false] }, "present"],
@@ -305,7 +305,7 @@ describe("createModelProviderRouteOverrideResolver", () => {
     ["temperature supported", { supportsTemperature: true }, "none"],
     ["preferred code mode", { codeMode: "preferred" }, "none"],
     ["capable code mode", { codeMode: "capable" }, "none"],
-    ["malformed temperature capability", { supportsTemperature: "false" }, "present"],
+    ["malformed temperature", { supportsTemperature: "false" }, "present"],
     ["unknown code mode", { codeMode: "exact" }, "present"],
     [
       "metadata with storage policy",
@@ -321,16 +321,8 @@ describe("createModelProviderRouteOverrideResolver", () => {
   ])(
     "classifies %s without discarding request behavior",
     (_label, compat, expected, timeoutSeconds?: number) => {
-      const config = {
-        models: {
-          providers: {
-            openai: {
-              models: [{ id: "gpt-5.6-sol", compat }],
-              timeoutSeconds,
-            },
-          },
-        },
-      } as never;
+      const openai = { models: [{ id: "gpt-5.6-sol", compat }], timeoutSeconds };
+      const config = { models: { providers: { openai } } } as never;
 
       expect(
         createModelProviderRouteOverrideResolver({

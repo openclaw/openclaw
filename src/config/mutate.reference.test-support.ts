@@ -24,6 +24,14 @@ type IncludeReferenceFixture = {
   };
 };
 
+const demo = { enabled: true };
+type PluginEntry = { enabled: boolean; config: Record<string, string> };
+const pluginConfig = (old: PluginEntry, addDemo = false) => ({
+  plugins: { entries: { old, ...(addDemo ? { demo } : {}) } },
+});
+const jsonFile = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+const parsedInclude = { plugins: { $include: "./config/plugins.json5" } };
+
 export function registerPluginIncludeReferenceRepairTest({
   suiteRootTracker,
   allowConfigPathWrite,
@@ -32,22 +40,11 @@ export function registerPluginIncludeReferenceRepairTest({
   it("repairs invalid config through a single-file top-level plugins include", async () => {
     const home = await suiteRootTracker.make("include");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    await fs.writeFile(
-      pluginsPath,
-      `${JSON.stringify(
-        {
-          entries: {
-            old: {
-              enabled: true,
-              config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    const authoredOldEntry = {
+      enabled: true,
+      config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
+    };
+    await fs.writeFile(pluginsPath, jsonFile(pluginConfig(authoredOldEntry).plugins), "utf-8");
     const previousBackupPath = `${pluginsPath}.bak`;
     await fs.writeFile(previousBackupPath, "previous backup", { mode: 0o644 });
     const oldEntry = {
@@ -58,39 +55,20 @@ export function registerPluginIncludeReferenceRepairTest({
       ...createSnapshot({
         hash: "hash-include",
         path: configPath,
-        parsed: { plugins: { $include: "./config/plugins.json5" } },
-        sourceConfig: {
-          plugins: {
-            entries: { old: oldEntry },
-          },
-        },
+        parsed: parsedInclude,
+        sourceConfig: pluginConfig(oldEntry),
       }),
       valid: false,
       issues: [{ path: "plugins.load.paths", message: "plugin path not found: /gone" }],
     };
+    const nextConfig = pluginConfig(oldEntry, true);
     const refreshedSnapshot = createSnapshot({
       hash: "hash-include-refreshed",
       path: configPath,
-      parsed: { plugins: { $include: "./config/plugins.json5" } },
-      sourceConfig: {
-        plugins: {
-          entries: {
-            old: oldEntry,
-            demo: { enabled: true },
-          },
-        },
-      },
+      parsed: parsedInclude,
+      sourceConfig: nextConfig,
     });
-    snapshot.authoredConfig = {
-      plugins: {
-        entries: {
-          old: {
-            ...oldEntry,
-            config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
-          },
-        },
-      },
-    };
+    snapshot.authoredConfig = pluginConfig(authoredOldEntry);
     ioMocks.readConfigFileSnapshotForWrite
       .mockResolvedValueOnce({
         snapshot,
@@ -110,27 +88,19 @@ export function registerPluginIncludeReferenceRepairTest({
       notifications.push(event);
     });
 
+    const afterWrite = { mode: "restart", reason: "test include refresh" } as const;
     try {
       await replaceConfigFile({
         baseHash: snapshot.hash,
-        afterWrite: { mode: "restart", reason: "test include refresh" },
+        afterWrite,
         writeOptions: {
           expectedConfigPath: snapshot.path,
           unsetPaths: [["plugins", "installs"]],
         },
         nextConfig: {
           plugins: {
-            entries: {
-              old: oldEntry,
-              demo: { enabled: true },
-            },
-            installs: {
-              demo: {
-                source: "npm",
-                spec: "demo",
-                installPath: "/tmp/demo",
-              },
-            },
+            ...nextConfig.plugins,
+            installs: { demo: { source: "npm", spec: "demo", installPath: "/tmp/demo" } },
           },
         },
         io: {
@@ -144,33 +114,15 @@ export function registerPluginIncludeReferenceRepairTest({
     }
 
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(notifications).toHaveLength(1);
-    const [notification] = notifications as Array<{
-      configPath?: string;
-      persistedHash?: string;
-      sourceConfig?: unknown;
-      runtimeConfig?: unknown;
-      afterWrite?: unknown;
-    }>;
-    expect(notification?.configPath).toBe(configPath);
-    expect(notification?.persistedHash).toBe("hash-include-refreshed");
-    expect(notification?.sourceConfig).toEqual({
-      plugins: {
-        entries: {
-          old: oldEntry,
-          demo: { enabled: true },
-        },
-      },
-    });
-    expect(notification?.runtimeConfig).toEqual({
-      plugins: {
-        entries: {
-          old: oldEntry,
-          demo: { enabled: true },
-        },
-      },
-    });
-    expect(notification?.afterWrite).toEqual({ mode: "restart", reason: "test include refresh" });
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        configPath,
+        persistedHash: "hash-include-refreshed",
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        afterWrite,
+      }),
+    ]);
     await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
       '"$include": "./config/plugins.json5"',
     );
@@ -184,10 +136,7 @@ export function registerPluginIncludeReferenceRepairTest({
       entries?: Record<string, { config?: { token?: string; optional?: string } }>;
       installs?: Record<string, unknown>;
     };
-    expect(persistedPlugins.entries?.old?.config).toEqual({
-      token: "${OPENCLAW_TEST_PLUGIN_TOKEN}",
-      optional: "${OPTIONAL_TOKEN}",
-    });
+    expect(persistedPlugins.entries?.old?.config).toEqual(authoredOldEntry.config);
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
     expect(persistedPlugins.installs).toBeUndefined();
   });
@@ -201,30 +150,20 @@ export function registerIncludeReferencePreflightTest({
   it("preflights the restored include payload with the current environment", async () => {
     const home = await suiteRootTracker.make("include-restored-preflight");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    const initialPluginsRaw = `${JSON.stringify(
-      {
-        entries: {
-          old: { enabled: true, config: { token: "${OPENCLAW_TEST_INCLUDE_TOKEN}" } },
-        },
-      },
-      null,
-      2,
-    )}\n`;
+    const authoredOldEntry = {
+      enabled: true,
+      config: { token: "${OPENCLAW_TEST_INCLUDE_TOKEN}" },
+    };
+    const initialPluginsRaw = jsonFile(pluginConfig(authoredOldEntry).plugins);
     await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
     const oldEntry = { enabled: true, config: { token: "old-token" } };
     const snapshot = createSnapshot({
       hash: "hash-include-restored-preflight",
       path: configPath,
-      parsed: { plugins: { $include: "./config/plugins.json5" } },
-      sourceConfig: { plugins: { entries: { old: oldEntry } } },
+      parsed: parsedInclude,
+      sourceConfig: pluginConfig(oldEntry),
     });
-    snapshot.authoredConfig = {
-      plugins: {
-        entries: {
-          old: { ...oldEntry, config: { token: "${OPENCLAW_TEST_INCLUDE_TOKEN}" } },
-        },
-      },
-    };
+    snapshot.authoredConfig = pluginConfig(authoredOldEntry);
     const observedSources: OpenClawConfig[] = [];
 
     try {
@@ -246,14 +185,7 @@ export function registerIncludeReferencePreflightTest({
             assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
-          nextConfig: {
-            plugins: {
-              entries: {
-                old: oldEntry,
-                demo: { enabled: true },
-              },
-            },
-          },
+          nextConfig: pluginConfig(oldEntry, true),
           io: {
             env: { OPENCLAW_TEST_INCLUDE_TOKEN: "new-token" },
             readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
