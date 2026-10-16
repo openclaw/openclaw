@@ -76,21 +76,23 @@ async function runSessionSweep(params: {
     const snapshot = await readWorkboardLifecycleSessions(
       {
         isAvailable: async () => true,
-        request: vi.fn(async (method: string, query: Record<string, unknown>) =>
-          method === "agents.list"
-            ? {
-                agents: [
-                  ...new Set(params.sessions.map((session) => session.key.split(":")[1])),
-                ].map((id) => ({ id })),
-              }
-            : method === "sessions.describe"
-              ? { session: params.sessions.find((session) => session.key === query.key) ?? null }
-              : {
-                  sessions: params.sessions
-                    .filter((session) => session.key.includes(String(query.search)))
-                    .slice(0, Number(query.limit)),
-                },
-        ),
+        request: vi
+          .fn<Parameters<typeof readWorkboardLifecycleSessions>[0]["request"]>()
+          .mockImplementation(async (method, query = {}) =>
+            method === "agents.list"
+              ? {
+                  agents: [
+                    ...new Set(params.sessions.map((session) => session.key.split(":")[1])),
+                  ].map((id) => ({ id })),
+                }
+              : method === "sessions.describe"
+                ? { session: params.sessions.find((session) => session.key === query.key) ?? null }
+                : {
+                    sessions: params.sessions
+                      .filter((session) => session.key.includes(String(query.search)))
+                      .slice(0, Number(query.limit)),
+                  },
+          ),
       },
       options,
     );

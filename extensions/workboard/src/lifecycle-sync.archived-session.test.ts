@@ -48,24 +48,26 @@ describe("Workboard archived session recovery", () => {
         let returnedRows = 0;
         const gateway = {
           isAvailable: async () => true,
-          request: vi.fn(async (method: string, params: Record<string, unknown>) => {
-            if (method === "sessions.describe") {
-              const session = sessions.find((row) => row.key === params.key) ?? null;
-              returnedRows += session ? 1 : 0;
-              return { session };
-            }
-            // Model the public list's archive filtering and pagination boundary.
-            const selected = sessions
-              .filter(
-                (session) =>
-                  params.archived === "all" ||
-                  Boolean("archivedAt" in session && session.archivedAt) ===
-                    (params.archived === true),
-              )
-              .slice(0, Number(params.limit));
-            returnedRows += selected.length;
-            return { sessions: selected };
-          }),
+          request: vi
+            .fn<Parameters<typeof readWorkboardLifecycleSessions>[0]["request"]>()
+            .mockImplementation(async (method, params = {}) => {
+              if (method === "sessions.describe") {
+                const session = sessions.find((row) => row.key === params.key) ?? null;
+                returnedRows += session ? 1 : 0;
+                return { session };
+              }
+              // Model the public list's archive filtering and pagination boundary.
+              const selected = sessions
+                .filter(
+                  (session) =>
+                    params.archived === "all" ||
+                    Boolean("archivedAt" in session && session.archivedAt) ===
+                      (params.archived === true),
+                )
+                .slice(0, Number(params.limit));
+              returnedRows += selected.length;
+              return { sessions: selected };
+            }),
         };
         const service = createWorkboardLifecycleService({
           store,
