@@ -805,26 +805,14 @@ describe("registered Slack attachment downloads", () => {
   });
 
   it.each([
-    { name: "disabled channel", options: { disabled: true }, error: /not allowed/i },
-    { name: "different account", options: { params: { accountId: "other" } }, error: /account/i },
-    {
-      name: "different origin provider",
-      options: { currentProvider: "discord" },
-      error: /provider and account/i,
-    },
-    {
-      name: "unverified install",
-      options: { trusted: false },
-      error: /exact current conversation/i,
-    },
-    {
-      name: "legacy cross-channel adapter",
-      options: { legacy: true },
-      error: /exact current conversation/i,
-    },
-  ] satisfies Array<{ name: string; options: FixtureOptions; error: RegExp }>)(
-    "rejects $name before provider I/O",
-    async ({ options, error }) => {
+    ["disabled channel", { disabled: true }, /not allowed/i],
+    ["different account", { params: { accountId: "other" } }, /account/i],
+    ["different origin provider", { currentProvider: "discord" }, /provider and account/i],
+    ["unverified install", { trusted: false }, /exact current conversation/i],
+    ["legacy cross-channel adapter", { legacy: true }, /exact current conversation/i],
+  ] satisfies Array<[string, FixtureOptions, RegExp]>)(
+    "rejects %s before provider I/O",
+    async (_, options, error) => {
       await withDownloadFixture(options, async (fixture) => {
         await expect(fixture.invoke()).rejects.toThrow(error);
         expect(fixture.requests).toEqual([]);

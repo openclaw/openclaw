@@ -5,6 +5,7 @@ import {
   resolveGeneratedMediaSessionDeliveryRoute,
   resolveSubagentCompletionOrigin,
 } from "../src/agents/subagents/announce/subagent-announce-origin.js";
+import type { DeliveryContext } from "../src/agents/subagents/announce/subagent-announce-origin.js";
 import type { ChannelPlugin } from "../src/channels/plugins/types.plugin.js";
 import type { SessionEntry } from "../src/config/sessions.js";
 import {
@@ -18,6 +19,45 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../src/test-utils/channel-plugins.js";
+
+const requesterSessionKey = "agent:main:main";
+const defaultChildSessionKey = "agent:worker:subagent:child";
+const telegramChildKey = "agent:main:telegram:default:direct:123";
+const registered = (plugin: ChannelPlugin) => ({ pluginId: plugin.id, source: "test", plugin });
+const pluginWithMessaging = (id: string, messaging: ChannelPlugin["messaging"]) =>
+  registered({ ...createChannelTestPluginBase({ id }), messaging });
+function makeBinding(
+  channel: string,
+  conversationId: string,
+  parentConversationId?: string,
+  child = false,
+) {
+  return {
+    channel,
+    accountId: channel === "telegram" ? "bot-1" : "acct-1",
+    targetSessionKey: child ? telegramChildKey : requesterSessionKey,
+    targetKind: child ? ("subagent" as const) : ("session" as const),
+    conversationId,
+    parentConversationId,
+  };
+}
+const discordRequester = {
+  channel: "discord",
+  accountId: "acct-1",
+  to: "channel:requester-room",
+  threadId: "requester-thread",
+};
+const telegramRequester = { channel: "telegram", accountId: "bot-1", to: "telegram:direct:123" };
+function expectDelivery(
+  origins: Parameters<typeof resolveCompletionDeliveryOrigins>[0],
+  expected: DeliveryContext,
+  route = { ...expected, chatType: "channel" },
+) {
+  expect(resolveCompletionDeliveryOrigins(origins).effectiveDirectOrigin).toEqual(expected);
+  expect(
+    resolveGeneratedMediaSessionDeliveryRoute({ sessionKey: requesterSessionKey, ...origins }),
+  ).toEqual({ deliveryContext: expected, route });
+}
 
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
@@ -69,72 +109,49 @@ const topicConversationFixtures = new Map<string, { id: string; threadId: string
 
 const resolveFixtureTopicConversation = ({ rawId }: { rawId: string }) =>
   topicConversationFixtures.get(rawId) ?? null;
+const storedTopic = (room: string) => ({
+  lastChannel: "topicchat",
+  lastTo: `topicchat:${room}:topic:99`,
+  lastThreadId: 99,
+});
 
 describe("resolveAnnounceOrigin threaded route targets", () => {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
-        {
-          pluginId: "topicchat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "topicchat" }),
-            messaging: { resolveSessionConversation: resolveFixtureTopicConversation },
-          },
-        },
+        pluginWithMessaging("topicchat", {
+          resolveSessionConversation: resolveFixtureTopicConversation,
+        }),
       ]),
     );
   });
 
-  it.each([
-    {
-      name: "does not inherit a target or thread from another account on the same channel",
-      stored: {
-        lastChannel: "telegram",
-        lastTo: "peer-b",
-        lastAccountId: "bot-b",
-        lastThreadId: 99,
-      },
-      requester: { channel: "telegram", accountId: "bot-a" },
-      expected: { channel: "telegram", to: undefined, accountId: "bot-a" },
-    },
-    {
-      name: "preserves stored thread ids when requester origin omits one for the same chat",
-      stored: {
-        lastChannel: "topicchat",
-        lastTo: "topicchat:room-a:topic:99",
-        lastThreadId: 99,
-      },
-      requester: { channel: "topicchat", to: "topicchat:room-a" },
-      expected: { channel: "topicchat", to: "topicchat:room-a", threadId: 99 },
-    },
-    {
-      name: "preserves stored thread ids for group-prefixed requester targets",
-      stored: {
-        lastChannel: "topicchat",
-        lastTo: "topicchat:room-a:topic:99",
-        lastThreadId: 99,
-      },
-      requester: { channel: "topicchat", to: "group:room-a" },
-      expected: { channel: "topicchat", to: "group:room-a", threadId: 99 },
-    },
-    {
-      name: "still strips stale thread ids when the stored route points at a different chat",
-      stored: {
-        lastChannel: "topicchat",
-        lastTo: "topicchat:room-b:topic:99",
-        lastThreadId: 99,
-      },
-      requester: { channel: "topicchat", to: "topicchat:room-a" },
-      expected: { channel: "topicchat", to: "topicchat:room-a" },
-    },
-  ])("$name", ({ stored, requester, expected }) => {
+  it("does not inherit a target or thread from another account on the same channel", () => {
+    const stored = {
+      lastChannel: "telegram",
+      lastTo: "peer-b",
+      lastAccountId: "bot-b",
+      lastThreadId: 99,
+    };
     expect(
       resolveAnnounceOrigin(
         normalizeLegacySessionEntryDelivery(stored as unknown as SessionEntry),
+        { channel: "telegram", accountId: "bot-a" },
+      ),
+    ).toEqual({ channel: "telegram", to: undefined, accountId: "bot-a" });
+  });
+  it.each([
+    ["same chat", "room-a", "topicchat:room-a", 99],
+    ["group-prefixed target", "room-a", "group:room-a", 99],
+    ["different chat", "room-b", "topicchat:room-a", undefined],
+  ] as const)("inherits a stored thread only for the %s", (_name, room, to, threadId) => {
+    const requester = { channel: "topicchat", to };
+    expect(
+      resolveAnnounceOrigin(
+        normalizeLegacySessionEntryDelivery(storedTopic(room) as unknown as SessionEntry),
         requester,
       ),
-    ).toEqual(expected);
+    ).toEqual(threadId === undefined ? requester : { ...requester, threadId });
   });
 });
 
@@ -146,26 +163,15 @@ describe("resolveSubagentCompletionOrigin", () => {
     });
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "slack", source: "test", plugin: slackPlugin },
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: createChannelTestPluginBase({ id: "discord" }),
-        },
-        { pluginId: "folded-chat", source: "test", plugin: foldedChatPlugin },
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "matrix" }),
-            messaging: {
-              targetIdComparison: "case-sensitive",
-              resolveDeliveryTarget: ({ conversationId }: { conversationId: string }) => ({
-                to: `room:${conversationId}`,
-              }),
-            },
-          },
-        },
+        registered(slackPlugin),
+        registered(createChannelTestPluginBase({ id: "discord" })),
+        registered(foldedChatPlugin),
+        pluginWithMessaging("matrix", {
+          targetIdComparison: "case-sensitive",
+          resolveDeliveryTarget: ({ conversationId }: { conversationId: string }) => ({
+            to: `room:${conversationId}`,
+          }),
+        }),
       ]),
     );
   });
@@ -173,16 +179,8 @@ describe("resolveSubagentCompletionOrigin", () => {
   it.each([
     ...["slack", "folded-chat"].map((channel) => ({
       name: `preserves a thread for case-folded ${channel} bound targets`,
-      bindings: [
-        {
-          channel,
-          accountId: "acct-1",
-          targetSessionKey: "agent:main:main",
-          targetKind: "session" as const,
-          conversationId: "C123",
-        },
-      ],
-      childSessionKey: "agent:worker:subagent:child",
+      bindings: [makeBinding(channel, "C123")],
+      childSessionKey: defaultChildSessionKey,
       requesterOrigin: {
         channel,
         accountId: "acct-1",
@@ -199,160 +197,89 @@ describe("resolveSubagentCompletionOrigin", () => {
     })),
     {
       name: "retargets distinct case-sensitive bound conversation ids",
-      bindings: [
-        {
-          channel: "matrix",
-          accountId: "acct-1",
-          targetSessionKey: "agent:main:main",
-          targetKind: "session" as const,
-          conversationId: "!room:server",
-        },
-      ],
-      childSessionKey: "agent:worker:subagent:child",
+      bindings: [makeBinding("matrix", "!room:server")],
+      childSessionKey: defaultChildSessionKey,
       requesterOrigin: { channel: "matrix", accountId: "acct-1", to: "channel:!Room:server" },
       expected: { channel: "matrix", accountId: "acct-1", to: "room:!room:server" },
       spawnMode: "session" as const,
     },
-    ...[
-      {
-        name: "drops the requester thread when a binding selects another top-level conversation",
-        conversationId: "bound-room",
-        expected: { to: "channel:bound-room" },
-      },
-      {
-        name: "preserves the requester thread when a binding stays in the same room",
-        conversationId: "requester-room",
-        expected: { to: "channel:requester-room", threadId: "requester-thread" },
-      },
-      {
-        name: "preserves the requester target when its thread is the bound conversation",
-        conversationId: "requester-thread",
-        expected: { to: "channel:requester-room", threadId: "requester-thread" },
-      },
-      {
-        name: "uses the bound child thread instead of the requester thread",
-        conversationId: "bound-thread",
-        parentConversationId: "bound-room",
-        expected: { to: "channel:bound-thread", threadId: "bound-thread" },
-      },
-    ].map(({ name, conversationId, parentConversationId, expected }) => ({
-      name,
-      bindings: [
-        {
-          channel: "discord",
-          accountId: "acct-1",
-          targetSessionKey: "agent:main:main",
-          targetKind: "session" as const,
-          conversationId,
-          parentConversationId,
-        },
-      ],
-      childSessionKey: "agent:worker:subagent:child",
-      requesterOrigin: {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "channel:requester-room",
-        threadId: "requester-thread",
-      },
+    ...(
+      [
+        ["another room", "bound-room", undefined, { to: "channel:bound-room" }],
+        [
+          "same room",
+          "requester-room",
+          undefined,
+          { to: "channel:requester-room", threadId: "requester-thread" },
+        ],
+        [
+          "requester thread",
+          "requester-thread",
+          undefined,
+          { to: "channel:requester-room", threadId: "requester-thread" },
+        ],
+        [
+          "bound child thread",
+          "bound-thread",
+          "bound-room",
+          { to: "channel:bound-thread", threadId: "bound-thread" },
+        ],
+      ] as const
+    ).map(([name, conversationId, parentConversationId, expected]) => ({
+      name: `routes a binding for ${name}`,
+      bindings: [makeBinding("discord", conversationId, parentConversationId)],
+      childSessionKey: defaultChildSessionKey,
+      requesterOrigin: discordRequester,
       expected: { channel: "discord", accountId: "acct-1", ...expected },
       spawnMode: "session" as const,
     })),
     {
       name: "prefers requester binding when child and requester share the same channel and accountId",
       bindings: [
-        {
-          channel: "telegram",
-          accountId: "bot-1",
-          targetSessionKey: "agent:main:telegram:default:direct:123",
-          targetKind: "subagent" as const,
-          conversationId: "direct:123",
-        },
-        {
-          channel: "telegram",
-          accountId: "bot-1",
-          targetSessionKey: "agent:main:main",
-          targetKind: "session" as const,
-          conversationId: "direct:789",
-        },
+        makeBinding("telegram", "direct:123", undefined, true),
+        makeBinding("telegram", "direct:789"),
       ],
-      childSessionKey: "agent:main:telegram:default:direct:123",
-      requesterOrigin: {
-        channel: "telegram",
-        accountId: "bot-1",
-        to: "telegram:direct:789",
-      },
-      expected: { channel: "telegram", accountId: "bot-1", to: "telegram:direct:789" },
+      childSessionKey: telegramChildKey,
+      requesterOrigin: { ...telegramRequester, to: "telegram:direct:789" },
+      expected: { ...telegramRequester, to: "telegram:direct:789" },
       spawnMode: "run" as const,
     },
     {
       name: "falls back to child binding when requester has no binding",
-      bindings: [
-        {
-          channel: "telegram",
-          accountId: "bot-1",
-          targetSessionKey: "agent:main:telegram:default:direct:123",
-          targetKind: "subagent" as const,
-          conversationId: "direct:123",
-        },
-      ],
-      childSessionKey: "agent:main:telegram:default:direct:123",
-      requesterOrigin: {
-        channel: "telegram",
-        accountId: "bot-1",
-        to: "telegram:direct:123",
-      },
-      expected: { channel: "telegram", accountId: "bot-1", to: "telegram:direct:123" },
+      bindings: [makeBinding("telegram", "direct:123", undefined, true)],
+      childSessionKey: telegramChildKey,
+      requesterOrigin: telegramRequester,
+      expected: telegramRequester,
       spawnMode: "run" as const,
     },
   ])("$name", async ({ bindings, childSessionKey, requesterOrigin, expected, spawnMode }) => {
-    const bindingGroups = new Map<string, (typeof bindings)[number][]>();
-    for (const binding of bindings) {
-      const key = `${binding.channel}\0${binding.accountId}`;
-      const group = bindingGroups.get(key) ?? [];
-      group.push(binding);
-      bindingGroups.set(key, group);
-    }
-    for (const group of bindingGroups.values()) {
-      const binding = group[0];
-      if (binding) {
-        registerTestSessionBindings(binding.channel, binding.accountId, group);
-      }
+    const first = bindings[0];
+    if (first) {
+      registerTestSessionBindings(first.channel, first.accountId, bindings);
     }
 
     const origin = await resolveSubagentCompletionOrigin({
       childSessionKey,
-      requesterSessionKey: "agent:main:main",
+      requesterSessionKey,
       requesterOrigin,
       spawnMode,
       expectsCompletionMessage: true,
     });
 
-    const { effectiveDirectOrigin } = resolveCompletionDeliveryOrigins({
-      expectsCompletionMessage: true,
-      completionDirectOrigin: origin,
-      directOrigin: requesterOrigin,
-      requesterSessionOrigin: requesterOrigin,
-    });
-    expect({
-      origin,
-      effectiveDirectOrigin,
-      media: resolveGeneratedMediaSessionDeliveryRoute({
-        sessionKey: "agent:main:main",
+    expect(origin).toEqual(expected);
+    expectDelivery(
+      {
+        expectsCompletionMessage: true,
         completionDirectOrigin: origin,
         directOrigin: requesterOrigin,
         requesterSessionOrigin: requesterOrigin,
-      }),
-    }).toEqual({
-      origin: expected,
-      effectiveDirectOrigin: expected,
-      media: {
-        deliveryContext: expected,
-        route: {
-          ...expected,
-          chatType: ["telegram", "matrix"].includes(expected.channel) ? "direct" : "channel",
-        },
       },
-    });
+      expected,
+      {
+        ...expected,
+        chatType: ["telegram", "matrix"].includes(expected.channel) ? "direct" : "channel",
+      },
+    );
   });
 });
 
@@ -384,32 +311,16 @@ describe("completion delivery route fallback", () => {
     });
     setActivePluginRegistry(
       createTestRegistry([
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "slack" }),
-            messaging: { normalizeTarget: (to: string) => `channel:${to.toLowerCase()}` },
-          },
-        },
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: telegramPlugin,
-        },
-        { pluginId: "folded-chat", source: "test", plugin: foldedChatPlugin },
-        {
-          pluginId: "scoped-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "scoped-chat" }),
-            messaging: {
-              targetIdComparison: "lowercase",
-              resolveSessionConversation: ({ rawId }: { rawId: string }) =>
-                scopedConversationFixtures.get(rawId) ?? null,
-            },
-          },
-        },
+        pluginWithMessaging("slack", {
+          normalizeTarget: (to: string) => `channel:${to.toLowerCase()}`,
+        }),
+        registered(telegramPlugin),
+        registered(foldedChatPlugin),
+        pluginWithMessaging("scoped-chat", {
+          targetIdComparison: "lowercase",
+          resolveSessionConversation: ({ rawId }: { rawId: string }) =>
+            scopedConversationFixtures.get(rawId) ?? null,
+        }),
       ]),
     );
   });
@@ -530,16 +441,11 @@ describe("completion delivery route fallback", () => {
     "uses $name for completion and generated-media delivery",
     ({ name: _name, expected, expectedChatType = "channel", expectedRoute, ...override }) => {
       const origins = { directOrigin: requesterSessionOrigin, requesterSessionOrigin, ...override };
-      expect(
-        resolveCompletionDeliveryOrigins({ ...origins, expectsCompletionMessage: true })
-          .effectiveDirectOrigin,
-      ).toEqual(expected);
-      expect(
-        resolveGeneratedMediaSessionDeliveryRoute({ sessionKey: "agent:main:main", ...origins }),
-      ).toEqual({
-        deliveryContext: expected,
-        route: expectedRoute ?? { ...expected, chatType: expectedChatType },
-      });
+      expectDelivery(
+        { ...origins, expectsCompletionMessage: true },
+        expected,
+        expectedRoute ?? { ...expected, chatType: expectedChatType },
+      );
     },
   );
 });
