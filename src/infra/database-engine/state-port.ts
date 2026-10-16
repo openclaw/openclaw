@@ -6,9 +6,9 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 export const statePortProvider: DatabasePortProvider = {
   id: "state",
   minimumPostgresVersion: 16,
-  async loadDescriptor() {
+  async loadDescriptor(_owner, version) {
     const { loadStatePortDescriptor } = await import("./state-port-descriptor.js");
-    return loadStatePortDescriptor();
+    return loadStatePortDescriptor(version);
   },
   matchesSqlite: (tables) =>
     ["schema_meta", "config_machine_state", "audit_events"].every((table) => tables.has(table)),

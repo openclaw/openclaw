@@ -31,6 +31,7 @@ export type DatabasePortProvider = {
   /** Includes the expected catalog from the same generated source as the bundled DDL. */
   loadDescriptor(
     owner?: Pick<PluginManifestRecord, "id" | "rootDir" | "source" | "origin">,
+    version?: number,
   ): Promise<PortDescriptor>;
 };
 
