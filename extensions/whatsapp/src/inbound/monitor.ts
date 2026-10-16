@@ -73,6 +73,7 @@ export async function attachWebInboxToSocket(
     defaultAccountId: options.accountId,
     resolveOutboundMentions: ({ jid, text }) => groupMetadata.resolveOutboundMentions(jid, text),
     authDir: options.authDir,
+    self: () => socketSession.self,
   });
 
   delivery.start();

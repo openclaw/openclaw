@@ -1,0 +1,269 @@
+// Latest selection per voter for recorded WhatsApp polls; no change history is kept.
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  buildWhatsAppKeyPrefixRange,
+  buildWhatsAppPollTallyPrefix,
+  normalizeWhatsAppPollJids,
+  normalizeWhatsAppPollMessageId,
+  openWhatsAppPollStore,
+  resolveWhatsAppPollScope,
+  resolveWhatsAppPollTtlMs,
+  runWhatsAppPollStoreOperation,
+  truncateUtf8,
+  WHATSAPP_POLL_TALLY_STORES,
+  type WhatsAppPollAccount,
+  type WhatsAppPollRecord,
+  type WhatsAppPollStoreErrorMode,
+} from "./poll-vote-store.js";
+
+type WhatsAppPollTallyValue = {
+  v: 1;
+  voterJids: string[];
+  name?: string;
+  e164?: string;
+  selected: string[];
+  votedAtMs: number;
+};
+
+export type WhatsAppPollVoter = {
+  /** Every JID known for the voter (participant, alt, LID); device suffixes are ignored. */
+  jids: readonly (string | null | undefined)[];
+  name?: string;
+  e164?: string;
+};
+
+export type WhatsAppPollTallyVoter = {
+  voterKey: string;
+  voterJids: string[];
+  name?: string;
+  e164?: string;
+  selected: string[];
+  votedAtMs: number;
+};
+
+const TALLY_READ_LIMIT = 1100;
+const NAME_MAX_BYTES = 128;
+
+/**
+ * senderTimestampMs is an int64: a protobuf Long before the durable queue and a
+ * string after it. Missing or malformed values fall back to the message timestamp.
+ */
+export function normalizeWhatsAppPollVoteTimestampMs(
+  senderTimestampMs: unknown,
+  messageTimestampSeconds: unknown,
+): number {
+  const senderMs = toPositiveFiniteNumber(senderTimestampMs);
+  if (senderMs !== undefined) {
+    return senderMs;
+  }
+  const seconds = toPositiveFiniteNumber(messageTimestampSeconds);
+  return seconds === undefined ? 0 : seconds * 1000;
+}
+
+function toPositiveFiniteNumber(value: unknown): number | undefined {
+  let numeric: number | undefined;
+  if (typeof value === "number") {
+    numeric = value;
+  } else if (typeof value === "string" || typeof value === "bigint") {
+    numeric = Number(value);
+  } else if (typeof (value as { toNumber?: unknown } | null)?.toNumber === "function") {
+    numeric = (value as { toNumber: () => number }).toNumber();
+  }
+  return numeric !== undefined && Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function resolveVoterKey(voterJids: readonly string[]): string | undefined {
+  return voterJids.find((jid) => jid.endsWith("@s.whatsapp.net")) ?? voterJids[0];
+}
+
+function isTallyValue(value: unknown): value is WhatsAppPollTallyValue {
+  const tally = value as Partial<WhatsAppPollTallyValue> | null | undefined;
+  return (
+    tally?.v === 1 &&
+    Array.isArray(tally.voterJids) &&
+    tally.voterJids.every((jid) => typeof jid === "string") &&
+    Array.isArray(tally.selected) &&
+    tally.selected.every((option) => typeof option === "string") &&
+    typeof tally.votedAtMs === "number"
+  );
+}
+
+type TallyRow = { key: string; value: WhatsAppPollTallyValue };
+
+/**
+ * A voter's row may sit under a JID this update does not carry (PN+LID first,
+ * LID only later), so rows match on their key or any stored voter JID.
+ */
+async function findVoterRows(
+  store: PluginStateKeyedStore<WhatsAppPollTallyValue, 2>,
+  prefix: string,
+  voterJids: readonly string[],
+): Promise<TallyRow[]> {
+  const wanted = new Set(voterJids);
+  const found = new Map<string, TallyRow>();
+  if (typeof store.entriesInKeyRange === "function") {
+    const rows = await store.entriesInKeyRange(
+      buildWhatsAppKeyPrefixRange(prefix, TALLY_READ_LIMIT),
+    );
+    for (const { key, value } of rows) {
+      const rowVoterKey = key.slice(prefix.length);
+      if (
+        !rowVoterKey.includes(":") &&
+        isTallyValue(value) &&
+        [rowVoterKey, ...value.voterJids].some((jid) => wanted.has(jid))
+      ) {
+        found.set(key, { key, value });
+      }
+    }
+  }
+  // Direct keys still resolve on polls with more voters than one range read returns.
+  for (const jid of voterJids) {
+    const key = `${prefix}${jid}`;
+    if (!found.has(key)) {
+      const value = await store.lookup(key);
+      if (isTallyValue(value)) {
+        found.set(key, { key, value });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+/** "stale": older than the voter's stored row; "skipped": not stored (bad ids, no store, failure). */
+export type WhatsAppPollVoteApplyResult = "applied" | "stale" | "skipped";
+
+/**
+ * Applies one decrypted vote. Callers rely on the per-chat ingress lane being
+ * serial, so the read-then-write below cannot interleave with another vote on
+ * the same poll. A retraction keeps a selection-less row as a watermark, so an
+ * older vote delivered after it stays stale instead of reviving the voter.
+ */
+export async function applyWhatsAppPollVote(params: {
+  record: WhatsAppPollRecord;
+  account: WhatsAppPollAccount;
+  pollMessageId: string;
+  voter: WhatsAppPollVoter;
+  selected: string[];
+  votedAtMs: number;
+  errors?: WhatsAppPollStoreErrorMode;
+}): Promise<WhatsAppPollVoteApplyResult> {
+  const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
+  const scope = resolveWhatsAppPollScope(params.account);
+  const voterJids = normalizeWhatsAppPollJids(params.voter.jids);
+  const voterKey = resolveVoterKey(voterJids);
+  if (!pollMessageId || !scope || !voterKey) {
+    return "skipped";
+  }
+  return await runWhatsAppPollStoreOperation<WhatsAppPollVoteApplyResult>({
+    operation: "tally write",
+    fallback: "skipped",
+    errors: params.errors,
+    transient: "write",
+    run: async () => {
+      const store = openWhatsAppPollStore<WhatsAppPollTallyValue>(
+        WHATSAPP_POLL_TALLY_STORES[params.record.origin],
+      );
+      if (!store) {
+        return "skipped";
+      }
+      const prefix = buildWhatsAppPollTallyPrefix(scope, pollMessageId);
+      const existing = await findVoterRows(store, prefix, voterJids);
+      if (existing.some(({ value }) => value.votedAtMs > params.votedAtMs)) {
+        return "stale";
+      }
+      const retracted = params.selected.length === 0;
+      const knownJids = normalizeWhatsAppPollJids([
+        ...voterJids,
+        ...existing.flatMap(({ value }) => value.voterJids),
+      ]);
+      // A watermark row carries no name or number; the voter is not shown again until a new vote.
+      const name = retracted
+        ? undefined
+        : params.voter.name?.trim() || existing.find(({ value }) => value.name)?.value.name;
+      const e164 = retracted
+        ? undefined
+        : params.voter.e164?.trim() || existing.find(({ value }) => value.e164)?.value.e164;
+      // Keep the PN key even when this update only carries the LID.
+      const voterRowKey = `${prefix}${resolveVoterKey(knownJids) ?? voterKey}`;
+      await store.register(
+        voterRowKey,
+        {
+          v: 1,
+          voterJids: knownJids,
+          ...(name ? { name: truncateUtf8(name, NAME_MAX_BYTES) } : {}),
+          ...(e164 ? { e164 } : {}),
+          selected: [...params.selected],
+          votedAtMs: params.votedAtMs,
+        },
+        { ttlMs: resolveWhatsAppPollTtlMs(params.record.recordedAt) },
+      );
+      for (const { key } of existing) {
+        if (key !== voterRowKey) {
+          await store.delete(key);
+        }
+      }
+      return "applied";
+    },
+  });
+}
+
+/** Latest selection per voter; rows that share a JID collapse to the newest one. */
+export async function readWhatsAppPollTally(params: {
+  record: WhatsAppPollRecord;
+  account: WhatsAppPollAccount;
+  pollMessageId: string;
+  errors?: WhatsAppPollStoreErrorMode;
+}): Promise<WhatsAppPollTallyVoter[] | undefined> {
+  const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
+  const scope = resolveWhatsAppPollScope(params.account);
+  if (!pollMessageId || !scope) {
+    return undefined;
+  }
+  return await runWhatsAppPollStoreOperation<WhatsAppPollTallyVoter[] | undefined>({
+    operation: "tally read",
+    fallback: undefined,
+    errors: params.errors,
+    run: async () => {
+      const store = openWhatsAppPollStore<WhatsAppPollTallyValue>(
+        WHATSAPP_POLL_TALLY_STORES[params.record.origin],
+      );
+      if (typeof store?.entriesInKeyRange !== "function") {
+        return undefined;
+      }
+      const prefix = buildWhatsAppPollTallyPrefix(scope, pollMessageId);
+      const rows = await store.entriesInKeyRange(
+        buildWhatsAppKeyPrefixRange(prefix, TALLY_READ_LIMIT),
+      );
+      const options = new Set(params.record.options);
+      const candidates = rows
+        // A voter key never contains ":", so a longer remainder belongs to another poll id.
+        .filter((row) => !row.key.slice(prefix.length).includes(":") && isTallyValue(row.value))
+        .toSorted((a, b) => b.value.votedAtMs - a.value.votedAtMs);
+      const seenJids = new Set<string>();
+      const voters: WhatsAppPollTallyVoter[] = [];
+      for (const { key, value } of candidates) {
+        const voterKey = key.slice(prefix.length);
+        const jids = [voterKey, ...value.voterJids];
+        if (jids.some((jid) => seenJids.has(jid))) {
+          continue;
+        }
+        for (const jid of jids) {
+          seenJids.add(jid);
+        }
+        // A retraction watermark still shadows the voter's older rows above, but is no vote.
+        if (value.selected.length === 0) {
+          continue;
+        }
+        voters.push({
+          voterKey,
+          voterJids: value.voterJids,
+          ...(value.name ? { name: value.name } : {}),
+          ...(value.e164 ? { e164: value.e164 } : {}),
+          selected: value.selected.filter((option) => options.has(option)),
+          votedAtMs: value.votedAtMs,
+        });
+      }
+      return voters;
+    },
+  });
+}

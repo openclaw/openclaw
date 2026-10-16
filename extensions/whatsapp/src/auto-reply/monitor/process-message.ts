@@ -26,6 +26,7 @@ import {
 import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { attachWhatsAppPollResultsContext } from "../../poll-results-context.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import {
@@ -37,7 +38,9 @@ import { whatsappInboundLog } from "../loggers.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import {
+  isWhatsAppPollCreatorVisible,
   resolveVisibleWhatsAppGroupHistory,
+  resolveVisibleWhatsAppPollVoters,
   resolveVisibleWhatsAppReplyContext,
   type GroupHistoryEntry,
 } from "./inbound-context.js";
@@ -377,6 +380,13 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? conversationId,
         });
 
+  const pollVisibility = {
+    isGroup: conversationKind === "group",
+    mode: contextVisibilityMode,
+    groupPolicy: inboundPolicy.groupPolicy,
+    groupAllowFrom: inboundPolicy.groupAllowFrom,
+    authDir: account.authDir,
+  };
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
@@ -389,7 +399,17 @@ export async function processMessage(params: {
     groupHistoryLimit: params.groupHistoryLimit,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
-    msg: params.msg,
+    // Stored poll results for this chat only; a copy, so broadcast agents never stack blocks.
+    msg: await attachWhatsAppPollResultsContext(params.msg, {
+      self,
+      filterVoters: (voters) => resolveVisibleWhatsAppPollVoters({ ...pollVisibility, voters }),
+      isCreatorVisible: (record) =>
+        isWhatsAppPollCreatorVisible({
+          ...pollVisibility,
+          creatorJids: record.creatorJids,
+          creatorE164: record.creatorE164,
+        }),
+    }),
     rawBody: commandBody,
     route: params.route,
     buildContext: params.buildContext,

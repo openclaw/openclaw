@@ -11,6 +11,7 @@ import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identit
 import { jidToE164 } from "../targets-runtime.js";
 import { parseVcard } from "../vcard.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
+import { findWhatsAppPollCreation } from "./poll-creation.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
 
 function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | undefined {
@@ -214,11 +215,7 @@ export function extractText(source: WhatsAppInboundMessageSource): string | unde
     if (interactiveSelection) {
       return interactiveSelection.trim();
     }
-    const poll =
-      candidate.pollCreationMessage ??
-      candidate.pollCreationMessageV2 ??
-      candidate.pollCreationMessageV3 ??
-      candidate.pollCreationMessageV5;
+    const poll = findWhatsAppPollCreation(candidate)?.poll;
     if (poll) {
       const question = poll.name?.trim();
       const options = (poll.options ?? [])

@@ -318,6 +318,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             await loadWhatsAppChannelRuntime()
           ).logoutWeb({
             authDir: account.authDir,
+            accountId: account.accountId,
             isLegacyAuthDir: account.isLegacyAuthDir,
             runtime,
           });

@@ -1,0 +1,299 @@
+// Builds the stored poll results block for one chat, attached when the agent is woken there.
+import { identitiesOverlap, type WhatsAppSelfIdentity } from "./identity.js";
+import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "./inbound/types.js";
+import {
+  listWhatsAppChatPollIds,
+  normalizeWhatsAppPollJids,
+  readPluginStateErrorCode,
+  readWhatsAppPollRecord,
+  warnWhatsAppPollState,
+  type WhatsAppChatPollIndexEntry,
+  type WhatsAppPollAccount,
+  type WhatsAppPollRecord,
+} from "./poll-vote-store.js";
+import { readWhatsAppPollTally, type WhatsAppPollTallyVoter } from "./poll-vote-tally-store.js";
+
+export type WhatsAppPollResultsContextEntry = {
+  label: string;
+  source: string;
+  type: string;
+  payload: { note: string; polls: WhatsAppPollResultsPoll[] };
+};
+
+type WhatsAppPollResultsOption = { option: string; votes: number; voters: string[] };
+
+type WhatsAppPollResultsPoll = {
+  poll_id: string;
+  question: string;
+  created_by: string;
+  created_at: string;
+  selectable_count: number;
+  voters_total: number;
+  options: WhatsAppPollResultsOption[];
+};
+
+const MAX_POLLS = 3;
+// The agent's own polls keep up to two of the slots, so members' polls cannot push them out.
+const RESERVED_SENT_POLLS = 2;
+// Index rows can outlive their record, so read past the ones that no longer resolve.
+const INDEX_READ_LIMIT = 12;
+const MAX_NAMES_PER_OPTION = 50;
+const MAX_PAYLOAD_BYTES = 4096;
+const NOTE =
+  "Stored latest selection per voter for polls in this chat. Mention only when asked about a poll.";
+
+function pnJidToE164(jid: string): string | undefined {
+  const digits = /^(\d+)@s\.whatsapp\.net$/.exec(jid)?.[1];
+  return digits ? `+${digits}` : undefined;
+}
+
+// LID JIDs are never shown; they identify nobody to a reader.
+function describeVoter(voter: WhatsAppPollTallyVoter): string {
+  return (
+    voter.name ||
+    voter.e164 ||
+    [voter.voterKey, ...voter.voterJids].map(pnJidToE164).find(Boolean) ||
+    "unknown voter"
+  );
+}
+
+/** A received poll the owner posted from the linked phone: neither the agent's nor a member's. */
+function isLinkedPhonePoll(
+  record: WhatsAppPollRecord,
+  self: WhatsAppSelfIdentity | null | undefined,
+): boolean {
+  return (
+    record.origin === "received" &&
+    [
+      ...record.creatorJids.map((jid) => ({ jid })),
+      ...(record.creatorE164 ? [{ e164: record.creatorE164 }] : []),
+    ].some((creator) => identitiesOverlap(creator, self))
+  );
+}
+
+function describeCreator(record: WhatsAppPollRecord, linkedPhone: boolean): string {
+  if (record.origin === "sent") {
+    return "assistant";
+  }
+  if (linkedPhone) {
+    return "linked phone";
+  }
+  return (
+    record.creatorName ||
+    record.creatorE164 ||
+    record.creatorJids.map(pnJidToE164).find(Boolean) ||
+    "unknown"
+  );
+}
+
+/** Drops voters the chat's context visibility policy hides; they are neither named nor counted. */
+export type WhatsAppPollVoterFilter = (
+  voters: WhatsAppPollTallyVoter[],
+) => WhatsAppPollTallyVoter[];
+
+/** Whether the chat's context visibility policy still shows a received poll's creator. */
+export type WhatsAppPollCreatorFilter = (record: WhatsAppPollRecord) => boolean;
+
+export type WhatsAppPollVisibility = {
+  filterVoters: WhatsAppPollVoterFilter;
+  isCreatorVisible: WhatsAppPollCreatorFilter;
+};
+
+function buildPoll(
+  pollMessageId: string,
+  record: WhatsAppPollRecord,
+  linkedPhone: boolean,
+  tally: WhatsAppPollTallyVoter[],
+  filterVoters: WhatsAppPollVoterFilter | undefined,
+): WhatsAppPollResultsPoll {
+  // First voters first, so the list reads in the order people answered.
+  const voters = (filterVoters ? filterVoters(tally) : tally)
+    .filter((voter) => voter.selected.length > 0)
+    .toSorted((a, b) => a.votedAtMs - b.votedAtMs || a.voterKey.localeCompare(b.voterKey));
+  return {
+    poll_id: pollMessageId,
+    question: record.question,
+    created_by: describeCreator(record, linkedPhone),
+    created_at: new Date(record.recordedAt).toISOString(),
+    selectable_count: record.selectableCount,
+    voters_total: voters.length,
+    options: record.options.map((option) => {
+      const names = voters
+        .filter((voter) => voter.selected.includes(option))
+        .map((voter) => describeVoter(voter));
+      const shown = names.slice(0, MAX_NAMES_PER_OPTION);
+      return {
+        option,
+        votes: names.length,
+        voters:
+          names.length > shown.length ? [...shown, `+${names.length - shown.length} more`] : shown,
+      };
+    }),
+  };
+}
+
+function payloadBytes(payload: WhatsAppPollResultsContextEntry["payload"]): number {
+  return Buffer.byteLength(JSON.stringify(payload));
+}
+
+type SelectedPoll = { poll: WhatsAppPollResultsPoll; sent: boolean; recordedAt: number };
+
+function withoutNames(poll: WhatsAppPollResultsPoll): WhatsAppPollResultsPoll {
+  return {
+    ...poll,
+    options: poll.options.map(({ option, votes }) => ({
+      option,
+      votes,
+      voters: votes > 0 ? [`+${votes} more`] : [],
+    })),
+  };
+}
+
+/**
+ * A poll whose question and options alone exceed the budget is left out first,
+ * so it cannot displace the others. Then voter names and whole polls go,
+ * members' polls oldest first, the agent's own polls last. Input is newest first.
+ */
+function fitPayload(selected: readonly SelectedPoll[]): WhatsAppPollResultsPoll[] {
+  const kept = new Map(
+    selected
+      .filter(
+        ({ poll }) =>
+          payloadBytes({ note: NOTE, polls: [withoutNames(poll)] }) <= MAX_PAYLOAD_BYTES,
+      )
+      .map((entry) => [entry, entry.poll] as const),
+  );
+  const fits = () => payloadBytes({ note: NOTE, polls: [...kept.values()] }) <= MAX_PAYLOAD_BYTES;
+  const trimOrder = [...kept.keys()]
+    .toReversed()
+    .toSorted((a, b) => Number(a.sent) - Number(b.sent));
+  for (const entry of trimOrder) {
+    if (fits()) {
+      break;
+    }
+    kept.set(entry, withoutNames(entry.poll));
+    if (!fits()) {
+      kept.delete(entry);
+    }
+  }
+  return [...kept.values()];
+}
+
+/**
+ * Reads only the queued message's own chat, account and linked phone; nothing
+ * the model controls selects the chat, so voter names never cross into another
+ * chat, and polls recorded by a previously linked phone never reach this one.
+ * Never throws: any failure yields no block and one warning carrying the code.
+ */
+export async function readWhatsAppPollResultsContext(params: {
+  account: WhatsAppPollAccount;
+  chatJids: readonly (string | null | undefined)[];
+  filterVoters?: WhatsAppPollVoterFilter;
+  isCreatorVisible?: WhatsAppPollCreatorFilter;
+}): Promise<WhatsAppPollResultsContextEntry | undefined> {
+  try {
+    const chatJids = new Set(normalizeWhatsAppPollJids(params.chatJids));
+    const ids = await listWhatsAppChatPollIds({
+      account: params.account,
+      chatJids: [...chatJids],
+      limit: INDEX_READ_LIMIT,
+      errors: "throw",
+    });
+    const selected: SelectedPoll[] = [];
+    const tried = new Set<string>();
+    const select = async (entry: WhatsAppChatPollIndexEntry) => {
+      if (tried.has(entry.pollMessageId)) {
+        return;
+      }
+      tried.add(entry.pollMessageId);
+      const poll = await readVisiblePoll(params, chatJids, entry.pollMessageId);
+      if (poll) {
+        selected.push({ poll, sent: entry.origin === "sent", recordedAt: entry.recordedAt });
+      }
+    };
+    for (const entry of ids.filter(({ origin }) => origin === "sent")) {
+      if (selected.length >= RESERVED_SENT_POLLS) {
+        break;
+      }
+      await select(entry);
+    }
+    for (const entry of ids) {
+      if (selected.length >= MAX_POLLS) {
+        break;
+      }
+      await select(entry);
+    }
+    const fitted = fitPayload(selected.toSorted((a, b) => b.recordedAt - a.recordedAt));
+    if (fitted.length === 0) {
+      return undefined;
+    }
+    return {
+      label: "WhatsApp poll results",
+      source: "whatsapp",
+      type: "poll_results",
+      payload: { note: NOTE, polls: fitted },
+    };
+  } catch (error) {
+    warnWhatsAppPollState("whatsapp poll results read failed", {
+      code: readPluginStateErrorCode(error) ?? "unknown",
+    });
+    return undefined;
+  }
+}
+
+/** The poll as the block shows it, or undefined when it is gone, elsewhere, or hidden. */
+async function readVisiblePoll(
+  params: Parameters<typeof readWhatsAppPollResultsContext>[0],
+  chatJids: ReadonlySet<string>,
+  pollMessageId: string,
+): Promise<WhatsAppPollResultsPoll | undefined> {
+  const record = await readWhatsAppPollRecord(params.account, pollMessageId, { errors: "throw" });
+  if (!record || !record.chatJids.some((jid) => chatJids.has(jid))) {
+    return undefined;
+  }
+  // A hidden creator takes the whole poll with them. A sent poll was read under the
+  // linked phone's own keys, so it is this assistant's and always shows, as does
+  // the owner's own poll posted from that phone.
+  const linkedPhone = isLinkedPhonePoll(record, params.account.self);
+  if (record.origin === "received" && !linkedPhone && params.isCreatorVisible?.(record) === false) {
+    return undefined;
+  }
+  const tally = await readWhatsAppPollTally({
+    record,
+    account: params.account,
+    pollMessageId,
+    errors: "throw",
+  });
+  return buildPoll(pollMessageId, record, linkedPhone, tally ?? [], params.filterVoters);
+}
+
+/**
+ * Returns a copy of the queued message with the results block appended, or the
+ * message itself when there is none. Broadcast agents share the original
+ * object, so it is never mutated. Direct chats also look up the PN JID derived
+ * from the conversation's E.164, since the chat may arrive under a LID.
+ * Callers pass the linked phone, and the voter and creator filters for the
+ * chat's context visibility policy.
+ */
+export async function attachWhatsAppPollResultsContext(
+  msg: AdmittedWebInboundMessage,
+  params: WhatsAppPollVisibility & { self: WhatsAppSelfIdentity | null | undefined },
+): Promise<AdmittedWebInboundMessage> {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  const digits = /^\+(\d+)$/.exec(admission.conversation.id)?.[1];
+  const { self, ...visibility } = params;
+  const entry = await readWhatsAppPollResultsContext({
+    account: { accountId: admission.accountId, self },
+    chatJids: [
+      msg.platform.chatJid,
+      admission.conversation.kind === "direct" && digits ? `${digits}@s.whatsapp.net` : undefined,
+    ],
+    ...visibility,
+  });
+  if (!entry) {
+    return msg;
+  }
+  const existing = msg.payload.channelStructuredContext ?? [];
+  return { ...msg, payload: { ...msg.payload, channelStructuredContext: [...existing, entry] } };
+}
