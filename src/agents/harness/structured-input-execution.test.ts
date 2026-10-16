@@ -79,16 +79,24 @@ describe("structured input execution", () => {
     const gateway = createGateway((questions) =>
       Object.fromEntries(questions.map((question) => [question.questionId, [question.questionId]])),
     );
-    const input = compileForm({
-      a: { type: "string" },
-      b: { type: "string" },
-      c: { type: "string" },
-      token: { type: "string", isSecret: true },
-      d: { type: "string" },
-      e: { type: "string" },
-      f: { type: "string" },
-      g: { type: "string" },
-    });
+    const content = {
+      a: "a",
+      b: "b",
+      c: "c",
+      token: "private-value",
+      d: "d",
+      e: "e",
+      f: "f",
+      g: "g",
+    };
+    const input = compileForm(
+      Object.fromEntries(
+        Object.keys(content).map((key) => [
+          key,
+          key === "token" ? { type: "string", isSecret: true } : { type: "string" },
+        ]),
+      ),
+    );
     const params = executionParams(gateway.call);
     const result = runStructuredInput({ input, ...params });
 
@@ -103,26 +111,8 @@ describe("structured input execution", () => {
 
     await expect(result).resolves.toEqual({
       status: "answered",
-      answers: {
-        a: ["a"],
-        b: ["b"],
-        c: ["c"],
-        token: ["private-value"],
-        d: ["d"],
-        e: ["e"],
-        f: ["f"],
-        g: ["g"],
-      },
-      content: {
-        a: "a",
-        b: "b",
-        c: "c",
-        token: "private-value",
-        d: "d",
-        e: "e",
-        f: "f",
-        g: "g",
-      },
+      answers: Object.fromEntries(Object.entries(content).map(([key, value]) => [key, [value]])),
+      content,
     });
     expect(gateway.requested.map((request) => request.questions.length)).toEqual([3, 3, 1]);
     expect(gateway.requested.flatMap((request) => request.questions)).not.toContainEqual({

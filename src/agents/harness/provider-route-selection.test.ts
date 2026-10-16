@@ -80,144 +80,106 @@ function authStore(subscription: boolean): AuthProfileStore {
 
 describe("registered provider route selection", () => {
   it.each([
-    {
-      label: "exact row after legacy",
-      rows: ["legacy", "exact"],
-      modelId: "Model",
-      harness: "custom-responses",
-    },
-    {
-      label: "exact row before legacy",
-      rows: ["exact", "legacy"],
-      modelId: "Model",
-      harness: "custom-responses",
-    },
-    { label: "legacy-only fallback", rows: ["legacy"], modelId: "Model", harness: "openclaw" },
-    {
-      label: "literal legacy selection",
-      rows: ["exact", "legacy"],
-      modelId: "custom/Model",
-      harness: "openclaw",
-    },
-    {
-      label: "same-spelling duplicates",
-      rows: ["exact", "duplicate"],
-      modelId: "Model",
-      harness: "custom-responses",
-    },
-  ] as const)("uses the selected model transport for $label", (fixture) => {
-    registerAgentHarness({
-      id: "custom-responses",
-      label: "Custom Responses harness",
-      supports: ({ modelProvider }) =>
-        modelProvider?.api === "openai-responses" &&
-        modelProvider.baseUrl === "https://responses.example/v1" &&
-        modelProvider.requestTransportOverrides === "none"
-          ? { supported: true, priority: 100 }
-          : { supported: false, reason: "Selected transport is not supported" },
-      async runAttempt() {
-        throw new Error("Selection proof does not execute inference");
-      },
-    });
-    const exact: ModelDefinitionConfig = {
-      id: "Model",
-      name: "Configured model",
-      api: "openai-responses",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 64_000,
-      maxTokens: 1024,
-    };
-    const rows: Record<"exact" | "legacy" | "duplicate", ModelDefinitionConfig> = {
-      exact,
-      legacy: {
-        ...exact,
-        id: "custom/Model",
-        api: "openai-completions",
-        baseUrl: "https://legacy.example/v1",
-        headers: { "x-model-route": "legacy" },
-      },
-      duplicate: { ...exact, api: "openai-completions" },
-    };
-    const cfg: OpenClawConfig = {
-      agents: { entries: { assistant: {} } },
-      models: {
-        providers: {
-          custom: {
-            api: "openai-responses",
-            baseUrl: "https://responses.example/v1",
-            models: fixture.rows.map((row) => rows[row]),
+    ["exact row after legacy", ["legacy", "exact"], "Model", "custom-responses"],
+    ["exact row before legacy", ["exact", "legacy"], "Model", "custom-responses"],
+    ["legacy-only fallback", ["legacy"], "Model", "openclaw"],
+    ["literal legacy selection", ["exact", "legacy"], "custom/Model", "openclaw"],
+    ["same-spelling duplicates", ["exact", "duplicate"], "Model", "custom-responses"],
+  ] as const)(
+    "uses the selected model transport for %s",
+    (_label, selectedRows, modelId, harness) => {
+      registerAgentHarness({
+        id: "custom-responses",
+        label: "Custom Responses harness",
+        supports: ({ modelProvider }) =>
+          modelProvider?.api === "openai-responses" &&
+          modelProvider.baseUrl === "https://responses.example/v1" &&
+          modelProvider.requestTransportOverrides === "none"
+            ? { supported: true, priority: 100 }
+            : { supported: false, reason: "Selected transport is not supported" },
+        async runAttempt() {
+          throw new Error("Selection proof does not execute inference");
+        },
+      });
+      const exact: ModelDefinitionConfig = {
+        id: "Model",
+        name: "Configured model",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 64_000,
+        maxTokens: 1024,
+      };
+      const rows: Record<"exact" | "legacy" | "duplicate", ModelDefinitionConfig> = {
+        exact,
+        legacy: {
+          ...exact,
+          id: "custom/Model",
+          api: "openai-completions",
+          baseUrl: "https://legacy.example/v1",
+          headers: { "x-model-route": "legacy" },
+        },
+        duplicate: { ...exact, api: "openai-completions" },
+      };
+      const cfg: OpenClawConfig = {
+        agents: { entries: { assistant: {} } },
+        models: {
+          providers: {
+            custom: {
+              api: "openai-responses",
+              baseUrl: "https://responses.example/v1",
+              models: selectedRows.map((row) => rows[row]),
+            },
           },
         },
-      },
-    };
-    expect(
-      selectAgentHarness({
-        provider: "custom",
-        modelId: fixture.modelId,
-        agentId: "assistant",
-        config: cfg,
-      }).id,
-    ).toBe(fixture.harness);
-  });
+      };
+      expect(
+        selectAgentHarness({
+          provider: "custom",
+          modelId,
+          agentId: "assistant",
+          config: cfg,
+        }).id,
+      ).toBe(harness);
+    },
+  );
 
   it.each([
-    {
-      label: "explicit Codex primary",
-      pinPrimary: true,
-      subscription: true,
-      modelId: "gpt-5.5",
-      harness: "codex",
-      profile: "openai:chatgpt",
-      requirement: "subscription",
+    ["Codex primary", true, true, "gpt-5.5", "codex", "openai:chatgpt", "subscription"],
+    ["API Completions", false, false, "gpt-5.5", "openclaw", "openai:platform", "api-key"],
+    ["heartbeat", true, true, "gpt-5.4-mini", "openclaw", "openai:chatgpt", "subscription"],
+  ] as const)(
+    "keeps %s on its supported route",
+    (_label, pinPrimary, subscription, modelId, harness, profile, requirement) => {
+      const selection = {
+        provider: "openai",
+        modelId,
+        config: config(pinPrimary),
+        agentId: "assistant",
+      };
+      expect(selectAgentHarness(selection).id).toBe(harness);
+      const prepared = prepareAgentRuntimeAuth({
+        ...selection,
+        env: {},
+        authProfileStore: authStore(subscription),
+      });
+      expect(prepared.plan).toMatchObject({
+        forwardedAuthProfileId: profile,
+        modelRoute: { authRequirement: requirement },
+      });
+      const finalized = selectAgentHarnessForPreparedModelProviders({
+        ...selection,
+        modelProviders: prepared.attempts.map((attempt) =>
+          projectPreparedModelProvider({
+            plan: attempt.plan,
+            attemptKind: attempt.kind,
+          }),
+        ),
+      });
+      expect(finalized.id).toBe(harness);
     },
-    {
-      label: "API-only unpinned Completions",
-      pinPrimary: false,
-      subscription: false,
-      modelId: "gpt-5.5",
-      harness: "openclaw",
-      profile: "openai:platform",
-      requirement: "api-key",
-    },
-    {
-      label: "heartbeat inheriting subscription preference",
-      pinPrimary: true,
-      subscription: true,
-      modelId: "gpt-5.4-mini",
-      harness: "openclaw",
-      profile: "openai:chatgpt",
-      requirement: "subscription",
-    },
-  ])("keeps $label on its supported route", (fixture) => {
-    const selection = {
-      provider: "openai",
-      modelId: fixture.modelId,
-      config: config(fixture.pinPrimary),
-      agentId: "assistant",
-    };
-    expect(selectAgentHarness(selection).id).toBe(fixture.harness);
-    const prepared = prepareAgentRuntimeAuth({
-      ...selection,
-      env: {},
-      authProfileStore: authStore(fixture.subscription),
-    });
-    expect(prepared.plan).toMatchObject({
-      forwardedAuthProfileId: fixture.profile,
-      modelRoute: { authRequirement: fixture.requirement },
-    });
-    const finalized = selectAgentHarnessForPreparedModelProviders({
-      ...selection,
-      modelProviders: prepared.attempts.map((attempt) =>
-        projectPreparedModelProvider({
-          plan: attempt.plan,
-          attemptKind: attempt.kind,
-        }),
-      ),
-    });
-    expect(finalized.id).toBe(fixture.harness);
-  });
+  );
 
   it("does not replace a required API profile to satisfy an explicit Codex runtime", () => {
     expect(() =>
