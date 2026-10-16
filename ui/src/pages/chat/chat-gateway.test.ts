@@ -147,10 +147,8 @@ it("keeps a diagnostic-only internal failure out of live and reloaded retry bann
     status: "error",
   });
   expect(getChatSessionProjection(reloaded).runs["internal-run"]?.errorMessage).toBeUndefined();
-  const attached = createState({
-    chatRunId: "internal-run",
-    sessionsResult: { sessions: [sessionInfo] } as SessionsListResult,
-  });
+  const attached = createStateWithRunningSession({ chatRunId: "internal-run" });
+  attached.sessionsResult = { ...attached.sessionsResult, sessions: [sessionInfo] };
   reconcileChatRunAfterSessionStatePublication(attached);
   expect(attached.chatRunError?.summary).toBeUndefined();
   expect(attached.chatRunId).toBeNull();
