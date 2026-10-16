@@ -7,7 +7,10 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: async () => ({ stdout: "", stderr: "", code: 0 }),
 }));
-vi.mock("../infra/ports-lsof.js", () => ({ resolveLsofCommand: async () => "lsof" }));
+vi.mock("../infra/ports-lsof.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-lsof.js")>()),
+  resolveLsofCommand: async () => "lsof",
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
