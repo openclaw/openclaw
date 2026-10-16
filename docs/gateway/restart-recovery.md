@@ -400,6 +400,20 @@ pending placement subphase, such as
 `reconcile.publications`. These joins keep the worker transports and shared
 database available until accepted effects have recorded their outcomes.
 
+Worker-environment shutdown also names its computer, inference, transfer, tunnel,
+and accepted-operation joins. For an attached worker, shutdown stops the exact
+remote environment before draining its workspace queue: a foreground command
+can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
+share at most ten seconds of the remaining process cleanup budget. An unreachable
+worker keeps its durable attachment for cleanup on reconnect; it is not reported
+as physically stopped. Local writes and transfer cleanup still settle before
+database retirement.
+
+The core `shutdown completed` message precedes final process cleanup. Slow-step
+diagnostics continue through managed local services, snapshot cleanup, log
+flushing, watchdog retirement, and shared-state closure, so a delay after that
+message can be attributed to its remaining owner.
+
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must

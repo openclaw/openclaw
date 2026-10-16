@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { formatGatewayPendingCloseSteps } from "../../gateway/restart-trace.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { gatewayWorkAdmissionActual, runLoopFixture as f } from "./run-loop-mocks.test-support.js";
 import {
@@ -247,6 +248,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
                 await cancelGate.entered;
               }
               expect(runtime.exit).not.toHaveBeenCalled();
+              expect(formatGatewayPendingCloseSteps()).toContain("restart.close.watchdog=");
               if (failed) {
                 cancelGate.reject(failure);
               } else {

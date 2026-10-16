@@ -2234,7 +2234,6 @@ src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	2
 src/plugin-sdk/provider-auth-runtime.ts	1
-src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	1
 src/plugin-sdk/provider-stream-shared.ts	4
 src/plugin-sdk/provider-stream.ts	1

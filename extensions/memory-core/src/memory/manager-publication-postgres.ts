@@ -3,12 +3,17 @@ import type {
   EngineConnection,
   SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  isPostgresSqlConnection,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_STATE_TABLE,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   bindSqliteWorkerDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
@@ -232,6 +237,35 @@ export function bindPostgresMemoryPublication(
   const execute: Parameters<
     typeof bindSqliteWorkerDatabase<MemoryPublicationOperations>
   >[1]["execute"] = (command) => {
+    if (command.type === "database.reset") {
+      return write(() => {
+        const query = getNodeSqliteKysely<
+          Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown> & {
+            memory_index_state: { id: number; revision: number };
+          }
+        >(db);
+        let changed = false;
+        // Admitted facts include optional vector projections; generated text columns
+        // disappear with their source rows while the index definitions stay admitted.
+        for (const table of MEMORY_INDEX_DERIVED_TABLES) {
+          if (table === MEMORY_INDEX_STATE_TABLE || !tableExists(db, table)) {
+            continue;
+          }
+          const result = executeSqliteQuerySync(db, query.deleteFrom(table));
+          changed ||= (result.numAffectedRows ?? 0n) > 0n;
+        }
+        if (changed) {
+          executeSqliteQuerySync(
+            db,
+            query
+              .updateTable(MEMORY_INDEX_STATE_TABLE)
+              .set((eb) => ({ revision: eb("revision", "+", 1) }))
+              .where("id", "=", 1),
+          );
+        }
+        return changed;
+      });
+    }
     if (stageId && !stages.has(stageId) && command.type !== "database.stage.start") {
       throw new Error("Memory reindex connection was lost; retry the full reindex.");
     }

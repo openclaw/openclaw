@@ -1,6 +1,7 @@
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
   MemoryOriginReadFilters,
@@ -198,9 +199,12 @@ export async function runMemoryCuratedCandidates(
   );
 }
 
-export async function runMemoryPresenceInspection(databasePath: string): Promise<boolean> {
+export async function runMemoryPresenceInspection(
+  databasePath: string,
+  agentId?: string,
+): Promise<boolean> {
   const result = await runRetrieval(
-    { kind: "presence", databasePath },
+    { kind: "presence", databasePath, agentId },
     { inputBytes: databasePath.length * 2 },
     "presence",
   );
@@ -238,6 +242,12 @@ export async function runMemoryVectorFallback(
     },
     "vector",
   );
+  if (result.capabilityError) {
+    throw new DatabaseSearchCapabilityUnavailableError(
+      result.capabilityError.capability,
+      result.capabilityError.message,
+    );
+  }
   return result.rows;
 }
 

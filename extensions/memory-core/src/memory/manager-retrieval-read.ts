@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   readMemoryRecallMetadata,
+  isPostgresSqlConnection,
   type MemorySource,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -120,7 +121,16 @@ function parseMemoryIndexMetadata(value: unknown) {
 
 export type MemoryRetrievalIndexState = ReturnType<typeof readMemoryRetrievalIndexState>;
 
-export function readMemoryRetrievalIndexState(db: DatabaseSync) {
+export function readMemoryRetrievalIndexState(db: EngineConnection) {
+  if (isPostgresSqlConnection(db)) {
+    const facts = readMemoryDatabaseFacts(db);
+    return {
+      meta: facts.meta,
+      hasIndexedChunks: facts.hasIndexedChunks,
+      hasFtsContent: false,
+      vectorState: facts.vectorState,
+    };
+  }
   const { meta } = readMemoryIndexMetadata(db);
   const hasIndexedChunks =
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
@@ -148,7 +158,7 @@ export type MemoryRecallQuery = {
   includeMemoryMtimes: boolean;
 };
 
-export function readMemoryRecallData(db: DatabaseSync, request: MemoryRecallQuery) {
+export function readMemoryRecallData(db: EngineConnection, request: MemoryRecallQuery) {
   const rows = readMemoryRecallMetadata(
     db,
     request.candidates.map((entry) => entry.id),

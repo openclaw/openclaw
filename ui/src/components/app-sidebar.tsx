@@ -19,6 +19,7 @@ import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 
@@ -73,6 +74,9 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       return owner;
     },
     { equals: false },
+  );
+  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
+    context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
   );
   const presentationRevision = createParkedProjection(
     () => {

@@ -1,6 +1,7 @@
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import { observeGcSamples, type GcSample } from "./gc-observer.js";
 
 export type WorkerGcStorm = {
@@ -45,7 +46,10 @@ export function publishWorkerGcStorm(gcStorm: WorkerGcStorm | { retireWorkerId: 
 const MAX_PENDING_GC_SAMPLES = 256;
 
 /** Publish isolate-local counters without sharing the task transport or keeping it alive. */
-export function serveWorkerMemorySamples(parent: MessagePort): () => void {
+export function serveWorkerMemorySamples(
+  parent: MessagePort,
+  retainedData?: () => readonly DiagnosticWorkerRetainedData[],
+): () => void {
   const { port1, port2 } = new MessageChannel();
   diagnosticPort = port1;
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
@@ -71,6 +75,7 @@ export function serveWorkerMemorySamples(parent: MessagePort): () => void {
       arrayBuffers,
       heapSizeLimitBytes,
       heapSpaces,
+      retainedData: retainedData?.(),
       gc,
     });
     gc = undefined;

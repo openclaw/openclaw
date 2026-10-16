@@ -44,6 +44,7 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "database.reset": { input: undefined; output: MemoryPublicationResult<boolean> };
   "database.stage.start": { input: undefined; output: MemoryPublicationResult<void> };
   "database.stage.discard": { input: { stageId: string }; output: void };
   "database.stage.publish": {

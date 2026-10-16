@@ -86,8 +86,8 @@ import {
 import { SessionAttentionController } from "./session-attention-controller.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
-import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
+import { SessionOwnerFilter } from "./session-owner-filter.ts";
+import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import {
@@ -151,13 +151,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
-  readonly sessionOwnerFilter = new SessionOwnerFilterController(
-    this,
-    () => this.context,
-    () =>
-      this.context?.sessions.listSnapshot(
-        this.sessionData.sessionListQuery(this.expandedAgentId()),
-      ),
+  readonly sessionOwnerFilter = new SessionOwnerFilter(
+    () => this.context?.gateway,
+    () => this.requestUpdate(),
   );
   readonly sessionData = new SessionDataController(this);
 
@@ -246,7 +242,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionsShowCron: boolean = loadStoredSidebarSessionsShowCron();
   sessionsShowPreview: boolean = loadStoredSidebarSessionsShowPreview();
   sessionsShowSystem: boolean = loadStoredSidebarSessionsShowSystem();
-  private readonly emptyGroups = new SidebarEmptyGroupsController(this, () => this.context);
+  private readonly emptyGroups = new SidebarEmptyGroupsPreference(() => this.context);
 
   get sessionsEmptyGroupsMode(): SidebarEmptyGroupsMode {
     return this.emptyGroups.mode;
@@ -254,6 +250,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void {
     this.emptyGroups.set(mode);
+    this.requestUpdate();
   }
   sessionsStatusFilter: SidebarSessionStatusFilter = loadStoredSidebarSessionStatusFilter();
   hiddenSessionCatalogIds: ReadonlySet<string> = loadStoredHiddenSessionCatalogIds();

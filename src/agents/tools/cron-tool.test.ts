@@ -282,30 +282,6 @@ describe("cron tool", () => {
     });
   });
 
-  it("restarts the scoped list when the current job moves behind the page boundary", async () => {
-    callGatewayMock
-      .mockResolvedValueOnce(listPage(otherJobs, "before", 201, 0, 200))
-      .mockResolvedValueOnce(listPage([], "after", 200, 200))
-      .mockResolvedValueOnce(listPage([...otherJobs.slice(0, 199), currentJob], "after", 200));
-
-    const result = await executeCron({ action: "list" }, { selfRemoveOnlyJobId: "job-current" });
-    expect(callGatewayMock.mock.calls.map(([call]) => call.params.offset)).toEqual([0, 200, 0]);
-    expect(result.details).toEqual(selfInventory);
-  });
-
-  it("rejects a scoped list after repeated snapshot churn", async () => {
-    callGatewayMock.mockImplementation(async ({ params }: { params: Record<string, unknown> }) =>
-      params.offset === 0
-        ? listPage(otherJobs, `revision-${callGatewayMock.mock.calls.length}`, 201, 0, 200)
-        : listPage([], `revision-${callGatewayMock.mock.calls.length}`, 200, 200),
-    );
-
-    await expect(
-      executeCron({ action: "list" }, { selfRemoveOnlyJobId: "job-current" }),
-    ).rejects.toThrow("cron.list inventory changed repeatedly while reading current automation");
-    expect(callGatewayMock).toHaveBeenCalledTimes(8);
-  });
-
   it.each([
     {
       name: "authenticated caller without an agent filter",

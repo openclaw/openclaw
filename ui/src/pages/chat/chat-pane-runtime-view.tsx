@@ -7,6 +7,7 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -61,7 +62,11 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     cacheProgress();
     return stop;
   });
-  const sources = [runtime.context.plugins, runtime.context.navigation].map((source) =>
+  const sources = [
+    runtime.context.plugins,
+    runtime.context.navigation,
+    nativeGatewaysCapability(),
+  ].map((source) =>
     projectSource(source, {
       read: (capability) => capability,
       subscribe: (capability, notify) => capability?.subscribe(notify) ?? (() => {}),
