@@ -272,22 +272,17 @@ type StoredVisitorGrant = {
 
 export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
   const roles = f.config.gateway!.roles!;
+  const guest = {
+    ...roles.definitions.guest!,
+    sandbox: "required" as const,
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  };
   const config: OpenClawConfig = {
     ...f.config,
     gateway: {
       ...f.config.gateway,
-      roles: {
-        ...roles,
-        definitions: {
-          ...roles.definitions,
-          guest: {
-            ...roles.definitions.guest!,
-            sandbox: "required",
-            accessPolicyPlugin: "visitor-access",
-            modelPolicy: {},
-          },
-        },
-      },
+      roles: { ...roles, definitions: { ...roles.definitions, guest } },
     },
   };
   setRuntimeConfigSnapshot(config);
@@ -387,9 +382,6 @@ export async function prepareVisitorPublicationFixture(f: {
     senderIsOwner: true,
     assertInvocationCurrent: f.maintainer.assertCurrent,
   };
-  const unexpectedSubagent = () => {
-    throw new Error("Visitor publication fixtures must not dispatch subagent work");
-  };
   const register = async () => {
     const registry = await loader.loadAndActivateRootPluginRegistry({
       config,
@@ -402,12 +394,12 @@ export async function prepareVisitorPublicationFixture(f: {
         gateway,
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
-          complete: unexpectedSubagent,
-          forkSession: unexpectedSubagent,
-          run: unexpectedSubagent,
-          waitForRun: unexpectedSubagent,
-          getSessionMessages: unexpectedSubagent,
-          deleteSession: unexpectedSubagent,
+          complete: unexpected,
+          forkSession: unexpected,
+          run: unexpected,
+          waitForRun: unexpected,
+          getSessionMessages: unexpected,
+          deleteSession: unexpected,
         },
       },
     });
@@ -467,6 +459,11 @@ export async function prepareVisitorPublicationFixture(f: {
     };
   };
   let active = await register();
+  const resetStores = async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  };
   return {
     get store() {
       return active.store;
@@ -485,9 +482,7 @@ export async function prepareVisitorPublicationFixture(f: {
     },
     async reopen() {
       await active.stop();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
+      await resetStores();
       active = await register();
     },
     async close() {
@@ -495,9 +490,7 @@ export async function prepareVisitorPublicationFixture(f: {
         await active.stop();
       } finally {
         runtime.restoreActivePluginRegistrySnapshot(priorRegistry);
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
+        await resetStores();
         vi.unstubAllGlobals();
       }
     },

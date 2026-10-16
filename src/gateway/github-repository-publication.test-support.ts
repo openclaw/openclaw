@@ -105,16 +105,12 @@ export async function createRepositoryPublicationFixture(
   const original = mocks.loadSession.getMockImplementation()!;
   mocks.loadSession.mockImplementation((key: string) => {
     const loaded = original(key);
-    if (key !== session.sessionKey) {
-      return loaded;
-    }
-    return {
-      ...loaded,
-      entry: {
-        sessionId: session.sessionId,
-        repositoryWorkspaceId: workspace.workspaceId,
-      },
-    };
+    return key === session.sessionKey
+      ? {
+          ...loaded,
+          entry: { sessionId: session.sessionId, repositoryWorkspaceId: workspace.workspaceId },
+        }
+      : loaded;
   });
   const sessionOwner = await persistPublicationTestSession(session.sessionKey);
   const payloads = new Map<string, { publicationStagingRoot: string; publicationDigest: string }>();
@@ -212,17 +208,14 @@ export async function createRepositoryPublicationFixture(
     if (endpoint === "repos/owner/repository") {
       return jsonResult({ fork: false, default_branch: "main", node_id: "repository-node" });
     }
-    if (endpoint.endsWith("/git/commits/" + baseCommit)) {
-      return jsonResult({ sha: baseCommit, tree: { sha: baseTree } });
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.baseHead)) {
-      return jsonResult({ sha: runtime.baseHead, tree: { sha: runtime.baseHeadTree } });
-    }
-    if (endpoint.endsWith("/git/commits/" + runtime.mergeBase)) {
-      return jsonResult({ sha: runtime.mergeBase, tree: { sha: runtime.mergeBaseTree } });
-    }
     if (endpoint.includes("/git/commits/")) {
-      return jsonResult(commits.get(endpoint.split("/").at(-1)!));
+      const sha = endpoint.split("/").at(-1)!;
+      const known = [
+        [baseCommit, baseTree],
+        [runtime.baseHead, runtime.baseHeadTree],
+        [runtime.mergeBase, runtime.mergeBaseTree],
+      ].find(([commit]) => sha === commit);
+      return jsonResult(known ? { sha, tree: { sha: known[1] } } : commits.get(sha));
     }
     if (endpoint.includes("/git/matching-refs/")) {
       const managed =
