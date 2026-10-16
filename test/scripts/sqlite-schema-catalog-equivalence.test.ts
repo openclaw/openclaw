@@ -4,8 +4,10 @@ import { buildMemoryStorageSchema } from "../../packages/memory-host-sdk/src/hos
 import { readSqliteSchemaCatalog as readNativeCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { listSqliteSchemaInputs } from "../../scripts/lib/sqlite-schema-inputs.mts";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../../src/daemon/runtime-pin-schema.js";
-import { readSqliteSchemaCatalog } from "../../src/infra/sqlite-schema-catalog.js";
-import { collectSqliteSchemaIssues } from "../../src/infra/sqlite-schema-contract.js";
+import {
+  collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
+} from "../../src/infra/sqlite-schema-contract.js";
 import { fingerprintSqliteSchemaCatalog } from "../../src/infra/sqlite-schema-fingerprint.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
@@ -34,7 +36,12 @@ describe("generated SQLite schema catalogs", () => {
       // Native per-object PRAGMAs are independent of the batched runtime reader.
       const nativeCatalog = readNativeCatalog(database);
       expect(generated).toEqual(nativeCatalog);
-      expect(readSqliteSchemaCatalog(database)).toEqual(generated);
+      expect(
+        createSqliteTableContractReader(database).readCatalog(
+          nativeCatalog.views.map((view) => view.name),
+          nativeCatalog.tables.map((table) => table.name),
+        ),
+      ).toEqual(generated);
       expect(fingerprintSqliteSchemaCatalog(nativeCatalog)).toBe(fingerprint?.fingerprint);
       expect(collectSqliteSchemaIssues(database, sql)).toEqual([]);
     } finally {
