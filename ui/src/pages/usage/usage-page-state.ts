@@ -133,14 +133,14 @@ export function createUsagePage(context: ApplicationContext) {
       details.cancel();
     },
     onSnapshot: handleGatewaySnapshot,
-    onPageActivation: () => refreshPolicy.request("focus"),
+    onPageActivation: () => void refreshPolicy.request("focus"),
   });
   const observeAgentScope = watchAgentScope((scopeId) => {
     if (routeDataInitialized && usageAgentId !== scopeId) {
       usageAgentId = scopeId;
       setFilters({ creatorKey: null });
       clearSelectionsAndDetails();
-      refreshPolicy.request("manual");
+      void refreshPolicy.request("manual");
     }
     notify();
   });
@@ -245,7 +245,7 @@ export function createUsagePage(context: ApplicationContext) {
       usageAgentId = currentAgentId;
       clearSelectionsAndDetails();
       resetProviderUsage();
-      refreshPolicy.request("manual");
+      void refreshPolicy.request("manual");
       return;
     }
 
@@ -264,7 +264,7 @@ export function createUsagePage(context: ApplicationContext) {
       currentQuery().agentId,
     ).updatedAt;
     if (usagePublication().committedAt > preloadUpdatedAt) {
-      refreshPolicy.request("publication");
+      void refreshPolicy.request("publication");
     }
     refreshPolicy.flushPending();
   }
@@ -450,7 +450,7 @@ export function createUsagePage(context: ApplicationContext) {
     routeDataEnabled = false;
     timers.dateDebounceTimer = window.setTimeout(() => {
       timers.dateDebounceTimer = null;
-      refreshPolicy.request("manual");
+      void refreshPolicy.request("manual");
     }, 400);
   }
 
@@ -465,10 +465,10 @@ export function createUsagePage(context: ApplicationContext) {
     if (change.identityChanged || change.becameConnected) {
       connectionEpoch = {};
       if (routeDataInitialized) {
-        refreshPolicy.request("reconnect");
+        void refreshPolicy.request("reconnect");
       }
     } else if (usageCommitted && routeDataInitialized) {
-      refreshPolicy.request("publication");
+      void refreshPolicy.request("publication");
     }
     const sessionKey = usageSelectedSessions.length === 1 ? usageSelectedSessions[0] : undefined;
     if (change.becameAvailable && sessionKey) {
@@ -566,7 +566,7 @@ export function createUsagePage(context: ApplicationContext) {
           onScopeChange: (scope) => {
             setFilters(scope);
             clearSelectionsAndDetails();
-            refreshPolicy.request("manual");
+            void refreshPolicy.request("manual");
           },
           onRefresh: () => {
             for (const receipt of usagePublication().failures) {

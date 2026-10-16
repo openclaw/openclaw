@@ -1428,7 +1428,7 @@ export function createSessionsPage(
         bindSessionList();
       },
       onTranscriptSearchChange: actions.updateTranscriptSearchQuery,
-      onTranscriptSearch: actions.runTranscriptSearch,
+      onTranscriptSearch: () => void actions.runTranscriptSearch(),
       onClearTranscriptSearch: () => resetTranscriptSearchState(""),
       onSortChange: (column, direction) => {
         setPresentation((draft) => {
@@ -1445,7 +1445,7 @@ export function createSessionsPage(
         saveStoredGroupBy(mode);
       },
       onAssignCategory: assignCategory,
-      onRequestNewCategory: actions.requestNewCategory,
+      onRequestNewCategory: (sessionKey) => void actions.requestNewCategory(sessionKey),
       onLoadMore: () => {
         const binding = listBinding;
         const offset = state.result?.nextOffset;
@@ -1466,7 +1466,7 @@ export function createSessionsPage(
       },
       onRefresh: () => void refreshSessionList(),
       onStatusFilterChange: (statusFilter) => updateStatusFilter(statusFilter),
-      onDeleteAllArchived: actions.deleteAllArchived,
+      onDeleteAllArchived: () => void actions.deleteAllArchived(),
       onPatch: (key, patch, options) =>
         void actions.patchSession(key, patch, undefined, undefined, options),
       onToggleSelect: (key) => updateSelection([key], "toggle"),
@@ -1475,7 +1475,7 @@ export function createSessionsPage(
       onDeselectAll: () => {
         state.selectedSessions = new Map();
       },
-      onDeleteSelected: actions.deleteSelected,
+      onDeleteSelected: () => void actions.deleteSelected(),
       onNavigateToChat: (sessionKey) => {
         const face = resolveSessionPreferredFaceForKey(context, sessionKey);
         const target = sessionNavigationTarget({

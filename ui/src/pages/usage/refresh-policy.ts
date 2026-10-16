@@ -149,6 +149,6 @@ export class UsageRefreshPolicy {
       return;
     }
     this.pendingAutomaticRefresh = false;
-    this.request("focus");
+    void this.request("focus");
   }
 }
