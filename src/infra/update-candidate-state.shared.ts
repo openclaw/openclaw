@@ -18,6 +18,7 @@ import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js
 import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
 export type StateInput = {
   stateDir: string;
+  additionalPaths?: readonly string[];
   config: OpenClawConfigWithLegacyRoster;
   includeLocalStoreVersions?: boolean;
   env?: NodeJS.ProcessEnv;

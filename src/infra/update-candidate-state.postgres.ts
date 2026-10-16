@@ -10,7 +10,6 @@ import {
   getPostgresPhysicalFacts,
 } from "./database-engine/physical-facts.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import {
   readUpdateCandidatePluginIndex,
@@ -77,7 +76,9 @@ if (parentPort && workerData?.updatePostgresState === true) {
       openSqlite() {},
     });
     try {
-      return runSqliteDeferredTransactionSync(db, () => {
+      // Bind the worker's host admission record before staging facts in a read transaction.
+      getPostgresPhysicalFacts(db);
+      return databaseEngineAdapters.postgres.transactions.read(db, () => {
         // Preflight never bootstraps, migrates or seals a source schema.
         admitPostgresPhysicalFacts({
           anchor,

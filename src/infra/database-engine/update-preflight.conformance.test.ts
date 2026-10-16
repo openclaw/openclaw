@@ -2,6 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -32,8 +33,11 @@ import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-ad
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { logbookPortProvider } from "./logbook-port.js";
 import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
+import { teamReportsPortProvider } from "./team-reports-port.js";
+import { workboardPortProvider } from "./workboard-port.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -43,6 +47,7 @@ const runId = "postgres-update-conformance";
 describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
+  const pluginAnchors: string[] = [];
   let root: string;
   let stateDir: string;
   let shared: string;
@@ -161,9 +166,11 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     vi.unstubAllEnvs();
     try {
       if (anchorCreated) {
-        const restored = readBackupEngine(shared);
-        if (restored.engine === "postgres") {
-          namespaces.add(restored.namespace);
+        for (const pathname of [shared, ...pluginAnchors]) {
+          const restored = readBackupEngine(pathname);
+          if (restored.engine === "postgres") {
+            namespaces.add(restored.namespace);
+          }
         }
       }
       for (const name of namespaces) {
@@ -288,6 +295,80 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
   });
 
   it("captures before a failed candidate migration and restores exact PostgreSQL rows while preserving current update history", async () => {
+    const families = [
+      {
+        provider: workboardPortProvider,
+        relativePath: "plugins/workboard/workboard.sqlite",
+        seed: "PRAGMA user_version=3; INSERT INTO workboard_schema_migrations VALUES ('schema-3',1); INSERT INTO workboard_boards (id,name,created_at,updated_at) VALUES ('board','baseline',1,1)",
+        table: "workboard_boards",
+        column: "name",
+      },
+      {
+        provider: logbookPortProvider,
+        relativePath: "logbook/logbook.sqlite",
+        seed: "PRAGMA user_version=1; INSERT INTO standups VALUES ('2026-10-16','baseline',1)",
+        table: "standups",
+        column: "text",
+      },
+      {
+        provider: teamReportsPortProvider,
+        relativePath: "plugins/team-reports/team-reports.sqlite",
+        seed: "PRAGMA user_version=1; INSERT INTO team_reports_schema_migrations VALUES ('schema-1',1); INSERT INTO team_reports_periods VALUES ('day','2026-10-16',1,2,'closed',2,'{}',NULL,'baseline')",
+        table: "team_reports_periods",
+        column: "markdown",
+      },
+    ];
+    const stores: Array<(typeof families)[number] & { pathname: string; namespace: string }> = [];
+    const pluginRoots: string[] = [];
+    for (const family of families) {
+      const id = family.provider.id;
+      const rootDir = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
+      pluginRoots.push(rootDir);
+      const descriptor = await family.provider.loadDescriptor({
+        id,
+        rootDir,
+        source: path.join(rootDir, "index.ts"),
+        origin: "global",
+      });
+      const pathname = path.join(stateDir, family.relativePath);
+      const storeId = randomUUID();
+      const storeNamespace = `update_${id.replaceAll("-", "_")}_${storeId.replaceAll("-", "")}`;
+      namespaces.add(storeNamespace);
+      await fs.mkdir(path.dirname(pathname), { recursive: true });
+      {
+        using source = openNodeSqliteDatabase(":memory:");
+        source.exec(descriptor.sqlite);
+        source.exec(family.seed);
+        await materializeDatabasePort({
+          source: { engine: "sqlite", db: source },
+          destination: { engine: "postgres", db: client, namespace: storeNamespace },
+          descriptor,
+          storeId,
+          assertCurrent() {},
+        });
+      }
+      {
+        using anchor = openNodeSqliteDatabase(pathname);
+        anchor.exec(
+          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+        );
+        anchor
+          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+          .run(storeId, storeNamespace);
+      }
+      pluginAnchors.push(pathname);
+      stores.push({ ...family, pathname, namespace: storeNamespace });
+    }
+    config = {
+      ...config,
+      plugins: {
+        load: { paths: pluginRoots },
+        entries: Object.fromEntries(
+          families.map(({ provider }) => [provider.id, { enabled: true }]),
+        ),
+      },
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
     const owner = await acquireGatewayLock({
       env,
       role: "sqlite-maintenance",
@@ -309,6 +390,15 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       expect(backup.databases).toContainEqual(
         expect.objectContaining({ path: shared, engine: "postgres", namespace }),
       );
+      for (const store of stores) {
+        expect(backup.databases).toContainEqual(
+          expect.objectContaining({
+            path: store.pathname,
+            engine: "postgres",
+            namespace: store.namespace,
+          }),
+        );
+      }
       const migration = await owner!.run(() =>
         runLegacyStateMigrationSteps([
           {
@@ -326,6 +416,11 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
                 `UPDATE "${namespace}".update_runs SET phase = 'validating', updated_at_ms = 2, reason = 'candidate migration failed', after_json = $1 WHERE run_id = $2`,
                 [' {"opaque":"\\u0062"} ', runId],
               );
+              for (const store of stores) {
+                await client.query(
+                  `UPDATE "${store.namespace}"."${store.table}" SET "${store.column}" = 'candidate'`,
+                );
+              }
               throw new Error("candidate migration failed after committed data write");
             },
           },
@@ -383,5 +478,20 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         )
       ).rows,
     ).toEqual([{ path: agent }]);
+    for (const store of stores) {
+      const restoredStore = readBackupEngine(store.pathname);
+      expect(restoredStore.engine).toBe("postgres");
+      if (restoredStore.engine !== "postgres") {
+        throw new Error(`Recovery replaced ${store.provider.id} with SQLite data`);
+      }
+      namespaces.add(restoredStore.namespace);
+      expect(
+        (
+          await client.query(
+            `SELECT "${store.column}" AS value FROM "${restoredStore.namespace}"."${store.table}"`,
+          )
+        ).rows,
+      ).toEqual([{ value: "baseline" }]);
+    }
   });
 });

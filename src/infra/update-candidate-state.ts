@@ -186,7 +186,8 @@ async function collectUpdateCandidateDatabasePaths(input: StateInput) {
   const files = await collectStateDatabasePaths(input);
   if (input.config.database?.engine === "postgres") {
     const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-    for (const file of await discoverBackupDatabasePaths(input)) {
+    // Capture already froze plugin roots before taking maintenance custody.
+    for (const file of input.additionalPaths ?? (await discoverBackupDatabasePaths(input))) {
       queueStateDatabaseSpelling(files, input.stateDir, file);
     }
   }

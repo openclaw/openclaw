@@ -492,25 +492,36 @@ export async function createUpdateDatabaseBackup({
       const excludedDatabasePaths = rehearsal?.admit(
         inspectionPlan.files.flatMap(([, database]) => database.spellings),
       );
-      const capturedInput = { ...workerInput, excludedDatabasePaths };
+      const capturedInput = {
+        ...workerInput,
+        excludedDatabasePaths,
+        postgresOffline: input.postgresOffline || custody,
+      };
       const files = [
         ...inspectionPlan.files.flatMap(([, database]) => database.spellings),
         ...(additionalPaths ?? []),
         ...(additionalFiles ?? []),
       ].filter((file) => !rehearsal?.excludes(file));
       rehearsal?.assertCurrent();
+      const databases = custody
+        ? await readUpdateStateDatabaseSizesInProcess(files, signal)
+        : await readUpdateStateDatabaseSizes(files, worker);
+      if (custody && postgresPaths.length > 0) {
+        scope!.assertAdmission();
+      }
       const backup = parseUpdateStateInspectionWorker(
         await runUpdateStateInspectionWorker({
           ...worker,
           retryAdvice,
           input: { ...capturedInput, mode: "database-backup", inspectionPlan },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
-          databases: custody
-            ? await readUpdateStateDatabaseSizesInProcess(files, signal)
-            : await readUpdateStateDatabaseSizes(files, worker),
+          databases,
         }),
         UpdateDatabaseBackupSchema,
       );
+      if (custody && postgresPaths.length > 0) {
+        scope!.assertAdmission();
+      }
       rehearsal?.assertCurrent();
       if (!sameFileIdentity(identity, await fs.lstat(directory, { bigint: true }))) {
         throw new Error(`Database backup directory changed during capture: ${directory}.`);
