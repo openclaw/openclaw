@@ -1,5 +1,6 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import path from "node:path";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -25,6 +26,32 @@ beforeEach(() => {
 });
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
+const agentRoster = {
+  agents: [{ id: "main", name: "Main agent" }],
+  defaultId: "main",
+  mainKey: "main",
+  scope: "agent",
+};
+function configResponse(config: Record<string, unknown>, hash = "agent-config-hash-1") {
+  return {
+    config,
+    sourceConfig: config,
+    runtimeConfig: config,
+    hash,
+    issues: [],
+    raw: JSON.stringify(config),
+    valid: true,
+  };
+}
+async function screenshot(page: Page, name: string) {
+  if (captureUiProof) {
+    await page.screenshot({
+      animations: "disabled",
+      fullPage: true,
+      path: path.join(proofDir, name),
+    });
+  }
+}
 
 suite.define(() => {
   it("recovers failed loads and resumes autosave after reloading a reconnected draft", async () => {
@@ -41,12 +68,7 @@ suite.define(() => {
             { id: "after-reload", name: "After reload", provider: "openai" },
           ],
           methodResponses: {
-            "agents.list": {
-              agents: [{ id: "main", name: "Main agent" }],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
+            "agents.list": agentRoster,
             "config.get": {
               __mockError: {
                 code: "INTERNAL_ERROR",
@@ -69,16 +91,10 @@ suite.define(() => {
         const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
         const reload = agentsPage.getByRole("button", { name: "Reload Config" });
         await reload.waitFor();
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              proofDir,
-              `agent-config-load-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "failed"}.png`,
-            ),
-          });
-        }
+        await screenshot(
+          page,
+          `agent-config-load-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "failed"}.png`,
+        );
 
         const error = agentsPage
           .getByRole("alert")
@@ -88,15 +104,10 @@ suite.define(() => {
           .poll(() => primary.locator(".picker-select__trigger").getAttribute("disabled"))
           .not.toBeNull();
 
-        await gateway.setMethodResponse("config.get", {
-          config,
-          sourceConfig: config,
-          runtimeConfig: config,
-          hash: "recovered-agent-config",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        });
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(config, "recovered-agent-config"),
+        );
         const readsBefore = (await gateway.getRequests("config.get")).length;
         await reload.click();
         await gateway.waitForRequest("config.get", { after: readsBefore });
@@ -138,15 +149,10 @@ suite.define(() => {
         ).toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeReconnect + 1);
 
-        await gateway.setMethodResponse("config.get", {
-          config,
-          sourceConfig: config,
-          runtimeConfig: config,
-          hash: "reloaded-agent-config",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        });
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(config, "reloaded-agent-config"),
+        );
         const readsBeforeDiscard = (await gateway.getRequests("config.get")).length;
         await reload.click();
         await gateway.waitForRequest("config.get", { after: readsBeforeDiscard });
@@ -178,16 +184,10 @@ suite.define(() => {
           expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
           await expect.poll(() => indicator.textContent()).toContain("Saved");
         } finally {
-          if (captureUiProof) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(
-                proofDir,
-                `agent-config-reload-autosave-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "result"}.png`,
-              ),
-            });
-          }
+          await screenshot(
+            page,
+            `agent-config-reload-autosave-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "result"}.png`,
+          );
         }
       },
     );
@@ -216,34 +216,13 @@ suite.define(() => {
     },
   ])("submits keyed entries and surfaces Gateway validation failures ($name)", async (scenario) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const config = {
-        agents: {
-          entries: {
-            main: {
-              tools: scenario.tools,
-            },
-          },
-        },
-      };
+      const config = { agents: { entries: { main: { tools: scenario.tools } } } };
       const gateway = await installMockGateway(page, {
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "config.get": {
-            config,
-            sourceConfig: config,
-            runtimeConfig: config,
-            hash: "agent-config-hash-1",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "agents.list": agentRoster,
+          "config.get": configResponse(config),
           "tools.catalog": {
             agentId: "main",
             profiles: [{ id: scenario.tools.profile, label: scenario.profileLabel }],
@@ -292,15 +271,7 @@ suite.define(() => {
       const request = await gateway.waitForRequest("config.set");
       const params = requireRecord(request.params);
       const raw = requireRecord(JSON.parse(String(params.raw)));
-      expect(raw).toEqual({
-        agents: {
-          entries: {
-            main: {
-              tools: scenario.expectedTools,
-            },
-          },
-        },
-      });
+      expect(raw).toEqual({ agents: { entries: { main: { tools: scenario.expectedTools } } } });
       expect(requireRecord(raw.agents)).not.toHaveProperty("list");
       expect(params.baseHash).toBe("agent-config-hash-1");
 
@@ -310,13 +281,7 @@ suite.define(() => {
       });
       await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
 
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "01-save-error.png"),
-        });
-      }
+      await screenshot(page, "01-save-error.png");
     });
   });
 
@@ -350,21 +315,8 @@ suite.define(() => {
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "config.get": {
-            config,
-            sourceConfig: config,
-            runtimeConfig: config,
-            hash: "agent-config-hash-1",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "agents.list": agentRoster,
+          "config.get": configResponse(config),
           "skills.status": {
             agentId: "main",
             agentSkillFilter: ["github"],

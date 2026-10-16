@@ -1,6 +1,6 @@
 // Control UI tests cover Appearance override provenance and restoring product defaults.
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -10,7 +10,7 @@ import {
   createControlUiMockBootstrapConfig,
   installMockGateway,
   waitForControlUiSettingsTakeover,
-  type MockGatewayRequest,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTweakcnThemePayload } from "../test-helpers/custom-theme.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -28,6 +28,124 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
+const pageOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1440 },
+} satisfies Parameters<typeof suite.browser.newContext>[0];
+const contextOptions = {
+  ...pageOptions,
+  colorScheme: "dark",
+  viewport: { height: 1000, width: 1440 },
+} satisfies Parameters<typeof suite.browser.newContext>[0];
+
+async function openAppearance(page: Page, gateway: MockGatewayControls) {
+  const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+  expect(response?.status()).toBe(200);
+  await waitForControlUiSettingsTakeover(page);
+  await gateway.waitForRequest("config.get");
+}
+
+function appearanceGateway(
+  page: Page,
+  prefs: Record<string, unknown>,
+  hash: string,
+  options: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    methodResponses: { "config.get": configResponse(prefs, hash), "config.patch": { ok: true } },
+    ...options,
+  });
+}
+
+function seedSettings(context: BrowserContext, values: Record<string, unknown>, seedOnce = false) {
+  return context.addInitScript(
+    ({ key, settings, once }) => {
+      const seedKey = "openclaw.control-ui-e2e.appearance-defaults-seeded";
+      if (once && sessionStorage.getItem(seedKey) === "1") {
+        return;
+      }
+      if (once) {
+        sessionStorage.setItem(seedKey, "1");
+      }
+      localStorage.setItem(key, JSON.stringify(settings));
+    },
+    {
+      key: settingsStorageKey(),
+      settings: { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), ...values },
+      once: seedOnce,
+    },
+  );
+}
+
+async function delayedThemeRoute(page: Page) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
+    await gate;
+    await route.fulfill({ json: createTweakcnThemePayload() });
+  });
+  return release;
+}
+
+function expectAttribute(locator: Locator, name: string, value: string) {
+  return expect.poll(() => locator.getAttribute(name)).toBe(value);
+}
+
+function expectPressed(locator: Locator, value = "true") {
+  return expectAttribute(locator, "aria-pressed", value);
+}
+
+function expectText(locator: Locator, text: string) {
+  return expect.poll(() => locator.textContent()).toContain(text);
+}
+
+function themeCard(page: Page, theme: string) {
+  return page.locator(`#settings-appearance-theme .settings-theme-card--${theme}`);
+}
+
+async function expectDefaults(page: Page) {
+  await expect
+    .poll(() => pickerValue(settingsRow(page, "Language").locator("openclaw-select-picker")))
+    .toBe("system");
+  await expectPressed(themeCard(page, "claw"));
+  await expect
+    .poll(() =>
+      settingsRow(page, "Color mode").getByRole("radiogroup").locator("input:checked").inputValue(),
+    )
+    .toBe("system");
+  await expectPressed(
+    page.locator("#settings-appearance-text-size .settings-text-scale__btn", { hasText: "100%" }),
+  );
+}
+
+async function expectAccent(page: Page, accent: string, foreground: string) {
+  await expect
+    .poll(() => readAccentPresentation(page))
+    .toEqual({
+      accent,
+      accentForeground: foreground,
+      primaryForeground: foreground,
+    });
+}
+
+async function rejectPreference(
+  gateway: MockGatewayControls,
+  click: () => Promise<unknown>,
+  count: number,
+  prefs: Record<string, unknown>,
+) {
+  await gateway.deferNext("config.patch");
+  await click();
+  await waitForRequestCount(gateway, "config.patch", count);
+  expect(patchPrefs((await gateway.getRequests("config.patch"))[count - 1]!)).toEqual(prefs);
+  await gateway.rejectDeferred("config.patch", {
+    code: "INVALID_REQUEST",
+    message: "mock validation failure",
+  });
+}
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let uiProofArtifactDir: string;
@@ -116,47 +234,18 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
 
 suite.define(() => {
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
-    await context.addInitScript(
-      ({ gatewayUrl, key }) => {
-        const seedKey = "openclaw.control-ui-e2e.appearance-defaults-seeded";
-        if (sessionStorage.getItem(seedKey) === "1") {
-          return;
-        }
-        sessionStorage.setItem(seedKey, "1");
-        localStorage.setItem(
-          key,
-          JSON.stringify({
-            gatewayUrl,
-            textScale: 110,
-          }),
-        );
-      },
-      { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), key: settingsStorageKey() },
-    );
+    const context = await suite.browser.newContext(contextOptions);
+    await seedSettings(context, { textScale: 110 }, true);
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
       locale: "en",
       theme: "knot",
       themeMode: "dark",
     };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": configResponse(initialPrefs, "appearance-defaults-1"),
-        "config.patch": { ok: true },
-      },
-    });
+    const gateway = await appearanceGateway(page, initialPrefs, "appearance-defaults-1");
 
     try {
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
-      await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
       const languageRow = settingsRow(page, "Language");
       const themeSection = page.locator("#settings-appearance-theme");
@@ -166,17 +255,11 @@ suite.define(() => {
       const colorModeGroup = colorModeRow.getByRole("radiogroup");
 
       await expect.poll(() => pickerValue(languageSelect)).toBe("en");
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectPressed(themeCard(page, "knot"));
       await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
-      await expect
-        .poll(() =>
-          textSizeSection
-            .locator(".settings-text-scale__btn", { hasText: "110%" })
-            .getAttribute("aria-pressed"),
-        )
-        .toBe("true");
+      await expectPressed(
+        textSizeSection.locator(".settings-text-scale__btn", { hasText: "110%" }),
+      );
       await expect.poll(() => languageRow.textContent()).toContain("Default: System");
       await expect.poll(() => themeSection.textContent()).toContain("Default: Claw");
       await expect.poll(() => colorModeRow.textContent()).toContain("Default: System");
@@ -199,11 +282,7 @@ suite.define(() => {
       const withoutTheme: Record<string, unknown> = { ...withoutLocale, accent: "theme" };
       delete withoutTheme.theme;
       await resetSyncedPreference({
-        click: () =>
-          themeSection
-            .locator(".settings-theme-card--claw")
-            .click()
-            .then(() => undefined),
+        click: () => themeCard(page, "claw").click(),
         expectedKey: "theme",
         expectedPrefs: { theme: null, accent: "theme" },
         gateway,
@@ -214,11 +293,7 @@ suite.define(() => {
       const withoutThemeMode = { ...withoutTheme };
       delete withoutThemeMode.themeMode;
       await resetSyncedPreference({
-        click: () =>
-          colorModeRow
-            .getByRole("radio", { name: "System", exact: true })
-            .click()
-            .then(() => undefined),
+        click: () => colorModeRow.getByRole("radio", { name: "System", exact: true }).click(),
         expectedKey: "themeMode",
         gateway,
         hash: "appearance-defaults-4",
@@ -228,54 +303,16 @@ suite.define(() => {
       await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
-      await expect.poll(() => pickerValue(languageSelect)).toBe("system");
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
-        .toBe("true");
-      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("system");
-      await expect
-        .poll(() =>
-          textSizeSection
-            .locator(".settings-text-scale__btn", { hasText: "100%" })
-            .getAttribute("aria-pressed"),
-        )
-        .toBe("true");
+      await expectDefaults(page);
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
 
-      const reloadedLanguageRow = settingsRow(page, "Language");
-      const reloadedThemeSection = page.locator("#settings-appearance-theme");
-      const reloadedColorModeRow = settingsRow(page, "Color mode");
-      const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
-
-      await expect
-        .poll(() => pickerValue(reloadedLanguageRow.locator("openclaw-select-picker")))
-        .toBe("system");
-      await expect
-        .poll(() =>
-          reloadedThemeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      await expect
-        .poll(() =>
-          reloadedColorModeRow.getByRole("radiogroup").locator("input:checked").inputValue(),
-        )
-        .toBe("system");
-      await expect
-        .poll(() =>
-          reloadedTextSizeSection
-            .locator(".settings-text-scale__btn", { hasText: "100%" })
-            .getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      await expect.poll(() => reloadedLanguageRow.textContent()).not.toContain("Using default:");
-      await expect.poll(() => reloadedThemeSection.textContent()).not.toContain("Using default:");
-      await expect.poll(() => reloadedColorModeRow.textContent()).not.toContain("Using default:");
-      await expect
-        .poll(() => reloadedTextSizeSection.textContent())
-        .not.toContain("Using default:");
+      await expectDefaults(page);
+      for (const section of [languageRow, themeSection, colorModeRow, textSizeSection]) {
+        await expect.poll(() => section.textContent()).not.toContain("Using default:");
+      }
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
@@ -292,30 +329,12 @@ suite.define(() => {
     const mintAccent = "#52c99a";
     const customAccent = "#243b6b";
     const operatorAccent = "#123456";
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
-    await context.addInitScript(
-      ({ accent, gatewayUrl, key }) => {
-        localStorage.setItem(key, JSON.stringify({ accent, gatewayUrl }));
-      },
-      {
-        accent: localAccent,
-        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-        key: settingsStorageKey(),
-      },
-    );
+    const context = await suite.browser.newContext(contextOptions);
+    await seedSettings(context, { accent: localAccent });
     const page = await context.newPage();
     const initialPrefs = { accent: serverAccent, theme: "knot" };
-    const gateway = await installMockGateway(page, {
+    const gateway = await appearanceGateway(page, initialPrefs, "appearance-accent-1", {
       deferredMethods: ["config.get"],
-      methodResponses: {
-        "config.get": configResponse(initialPrefs, "appearance-accent-1"),
-        "config.patch": { ok: true },
-      },
     });
     await page.route("**/control-ui-config.json", (route) =>
       route.fulfill({
@@ -327,13 +346,7 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
-      await expect
-        .poll(() => readAccentPresentation(page))
-        .toEqual({
-          accent: localAccent,
-          accentForeground: "#000000",
-          primaryForeground: "#000000",
-        });
+      await expectAccent(page, localAccent, "#000000");
 
       await gateway.resolveDeferred(
         "config.get",
@@ -342,11 +355,7 @@ suite.define(() => {
       await waitForControlUiSettingsTakeover(page);
       const accentSection = page.locator("#settings-appearance-accent");
       const mintPreset = accentSection.locator('[data-accent-preset="mint"]');
-      await expect
-        .poll(() =>
-          accentSection.locator('[data-accent-preset="blue"]').getAttribute("aria-pressed"),
-        )
-        .toBe("true");
+      await expectPressed(accentSection.locator('[data-accent-preset="blue"]'));
       await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: serverAccent });
       await accentSection.scrollIntoViewIfNeeded();
       await captureViewport(page, "08-accent-server-preference.png");
@@ -360,14 +369,8 @@ suite.define(() => {
       expect(patchPrefs((await gateway.getRequests("config.patch"))[0]!)).toEqual({
         accent: mintAccent,
       });
-      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("true");
-      await expect
-        .poll(() => readAccentPresentation(page))
-        .toEqual({
-          accent: mintAccent,
-          accentForeground: "#000000",
-          primaryForeground: "#000000",
-        });
+      await expectPressed(mintPreset);
+      await expectAccent(page, mintAccent, "#000000");
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: mintAccent });
       // Dark Knot primary buttons hover on --primary-hover; it must track the
       // selected accent (mint mixed 18% toward white), not the theme default.
@@ -382,11 +385,7 @@ suite.define(() => {
       await captureViewport(page, "09-accent-mint-selected.png");
 
       await resetSyncedPreference({
-        click: () =>
-          page
-            .locator("#settings-appearance-theme .settings-theme-card--claw")
-            .click()
-            .then(() => undefined),
+        click: () => themeCard(page, "claw").click(),
         expectedKey: "theme",
         expectedPrefs: { theme: null, accent: "theme" },
         gateway,
@@ -396,7 +395,7 @@ suite.define(() => {
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
       await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: "#ff5c5c" });
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: "theme" });
-      await expect.poll(() => mintPreset.getAttribute("aria-pressed")).toBe("false");
+      await expectPressed(mintPreset, "false");
 
       await gateway.setMethodResponse(
         "config.get",
@@ -407,38 +406,18 @@ suite.define(() => {
       expect(patchPrefs((await gateway.getRequests("config.patch"))[2]!)).toEqual({
         accent: customAccent,
       });
-      await expect
-        .poll(() => readAccentPresentation(page))
-        .toEqual({
-          accent: customAccent,
-          accentForeground: "#ffffff",
-          primaryForeground: "#ffffff",
-        });
+      await expectAccent(page, customAccent, "#ffffff");
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: customAccent });
 
       await resetSyncedPreference({
-        click: () =>
-          accentSection
-            .locator('[data-accent-preset="default"]')
-            .click()
-            .then(() => undefined),
+        click: () => accentSection.locator('[data-accent-preset="default"]').click(),
         expectedKey: "accent",
         gateway,
         hash: "appearance-accent-5",
         remainingPrefs: {},
       });
-      await expect
-        .poll(() =>
-          accentSection.locator('[data-accent-preset="default"]').getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      await expect
-        .poll(() => readAccentPresentation(page))
-        .toEqual({
-          accent: operatorAccent,
-          accentForeground: "#ffffff",
-          primaryForeground: "#ffffff",
-        });
+      await expectPressed(accentSection.locator('[data-accent-preset="default"]'));
+      await expectAccent(page, operatorAccent, "#ffffff");
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("accent");
       await captureViewport(page, "10-accent-operator-default-restored.png");
     } finally {
@@ -447,122 +426,70 @@ suite.define(() => {
   });
 
   it("keeps rejected edits browser-local and resets them without another server write", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const initialPrefs = {
-          locale: "en",
-          theme: "claw",
-          chatFollowUpMode: "queue",
-        };
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse(initialPrefs, "appearance-rejected-1"),
-          },
-        });
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const initialPrefs = {
+        locale: "en",
+        theme: "claw",
+        chatFollowUpMode: "queue",
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configResponse(initialPrefs, "appearance-rejected-1"),
+        },
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        expect(response?.status()).toBe(200);
-        await waitForControlUiSettingsTakeover(page);
-        await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
-        const languageRow = page.locator("#settings-language .settings-row");
-        const languageSelect = languageRow.locator("openclaw-select-picker");
-        const themeSection = page.locator("#settings-appearance-theme");
-        const themeDescription = themeSection.locator(":scope > .settings-section__desc");
-        const followUpSelect = page.locator("[data-settings-follow-up-mode]");
-        const followUpRow = page.locator(".settings-row").filter({ has: followUpSelect });
+      const languageRow = page.locator("#settings-language .settings-row");
+      const languageSelect = languageRow.locator("openclaw-select-picker");
+      const themeSection = page.locator("#settings-appearance-theme");
+      const themeDescription = themeSection.locator(":scope > .settings-section__desc");
+      const followUpSelect = page.locator("[data-settings-follow-up-mode]");
+      const followUpRow = page.locator(".settings-row").filter({ has: followUpSelect });
 
-        await expect.poll(() => pickerValue(languageSelect)).toBe("en");
-        await expect
-          .poll(() =>
-            themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
-          )
-          .toBe("true");
-        await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
+      await expect.poll(() => pickerValue(languageSelect)).toBe("en");
+      await expectPressed(themeCard(page, "claw"));
+      await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
 
-        await gateway.deferNext("config.patch");
-        await themeSection.locator(".settings-theme-card--knot").click();
-        await waitForRequestCount(gateway, "config.patch", 1);
-        expect(
-          patchPrefs((await gateway.getRequests("config.patch"))[0] as MockGatewayRequest),
-        ).toEqual({ theme: "knot", accent: "theme" });
-        await gateway.rejectDeferred("config.patch", {
-          code: "INVALID_REQUEST",
-          message: "mock validation failure",
-        });
+      await rejectPreference(gateway, () => themeCard(page, "knot").click(), 1, {
+        theme: "knot",
+        accent: "theme",
+      });
 
-        await expect
-          .poll(() =>
-            themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"),
-          )
-          .toBe("true");
-        await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
-        await expect
-          .poll(() => themeDescription.textContent())
-          .toContain("Stored in this browser only");
+      await expectPressed(themeCard(page, "knot"));
+      await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
+      await expectText(themeDescription, "Stored in this browser only");
 
-        await gateway.deferNext("config.patch");
-        await selectPickerValue(languageSelect, "fr");
-        await waitForRequestCount(gateway, "config.patch", 2);
-        expect(
-          patchPrefs((await gateway.getRequests("config.patch"))[1] as MockGatewayRequest),
-        ).toEqual({ locale: "fr" });
-        await gateway.rejectDeferred("config.patch", {
-          code: "INVALID_REQUEST",
-          message: "mock validation failure",
-        });
+      await rejectPreference(gateway, () => selectPickerValue(languageSelect, "fr"), 2, {
+        locale: "fr",
+      });
 
-        await expect.poll(() => pickerValue(languageSelect)).toBe("fr");
-        await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
-        await expect
-          .poll(() => languageRow.textContent())
-          .toContain("Stocké uniquement dans ce navigateur");
+      await expect.poll(() => pickerValue(languageSelect)).toBe("fr");
+      await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
+      await expectText(languageRow, "Stocké uniquement dans ce navigateur");
 
-        await gateway.deferNext("config.patch");
-        await followUpSelect.selectOption("steer");
-        await waitForRequestCount(gateway, "config.patch", 3);
-        expect(
-          patchPrefs((await gateway.getRequests("config.patch"))[2] as MockGatewayRequest),
-        ).toEqual({ chatFollowUpMode: "steer" });
-        await gateway.rejectDeferred("config.patch", {
-          code: "INVALID_REQUEST",
-          message: "mock validation failure",
-        });
+      await rejectPreference(gateway, () => followUpSelect.selectOption("steer"), 3, {
+        chatFollowUpMode: "steer",
+      });
 
-        await expect.poll(() => followUpSelect.inputValue()).toBe("steer");
-        await expect
-          .poll(() => followUpRow.textContent())
-          .toContain("Stocké uniquement dans ce navigateur");
+      await expect.poll(() => followUpSelect.inputValue()).toBe("steer");
+      await expectText(followUpRow, "Stocké uniquement dans ce navigateur");
 
-        await themeSection.locator(".settings-theme-card--claw").click();
-        await selectPickerValue(languageSelect, "system");
-        await followUpRow.locator("button.btn--sm").click();
+      await themeSection.locator(".settings-theme-card--claw").click();
+      await selectPickerValue(languageSelect, "system");
+      await followUpRow.locator("button.btn--sm").click();
 
-        await expect
-          .poll(() =>
-            themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
-          )
-          .toBe("true");
-        await expect.poll(() => pickerValue(languageSelect)).toBe("en");
-        await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
-        await expect.poll(() => page.locator("html").getAttribute("lang")).toBe("en");
-        await page.waitForTimeout(100);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(3);
-      },
-    );
+      await expectPressed(themeCard(page, "claw"));
+      await expect.poll(() => pickerValue(languageSelect)).toBe("en");
+      await expect.poll(() => followUpSelect.inputValue()).toBe("queue");
+      await expectAttribute(page.locator("html"), "lang", "en");
+      await page.waitForTimeout(100);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(3);
+    });
   });
 
   it("keeps every read-only preference surface browser-local across reload", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.browser.newContext(pageOptions);
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       operatorScopes: ["operator.read"],
@@ -572,40 +499,27 @@ suite.define(() => {
     });
 
     try {
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
-      await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
       const themeSection = page.locator("#settings-appearance-theme");
       const themeDescription = themeSection.locator(":scope > .settings-section__desc");
       await themeSection.locator(".settings-theme-card--claw").click();
 
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
-        .toBe("true");
-      await expect
-        .poll(() => themeDescription.textContent())
-        .toContain("Stored in this browser only");
+      await expectPressed(themeCard(page, "claw"));
+      await expectText(themeDescription, "Stored in this browser only");
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await page.reload();
       await waitForControlUiSettingsTakeover(page);
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
-        .toBe("true");
-      await expect
-        .poll(() => themeDescription.textContent())
-        .toContain("Stored in this browser only");
+      await expectPressed(themeCard(page, "claw"));
+      await expectText(themeDescription, "Stored in this browser only");
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await themeSection.locator(".settings-theme-card--knot").click();
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectPressed(themeCard(page, "knot"));
       await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
       await expect
         .poll(() => themeDescription.textContent())
@@ -627,7 +541,7 @@ suite.define(() => {
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
-      await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
+      await expectAttribute(reasoning, "aria-checked", "false");
 
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
@@ -684,80 +598,60 @@ suite.define(() => {
   });
 
   it("announces a failed custom-theme import, then persists a successful retry across reload", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse({}, "custom-theme-invalid-1"),
-            "config.patch": { ok: true },
-          },
-        });
-        await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
-          await route.fulfill({ status: 503 });
-        });
-        let successfulImports = 0;
-        await page.route("https://tweakcn.com/r/themes/retry-theme", async (route) => {
-          successfulImports += 1;
-          await route.fulfill({ json: createTweakcnThemePayload() });
-        });
+    await suite.withPage({ ...pageOptions, colorScheme: "dark" }, async ({ page }) => {
+      const gateway = await appearanceGateway(page, {}, "custom-theme-invalid-1");
+      await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
+        await route.fulfill({ status: 503 });
+      });
+      let successfulImports = 0;
+      await page.route("https://tweakcn.com/r/themes/retry-theme", async (route) => {
+        successfulImports += 1;
+        await route.fulfill({ json: createTweakcnThemePayload() });
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        expect(response?.status()).toBe(200);
-        await waitForControlUiSettingsTakeover(page);
-        await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
-        await page.locator(".settings-theme-card--custom").click();
-        const importer = page.locator(".settings-theme-import");
-        await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
-        await importer.locator("button.primary").click();
+      await page.locator(".settings-theme-card--custom").click();
+      const importer = page.locator(".settings-theme-import");
+      await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
+      await importer.locator("button.primary").click();
 
-        await expect
-          .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
-          .toBe("tweakcn import failed (503).");
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await captureViewport(page, "07-custom-theme-import-error-announced.png");
+      await expect
+        .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
+        .toBe("tweakcn import failed (503).");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await captureViewport(page, "07-custom-theme-import-error-announced.png");
 
-        await gateway.setMethodResponse(
-          "config.get",
-          configResponse({ theme: "custom", accent: "theme" }, "custom-theme-imported-2"),
-        );
-        await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
-        await importer.locator("button.primary").click();
-        await expect.poll(() => importer.getByRole("status").textContent()).toContain("Imported");
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
-        const importedSettings = await readPersistedSettings(page);
-        expect(importedSettings).toMatchObject({
-          customTheme: { themeId: "retry-theme", label: "Light Green" },
-          theme: "custom",
-        });
-        const importedAccent = await readAccentPresentation(page);
-        expect(importedAccent.accent).toBe(createTweakcnThemePayload().cssVars.dark.accent);
-        await waitForRequestCount(gateway, "config.patch", 1);
-        const [themePatch] = await gateway.getRequests("config.patch");
-        expect(patchPrefs(themePatch!)).toEqual({ theme: "custom", accent: "theme" });
-        await captureViewport(page, "08-custom-theme-imported.png");
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse({ theme: "custom", accent: "theme" }, "custom-theme-imported-2"),
+      );
+      await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
+      await importer.locator("button.primary").click();
+      await expectText(importer.getByRole("status"), "Imported");
+      await expectAttribute(page.locator("html"), "data-theme", "custom");
+      const importedSettings = await readPersistedSettings(page);
+      expect(importedSettings).toMatchObject({
+        customTheme: { themeId: "retry-theme", label: "Light Green" },
+        theme: "custom",
+      });
+      const importedAccent = await readAccentPresentation(page);
+      expect(importedAccent.accent).toBe(createTweakcnThemePayload().cssVars.dark.accent);
+      await waitForRequestCount(gateway, "config.patch", 1);
+      const [themePatch] = await gateway.getRequests("config.patch");
+      expect(patchPrefs(themePatch!)).toEqual({ theme: "custom", accent: "theme" });
+      await captureViewport(page, "08-custom-theme-imported.png");
 
-        await page.reload();
-        await waitForControlUiSettingsTakeover(page);
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
-        await expect
-          .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
-          .toContain("Light Green");
-        expect((await readPersistedSettings(page)).customTheme).toEqual(
-          importedSettings.customTheme,
-        );
-        expect(await readAccentPresentation(page)).toEqual(importedAccent);
-        expect(successfulImports).toBe(1);
-        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await captureViewport(page, "09-custom-theme-reloaded.png");
-      },
-    );
+      await page.reload();
+      await waitForControlUiSettingsTakeover(page);
+      await expectAttribute(page.locator("html"), "data-theme", "custom");
+      await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
+      expect((await readPersistedSettings(page)).customTheme).toEqual(importedSettings.customTheme);
+      expect(await readAccentPresentation(page)).toEqual(importedAccent);
+      expect(successfulImports).toBe(1);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await captureViewport(page, "09-custom-theme-reloaded.png");
+    });
   });
 
   it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
@@ -769,59 +663,22 @@ suite.define(() => {
           { headers: { "content-type": "application/json" }, status: 200 },
         ),
     );
-    const replacementPayload = createTweakcnThemePayload();
-    let releaseReplacement!: () => void;
-    const replacementGate = new Promise<void>((resolve) => {
-      releaseReplacement = resolve;
-    });
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
-    await context.addInitScript(
-      ({ gatewayUrl, key, theme }) => {
-        localStorage.setItem(
-          key,
-          JSON.stringify({
-            customTheme: theme,
-            gatewayUrl,
-            theme: "custom",
-          }),
-        );
-      },
-      {
-        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-        key: settingsStorageKey(),
-        theme: existingTheme,
-      },
-    );
+    const context = await suite.browser.newContext(contextOptions);
+    await seedSettings(context, { customTheme: existingTheme, theme: "custom" });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": configResponse({}, "custom-theme-race-1"),
-        "config.patch": { ok: true },
-      },
-    });
-    await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
-      await replacementGate;
-      await route.fulfill({ json: replacementPayload });
-    });
+    const gateway = await appearanceGateway(page, {}, "custom-theme-race-1");
+    const releaseReplacement = await delayedThemeRoute(page);
 
     try {
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
-      await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
-      const themeSection = page.locator("#settings-appearance-theme");
       const importer = page.locator(".settings-theme-import");
       const importField = importer.locator("input");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
-      await expect
-        .poll(() => importer.locator(".settings-theme-import__meta-value").textContent())
-        .toContain("Existing Test Theme");
+      await expectAttribute(page.locator("html"), "data-theme", "custom");
+      await expectText(
+        importer.locator(".settings-theme-import__meta-value"),
+        "Existing Test Theme",
+      );
       const beforeReplace = await readThemeImportRaceState(page);
       await captureViewport(page, "04-custom-theme-before-replace.png");
 
@@ -831,9 +688,7 @@ suite.define(() => {
       await expect.poll(() => importer.locator("button.primary").isDisabled()).toBe(true);
       await importer.locator("button.danger").click();
 
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectPressed(themeCard(page, "claw"));
       await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
       const afterClear = await readThemeImportRaceState(page);
       await captureViewport(page, "05-custom-theme-cleared-with-replace-pending.png");
@@ -850,9 +705,7 @@ suite.define(() => {
         })
         .toEqual({ customTheme: undefined, theme: "claw" });
       await expect.poll(() => importer.locator(".settings-theme-import__meta").count()).toBe(0);
-      await expect
-        .poll(() => importer.locator(".settings-theme-import__message").textContent())
-        .toContain("removed");
+      await expectText(importer.locator(".settings-theme-import__message"), "removed");
       await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       const afterDelayedResponse = await readThemeImportRaceState(page);
       expect(beforeReplace).toMatchObject({
@@ -892,37 +745,15 @@ suite.define(() => {
   });
 
   it("keeps a newer server-applied theme authoritative over a delayed import", async () => {
-    const replacementPayload = createTweakcnThemePayload();
-    let releaseImport!: () => void;
-    const importGate = new Promise<void>((resolve) => {
-      releaseImport = resolve;
-    });
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
+    const context = await suite.browser.newContext(contextOptions);
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": configResponse({ theme: "claw" }, "custom-theme-server-race-1"),
-        "config.patch": { ok: true },
-      },
-    });
-    await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
-      await importGate;
-      await route.fulfill({ json: replacementPayload });
-    });
+    const gateway = await appearanceGateway(page, { theme: "claw" }, "custom-theme-server-race-1");
+    const releaseImport = await delayedThemeRoute(page);
 
     try {
-      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      expect(response?.status()).toBe(200);
-      await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("config.get");
+      await openAppearance(page, gateway);
 
-      const themeSection = page.locator("#settings-appearance-theme");
-      await themeSection.locator(".settings-theme-card--custom").click();
+      await themeCard(page, "custom").click();
       const importer = page.locator(".settings-theme-import");
       await importer.locator("input").fill("replacement");
       await importer.locator("button.primary").click();
@@ -940,9 +771,7 @@ suite.define(() => {
         ts: Date.now(),
       });
       await waitForRequestCount(gateway, "config.get", configGetCount + 1);
-      await expect
-        .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectPressed(themeCard(page, "knot"));
 
       releaseImport();
       await replacementResponse;
@@ -955,9 +784,7 @@ suite.define(() => {
           };
         })
         .toEqual({ hasCustomTheme: true, theme: "knot" });
-      await expect
-        .poll(() => importer.locator(".settings-theme-import__message").textContent())
-        .toContain("Imported");
+      await expectText(importer.locator(".settings-theme-import__message"), "Imported");
       await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {

@@ -184,6 +184,12 @@ catalogSuite.define(() => {
       commands.push({ args, ...result });
       expect(result.code, result.stderr).toBe(0);
     };
+    const readConfig = async (key: string) => {
+      const result = await owner.cli(["config", "get", key, "--json"]);
+      commands.push(result);
+      expect(result.code, result.stderr || result.stdout).toBe(0);
+      return JSON.parse(result.stdout);
+    };
     try {
       const initialInventory = await refreshInventory();
       expect(initialInventory.code, initialInventory.stderr).toBe(0);
@@ -196,6 +202,11 @@ catalogSuite.define(() => {
           ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
+          const capture = async (name: string) => {
+            if (captureEnabled) {
+              await page.screenshot({ path: path.join(catalogSuite.artifactDir, `${name}.png`) });
+            }
+          };
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
             const server = socket.connectToServer();
             socket.onMessage((message) => {
@@ -255,73 +266,49 @@ catalogSuite.define(() => {
           const picker = editor.locator(
             'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
           );
+          const option = (id: string) => picker.locator(`[role="option"][data-value="${id}"]`);
+          const waitForOption = (id: string) => expect.poll(() => option(id).count()).toBe(1);
           await openPicker(picker);
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
-            .toBe(1);
+          await waitForOption("fixture/retiring");
           const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
           await identityName.fill("Keep this identity draft");
           expect(await identityName.inputValue()).toBe("Keep this identity draft");
           await openPicker(picker);
-          await picker.locator('[role="option"][data-value="fixture/selected"]').click();
+          await option("fixture/selected").click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
           await fallbackInput.press("Enter");
           const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
-          await expect
-            .poll(async () => {
-              const result = await owner.cli([
-                "config",
-                "get",
-                "agents.entries.main.model",
-                "--json",
-              ]);
-              expect(result.code, result.stderr || result.stdout).toBe(0);
-              return JSON.parse(result.stdout);
-            })
-            .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
+          const selectedModel = { primary: "fixture/selected", fallbacks: ["fixture/anchor"] };
+          await expect.poll(() => readConfig("agents.entries.main.model")).toEqual(selectedModel);
           const writesBeforePublication = [...mutations];
           // Opening refreshes the catalog; verify publication updates closed choices first.
           const choices = () =>
             picker.evaluate((element) =>
               element
                 .closest("openclaw-select-picker")
-                ?.params.options.map((option) => option.value),
+                ?.params.options.map((choice) => choice.value),
             );
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
-          }
+          await capture("initial");
 
           await publish("published");
           await expect.poll(choices).toContain("fixture/published");
           await openPicker(picker);
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
-            .toBe(1);
-          expect(
-            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
-          ).toBe(0);
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
-          }
+          await waitForOption("fixture/published");
+          expect(await option("fixture/retiring").count()).toBe(0);
+          await capture("published");
 
           inventoryModel = "inventory-after";
           const refreshed = await refreshInventory();
           commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
           expect(refreshed.code, refreshed.stderr).toBe(0);
           expect(refreshed.stdout).toContain("inventory-after");
-          await expect
-            .poll(() =>
-              picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
-            )
-            .toBe(1);
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-before"]').count(),
-          ).toBe(0);
+          await waitForOption("ollama/inventory-after");
+          expect(await option("ollama/inventory-before").count()).toBe(0);
 
           holdCatalog = true;
           inventoryModel = "inventory-held";
@@ -334,22 +321,10 @@ catalogSuite.define(() => {
           for (const release of heldCatalogs.splice(0)) {
             release();
           }
-          await expect
-            .poll(() =>
-              picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
-            )
-            .toBe(1);
-          if (captureEnabled) {
-            await page.screenshot({
-              path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
-            });
-          }
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
-          ).toBe(1);
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
-          ).toBe(0);
+          await waitForOption("ollama/inventory-latest");
+          await capture("latest-publication");
+          expect(await option("ollama/inventory-latest").count()).toBe(1);
+          expect(await option("ollama/inventory-held").count()).toBe(0);
 
           rejectCatalog = true;
           // Refresh the same catalog owner; a config write retires its display facts.
@@ -361,22 +336,14 @@ catalogSuite.define(() => {
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });
           await error.waitFor({ state: "visible" });
-          expect(
-            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
-          ).toBe(1);
-          if (captureEnabled) {
-            await page.screenshot({
-              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
-            });
-          }
+          expect(await option("fixture/published").count()).toBe(1);
+          await capture("read-failure");
 
           rejectCatalog = false;
           await publish("recovered");
           await expect.poll(choices).toContain("fixture/recovered");
           await openPicker(picker);
-          await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
-            .toBe(1);
+          await waitForOption("fixture/recovered");
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
           expect(await identityName.inputValue()).toBe("Keep this identity draft");
@@ -386,25 +353,9 @@ catalogSuite.define(() => {
               .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
           ).toContain("fixture/anchor");
           expect(mutations).toEqual(writesBeforePublication);
-          const persistedModel = await owner.cli([
-            "config",
-            "get",
-            "agents.entries.main.model",
-            "--json",
-          ]);
-          commands.push(persistedModel);
-          expect(persistedModel.code, persistedModel.stderr).toBe(0);
-          expect(JSON.parse(persistedModel.stdout)).toEqual({
-            primary: "fixture/selected",
-            fallbacks: ["fixture/anchor"],
-          });
-          const persisted = await owner.cli(["config", "get", "agents.defaults.model", "--json"]);
-          commands.push(persisted);
-          expect(persisted.code, persisted.stderr).toBe(0);
-          expect(JSON.parse(persisted.stdout)).toBe("fixture/anchor");
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
-          }
+          expect(await readConfig("agents.entries.main.model")).toEqual(selectedModel);
+          expect(await readConfig("agents.defaults.model")).toBe("fixture/anchor");
+          await capture("recovered");
         },
       );
     } finally {
@@ -518,6 +469,14 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
               .click();
             const editor = page.locator(".agent-file-textarea");
+            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
+            const conflict = page.locator(".callout.danger");
+            const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
+            const rejectStaleSave = async (authoritative: string) => {
+              await save.click();
+              await expect.poll(() => conflict.isVisible()).toBe(true);
+              expect(await readFile(agentsFile, "utf8")).toBe(authoritative);
+            };
             await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
 
             await selectAgentFileWorkspace(page, "writer");
@@ -526,27 +485,20 @@ suite.define(() => {
             await selectAgentFileWorkspace(page, "main");
             await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
             await editor.fill("# Saved through real Gateway\n");
-            const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
             await save.click();
             await expect.poll(() => save.isDisabled()).toBe(true);
             await expect
-              .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
+              .poll(() => readFile(agentsFile, "utf8"))
               .toBe("# Saved through real Gateway\n");
             await captureAgentFileScreenshot(page, "07-real-gateway-main-save.png");
 
-            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
             const appended = "# Saved through real Gateway\n- agent appended a memory\n";
             await writeFile(agentsFile, appended, "utf8");
             await editor.fill("# Operator draft that never saw the memory\n");
-            await save.click();
-            const conflict = page.locator(".callout.danger");
-            await expect.poll(() => conflict.isVisible()).toBe(true);
-            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+            await rejectStaleSave(appended);
             await captureAgentFileScreenshot(page, "08-real-gateway-stale-save-refused.png");
 
-            await save.click();
-            await expect.poll(() => conflict.isVisible()).toBe(true);
-            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+            await rejectStaleSave(appended);
 
             await conflict.getByRole("button", { name: "Overwrite" }).click();
             await expect
@@ -557,9 +509,7 @@ suite.define(() => {
             const secondAppend = "# Operator draft that never saw the memory\n- second memory\n";
             await writeFile(agentsFile, secondAppend, "utf8");
             await editor.fill("# Another operator draft\n");
-            await save.click();
-            await expect.poll(() => conflict.isVisible()).toBe(true);
-            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await rejectStaleSave(secondAppend);
             await conflict.getByRole("button", { name: "Reload" }).click();
             await expect.poll(() => editor.inputValue()).toBe(secondAppend);
             expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
@@ -574,9 +524,7 @@ suite.define(() => {
               .getByRole("button", { name: "Refresh" })
               .click();
             await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
-            await save.click();
-            await expect.poll(() => conflict.isVisible()).toBe(true);
-            expect(await readFile(agentsFile, "utf8")).toBe(thirdAppend);
+            await rejectStaleSave(thirdAppend);
             await captureAgentFileScreenshot(page, "10-real-gateway-refresh-then-save.png");
 
             await page

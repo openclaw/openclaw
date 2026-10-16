@@ -16,11 +16,11 @@ let page: Page | undefined;
 const activeSessionKey = "agent:main:main";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let proofDir: string;
-beforeEach(() => {
+async function screenshot(currentPage: Page, name: string) {
   if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("approval-flow");
+    await currentPage.screenshot({ path: path.join(proofDir, name) });
   }
-});
+}
 
 function approval(id: string, command: string, createdAtMs: number, sessionKey = activeSessionKey) {
   return {
@@ -40,8 +40,33 @@ function approvalInboxButton(currentPage: Page) {
 function approvalInboxPanel(currentPage: Page) {
   return currentPage.locator("openclaw-sidebar-attention #sidebar-issues-panel");
 }
+async function openChat(
+  options: Parameters<typeof installMockGateway>[1] = {},
+  { home = true, recordVideo = false } = {},
+) {
+  const context = await suite.browser.newContext({
+    viewport: { height: 800, width: 1200 },
+    ...(recordVideo ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1200 } } } : {}),
+  });
+  const currentPage = await context.newPage();
+  page = currentPage;
+  const gateway = await installMockGateway(currentPage, options);
+  const url = home
+    ? controlUiSessionUrl(suite.server.baseUrl, activeSessionKey)
+    : `${suite.server.baseUrl}chat`;
+  await currentPage.goto(url);
+  await gateway.waitForRequest("sessions.list");
+  const request = (...args: Parameters<typeof approval>) =>
+    gateway.emitGatewayEvent("exec.approval.requested", approval(...args));
+  return { currentPage, gateway, request };
+}
 
 suite.define(() => {
+  beforeEach(() => {
+    if (captureUiProof) {
+      proofDir = createControlUiE2eArtifactDir("approval-flow");
+    }
+  });
   afterEach(async () => {
     await page
       ?.context()
@@ -51,18 +76,9 @@ suite.define(() => {
   });
 
   it("keeps a resolve failure scoped to its approval when a newer one arrives", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage, { sessionKey: activeSessionKey });
-
-    await currentPage.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", activeSessionKey));
-    await gateway.waitForRequest("sessions.list");
+    const { currentPage, gateway, request } = await openChat({ sessionKey: activeSessionKey });
     await gateway.deferNext("exec.approval.resolve");
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-active", "echo active", 1_000),
-    );
+    await request("approval-active", "echo active", 1_000);
     const activeCard = currentPage.locator(
       '.chat-inline-approval [data-approval-id="approval-active"]',
     );
@@ -75,10 +91,7 @@ suite.define(() => {
     ).toBe(true);
     await activeCard.getByRole("button", { name: "Allow once" }).click();
 
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-newer", "echo newer", 2_000),
-    );
+    await request("approval-newer", "echo newer", 2_000);
     await approvalInboxButton(currentPage).waitFor();
     await gateway.rejectDeferred("exec.approval.resolve", {
       code: "UNAVAILABLE",
@@ -99,39 +112,23 @@ suite.define(() => {
   });
 
   it("keeps approvals passive until the Inbox opens the full queue", async () => {
-    const context = await suite.browser.newContext({
-      viewport: { height: 800, width: 1200 },
-      ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1200 } } }
-        : {}),
-    });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage, { sessionKey: activeSessionKey });
-
-    await currentPage.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", activeSessionKey));
-    await gateway.waitForRequest("sessions.list");
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-inline", "echo inline", 1_000),
+    const { currentPage, request } = await openChat(
+      { sessionKey: activeSessionKey },
+      { recordVideo: captureUiProof },
     );
+    await request("approval-inline", "echo inline", 1_000);
 
     await currentPage
       .locator('.chat-inline-approval [data-approval-id="approval-inline"]')
       .waitFor();
     expect(await currentPage.locator("openclaw-modal-dialog").count()).toBe(0);
 
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-other", "echo other", 2_000, "agent:main:other"),
-    );
+    await request("approval-other", "echo other", 2_000, "agent:main:other");
 
     await approvalInboxButton(currentPage).waitFor();
     expect(await currentPage.locator("openclaw-modal-dialog").count()).toBe(0);
     expect(await currentPage.getByText("echo other", { exact: true }).count()).toBe(0);
-    if (captureUiProof) {
-      await currentPage.screenshot({ path: path.join(proofDir, "01-passive-attention.png") });
-    }
+    await screenshot(currentPage, "01-passive-attention.png");
 
     await approvalInboxButton(currentPage).click();
     const inboxPanel = approvalInboxPanel(currentPage);
@@ -139,47 +136,38 @@ suite.define(() => {
     await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
     await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
     await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
-    if (captureUiProof) {
-      await currentPage.screenshot({ path: path.join(proofDir, "02-open-queue.png") });
-    }
+    await screenshot(currentPage, "02-open-queue.png");
   });
 
   it("keeps no-auth inline and Inbox approvals readable while blocking decisions", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage, {
+    const { currentPage, request } = await openChat({
       omitConnectHelloAuth: true,
       sessionKey: activeSessionKey,
     });
 
-    await currentPage.goto(controlUiSessionUrl(suite.server?.baseUrl ?? "", activeSessionKey));
-    await gateway.waitForRequest("sessions.list");
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-review-only", "echo review only", 1_000),
-    );
+    await request("approval-review-only", "echo review only", 1_000);
 
     const inlineCard = currentPage.locator(
       '.chat-inline-approval [data-approval-id="approval-review-only"]',
     );
     await inlineCard.waitFor();
     await inlineCard.getByText("echo review only", { exact: true }).waitFor();
-    await inlineCard
-      .getByText("Review only. Sign in with approval access to record a decision.", {
-        exact: true,
-      })
-      .waitFor();
-    const inlineDecisionButtons = inlineCard.locator(".exec-approval-actions button");
-    expect(await inlineDecisionButtons.count()).toBe(3);
-    expect(
-      await inlineDecisionButtons.evaluateAll((buttons) =>
-        buttons.every((button) => (button as HTMLButtonElement).disabled),
-      ),
-    ).toBe(true);
-    if (captureUiProof) {
-      await currentPage.screenshot({ path: path.join(proofDir, "review-only-inline.png") });
-    }
+    const assertReviewOnly = async (card: ReturnType<Page["locator"]>, selector: string) => {
+      await card
+        .getByText("Review only. Sign in with approval access to record a decision.", {
+          exact: true,
+        })
+        .waitFor();
+      const buttons = card.locator(selector);
+      expect(await buttons.count()).toBe(3);
+      expect(
+        await buttons.evaluateAll((items) =>
+          items.every((button) => (button as HTMLButtonElement).disabled),
+        ),
+      ).toBe(true);
+    };
+    await assertReviewOnly(inlineCard, ".exec-approval-actions button");
+    await screenshot(currentPage, "review-only-inline.png");
 
     await approvalInboxButton(currentPage).click();
     const inboxPanel = approvalInboxPanel(currentPage);
@@ -187,32 +175,12 @@ suite.define(() => {
     await expect
       .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
       .toContain("echo review only");
-    await inboxRow
-      .getByText("Review only. Sign in with approval access to record a decision.", {
-        exact: true,
-      })
-      .waitFor();
-    const inboxDecisionButtons = inboxRow.locator(".sidebar-approval-row__actions button");
-    expect(await inboxDecisionButtons.count()).toBe(3);
-    expect(
-      await inboxDecisionButtons.evaluateAll((buttons) =>
-        buttons.every((button) => (button as HTMLButtonElement).disabled),
-      ),
-    ).toBe(true);
-
-    if (captureUiProof) {
-      await currentPage.screenshot({ path: path.join(proofDir, "review-only-inbox.png") });
-    }
+    await assertReviewOnly(inboxRow, ".sidebar-approval-row__actions button");
+    await screenshot(currentPage, "review-only-inbox.png");
   });
 
   it("sends a typed approval command immediately while the active run waits", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage);
-
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await gateway.waitForRequest("sessions.list");
+    const { currentPage, gateway } = await openChat({}, { home: false });
 
     const composer = currentPage.locator(".agent-chat__composer-combobox textarea");
     await composer.fill("run a command that needs approval");
