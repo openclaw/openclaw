@@ -37,7 +37,6 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
-import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
@@ -119,6 +118,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           ).run(`chunk-${index}`, cryptoValue);
         }
         await closeOpenClawStateDatabaseAsync();
+        // Current crypto roots without legacy dedupe rows do not require a migration receipt.
+        await expect(
+          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+        ).resolves.toMatchObject({ phase: "preflight" });
         const retainedEntries = files.map(sqliteEntries);
         // Fresh crypto roots are port-ready; only genuine legacy dedupe rows require repair.
         const legacy = {
@@ -135,7 +138,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'inbound-dedupe', ?, ?, ?)",
           ).run(legacyKey, JSON.stringify(legacy), legacy.ts);
         }
-        await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
+        await expect(doctorDatabasePort({ family: "state", to: "postgres", dryRun: true })).rejects.toThrow(
           "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
         );
         // Complete Doctor's retained-root scan before porting, then keep testing a disabled plugin.
@@ -211,10 +214,10 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     return roots;
   }
 
-  it("ports every retained token/account root and restores matched backups into fresh namespaces", async () => {
+  it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
     await withRoots(async (state, files, config) => {
       const expected = files.map(sqliteEntries);
-      const forward = await doctorDatabasePort({ to: "postgres" });
+      const forward = await doctorDatabasePort({ family: "state", to: "postgres" });
       expect(forward).toMatchObject({ engine: "postgres" });
       const physical = await postgresRoots(files);
       expect(physical.map((root) => root.entries)).toEqual(expected);
@@ -243,7 +246,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       );
       const postgresConfig = {
         ...config,
-        database: { ...config.database, engine: "postgres" },
+        database: { ...config.database, families: { state: { engine: "postgres" } } },
       } satisfies OpenClawConfig;
       const deferredRegistry = await preparePostgresBackupDiscovery({
         stateDir: state.stateDir,
@@ -255,7 +258,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(files.every((file) => deferredRegistry.paths.includes(file))).toBe(true);
       const note = vi.spyOn(terminal, "note").mockImplementation(() => {});
       for (const database of [
-        postgresConfig.database,
+        { ...config.database, engine: "postgres" as const },
         {
           ...config.database,
           families: { state: { engine: "postgres" as const } },
@@ -267,7 +270,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const findings = await withDatabaseEngineSelection(selection, () =>
           noteDatabaseEngines(doctorConfig, { env: state.env }),
         );
-        expect(findings.filter((finding) => finding.path !== "database.engine")).toEqual([]);
+        expect(findings.filter((finding) => files.includes(finding.path ?? ""))).toEqual([]);
         const output = String(note.mock.lastCall?.[0]);
         for (const [index, file] of files.entries()) {
           expect(output).toContain(
@@ -350,7 +353,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       await client.query(
         `DELETE FROM "${globalAnchor.namespace}".agent_databases WHERE agent_id = 'retained'`,
       );
-      await doctorDatabasePort({ to: "sqlite" });
+      await doctorDatabasePort({ family: "state", to: "sqlite" });
       expect(files.map(readBackupEngine)).toEqual(files.map(() => ({ engine: "sqlite" })));
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
