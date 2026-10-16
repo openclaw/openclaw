@@ -59,7 +59,7 @@ function fixture(
     notify() {},
     async request(value, transferList) {
       const chunk = structuredClone(value, {
-        transfer: transferList,
+        transfer: transferList?.slice(),
       }) as SessionTranscriptHydrationChunk;
       chunks.push(chunk);
       await onChunk?.(chunk);
