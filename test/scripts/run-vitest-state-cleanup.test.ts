@@ -13,6 +13,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { proveNestedRetention } from "./nested-retention.test-support.js";
+import { repoRoot, scriptFiles } from "./run-vitest.test-support.js";
 import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,6 @@ beforeAll(() => {
 });
 const nestedLifetime = createFixtureLifetime();
 afterEach(() => nestedLifetime.cleanup());
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const testNodeExecPath = resolveTestNodeExecPath();
 const preparedCompiler = process.platform === "win32" ? undefined : createPreparedWorkerCompiler();
@@ -31,17 +31,18 @@ beforeAll(() => preparedCompiler?.prepare());
 afterAll(() => preparedCompiler?.cleanup());
 
 function prepareVitestFixture(root: string, homeName = "home") {
+  const files = scriptFiles(root);
   const tmp = path.join(root, "tmp");
   const home = path.join(root, homeName);
   fs.mkdirSync(tmp);
   fs.mkdirSync(home);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
+  files.write(
+    "package.json",
     JSON.stringify({ private: true, type: "module", packageManager: packageJson.packageManager }),
   );
   // Keep pnpm's pinned toolchain record without sharing lockfile writes.
   fs.copyFileSync(path.join(repoRoot, "pnpm-lock.yaml"), path.join(root, "pnpm-lock.yaml"));
-  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+  files.linkModules();
   return { tmp, home };
 }
 
@@ -85,18 +86,12 @@ function expectFixtureResults(
       expectedStatus,
     );
     expect(file.message, file.name).toBe("");
-    expect(
-      file.assertionResults.map(
-        ({ ancestorTitles, fullName, title: caseTitle, status, failureMessages }) => ({
-          ancestorTitles,
-          fullName,
-          title: caseTitle,
-          status,
-          failureMessages: failureMessages?.map((message) => message.split("\n")[0]),
-        }),
-      ),
-      file.name,
-    ).toEqual([
+    const assertions = file.assertionResults.map((result) => ({
+      ...result,
+      failureMessages: result.failureMessages?.map((message) => message.split("\n")[0]),
+    }));
+    expect(assertions).toHaveLength(1);
+    expect(assertions, file.name).toMatchObject([
       {
         ancestorTitles: [],
         fullName: expectedTitle,
@@ -121,45 +116,47 @@ function expectFixtureResults(
   });
 }
 
-const cleanupCases = [
-  { route: "main", pool: "threads", failRun: false },
-  { route: "main", pool: "threads", failRun: true },
-  { route: "main", pool: "forks", failRun: false },
-  { route: "main", pool: "forks", failRun: true },
-  ...["batch", "live", "profile-main", "profile-runner", "pty"].flatMap((route) => [
-    { route, pool: "threads", failRun: false },
-    { route, pool: "forks", failRun: true },
-  ]),
-  ...["profile-main", "profile-runner"].flatMap((route) => [
-    { route, pool: "forks", failRun: false },
-    { route, pool: "threads", failRun: true },
-  ]),
-].map((testCase) =>
-  Object.assign(testCase, {
+function cleanupCase(
+  route: string,
+  pool: string,
+  changes: Partial<{
+    failRun: boolean;
+    pauseAfterAck: boolean;
+    failFirstFile: boolean;
+    homePolicy: string;
+  }> = {},
+) {
+  return {
+    route,
+    pool,
+    failRun: false,
     pauseAfterAck: false,
     failFirstFile: false,
     homePolicy: "isolated",
-  }),
-);
-cleanupCases.push({
-  route: "profile-runner",
-  pool: "forks",
-  failRun: true,
-  pauseAfterAck: true,
-  failFirstFile: false,
-  homePolicy: "isolated",
-});
+    ...changes,
+  };
+}
+const cleanupCases = [
+  cleanupCase("main", "threads"),
+  cleanupCase("main", "threads", { failRun: true }),
+  cleanupCase("main", "forks"),
+  cleanupCase("main", "forks", { failRun: true }),
+  ...["batch", "live", "profile-main", "profile-runner", "pty"].flatMap((route) => [
+    cleanupCase(route, "threads"),
+    cleanupCase(route, "forks", { failRun: true }),
+  ]),
+  ...["profile-main", "profile-runner"].flatMap((route) => [
+    cleanupCase(route, "forks"),
+    cleanupCase(route, "threads", { failRun: true }),
+  ]),
+  cleanupCase("profile-runner", "forks", { failRun: true, pauseAfterAck: true }),
+];
 
 posixIt.each([
   ...cleanupCases,
-  ...["threads", "forks"].map((pool) => ({
-    route: "main",
-    pool,
-    failRun: true,
-    pauseAfterAck: false,
-    failFirstFile: true,
-    homePolicy: "isolated",
-  })),
+  ...["threads", "forks"].map((pool) =>
+    cleanupCase("main", pool, { failRun: true, failFirstFile: true }),
+  ),
   ...[
     "hermetic-ambient",
     "staged-live",
@@ -167,19 +164,15 @@ posixIt.each([
     "profile-only",
     "profile-only-parent-shell",
   ].flatMap((homePolicy) =>
-    ["threads", "forks"].map((pool) => ({
-      route: homePolicy === "staged-live" ? "live" : "owned",
-      pool,
-      homePolicy,
-      failRun: false,
-      pauseAfterAck: false,
-      failFirstFile: false,
-    })),
+    ["threads", "forks"].map((pool) =>
+      cleanupCase(homePolicy === "staged-live" ? "live" : "owned", pool, { homePolicy }),
+    ),
   ),
 ])(
   "$route cleans its namespace after $pool completion ($homePolicy, failed run: $failRun, paused after acknowledgement: $pauseAfterAck, first-file failure: $failFirstFile)",
   async ({ route, pool, failRun, pauseAfterAck, failFirstFile, homePolicy }) => {
     const root = tempDirs.make("oc-vt-state-");
+    const files = scriptFiles(root);
     const profileOnly = homePolicy === "profile-only" || homePolicy === "profile-only-parent-shell";
     const { tmp, home } = prepareVitestFixture(root, profileOnly ? "home-$source" : "home");
     const realHome = homePolicy === "real-home";
@@ -210,9 +203,9 @@ posixIt.each([
     const configRoot = path.join(root, "test/vitest");
     fs.mkdirSync(testRoot, { recursive: true });
     fs.mkdirSync(configRoot, { recursive: true });
-    fs.writeFileSync(path.join(root, "tiny.ts"), "export const answer: number = 42;");
-    fs.writeFileSync(
-      path.join(root, "resources.ts"),
+    files.write("tiny.ts", "export const answer: number = 42;");
+    files.write(
+      "resources.ts",
       `
 import fs from "node:fs";
 import path from "node:path";
@@ -311,9 +304,7 @@ const { openOpenClawStateDatabase } = await import(${databaseModule});
 const resources = await allocateResources();
 it(${JSON.stringify(fixtureTests[1][1])}, () => {
   expect(process.pid).toBe(previous.pid);
-  expect(previous.reopened.db.isOpen).toBe(false);
-  expect(previous.explicit.db.isOpen).toBe(false);
-  expect(previous.fallback.db.isOpen).toBe(false);
+  expect(previous).toMatchObject({ reopened: { db: { isOpen: false } }, explicit: { db: { isOpen: false } }, fallback: { db: { isOpen: false } } });
   expect(assertHomeBoundary()).toBe(previous.fallback.path);
   const current = openOpenClawStateDatabase();
   expect(current.path).toBe(previous.reopened.path);
@@ -503,43 +494,34 @@ const { completion } = spawnOwnedVitestProcess({
 });
 process.exitCode = (await completion).code ?? 1;`,
     );
-    const args =
-      route === "owned"
-        ? [ownedEntry]
-        : route === "main"
-          ? [
-              path.join(repoRoot, "scripts/run-vitest.mjs"),
-              "run",
-              "--config",
-              configPath,
-              ...vitestArgs,
-            ]
-          : route === "batch"
-            ? [batchEntry]
-            : route === "live"
-              ? [path.join(repoRoot, "scripts/test-live.mts"), "--", ...vitestArgs]
-              : route === "pty"
-                ? [
-                    path.join(repoRoot, "scripts/dev/tui-pty-test-watch.ts"),
-                    "--mode",
-                    "all",
-                    "--no-alt-screen",
-                    "--mirror-path",
-                    mirrorPath,
-                    "--",
-                    // The watcher supplies --reporter=dot, overriding config reporters.
-                    "--reporter=default",
-                    "--reporter=json",
-                    ...vitestArgs,
-                  ]
-                : [
-                    path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-                    route === "profile-main" ? "main" : "runner",
-                    "--output-dir",
-                    profileDir,
-                    "--",
-                    ...vitestArgs,
-                  ];
+    const script = (name: string) => path.join(repoRoot, "scripts", name);
+    const routes: Record<string, string[]> = {
+      owned: [ownedEntry],
+      main: [script("run-vitest.mjs"), "run", "--config", configPath, ...vitestArgs],
+      batch: [batchEntry],
+      live: [script("test-live.mts"), "--", ...vitestArgs],
+      // The watcher supplies --reporter=dot, overriding config reporters.
+      pty: [
+        script("dev/tui-pty-test-watch.ts"),
+        "--mode",
+        "all",
+        "--no-alt-screen",
+        "--mirror-path",
+        mirrorPath,
+        "--",
+        "--reporter=default",
+        "--reporter=json",
+        ...vitestArgs,
+      ],
+    };
+    const args = routes[route] ?? [
+      script("run-vitest-profile.mts"),
+      route === "profile-main" ? "main" : "runner",
+      "--output-dir",
+      profileDir,
+      "--",
+      ...vitestArgs,
+    ];
     // Keep each real runner's generation and cleanup independent; reuse only compiled bytes.
     const childEnv =
       preparedCompiler && (route === "main" || route === "batch")
@@ -563,20 +545,20 @@ process.exitCode = (await completion).code ?? 1;`,
         expect(result.output).toContain(intentionalFailure);
       }
       if (pauseAfterAck) {
-        expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
+        expect(files.json("pause.json")).toEqual({
           acknowledged: true,
           code: null,
           signal: "SIGKILL",
           deadline: { delay: 60_000, liveTimers: 1, stopped: true, advanced: 1, error: null },
         });
       }
-      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
+      const receipt: {
         path: string;
         resetVerified: boolean;
         resources: Array<{ home: string; cache: string; tempHomes: string[] }>;
-      };
+      } = files.json("receipt.json");
       expect(receipt.resetVerified).toBe(true);
-      const configReceipt = JSON.parse(fs.readFileSync(configReceiptPath, "utf8"));
+      const configReceipt = files.json("config-home.json");
       expect(path.dirname(configReceipt.namespace)).toBe(tmp);
       expect(configReceipt.nativeHome).toBe(
         realHome ? home : path.join(configReceipt.namespace, "home"),
@@ -633,9 +615,7 @@ process.exitCode = (await completion).code ?? 1;`,
       }
       // Receipts can be written before Vitest marks a callback failed. Require its verdict,
       // independently of the paused-worker control's separately asserted forced teardown.
-      const report = JSON.parse(
-        fs.readFileSync(path.join(root, "report.json"), "utf8"),
-      ) as JsonTestResults;
+      const report: JsonTestResults = files.json("report.json");
       if (failFirstFile) {
         // Both failures must be exact before testing rejection by the normal matrix validator.
         expectFixtureResults(report, testRoot, failRun, true);

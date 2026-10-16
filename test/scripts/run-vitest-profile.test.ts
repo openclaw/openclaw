@@ -10,27 +10,23 @@ import {
   parseArgs,
   resolveVitestProfileDir,
 } from "../../scripts/run-vitest-profile.mts";
-import { decodeUtf8Tail } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { createDeferred } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { repoRoot, scriptFiles, waitAtGate } from "./run-vitest.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 describe("scripts/run-vitest-profile", () => {
   const { trackTempDir } = createScriptTestHarness();
   const lifetime = createFixtureLifetime();
   const { createTempDir } = lifetime;
-  const repoRoot = path.resolve(import.meta.dirname, "../..");
   afterEach(() => lifetime.cleanup());
 
   function createProject(prefix: string) {
     const root = createTempDir(prefix);
-    fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
-    fs.symlinkSync(
-      path.join(repoRoot, "node_modules"),
-      path.join(root, "node_modules"),
-      "junction",
-    );
+    const files = scriptFiles(root);
+    files.write("package.json", '{"private":true,"type":"module"}');
+    files.linkModules();
     return root;
   }
 
@@ -45,116 +41,36 @@ describe("scripts/run-vitest-profile", () => {
     ];
   }
 
-  function readDiagnostic(file: string) {
-    try {
-      const fd = fs.openSync(file, "r");
-      try {
-        const bytes = Buffer.alloc(4096);
-        return bytes.subarray(0, fs.readSync(fd, bytes)).toString("utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return "unavailable";
-    }
-  }
-
   async function runProfileProcess(
     args: string[],
     root: string,
     signal: AbortSignal,
     env?: NodeJS.ProcessEnv,
-    diagnostics?: {
-      mode: string;
-      flags: string[];
-      ordering: string;
-      profiles: string;
-    },
     observeOutput?: (stdout: string) => void,
   ) {
-    let inspectChild: (() => unknown) | undefined;
-    let reported = false;
-    const reportFailure = () => {
-      if (!diagnostics || reported) {
-        return;
-      }
-      reported = true;
-      try {
-        let cpuProfiles: number | "unavailable";
-        try {
-          cpuProfiles = fs
-            .readdirSync(diagnostics.profiles)
-            .filter((name) => name.endsWith(".cpuprofile")).length;
-        } catch {
-          cpuProfiles = "unavailable";
-        }
-        console.error(
-          "[run-vitest-profile failure]",
-          JSON.stringify(
-            {
-              mode: diagnostics.mode,
-              flags: diagnostics.flags,
-              aborted: signal.aborted,
-              child: inspectChild?.() ?? "not observed",
-              hashOrder: readDiagnostic(diagnostics.ordering),
-              cpuProfiles,
-            },
-            (_key, value: unknown) =>
-              typeof value === "string"
-                ? value.replaceAll(root, "<fixture>").replaceAll(repoRoot, "<repo>")
-                : value,
-          ),
-        );
-      } catch {
-        // Diagnostics must never interrupt the existing cancellation or cleanup owner.
-        console.error("[run-vitest-profile failure] diagnostic capture failed");
-      }
-    };
-    // Register before the managed command so timeout evidence precedes its stop/cleanup.
-    signal.addEventListener("abort", reportFailure, { once: true });
-    try {
-      const result = await lifetime.track(
-        runNodeScript(
-          args,
-          { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1", ...env },
-          undefined,
-          {
-            cwd: root,
-            signal,
-            maxBuffer: 1024 * 1024,
-            requireProcessTreeExit: process.platform !== "win32",
-            onReady(child, readOutput) {
-              if (observeOutput) {
-                child.stdout?.on("data", () => observeOutput(readOutput().stdout));
-              }
-              inspectChild = () => {
-                const output = readOutput();
-                return {
-                  pid: child.pid,
-                  exitCode: child.exitCode,
-                  signalCode: child.signalCode,
-                  killed: child.killed,
-                  stdoutEnded: child.stdout?.readableEnded,
-                  stderrEnded: child.stderr?.readableEnded,
-                  stdout: decodeUtf8Tail(Buffer.from(output.stdout).subarray(-8192)),
-                  stderr: decodeUtf8Tail(Buffer.from(output.stderr).subarray(-8192)),
-                };
-              };
-            },
+    const result = await lifetime.track(
+      runNodeScript(
+        args,
+        { PATH: process.env.PATH, HOME: root, USERPROFILE: root, CI: "1", ...env },
+        undefined,
+        {
+          cwd: root,
+          signal,
+          maxBuffer: 1024 * 1024,
+          requireProcessTreeExit: process.platform !== "win32",
+          onReady(child, readOutput) {
+            if (observeOutput) {
+              child.stdout?.on("data", () => observeOutput(readOutput().stdout));
+            }
           },
-        ),
-      );
-      const output = result.stdout + result.stderr;
-      if (result.error || result.status !== 0) {
-        reportFailure();
-      }
-      if (result.error) {
-        throw new Error(`${formatErrorMessage(result.error)}\n${output}`, { cause: result.error });
-      }
-      return { code: result.status, output };
-    } finally {
-      signal.removeEventListener("abort", reportFailure);
+        },
+      ),
+    );
+    const output = result.stdout + result.stderr;
+    if (result.error) {
+      throw new Error(`${formatErrorMessage(result.error)}\n${output}`, { cause: result.error });
     }
+    return { code: result.status, output };
   }
 
   it("defaults profile output outside the repo", () => {
@@ -171,24 +87,18 @@ describe("scripts/run-vitest-profile", () => {
   });
 
   it.for([
-    { pool: "forks", isolate: false, custom: false, failRun: true },
-    { pool: "threads", isolate: true, custom: true, failRun: false },
-    { pool: "forks", isolate: true, custom: true, failRun: false, projects: true },
-    { pool: "threads", isolate: false, custom: false, failRun: true, failProfile: true },
+    { pool: "forks", failRun: true },
+    { pool: "threads", isolate: true, custom: true },
+    { pool: "forks", isolate: true, custom: true, projects: true },
+    { pool: "threads", failRun: true, failProfile: true },
     {
       pool: "forks",
-      isolate: false,
-      custom: false,
-      failRun: false,
       failProfile: true,
       unhandled: true,
       errorPolicy: "ignore",
     },
     {
       pool: "threads",
-      isolate: false,
-      custom: false,
-      failRun: false,
       failProfile: true,
       unhandled: true,
       errorPolicy: "filter",
@@ -198,18 +108,18 @@ describe("scripts/run-vitest-profile", () => {
     (
       {
         pool,
-        isolate,
-        custom,
-        failRun,
+        isolate = false,
+        custom = false,
+        failRun = false,
         projects = false,
         failProfile = false,
         unhandled = false,
         errorPolicy = "default",
       }: {
         pool: string;
-        isolate: boolean;
-        custom: boolean;
-        failRun: boolean;
+        isolate?: boolean;
+        custom?: boolean;
+        failRun?: boolean;
         projects?: boolean;
         failProfile?: boolean;
         unhandled?: boolean;
@@ -219,6 +129,7 @@ describe("scripts/run-vitest-profile", () => {
     ) =>
       lifetime.run(async () => {
         const root = createProject("oc-profile-sibling-");
+        const files = scriptFiles(root);
         const environment = custom && pool === "threads" ? "jsdom" : "node";
         const outputDir = path.join(root, "profiles with spaces");
         const configPath = path.join(root, "custom.config.ts");
@@ -313,8 +224,9 @@ it("retains the selected execution context", async () => {
           args.push("--reporter", "dot", "--reporter", "json");
         }
         const result = await runProfileProcess(args, root, signal);
-        const reportPath = path.join(root, "report.json");
-        const reportText = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, "utf8") : "";
+        const reportText = fs.existsSync(files.path("report.json"))
+          ? files.read("report.json")
+          : "";
         const shouldFail = failRun || failProfile || (unhandled && errorPolicy === "default");
         expect(result.code, `${result.output}\n${reportText}`).toBe(shouldFail ? 1 : 0);
         expect(fs.readFileSync(configLoads, "utf8")).toBe("loaded\n");
@@ -328,8 +240,7 @@ it("retains the selected execution context", async () => {
           expect(result.output).toContain("intentional unhandled profiling workload");
         }
         const report = JSON.parse(reportText);
-        expect(report.numTotalTests).toBe(2);
-        expect(report.numFailedTests).toBe(failRun ? 1 : 0);
+        expect(report).toMatchObject({ numTotalTests: 2, numFailedTests: failRun ? 1 : 0 });
         if (failProfile) {
           expect(result.output).toContain("Failed to write Vitest profiles.");
           expect(result.output).toContain("ENOENT");
@@ -338,9 +249,7 @@ it("retains the selected execution context", async () => {
         }
         const profiles = fs.readdirSync(outputDir);
         for (const name of ["first", "second"]) {
-          const { pid, threadId } = JSON.parse(
-            fs.readFileSync(path.join(root, name + ".json"), "utf8"),
-          );
+          const { pid, threadId } = files.json(name + ".json");
           const cpuFiles = profiles.filter((file) => file.startsWith(`CPU.${pid}.${threadId}.`));
           const heapFiles = profiles.filter((file) => file.startsWith(`Heap.${pid}.${threadId}.`));
           // Repeated files share one sampler unless Vitest actually creates another worker.
@@ -392,7 +301,6 @@ it("holds admitted work until the caller releases it", async () => {
         root,
         AbortSignal.any([signal, controller.signal]),
         undefined,
-        undefined,
         (stdout) => {
           if (stdout.includes("profile-workload-ready")) {
             ready.resolve();
@@ -400,13 +308,11 @@ it("holds admitted work until the caller releases it", async () => {
         },
       );
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            ready.promise,
-            completion,
-            `Child exited before writing ${path.join(root, "ready")}`,
-          ),
+        await waitAtGate(
+          ready.promise,
+          completion,
           signal,
+          `Child exited before writing ${path.join(root, "ready")}`,
         );
         const aborted = expect(completion).rejects.toMatchObject({ cause: { code: "ABORT_ERR" } });
         controller.abort();
@@ -463,13 +369,9 @@ crypto.getHashes = function() {
 syncBuiltinESMExports();`,
         );
         const args = profileArgs(root, mode, ...flags);
-        const result = await runProfileProcess(
-          args,
-          root,
-          signal,
-          { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
-          { mode, flags, ordering, profiles },
-        );
+        const result = await runProfileProcess(args, root, signal, {
+          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+        });
         expect(
           fs
             .readFileSync(ordering, "utf8")
@@ -533,30 +435,28 @@ throw new Error("Invalid CLI options reached config loading");`,
       expect(result.output).toContain("ENOENT");
     }));
 
-  it("parses mode and explicit output dir", () => {
-    expect(parseArgs(["runner", "--output-dir", "/tmp/out"])).toEqual({
-      mode: "runner",
-      outputDir: "/tmp/out",
-      vitestArgs: [],
-    });
+  it.each([
+    ["runner", ["--output-dir", "/tmp/out"], []],
+    [
+      "main",
+      ["--output-dir", "/tmp/out", "--", "--config", "custom.ts"],
+      ["--config", "custom.ts"],
+    ],
+    ["main", ["--", "--output-dir", "/tmp/out"], []],
+  ] as const)("parses %s flags %j", (mode, flags, vitestArgs) => {
+    expect(parseArgs([mode, ...flags])).toEqual({ mode, outputDir: "/tmp/out", vitestArgs });
   });
 
-  it("rejects missing profile output directories", () => {
-    expect(() => parseArgs(["runner", "--output-dir"])).toThrow("Expected --output-dir <dir>.");
-    expect(() => parseArgs(["runner", "--output-dir", "-h"])).toThrow(
-      "Expected --output-dir <dir>.",
-    );
-    expect(() => parseArgs(["runner", "--output-dir", "--", "--config", "custom.ts"])).toThrow(
-      "Expected --output-dir <dir>.",
-    );
-  });
+  it.each([[], ["-h"], ["--", "--config", "custom.ts"]])(
+    "rejects missing profile directory before %j",
+    (...args) => {
+      expect(() => parseArgs(["runner", "--output-dir", ...args])).toThrow(
+        "Expected --output-dir <dir>.",
+      );
+    },
+  );
 
-  it("passes vitest args after a separator", () => {
-    expect(parseArgs(["main", "--output-dir", "/tmp/out", "--", "--config", "custom.ts"])).toEqual({
-      mode: "main",
-      outputDir: "/tmp/out",
-      vitestArgs: ["--config", "custom.ts"],
-    });
+  it("passes Vitest targets into the runner command", () => {
     expect(
       buildVitestProfileCommandWithArgs({
         mode: "runner",
@@ -564,13 +464,5 @@ throw new Error("Invalid CLI options reached config loading");`,
         vitestArgs: ["src/example.test.ts"],
       }).args,
     ).toContain("src/example.test.ts");
-  });
-
-  it("allows a package-script separator before script flags", () => {
-    expect(parseArgs(["main", "--", "--output-dir", "/tmp/out"])).toEqual({
-      mode: "main",
-      outputDir: "/tmp/out",
-      vitestArgs: [],
-    });
   });
 });

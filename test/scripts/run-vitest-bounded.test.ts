@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -15,23 +15,47 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
+import {
+  captureOutput,
+  childTermination,
+  cleanRunnerEnv,
+  repoRoot,
+  scriptFiles,
+} from "./run-vitest.test-support.js";
 
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixDescribe = process.platform === "win32" ? describe.skip : describe;
 const testNodeExecPath = resolveTestNodeExecPath();
 
 function fixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env = testRunnerFixtureEnv();
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-      delete env[key];
-    }
-  }
-  return { ...env, CI: "1", ...overrides };
+  return cleanRunnerEnv({ CI: "1", ...overrides });
 }
 
-function linkModules(root: string) {
-  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+function managedFixture(
+  context: TestContext,
+  prefix: string,
+  body: (
+    files: ReturnType<typeof scriptFiles>,
+    run: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      timeout?: number,
+      options?: Parameters<typeof runNodeScript>[3],
+    ) => ReturnType<typeof runNodeScript>,
+  ) => Promise<void>,
+) {
+  const lifetime = createFixtureLifetime();
+  context.onTestFinished(() => lifetime.cleanup());
+  return lifetime.run(() =>
+    body(scriptFiles(lifetime.createTempDir(prefix)), (args, env, timeout, options) =>
+      lifetime.track(
+        runNodeScript(args, env, timeout ?? 10_000, {
+          signal: context.signal,
+          requireProcessTreeExit: process.platform !== "win32",
+          ...options,
+        }),
+      ),
+    ),
+  );
 }
 
 const entrypoints = [
@@ -99,12 +123,9 @@ describe("Vitest CLI final outcome ownership", () => {
     ),
   )(
     "classifies $failure loader initialization at $name",
-    async ({ failure, args, failedTrailers }, { signal, onTestFinished }) => {
-      const lifetime = createFixtureLifetime();
-      onTestFinished(() => lifetime.cleanup());
-      await lifetime.run(async () => {
-        const root = lifetime.createTempDir("oc-vt-loader-failure-");
-        const preload = path.join(root, "preload.mjs");
+    ({ failure, args, failedTrailers }, context) =>
+      managedFixture(context, "oc-vt-loader-failure-", async (files, run) => {
+        const preload = files.path("preload.mjs");
         const loaderFailure =
           failure === "missing"
             ? 'throw Object.assign(new Error("owned missing loader dependency"), {code: "ERR_MODULE_NOT_FOUND"});'
@@ -119,32 +140,23 @@ registerHooks({load(url, context, nextLoad) {
   return nextLoad(url, context);
 }});`,
         );
-        const result = await lifetime.track(
-          runNodeScript(
-            [...args, "--help"],
-            testRunnerFixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
-            10_000,
-            { signal, requireProcessTreeExit: process.platform !== "win32" },
-          ),
+        const result = await run(
+          [...args, "--help"],
+          testRunnerFixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
         );
-        expect(result.error, result.stderr).toBeUndefined();
-        expect(result.status, result.stderr).toBe(2);
+        expect(result, result.stderr).toMatchObject({ error: undefined, status: 2 });
         expect(result.stderr).toContain(`owned ${failure} loader dependency`);
         expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
           failedTrailers,
         );
-      });
-    },
+      }),
   );
 
   it.for([0, 1, 2])(
     "preserves settled implementation exit %s through the JavaScript CLI",
-    async (code, { signal, onTestFinished }) => {
-      const lifetime = createFixtureLifetime();
-      onTestFinished(() => lifetime.cleanup());
-      await lifetime.run(async () => {
-        const root = lifetime.createTempDir("oc-vt-exit-propagation-");
-        const preload = path.join(root, "preload.mjs");
+    (code, context) =>
+      managedFixture(context, "oc-vt-exit-propagation-", async (files, run) => {
+        const preload = files.path("preload.mjs");
         fs.writeFileSync(
           preload,
           `import { registerHooks } from "node:module";
@@ -155,21 +167,15 @@ registerHooks({ load(url, context, nextLoad) {
   return nextLoad(url, context);
 }});`,
         );
-        const result = await lifetime.track(
-          runNodeScript(
-            [path.join(preparedCli.root, "scripts/run-vitest.mjs")],
-            { ...preparedCli.env(testRunnerFixtureEnv()), NODE_OPTIONS: `--import=${preload}` },
-            10_000,
-            { signal, requireProcessTreeExit: process.platform !== "win32" },
-          ),
-        );
-        expect(result.error, result.stderr).toBeUndefined();
-        expect(result.status, result.stderr).toBe(code);
+        const result = await run([path.join(preparedCli.root, "scripts/run-vitest.mjs")], {
+          ...preparedCli.env(testRunnerFixtureEnv()),
+          NODE_OPTIONS: `--import=${preload}`,
+        });
+        expect(result, result.stderr).toMatchObject({ error: undefined, status: code });
         expect(result.stderr.match(/^\[test\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
           code ? [`[test] FAILED (exit ${code})`] : [],
         );
-      });
-    },
+      }),
   );
 
   it.for(
@@ -187,16 +193,14 @@ registerHooks({ load(url, context, nextLoad) {
     ),
   )(
     "$script (direct=$direct) reports $outcome after its owners settle",
-    async ({ script, direct, tool, outcome }, { signal, onTestFinished }) => {
-      const lifetime = createFixtureLifetime();
-      onTestFinished(() => lifetime.cleanup());
-      await lifetime.run(async () => {
-        const root = lifetime.createTempDir("oc-vt-trailer-");
+    ({ script, direct, tool, outcome }, context) =>
+      managedFixture(context, "oc-vt-trailer-", async (files, run) => {
+        const root = files.path();
         const target = "test/scripts/run-vitest.test.ts";
         const receipt = path.join(root, "receipt.json");
         fs.mkdirSync(path.join(root, "test/scripts"), { recursive: true });
         fs.mkdirSync(path.join(root, "test/vitest"));
-        linkModules(root);
+        files.linkModules();
         fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
         fs.writeFileSync(
           path.join(root, target),
@@ -240,33 +244,25 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
         const preload = script.endsWith(".mts")
           ? ["--import", path.join(preparedCli.root, "scripts/tsx.mjs")]
           : [];
-        const result = await lifetime.track(
-          runNodeScript(
-            [...preload, path.join(preparedCli.root, "scripts", script), ...args],
-            preparedCli.env(env),
-            45_000,
-            {
-              cwd: root,
-              signal,
-              requireProcessTreeExit: process.platform !== "win32",
-              onReady(child) {
-                child.stdout!.on("data", (chunk) => {
-                  output += String(chunk);
-                });
-                child.stderr!.on("data", (chunk) => {
-                  output += String(chunk);
-                  if (
-                    outcome === "signal" &&
-                    !signaled &&
-                    output.includes("fixture signal ready")
-                  ) {
-                    signaled = true;
-                    child.kill("SIGTERM");
-                  }
-                });
-              },
+        const result = await run(
+          [...preload, path.join(preparedCli.root, "scripts", script), ...args],
+          preparedCli.env(env),
+          45_000,
+          {
+            cwd: root,
+            onReady(child) {
+              child.stdout!.on("data", (chunk) => {
+                output += String(chunk);
+              });
+              child.stderr!.on("data", (chunk) => {
+                output += String(chunk);
+                if (outcome === "signal" && !signaled && output.includes("fixture signal ready")) {
+                  signaled = true;
+                  child.kill("SIGTERM");
+                }
+              });
             },
-          ),
+          },
         );
         expect(result.error, output).toBeUndefined();
         const code =
@@ -299,7 +295,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
           if (!direct && outcome !== "signal") {
             expect(output).toMatch(/\[test\] (?:failed|passed) 1 Vitest shard/);
           }
-          const owned = JSON.parse(fs.readFileSync(receipt, "utf8"));
+          const owned = files.json("receipt.json");
           expect(isProcessAlive(owned.pid)).toBe(false);
           expect(owned.generation).toEqual(expect.any(String));
           expect(fs.existsSync(owned.generation)).toBe(false);
@@ -307,8 +303,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
             expect(fs.existsSync(owned.namespace)).toBe(false);
           }
         }
-      });
-    },
+      }),
   );
 });
 
@@ -382,6 +377,7 @@ syncBuiltinESMExports();
     { timeout: 60_000 },
     async (outcome, { signal }) => {
       const root = tempDirs.make("oc-vt-preparation-");
+      const files = scriptFiles(root);
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
@@ -467,19 +463,8 @@ syncBuiltinESMExports();
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      let output = "";
-      child.stdout.on("data", (chunk) => {
-        output += chunk;
-      });
-      child.stderr.on("data", (chunk) => {
-        output += chunk;
-      });
-      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          child.once("error", reject);
-          child.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
-        },
-      );
+      const output = captureOutput(child);
+      const closed = childTermination(child);
       let builderPid: number | undefined;
       try {
         if (outcome === "cancel") {
@@ -499,25 +484,17 @@ syncBuiltinESMExports();
           child.kill("SIGTERM");
         }
         const failed = outcome.endsWith("-failure") || outcome === "cancel";
-        expect(await withinTest(closed, signal), output).toEqual({
+        expect(await withinTest(closed, signal), output.text).toEqual({
           code: failed ? 2 : 0,
           signal: null,
         });
-        const events = fs
-          .readFileSync(receiptsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                kind: string;
-                event: string;
-                pid: number;
-                shard: string;
-                prebuilt: string;
-                skip: string;
-              },
-          );
+        const events: Array<{
+          kind: string;
+          event: string;
+          pid: number;
+          prebuilt: string;
+          skip: string;
+        }> = files.jsonLines("events.jsonl");
         const readers = events.filter(({ kind, event }) => kind === "reader" && event === "start");
         const builds = events.filter(({ kind, event }) => kind !== "reader" && event === "start");
         expect(builds.map(({ kind }) => kind)).toEqual(
@@ -537,8 +514,10 @@ syncBuiltinESMExports();
           ]);
         }
         for (const reader of readers) {
-          expect(reader.prebuilt).toBe(["success", "prebuilt"].includes(outcome) ? "1" : "");
-          expect(reader.skip).toBe(outcome === "skip" ? "1" : "");
+          expect(reader).toMatchObject({
+            prebuilt: ["success", "prebuilt"].includes(outcome) ? "1" : "",
+            skip: outcome === "skip" ? "1" : "",
+          });
         }
         for (const workerPid of new Set(events.map(({ pid }) => pid))) {
           // CLI completion follows managed builder and reader child/group joins.
@@ -564,7 +543,8 @@ syncBuiltinESMExports();
     { timeout: 60_000 },
     (outcome) => {
       const root = tempDirs.make("oc-vt-bounded-");
-      linkModules(root);
+      const files = scriptFiles(root);
+      files.linkModules();
       const configPath = path.join(root, "test/vitest/vitest.e2e.config.ts");
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       const receiptPath = path.join(root, "executed.jsonl");
@@ -604,11 +584,7 @@ it("case ${index}", () => {
       const trailer = `[test] FAILED (exit ${outcome === "cancel" ? 143 : 1})`;
       expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
       expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
-      const receipts = fs
-        .readFileSync(receiptPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { index: number; pid: number });
+      const receipts: Array<{ index: number; pid: number }> = files.jsonLines("executed.jsonl");
       if (outcome === "cancel") {
         expect(result.signal === "SIGTERM" || result.status === 143, result.stderr).toBe(true);
         expect(receipts).toHaveLength(1);
