@@ -41,34 +41,18 @@ describe("google generative ai helpers", () => {
   });
 
   it("normalizes Google provider configs by provider key, provider api, or model api", () => {
-    const openaiModels = [{ api: "openai-completions" }];
-    expect(
-      shouldNormalizeGoogleGenerativeAiProviderConfig("google", { models: openaiModels }),
-    ).toBe(true);
-    expect(
-      shouldNormalizeGoogleGenerativeAiProviderConfig("custom", {
-        api: "google-generative-ai",
-        models: openaiModels,
-      }),
-    ).toBe(true);
-    expect(
-      shouldNormalizeGoogleGenerativeAiProviderConfig("custom", {
-        models: [{ api: "google-generative-ai" }],
-      }),
-    ).toBe(true);
-    for (const provider of ["custom", "google"]) {
-      expect(
-        shouldNormalizeGoogleGenerativeAiProviderConfig(provider, {
-          api: "openai-completions",
-          models: openaiModels,
-        }),
-      ).toBe(false);
+    const models = [{ api: "openai-completions" }];
+    const cases = [
+      ["google", { models }, true],
+      ["custom", { api: "google-generative-ai", models }, true],
+      ["custom", { models: [{ api: "google-generative-ai" }] }, true],
+      ["custom", { api: "openai-completions", models }, false],
+      ["google", { api: "openai-completions", models }, false],
+      ["google-vertex", { baseUrl: "https://aiplatform.googleapis.com" }, false],
+    ] as const;
+    for (const [provider, config, expected] of cases) {
+      expect(shouldNormalizeGoogleGenerativeAiProviderConfig(provider, config)).toBe(expected);
     }
-    expect(
-      shouldNormalizeGoogleGenerativeAiProviderConfig("google-vertex", {
-        baseUrl: "https://aiplatform.googleapis.com",
-      }),
-    ).toBe(false);
   });
 
   it("detects native Google Vertex hosts by hostname only", () => {
@@ -85,35 +69,20 @@ describe("google generative ai helpers", () => {
   });
 
   it("normalizes transport baseUrls only for Google Generative AI", () => {
-    for (const input of [
-      { provider: "google", api: undefined, baseUrl: origin },
-      { api: "google-generative-ai", baseUrl: origin },
-    ]) {
-      expect(resolveGoogleGenerativeAiTransport(input)).toEqual({
-        api: "google-generative-ai",
-        baseUrl: `${origin}/v1beta`,
+    const vertex = "https://us-central1-aiplatform.googleapis.com";
+    const cases = [
+      ["google", undefined, origin, "google-generative-ai", `${origin}/v1beta`],
+      [undefined, "google-generative-ai", origin, "google-generative-ai", `${origin}/v1beta`],
+      [undefined, "openai-completions", origin, "openai-completions", origin],
+      ["google-vertex", undefined, vertex, "google-vertex", vertex],
+      ["google-vertex", "openai-completions", vertexOpenAi, "openai-completions", vertexOpenAi],
+    ] as const;
+    for (const [provider, api, baseUrl, expectedApi, expectedUrl] of cases) {
+      expect(resolveGoogleGenerativeAiTransport({ provider, api, baseUrl })).toEqual({
+        api: expectedApi,
+        baseUrl: expectedUrl,
       });
     }
-    expect(
-      resolveGoogleGenerativeAiTransport({ api: "openai-completions", baseUrl: origin }),
-    ).toEqual({
-      api: "openai-completions",
-      baseUrl: origin,
-    });
-    expect(
-      resolveGoogleGenerativeAiTransport({
-        provider: "google-vertex",
-        api: undefined,
-        baseUrl: "https://us-central1-aiplatform.googleapis.com",
-      }),
-    ).toEqual({ api: "google-vertex", baseUrl: "https://us-central1-aiplatform.googleapis.com" });
-    expect(
-      resolveGoogleGenerativeAiTransport({
-        provider: "google-vertex",
-        api: "openai-completions",
-        baseUrl: vertexOpenAi,
-      }),
-    ).toEqual({ api: "openai-completions", baseUrl: vertexOpenAi });
   });
 
   it("normalizes google-vertex model ids without rewriting the OpenAI-compatible baseUrl", () => {
