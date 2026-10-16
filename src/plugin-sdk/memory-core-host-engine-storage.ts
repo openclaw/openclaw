@@ -56,6 +56,10 @@ export {
   stopMemorySqliteWalMaintenance,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { chunkMarkdown } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { ensureDir } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
   MemoryWorkspaceFiles,

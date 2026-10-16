@@ -1877,56 +1877,73 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("delivers isolated script notify through the cron announce path", async () => {
-    const cfg = createCronConfig("server-cron-script-announce");
-    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    cfg.gateway = { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } };
-    loadConfigMock.mockReturnValue(cfg);
-    cronScriptExecutorMock.mockResolvedValueOnce({
-      kind: "completed",
-      notify: "queue changed",
-      stateChanged: false,
-    });
+  it.each([
+    { notify: "queue changed", expected: "queue changed" },
+    { notify: "NO_REPLY", expected: undefined },
+    { notify: "NO_REPLY\nNO_REPLY", expected: "NO_REPLY" },
+    { notify: "NO_REPLY.", expected: "NO_REPLY." },
+  ])(
+    "prepares isolated script notify $notify before announcement",
+    async ({ notify, expected }) => {
+      const cfg = createCronConfig("server-cron-script-announce");
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      cfg.gateway = {
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/control" },
+      };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify,
+        stateChanged: false,
+      });
 
-    const state = createCronService(cfg);
-    try {
-      const job = await addScriptJob(
-        state,
-        "script-announce",
-        "return { notify: 'queue changed' }",
-        {
-          deleteAfterRun: false,
-          delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
-        },
-      );
+      const state = createCronService(cfg);
+      try {
+        const job = await addScriptJob(
+          state,
+          "script-announce",
+          "return { notify: 'queue changed' }",
+          {
+            deleteAfterRun: false,
+            delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
+          },
+        );
 
-      await state.cron.run(job.id, "force");
+        await state.cron.run(job.id, "force");
 
-      expect(cronScriptExecutorMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({
-            id: job.id,
-            payload: expect.objectContaining({
-              script: "return { notify: 'queue changed' }",
-              timeoutSeconds: 300,
-              toolBudget: 50,
+        expect(cronScriptExecutorMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            job: expect.objectContaining({
+              id: job.id,
+              payload: expect.objectContaining({
+                script: "return { notify: 'queue changed' }",
+                timeoutSeconds: 300,
+                toolBudget: 50,
+              }),
             }),
           }),
-        }),
-      );
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          jobId: job.id,
-          payload: [{ text: "queue changed" }],
-          inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
-          target: expect.objectContaining({ threadId: 456 }),
-        }),
-      );
-      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-    } finally {
-      state.cron.stop();
-    }
-  });
+        );
+        if (expected === undefined) {
+          expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBe("silent");
+        } else {
+          expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              jobId: job.id,
+              payload: [{ text: expected }],
+              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+              target: expect.objectContaining({ threadId: 456 }),
+            }),
+          );
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBeUndefined();
+        }
+        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      } finally {
+        state.cron.stop();
+      }
+    },
+  );
 
   it("keeps script failure detail transient while preserving structured error payloads", async () => {
     const cfg = createCronConfig("server-cron-script-failure-detail");

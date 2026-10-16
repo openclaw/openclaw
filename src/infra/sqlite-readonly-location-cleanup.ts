@@ -359,7 +359,6 @@ export async function removeTempDirectoryAsync(
     return removed;
   }
   try {
-    assertSnapshotReadersRetired(owner);
     const retirement = prepareSnapshotRetirement(tempDir, owner);
     try {
       for (const file of retirement?.payload ?? []) {

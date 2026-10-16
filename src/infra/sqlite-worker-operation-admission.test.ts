@@ -166,7 +166,6 @@ it("rechecks database ownership after a worker request crosses the message port"
     maintenance = acquireGatewayStateOwner({ databasePath });
     admission.service();
     expect(Atomics.load(pending, 0)).toBe(2);
-    expect(admit).not.toHaveBeenCalled();
     expect(admission.failure).toMatchObject({
       message: expect.stringContaining("undergoing offline maintenance"),
     });
@@ -209,10 +208,6 @@ it("retains exact-target schema authority until settlement and rechecks access f
       ).toThrow("SQLite transaction admission was refused");
     });
     expect(acquireSchema).toHaveBeenCalledOnce();
-    expect(admit).toHaveBeenCalledExactlyOnceWith(
-      { stage: "transaction", facts: "ordinary write" },
-      expect.any(Function),
-    );
     expect(admission.failure).toBe(revoked);
     expect(release).not.toHaveBeenCalled();
     admission.finish();

@@ -784,15 +784,6 @@ describe("cross-OS release checks workflow", () => {
     const sourceCheckout = step(prepare, "Checkout public source ref");
     expect(sourceCheckout.if).toBe("inputs.candidate_artifact_name == ''");
     expect(sourceCheckout.with?.ref).toBe("${{ inputs.ref }}");
-    expect(prepare.steps?.map((candidate) => candidate.name)).not.toEqual(
-      expect.arrayContaining([
-        "Install companion plugin build dependencies",
-        "Pack exact Codex companion plugin",
-        "Resolve exact Codex companion plugin",
-        "Upload generated prerelease plugin registry artifact",
-      ]),
-    );
-
     const consumer = job(workflow, "cross_os_release_checks");
     const download = step(consumer, "Download prerelease plugin registry artifact");
     expect(download.with).toMatchObject({

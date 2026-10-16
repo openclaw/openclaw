@@ -1,4 +1,4 @@
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -8,8 +8,11 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import { icons } from "../../../components/icons.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
@@ -80,19 +83,22 @@ function mountIntegratedPresenceHeader(params: {
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
-  const renderHeader = () =>
-    render(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
+  const header = () =>
+    pane.renderPaneHeader(
+      createPaneHeaderWorkspaceFixture(state),
+      session,
+      false,
+      undefined,
+      false,
+      null,
     );
-  renderHeader();
+  const [content, setContent] = createSignal(header());
+  mountSolid(() => <LitContent value={content()} />, { container });
+  const renderHeader = () => {
+    setContent(header());
+    flush();
+  };
+  flush();
   return { container, pane, renderHeader };
 }
 
@@ -127,8 +133,8 @@ describe("chat pane header", () => {
       onSplitDown,
       onSplitRight,
       onOpenSplitView,
-      sharingControl: html`<button aria-label="Share">Share</button>`,
-      sessionMenuAction: html`<button aria-label="Session actions">…</button>`,
+      sharingControl: <button aria-label="Share">Share</button>,
+      sessionMenuAction: <button aria-label="Session actions">…</button>,
     });
     const actions = container.querySelector(".chat-pane__actions")!;
     expect(
@@ -161,9 +167,9 @@ describe("chat pane header", () => {
       narrow: true,
       mergedChrome: true,
       panelMenuActions: [
-        { id: "terminal", label: "Terminal", icon: html``, onActivate: onTerminal },
+        { id: "terminal", label: "Terminal", icon: icons.copy, onActivate: onTerminal },
       ],
-      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+      sessionMenuAction: <button data-action="session-menu"></button>,
       onOpenSplitView: vi.fn(),
       onSplitDown: vi.fn(),
       onSplitRight: vi.fn(),
@@ -252,8 +258,8 @@ describe("chat pane header", () => {
 
   it("places placement and presence after the identity trail", () => {
     const { container } = mountHeader({
-      placementControl: html`<span data-slot="placement"></span>`,
-      presence: html`<span data-slot="presence"></span>`,
+      placementControl: <span data-slot="placement"></span>,
+      presence: <span data-slot="presence"></span>,
     });
     const crumbs = container.querySelector(".chat-pane__crumbs");
     expect(
@@ -266,7 +272,7 @@ describe("chat pane header", () => {
     const narrow = true;
     const { container } = mountHeader({
       narrow,
-      publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
+      publicAccessIndicator: <span class="chat-pane__public-share-indicator">Public</span>,
     });
 
     expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
@@ -284,7 +290,7 @@ describe("chat pane header", () => {
     const { container } = mountHeader({
       session: row({ owner: { actor } }),
       showOwnerChip: true,
-      sharingControl: html`<span data-slot="sharing"></span>`,
+      sharingControl: <span data-slot="sharing"></span>,
     });
 
     expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
@@ -592,7 +598,9 @@ describe("chat pane header", () => {
     const { container } = mountHeader({
       catalog: true,
       session: undefined,
-      panelMenuActions: [{ id: "terminal", label: "Terminal", icon: html``, onActivate: vi.fn() }],
+      panelMenuActions: [
+        { id: "terminal", label: "Terminal", icon: icons.copy, onActivate: vi.fn() },
+      ],
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(

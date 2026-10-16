@@ -502,6 +502,66 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
+    it.each([
+      {
+        eol: "\n",
+        value: " first line\n  second line",
+        text: "first line\nsecond line",
+        prefix: " ",
+      },
+      { eol: "\r\n", value: "\n  first line", text: "first line", prefix: "\n  " },
+    ])(
+      "reads and edits wrapped Markdown item values: $value with $eol",
+      async ({ eol, value, text, prefix }) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "notes.md");
+        const before = [
+          "## Notes",
+          `- description:${value}`,
+          "  - child: preserved",
+          "- keep: unchanged",
+          "",
+        ]
+          .join("\n")
+          .replaceAll("\n", eol);
+        writeFileSync(filePath, before, "utf-8");
+        const path = "oc://notes.md/notes/description/description";
+        const options = { cwd: workspaceDir, json: true };
+        const resolved = createTestRuntime();
+        await pathResolveCommand(path, options, resolved);
+        expect(resolved.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(resolved)).match).toMatchObject({
+          kind: "leaf",
+          valueText: text,
+          leafType: "string",
+        });
+
+        const expected = [
+          "## Notes",
+          `- description:${prefix}updated`,
+          "  - child: preserved",
+          "- keep: unchanged",
+          "",
+        ]
+          .join("\n")
+          .replaceAll("\n", eol);
+        const preview = createTestRuntime();
+        await pathSetCommand(path, "updated", { ...options, dryRun: true }, preview);
+        expect(preview.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(preview)).bytes).toBe(expected);
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+
+        const written = createTestRuntime();
+        await pathSetCommand(path, "updated", options, written);
+        expect(written.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf-8")).toBe(expected);
+        const reread = createTestRuntime();
+        await pathResolveCommand(path, options, reread);
+        expect(reread.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(reread)).match).toMatchObject({ valueText: "updated" });
+      },
+    );
+
     describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
       const frontmatter =
         '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';

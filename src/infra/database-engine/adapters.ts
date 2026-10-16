@@ -112,7 +112,7 @@ export const databaseEngineAdapters: {
         if (!store.schema.postgres) {
           throw new Error("Store has no PostgreSQL schema");
         }
-        db.exec(postgresSchemaSql(store.schema));
+        db.exec(postgresSchemaSql(store.schema, store.namespace!));
         db.prepare(
           "INSERT INTO openclaw_schema_meta (store, version, store_id) VALUES (?, ?, ?)",
         ).run(store.schema.id, store.schema.version, store.storeId!);

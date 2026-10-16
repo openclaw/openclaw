@@ -193,6 +193,7 @@ describe("recovered requester final receipts", () => {
         },
         parentOnly: false,
         requesterSessionBound: true,
+        replyExpectation: "required",
         deliveryTarget: context,
         shouldDeliverAgentFinal: true,
         requiresMessageToolDelivery: false,

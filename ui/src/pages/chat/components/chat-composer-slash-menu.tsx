@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
-import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import {
   SLASH_COMMANDS,
   executesInlineImmediately,
@@ -14,6 +14,7 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ComposerContent } from "./chat-composer-content.tsx";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
@@ -22,7 +23,6 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
@@ -551,13 +551,9 @@ function renderSlashMenuContents(
                     requestUpdate();
                   },
                   icon: (
-                    <LitContent
-                      value={
-                        state.slashMenuCommand?.icon
-                          ? icons[state.slashMenuCommand.icon]
-                          : icons.terminal
-                      }
-                    />
+                    <ComposerContent>
+                      <Icon name={state.slashMenuCommand?.icon ?? "terminal"} />
+                    </ComposerContent>
                   ),
                   name: menuItem(),
                   description: (
@@ -589,15 +585,9 @@ function renderSlashMenuContents(
         requestUpdate();
       },
       icon: (
-        <LitContent
-          value={
-            cmd.source === "skill"
-              ? icons.pencilSparkles
-              : cmd.icon
-                ? icons[cmd.icon]
-                : icons.terminal
-          }
-        />
+        <ComposerContent>
+          <Icon name={cmd.source === "skill" ? "pencilSparkles" : (cmd.icon ?? "terminal")} />
+        </ComposerContent>
       ),
       name: (
         <>

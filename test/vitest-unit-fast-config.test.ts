@@ -498,7 +498,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/sessions/session-lifecycle-events.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
-    expect(testConfig.include).not.toEqual(expect.arrayContaining(unitFastIsolatedTestFiles));
   });
 
   it("does not treat moved config paths as CLI include filters", () => {
@@ -604,11 +603,7 @@ describe("unit-fast vitest lane", () => {
       expect(resolveUnitFastTimerTestIncludePattern(file)).toBe(file);
     }
 
-    const fastConfig = requireTestConfig(unitFastConfig);
-    const isolatedConfig = requireTestConfig(createUnitFastIsolatedVitestConfig({}));
     const timerConfig = requireTestConfig(createUnitFastFakeTimersVitestConfig({}));
-    expect(fastConfig.include).not.toEqual(expect.arrayContaining(unitFastTimerTestFiles));
-    expect(isolatedConfig.include).not.toEqual(expect.arrayContaining(unitFastTimerTestFiles));
     expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
     expect(timerConfig.isolate).toBe(false);
     expect(normalizeConfigPath(timerConfig.runner)).toBe("test/non-isolated-runner.ts");

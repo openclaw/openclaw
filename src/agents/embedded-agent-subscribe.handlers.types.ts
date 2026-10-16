@@ -286,6 +286,7 @@ export type EmbeddedAgentSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  getPartialReplySourceText: () => string;
   resetPartialReplyDirectives: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;

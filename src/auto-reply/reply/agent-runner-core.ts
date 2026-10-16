@@ -34,7 +34,6 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type {
   ReplyAgentTurnContext,
@@ -358,13 +357,13 @@ export async function handleReplyAgentRunError(
   } = context;
 
   if (isReplyOperationSuperseded(replyOperation)) {
-    return { text: SILENT_REPLY_TOKEN };
+    return {};
   }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
   ) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    return returnWithQueuedFollowupDrain({});
   }
   if (
     replyOperation.result?.kind === "aborted" &&
@@ -375,7 +374,7 @@ export async function handleReplyAgentRunError(
       isReplyOperationSuperseded(replyOperation) ||
       resolveReplyOperationAbortReason(replyOperation) === "user"
     ) {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain({});
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({

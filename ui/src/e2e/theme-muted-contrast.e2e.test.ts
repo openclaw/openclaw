@@ -6,6 +6,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
+import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -331,7 +332,7 @@ suite.define(() => {
         ).toBeGreaterThanOrEqual(4.5);
 
         const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
-        await picker.locator(".picker-select__trigger").click();
+        await openPicker(picker);
         const selected = picker.locator('[role="option"][aria-selected="true"]');
         await selected.waitFor({ state: "visible" });
         const optionPaint = async (option: typeof selected) => {
@@ -389,7 +390,7 @@ suite.define(() => {
         await assertOptionContrast(picker.locator('[role="option"][data-value="system"]'));
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-        expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+        expect(await pickerValue(picker)).toBe(selectedValue);
         expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
 
         if (captureUiProof) {

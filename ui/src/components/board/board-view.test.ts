@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import "../../lib/toast-host.ts";
+import "../mcp-app-view-registration.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
@@ -477,9 +478,6 @@ describe("openclaw-board-view", () => {
   });
 
   it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
-    if (!customElements.get("mcp-app-view")) {
-      customElements.define("mcp-app-view", class extends HTMLElement {});
-    }
     const widgetAppView = vi.fn(async () => ({
       status: "stale" as const,
       error: "origin transcript pruned",
@@ -494,6 +492,7 @@ describe("openclaw-board-view", () => {
     const view = await mount({
       snapshot: source,
       callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
+      context: gatewayContext(null),
     });
 
     await vi.waitFor(() =>

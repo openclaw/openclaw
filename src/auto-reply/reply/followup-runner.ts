@@ -72,7 +72,7 @@ function resolveFollowupCompletion(
         outcome.kind === "rejected"
           ? outcome.payload.text
           : outcome.kind === "settled" && outcome.status === "failed"
-            ? outcome.terminalFailurePayload.text
+            ? (outcome.terminalFailurePayload?.text ?? meta?.error?.message)
             : meta?.error?.message,
     },
   });

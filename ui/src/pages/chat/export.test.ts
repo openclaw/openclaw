@@ -69,7 +69,7 @@ describe("exportChatMarkdown", () => {
     expect(markdown).toContain("A readable conversation.");
   });
 
-  it("uses transcript speaker normalization without inventing timestamps or exporting silent replies", () => {
+  it("uses transcript speaker normalization and preserves prepared literal control text", () => {
     const markdown = buildChatMarkdown(
       [
         {
@@ -105,7 +105,8 @@ describe("exportChatMarkdown", () => {
       "# Chat with OpenClaw\n\n" +
         "## Kai\n\nPlease check the build.\n\n" +
         "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
-        "## Tool\n\n  exit 0\n\n",
+        "## Tool\n\n  exit 0\n\n\n" +
+        "## OpenClaw\n\nNO_REPLY\n",
     );
   });
 

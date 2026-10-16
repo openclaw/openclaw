@@ -588,7 +588,12 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
               endedAt,
               outcome: { status: "ok" },
             },
-            completion: { required: true, resultText: RESTORED_CHILD_RESULT, capturedAt: endedAt },
+            completion: {
+              required: true,
+              terminalReply: { disposition: "visible", text: RESTORED_CHILD_RESULT },
+              resultText: RESTORED_CHILD_RESULT,
+              capturedAt: endedAt,
+            },
           };
           saveSubagentRegistryToSqlite(new Map([[restored.runId, restored]]));
           const seeded = loadSubagentRegistryFromSqlite().get(RESTORED_RUN_ID);

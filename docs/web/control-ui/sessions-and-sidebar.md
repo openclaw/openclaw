@@ -13,6 +13,8 @@ sidebarTitle: "Sessions and sidebar"
 The sidebar separates navigation into **Pages**, **Sessions**, and **Users**.
 The New session page starts new conversations.
 
+On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on device** in the workspace picker. Enter an
 absolute path on that device. The option appears only when the connected session

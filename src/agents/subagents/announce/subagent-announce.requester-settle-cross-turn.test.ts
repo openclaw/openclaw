@@ -4,7 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import {
-  countActiveDescendantRunsFromRuns,
+  buildScopedSubagentRunReadIndexFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
 } from "../registry/subagent-registry-queries.js";
 import {
@@ -41,6 +41,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { childSessionKey: "agent:research:subagent:short" } : {}),
       createdAt: now - 100,
       endedAt: now,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -55,6 +56,7 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       ...(crossAgent ? { requesterStorePath: "/research/sessions.json" } : {}),
       createdAt: now - 200,
       requesterSessionKey: crossAgent ? short.childSessionKey : REQUESTER,
+      completion: { required: true, terminalReply: { disposition: "empty" } },
       execution:
         scenario === "paused member" || scenario === "pending cleanup"
           ? { status: "terminal", startedAt: now - 200, endedAt: now }
@@ -82,13 +84,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
         params.settledBefore,
         params.rootRunIds,
       ),
-      active: countActiveDescendantRunsFromRuns(
+      active: buildScopedSubagentRunReadIndexFromRuns(
         runs,
         params.requesterSessionKey,
         params.requesterAgentId,
         params.requesterStorePath,
         params.rootRunIds,
-      ),
+      ).countActiveDescendantRuns(params.requesterSessionKey),
     }));
     const early = scenario === "older batch";
     expect(
