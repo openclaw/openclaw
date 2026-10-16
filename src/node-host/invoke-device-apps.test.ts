@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { scanInstalledApps } from "../infra/installed-apps.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 
-vi.mock("../infra/installed-apps.js", () => ({ scanInstalledApps: vi.fn() }));
+vi.mock("../infra/installed-apps.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/installed-apps.js")>()),
+  scanInstalledApps: vi.fn(),
+}));
 
 const scan = vi.mocked(scanInstalledApps).mockImplementation(async () => ({
   status: "ok",
