@@ -4,6 +4,7 @@ import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { boardWidget } from "./board-view.test-support.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
 import "./board-view.ts";
@@ -19,31 +20,22 @@ const source: BoardSnapshot = {
     { tabId: "main", title: "Main", position: 0, chatDock: "right" },
     { tabId: "ops", title: "Operations", position: 1, chatDock: "right" },
   ],
-  widgets: [
-    {
-      name: "first",
-      tabId: "main",
-      title: "First",
-      contentKind: "html",
-      sizeW: 6,
+  widgets: ["first", "second"].map((name, position) =>
+    boardWidget({
+      name,
+      title: position ? "Second" : "First",
       sizeH: 3,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "second",
-      tabId: "main",
-      title: "Second",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 3,
-      position: 1,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
+      position,
+    }),
+  ),
 };
+
+async function settle(view: OpenClawBoardView) {
+  await view.updateComplete;
+  await Promise.all(
+    [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
+  );
+}
 
 async function mount(
   applyOps = vi.fn(async () => undefined),
@@ -55,10 +47,7 @@ async function mount(
   view.widgetFrameUrl = () => "about:blank";
   view.callbacks = { applyOps, grant: vi.fn(async () => undefined), selectTab: vi.fn() };
   parent.append(view);
-  await view.updateComplete;
-  await Promise.all(
-    [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-  );
+  await settle(view);
   return view;
 }
 
@@ -79,6 +68,11 @@ function pointer(
       cancelable: true,
     }),
   );
+}
+
+function dropAt(pointerId: number, x: number, y: number) {
+  pointer(window, "pointermove", pointerId, x, y);
+  pointer(window, "pointerup", pointerId, x, y);
 }
 
 afterEach(() => {
@@ -313,10 +307,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const target = cards[0]!.getBoundingClientRect();
     pointer(cards[1]!.querySelector(".board-widget__drag-handle")!, "pointerdown", 81);
     pointer(window, "pointermove", 81, target.right - 3, target.top + target.height / 2);
-    await view.updateComplete;
-    await Promise.all(
-      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-    );
+    await settle(view);
     pointer(window, "pointerup", 81, target.right - 3, target.top + target.height / 2);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
@@ -472,10 +463,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         { ...source.widgets[1]!, sizeW: 6, presentation: "frameless" },
       ],
     };
-    await view.updateComplete;
-    await Promise.all(
-      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
-    );
+    await settle(view);
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     const first = cells[0]!;
     const second = cells[1]!;
@@ -624,20 +612,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const foreignTab = other.querySelector<HTMLElement>('[data-board-tab-id="foreign-b"]');
     const target = foreignTab!.getBoundingClientRect();
     pointer(handle!, "pointerdown", 41, 100, 100);
-    pointer(
-      window,
-      "pointermove",
-      41,
-      target.left + target.width / 2,
-      target.top + target.height / 2,
-    );
-    pointer(
-      window,
-      "pointerup",
-      41,
-      target.left + target.width / 2,
-      target.top + target.height / 2,
-    );
+    dropAt(41, target.left + target.width / 2, target.top + target.height / 2);
     await Promise.resolve();
     expect(applyOps).not.toHaveBeenCalled();
   });
@@ -647,8 +622,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const view = await mount(applyOps);
     const handle = view.querySelector<HTMLElement>(".board-widget__drag-handle");
     pointer(handle!, "pointerdown", 51, 100, 100);
-    pointer(window, "pointermove", 51, 0, 10_000);
-    pointer(window, "pointerup", 51, 0, 10_000);
+    dropAt(51, 0, 10_000);
     await Promise.resolve();
     expect(applyOps).not.toHaveBeenCalled();
   });
@@ -671,8 +645,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const target = appendZone!.getBoundingClientRect();
     const targetX = target.left + target.width / 2;
     const targetY = target.top + target.height / 2;
-    pointer(window, "pointermove", 61, targetX, targetY);
-    pointer(window, "pointerup", 61, targetX, targetY);
+    dropAt(61, targetX, targetY);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "first", position: 1 }]),
     );

@@ -3,6 +3,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { boardWidget } from "./board-view.test-support.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
 
@@ -27,19 +28,12 @@ if (!customElements.get("mcp-app-view")) {
 type BoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
 function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
-  return {
-    name: "alpha",
-    tabId: "main",
+  return boardWidget({
     title: "Alpha app",
     contentKind: "mcp-app",
-    sizeW: 6,
-    sizeH: 4,
-    position: 0,
-    grantState: "none",
-    revision: 1,
     instanceId: "alpha-instance",
     ...overrides,
-  } as BoardWidget;
+  });
 }
 
 function readyAppView(viewId: string, expiresAtMs = Date.now() + 60_000) {
@@ -69,8 +63,8 @@ function callbacks(overrides: Partial<BoardWidgetCellCallbacks> = {}): BoardWidg
 }
 
 async function mount(
-  currentWidget: BoardWidget,
-  currentCallbacks: BoardWidgetCellCallbacks,
+  currentWidget: BoardWidget = widget(),
+  currentCallbacks: BoardWidgetCellCallbacks = callbacks(),
   active = true,
 ): Promise<BoardWidgetCell> {
   const cell = document.createElement("openclaw-board-widget-cell");
@@ -91,24 +85,55 @@ async function settle(cell: BoardWidgetCell): Promise<void> {
   await cell.updateComplete;
 }
 
+const app = (cell: BoardWidgetCell) => cell.querySelector<TestMcpAppView>("mcp-app-view");
+const stale = (cell: BoardWidgetCell) => cell.querySelector('[data-test-id="board-mcp-app-stale"]');
+const waitForApp = (cell: BoardWidgetCell) => vi.waitFor(() => expect(app(cell)).not.toBeNull());
+function mountLease(
+  viewId: string,
+  expiresAtMs: number,
+  refreshWidgetAppView: BoardWidgetCellCallbacks["refreshWidgetAppView"],
+) {
+  return mount(
+    widget(),
+    callbacks({
+      widgetAppView: vi.fn(async () => readyAppView(viewId, expiresAtMs)),
+      refreshWidgetAppView,
+    }),
+  );
+}
+async function advance(cell: BoardWidgetCell, ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await settle(cell);
+}
+
 function stubVisibility(visible: (index: number) => boolean): {
   disconnect: ReturnType<typeof vi.fn>;
   observed: () => number;
+  emit: () => void;
 } {
   let observed = 0;
+  let emit = () => {};
   const disconnect = vi.fn();
   vi.stubGlobal(
     "IntersectionObserver",
     class {
       constructor(private readonly callback: IntersectionObserverCallback) {}
       observe(target: Element) {
-        const isIntersecting = visible(observed);
+        const index = observed;
         observed += 1;
-        vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
-          bottom: isIntersecting ? 200 : 5_200,
-          top: isIntersecting ? 0 : 5_000,
-        } as DOMRect);
-        this.callback([{ isIntersecting, target } as IntersectionObserverEntry], this as never);
+        vi.spyOn(target, "getBoundingClientRect").mockImplementation(
+          () =>
+            ({
+              bottom: visible(index) ? 200 : 5_200,
+              top: visible(index) ? 0 : 5_000,
+            }) as DOMRect,
+        );
+        emit = () =>
+          this.callback(
+            [{ isIntersecting: visible(index), target } as IntersectionObserverEntry],
+            this as never,
+          );
+        emit();
       }
       disconnect = disconnect;
       unobserve() {}
@@ -117,37 +142,15 @@ function stubVisibility(visible: (index: number) => boolean): {
       }
     },
   );
-  return { disconnect, observed: () => observed };
+  return { disconnect, observed: () => observed, emit: () => emit() };
 }
 
 function stubChangingVisibility() {
   let visible = true;
-  let emitVisibility: () => void = () => undefined;
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe(target: Element) {
-        vi.spyOn(target, "getBoundingClientRect").mockImplementation(
-          () => ({ bottom: visible ? 200 : 5_200, top: visible ? 0 : 5_000 }) as DOMRect,
-        );
-        emitVisibility = () =>
-          this.callback(
-            [{ isIntersecting: visible, target } as IntersectionObserverEntry],
-            this as never,
-          );
-        emitVisibility();
-      }
-      disconnect() {}
-      unobserve() {}
-      takeRecords() {
-        return [];
-      }
-    },
-  );
+  const observer = stubVisibility(() => visible);
   return (next: boolean) => {
     visible = next;
-    emitVisibility();
+    observer.emit();
   };
 }
 
@@ -169,12 +172,12 @@ describe("board MCP App cell lifecycle", () => {
 
     expect(visibility.observed()).toBe(0);
     expect(widgetAppView).not.toHaveBeenCalled();
-    expect(cell.querySelector("mcp-app-view")).toBeNull();
+    expect(app(cell)).toBeNull();
 
     cell.active = true;
     await settle(cell);
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
-    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
+    expect(app(cell)).not.toBeNull();
   });
 
   it("shows pending access notices above container-sized apps", async () => {
@@ -184,9 +187,9 @@ describe("board MCP App cell lifecycle", () => {
         widgetAppView: vi.fn(async () => readyAppView("fixed-view")),
       }),
     );
-    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
+    await waitForApp(cell);
 
-    expect(cell.querySelector("mcp-app-view")).toMatchObject({
+    expect(app(cell)).toMatchObject({
       fillContainer: true,
       sessionKey: "agent:main:test",
       viewId: "fixed-view",
@@ -195,7 +198,7 @@ describe("board MCP App cell lifecycle", () => {
 
     cell.widget = widget({ grantState: "granted" });
     await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
+    expect(app(cell)).not.toBeNull();
     expect(cell.querySelector('[data-test-id="board-pending"]')).toBeNull();
   });
 
@@ -203,26 +206,26 @@ describe("board MCP App cell lifecycle", () => {
     const setVisible = stubChangingVisibility();
     const widgetAppView = vi.fn(async () => readyAppView("viewport-view"));
     const cell = await mount(widget(), callbacks({ widgetAppView }));
-    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-    const initialView = cell.querySelector("mcp-app-view");
+    await waitForApp(cell);
+    const initialView = app(cell);
 
     setVisible(false);
     await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBeNull();
+    expect(app(cell)).toBeNull();
 
     setVisible(true);
     await settle(cell);
-    const remountedView = cell.querySelector<TestMcpAppView>("mcp-app-view");
+    const remountedView = app(cell);
     expect(remountedView).not.toBeNull();
     expect(remountedView).not.toBe(initialView);
     expect(widgetAppView).toHaveBeenCalledOnce();
 
     cell.active = false;
     await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBe(remountedView);
+    expect(app(cell)).toBe(remountedView);
     cell.active = true;
     await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBe(remountedView);
+    expect(app(cell)).toBe(remountedView);
     expect(remountedView?.teardown).not.toHaveBeenCalled();
     expect(widgetAppView).toHaveBeenCalledOnce();
   });
@@ -236,15 +239,9 @@ describe("board MCP App cell lifecycle", () => {
 
     cell.active = false;
     await settle(cell);
-    appView.resolve({
-      status: "ready",
-      viewId: "finished-hidden",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    appView.resolve(readyAppView("finished-hidden"));
     await settle(cell);
-    expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.viewId).toBe(
-      "finished-hidden",
-    );
+    expect(app(cell)?.viewId).toBe("finished-hidden");
 
     cell.active = true;
     await settle(cell);
@@ -258,8 +255,8 @@ describe("board MCP App cell lifecycle", () => {
       error: "lease rejected",
     }));
     const cell = await mount(widget(), callbacks({ refreshWidgetAppView }));
-    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-    const view = cell.querySelector("mcp-app-view")!;
+    await waitForApp(cell);
+    const view = app(cell)!;
     const teardown = vi.spyOn(view, "teardown").mockImplementation(() => retired.promise);
     view.dispatchEvent(
       new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
@@ -267,33 +264,25 @@ describe("board MCP App cell lifecycle", () => {
     await settle(cell);
 
     expect(teardown).toHaveBeenCalled();
-    expect(cell.querySelector("mcp-app-view")).toBe(view);
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).toBeNull();
+    expect(app(cell)).toBe(view);
+    expect(stale(cell)).toBeNull();
     retired.resolve();
     await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBeNull();
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    expect(app(cell)).toBeNull();
+    expect(stale(cell)).not.toBeNull();
   });
 
   it("keeps a short renewed lease until expiry without another refresh loop", async () => {
     vi.useFakeTimers({ now: 1_000 });
     const refreshWidgetAppView = vi.fn(async () => readyAppView("short-renewed-view", 5_000));
-    const cell = await mount(
-      widget(),
-      callbacks({
-        widgetAppView: vi.fn(async () => readyAppView("near-expiry-view", 5_000)),
-        refreshWidgetAppView,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await settle(cell);
+    const cell = await mountLease("near-expiry-view", 5_000, refreshWidgetAppView);
+    await advance(cell, 0);
 
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(4_000);
-    await settle(cell);
+    expect(app(cell)).not.toBeNull();
+    await advance(cell, 4_000);
 
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    expect(stale(cell)).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
   });
 
@@ -318,48 +307,34 @@ describe("board MCP App cell lifecycle", () => {
     vi.useFakeTimers({ now: 10_000 });
     const remint = deferred<BoardWidgetAppViewState>();
     const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mount(
-      widget(),
-      callbacks({
-        widgetAppView: vi.fn(async () => readyAppView("short-view", 11_000)),
-        refreshWidgetAppView,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await settle(cell);
+    const cell = await mountLease("short-view", 11_000, refreshWidgetAppView);
+    await advance(cell, 0);
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    await settle(cell);
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    await advance(cell, 1_000);
+    expect(stale(cell)).not.toBeNull();
 
-    remint.resolve({ status: "ready" as const, viewId: "late-view", expiresAtMs: 30_000 });
+    remint.resolve(readyAppView("late-view", 30_000));
     await settle(cell);
-    expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.viewId).toBe("late-view");
+    expect(app(cell)?.viewId).toBe("late-view");
   });
 
   it("keeps a valid lease mounted when proactive renewal fails", async () => {
     vi.useFakeTimers({ now: 10_000 });
-    const cell = await mount(
-      widget(),
-      callbacks({
-        widgetAppView: vi.fn(async () => readyAppView("still-valid-view", 20_000)),
-        refreshWidgetAppView: vi.fn(async () => ({
-          status: "stale" as const,
-          error: "temporary gateway failure",
-        })),
-      }),
-    );
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(cell);
-    expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.viewId).toBe(
+    const cell = await mountLease(
       "still-valid-view",
+      20_000,
+      vi.fn(async () => ({
+        status: "stale" as const,
+        error: "temporary gateway failure",
+      })),
     );
 
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(cell);
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    await advance(cell, 5_000);
+    expect(app(cell)?.viewId).toBe("still-valid-view");
+
+    await advance(cell, 5_000);
+    expect(stale(cell)).not.toBeNull();
   });
 
   it("keeps the expiry watchdog when a renewing app moves offscreen", async () => {
@@ -367,15 +342,8 @@ describe("board MCP App cell lifecycle", () => {
     const setVisible = stubChangingVisibility();
     const remint = deferred<BoardWidgetAppViewState>();
     const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mount(
-      widget(),
-      callbacks({
-        widgetAppView: vi.fn(async () => readyAppView("short-view", 11_000)),
-        refreshWidgetAppView,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await settle(cell);
+    const cell = await mountLease("short-view", 11_000, refreshWidgetAppView);
+    await advance(cell, 0);
 
     setVisible(false);
     await settle(cell);
@@ -384,7 +352,7 @@ describe("board MCP App cell lifecycle", () => {
     await settle(cell);
 
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    expect(stale(cell)).not.toBeNull();
   });
 
   it("does not remint a short renewed lease when it returns onscreen", async () => {
@@ -392,28 +360,19 @@ describe("board MCP App cell lifecycle", () => {
     const setVisible = stubChangingVisibility();
     const remint = deferred<BoardWidgetAppViewState>();
     const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mount(
-      widget(),
-      callbacks({
-        widgetAppView: vi.fn(async () => readyAppView("first-view", 20_000)),
-        refreshWidgetAppView,
-      }),
-    );
+    const cell = await mountLease("first-view", 20_000, refreshWidgetAppView);
     await vi.advanceTimersByTimeAsync(5_000);
     setVisible(false);
-    remint.resolve({ status: "ready" as const, viewId: "short-renewed", expiresAtMs: 18_000 });
+    remint.resolve(readyAppView("short-renewed", 18_000));
     await settle(cell);
 
     setVisible(true);
     await settle(cell);
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-    expect((cell.querySelector("mcp-app-view") as TestMcpAppView | null)?.viewId).toBe(
-      "short-renewed",
-    );
+    expect(app(cell)?.viewId).toBe("short-renewed");
 
-    await vi.advanceTimersByTimeAsync(3_000);
-    await settle(cell);
-    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
+    await advance(cell, 3_000);
+    expect(stale(cell)).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
   });
 
@@ -428,6 +387,6 @@ describe("board MCP App cell lifecycle", () => {
     await settle(cell);
 
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));
-    expect(cell.querySelector("mcp-app-view")).not.toBeNull();
+    expect(app(cell)).not.toBeNull();
   });
 });
