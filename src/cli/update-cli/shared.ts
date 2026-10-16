@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -534,16 +535,19 @@ export async function tryWriteCompletionCache(
 
   let failure: string;
   try {
-    const result = await runCommandWithTimeout(
-      [nodeRunner, binPath, "completion", "--write-state"],
-      {
-        cwd: root,
-        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
-        input: "",
-        timeoutMs,
-        killProcessTree: true,
-      },
-    );
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: binPath,
+      execArgv: [],
+      args: ["completion", "--write-state"],
+    });
+    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+      input: "",
+      timeoutMs,
+      killProcessTree: true,
+    });
     if (result.code === 0) {
       return "completed";
     }

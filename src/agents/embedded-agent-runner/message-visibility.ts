@@ -10,17 +10,14 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../auto-reply/tokens.js";
-import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+  isSilentAssistantTranscriptMessage,
+  resolveAssistantMessagePhase,
+} from "../../shared/chat-message-content.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
 type PayloadVisibilityOptions = {
   includeErrorPayloads?: boolean;
   includeReasoningPayloads?: boolean;
-  includeSilentReplyPayloads?: boolean;
   requireTerminalContent?: boolean;
 };
 
@@ -59,19 +56,6 @@ function hasVisibleAttachmentReference(value: unknown): boolean {
   return urls.size > 0;
 }
 
-/** Applies the shared exact or payload-aware silent-reply contract. */
-export function isSilentAgentReplyText(
-  value: unknown,
-  mode: "exact" | "payload" = "exact",
-): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  return mode === "payload"
-    ? isSilentReplyPayloadText(value, SILENT_REPLY_TOKEN)
-    : isSilentReplyText(value, SILENT_REPLY_TOKEN);
-}
-
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
   options: PayloadVisibilityOptions = {},
@@ -91,10 +75,7 @@ export function hasVisibleAgentPayload(
       ) {
         return false;
       }
-      const visibleText =
-        hasNonEmptyString(record.text) &&
-        (options.includeSilentReplyPayloads !== false ||
-          !isSilentAgentReplyText(record.text, "payload"));
+      const visibleText = hasNonEmptyString(record.text);
       return Boolean(
         visibleText ||
         hasReplyPayloadSpeechContent(record) ||
@@ -122,39 +103,9 @@ export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
   );
 }
 
-export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown }): boolean {
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  return payloads.some((payload) => {
-    const record = asOptionalRecord(payload);
-    if (!record) {
-      return false;
-    }
-    return (
-      isSilentAgentReplyText(record.text, "payload") &&
-      !hasVisibleAgentPayload({ payloads: [{ ...record, text: undefined }] })
-    );
-  });
-}
-
 export function getTranscriptMessageRole(message: unknown): string | undefined {
   const role = asOptionalObjectRecord(message)?.role;
   return typeof role === "string" ? role : undefined;
-}
-
-export function readTerminalSourceReplyDeliveryMirror(
-  message: unknown,
-): { sourceTurnId: string; toolCallId?: string } | undefined {
-  const delivery = asOptionalObjectRecord(asOptionalObjectRecord(message)?.openclawDeliveryMirror);
-  if (!delivery) {
-    return undefined;
-  }
-  const sourceTurnId =
-    typeof delivery.sourceTurnId === "string" ? delivery.sourceTurnId.trim() : "";
-  if (delivery.kind !== "message-tool-source-reply" || delivery.final !== true || !sourceTurnId) {
-    return undefined;
-  }
-  const toolCallId = typeof delivery.toolCallId === "string" ? delivery.toolCallId.trim() : "";
-  return { sourceTurnId, ...(toolCallId ? { toolCallId } : {}) };
 }
 
 /** System and malformed records do not constitute a resumable transcript tail. */
@@ -185,36 +136,13 @@ export function isIntermediateAssistantTranscriptMessage(message: unknown): bool
   return fallback?.source === "segment" && hasNonEmptyString(fallback.itemId);
 }
 
-/** Returns whether a stopped assistant turn contains only reasoning and a silent marker. */
+/** Only a completed final assistant row can prove terminal silence. */
 export function isTerminalSilentAssistantMessage(message: unknown): boolean {
-  const messageRecord = asOptionalObjectRecord(message);
-  if (
-    messageRecord?.role !== "assistant" ||
-    typeof messageRecord.stopReason !== "string" ||
-    messageRecord.stopReason.trim() !== "stop"
-  ) {
-    return false;
-  }
-  const content = messageRecord.content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    const type = typeof record.type === "string" ? record.type.trim() : undefined;
-    if (type === "thinking") {
-      continue;
-    }
-    if (type !== "text") {
-      return false;
-    }
-    if (typeof record.text === "string" && record.text.trim()) {
-      textParts.push(record.text.trim());
-    }
-  }
-  return isSilentAgentReplyText(textParts.join("\n"), "payload");
+  const record = asOptionalObjectRecord(message);
+  return (
+    record?.stopReason === "stop" &&
+    record.endTurn !== false &&
+    !isIntermediateAssistantTranscriptMessage(message) &&
+    isSilentAssistantTranscriptMessage(message)
+  );
 }

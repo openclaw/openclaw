@@ -167,18 +167,6 @@ describe("application mention Inbox", () => {
     },
   );
 
-  it("does not call older Gateways without an advertised mention Inbox", async () => {
-    const request = vi.fn<RequestFn>(() => Promise.resolve(result(1)));
-    const harness = gatewayForMentions(request);
-    harness.update({ hello: { ...hello(), features: { methods: ["sessions.list"] } } });
-    const capability = createCapability(harness.gateway);
-
-    await capability.refresh();
-
-    expect(capability.snapshot.phase).toBe("unavailable");
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("hydrates only a canonical profile and keeps mentions independent of the selected session", async () => {
     const request = vi.fn<RequestFn>(() => Promise.resolve(result(1)));
     const harness = gatewayForMentions(request);

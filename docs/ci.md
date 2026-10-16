@@ -70,6 +70,11 @@ Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
+Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
+path. Successful 16-class jobs reached 19:04, leaving too little margin under the
+former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
+runner size, worker count, shard split, and individual test deadlines are unchanged.
+
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
@@ -134,7 +139,7 @@ runner startup, then reject expired requests before checkout and hydration. This
 queue allowance does not extend running-job or idle deadlines; see
 [Testbox spending limits](/ci/runners#testbox-spending-limits).
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts retain both packed core-lint rows on the Blacksmith 16-class. Ordinary upstream hybrid push and scheduled runs, plus same-repository PRs, place `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` on hosted `ubuntu-24.04`; fork first attempts and all dispatch, qualification, release, and other backend routes retain their existing overrides. The mandatory controls count toward the existing hosted-row budget. See [critical-path assignment evidence](/ci/routing-costs#hosted-assignment-on-the-critical-path). Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
@@ -205,7 +210,7 @@ The first `checks-ui` shard also runs a curated WebKit overlay and composer-focu
 
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
-Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 

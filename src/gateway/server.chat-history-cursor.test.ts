@@ -478,7 +478,7 @@ describe("chat.history cursor catch-up", () => {
         content: [
           {
             type: "text",
-            text: "ANNOUNCE_SKIP REPLY_SKIP",
+            text: "NO_REPLY",
             textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
           },
           ...sibling,

@@ -224,18 +224,6 @@ describe("ClickClack discussion service", () => {
       }),
     );
   });
-
-  it("truncates display_title by Unicode code point", async () => {
-    const harness = createHarness({ label: "😀".repeat(201) });
-
-    await harness.service.open("agent:main:long-title");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({ display_title: "😀".repeat(200) }),
-    );
-  });
-
   it("backfills an unchanged title after a sibling confirms server support", async () => {
     const harness = createHarness({ label: "Needs Backfill" });
     const sessionKey = "agent:main:needs-backfill";
@@ -318,20 +306,6 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("uses the configured main key when building control links", async () => {
-    const harness = createHarness({ label: "Workspace main" });
-    harness.config.session = { mainKey: "workspace" };
-
-    await harness.service.open("agent:research:workspace");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url: "https://control.example/control/chat/research",
-      }),
-    );
-  });
-
   it("builds control links from URL path and query components", async () => {
     const harness = createHarness({ label: "Control link" });
     harness.config.channels!.clickclack!.discussions!.controlUrlBase =
@@ -355,7 +329,6 @@ describe("ClickClack discussion service", () => {
     expect(await harness.service.open("agent:main:missing")).toEqual({ state: "available" });
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
-
   it("does not create a channel without a concrete session incarnation", async () => {
     const harness = createHarness({ sessionId: "", label: "Unmaterialized session" });
 

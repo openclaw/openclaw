@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -141,7 +142,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       req.method,
       getMethodRegistry,
       extraHandlers,
-      req.method === "models.list"
+      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
         ? {
             clientKind: client.connect.client.id,
             source: sendResponse === send ? "wire" : "internal",
@@ -431,16 +432,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             ).catch(() => undefined);
             // Refuse within the preparation lease so its response settles before the
             // preparation join; the mutating handler retains its execution owner.
-            if (context.requestEntryLifetime?.signal.aborted) {
-              respondWithAuthority(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, "gateway closing before request dispatch", {
-                  retryable: true,
-                }),
-              );
-              return;
-            }
+            entry?.assertOpen();
             if (isClosed()) {
               return;
             }
@@ -526,9 +518,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               errorShape(
                 ErrorCodes.UNAVAILABLE,
                 formatForLog(err),
-                startTimedOut
-                  ? { retryable: true, details: { reason: "request-start-timeout" } }
-                  : undefined,
+                err instanceof GatewayClientRequestError
+                  ? {
+                      retryable: err.retryable,
+                      retryAfterMs: err.retryAfterMs,
+                      details: err.details,
+                    }
+                  : startTimedOut
+                    ? { retryable: true, details: { reason: "request-start-timeout" } }
+                    : undefined,
               ),
           );
         } finally {

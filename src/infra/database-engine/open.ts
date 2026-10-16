@@ -15,6 +15,7 @@ import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js
 import { observeConnection } from "./observation.js";
 import { admitPostgresPhysicalFacts } from "./physical-facts.js";
 import { admitPostgresCapabilities, postgresSchemaMetadataSql } from "./postgres-schema.js";
+import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 type EngineAdmission =
@@ -178,6 +179,9 @@ export function openEngineStore(ref: {
     ref.admitPostgres?.(db, fresh);
   };
   try {
+    const publishSearch = schema.search
+      ? admitPostgresSearch(db, schema.search, identity.namespace)
+      : undefined;
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
@@ -236,6 +240,8 @@ export function openEngineStore(ref: {
         version: schema.version,
       });
     }
+    // Publish against the committed schema revision, after bootstrap/migration settles.
+    publishSearch?.();
     return db;
   } catch (error) {
     if (ref.closeOnFailure) {

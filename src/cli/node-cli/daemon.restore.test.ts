@@ -9,6 +9,7 @@ import { registerNodeCli } from "./register.js";
 const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
   pin: vi.fn(),
+  pending: vi.fn(),
   probe: vi.fn(),
 }));
 const service = createMockGatewayService();
@@ -26,8 +27,10 @@ vi.mock("../../daemon/node-service.js", async (importOriginal) => ({
 }));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => run(),
   readDaemonRuntimePinForInstall: mocks.pin,
   readDaemonRuntimePin: mocks.pin,
+  readDaemonRuntimePinMigrationPending: mocks.pending,
 }));
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
@@ -53,6 +56,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_WRAPPER", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
   mocks.pin.mockReturnValue(observed);
+  mocks.pending.mockReturnValue(false);
   mocks.probe.mockImplementation(async (executable: string) => ({
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",
@@ -180,3 +184,16 @@ it.each([true, false])(
     }
   },
 );
+
+it("reports pending node runtime migration without claiming unpinned custody", async () => {
+  mocks.pending.mockReturnValue(true);
+  const program = new Command().exitOverride();
+  registerNodeCli(program);
+  await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
+  expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+    service: expect.objectContaining({
+      runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" },
+    }),
+  });
+  expect(mocks.pin).not.toHaveBeenCalled();
+});

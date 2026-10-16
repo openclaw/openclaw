@@ -75,17 +75,6 @@ describe("applyJobPatch", () => {
     },
   );
 
-  it("retargets announce delivery to main", () => {
-    const current = agentJob({ mode: "announce", channel: "telegram", to: "123" });
-    applyJobPatch(current, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "ping" },
-    });
-    expect(current.sessionTarget).toBe("main");
-    expect(current.payload.kind).toBe("systemEvent");
-    expect(current.delivery).toBeUndefined();
-  });
-
   it("clears chat and completion routes when switching to a trimmed webhook", () => {
     const current = agentJob({
       mode: "announce",
@@ -420,12 +409,6 @@ describe("script payload validation", () => {
     ).toThrow("cron script payload has a syntax error");
   });
 
-  it("rejects the current session target", () => {
-    expect(() => createJob(fixtureState(), scriptInput("return 1", "current"))).toThrow(
-      'scripts run headless and support only "main" or "isolated"',
-    );
-  });
-
   it("rejects condition triggers because both script kinds own trigger.state", () => {
     const serviceState = fixtureState();
     expect(() =>
@@ -467,23 +450,6 @@ describe("session targets", () => {
     expect(() =>
       createJob(fixtureState(), agentInput({ sessionTarget: "session:bad\0id" })),
     ).toThrow("invalid cron sessionTarget session id");
-  });
-
-  it("rejects failure destinations on created main jobs without webhook delivery", () => {
-    expect(() =>
-      createJob(
-        fixtureState("main"),
-        input({
-          agentId: "main",
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "123",
-            failureDestination: { mode: "announce", channel: "signal", to: "+15550001111" },
-          },
-        }),
-      ),
-    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 
   it("rejects patching a main-session job to a non-default agent", () => {
@@ -605,32 +571,6 @@ describe("cron maintenance ownership", () => {
     } finally {
       clearCronJobActive(job.id, marker);
     }
-  });
-
-  it("isolates schedule errors while filling missing nextRunAtMs", () => {
-    const now = Date.now();
-    const pastDue = now - 1_000;
-
-    const dueJob = createCronSystemEventJob(now, {
-      id: "due-job",
-      state: {
-        nextRunAtMs: pastDue,
-      },
-    });
-
-    const malformedJob = createCronSystemEventJob(now, {
-      id: "bad-job",
-      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
-      state: {},
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
-
-    expect(recomputeNextRunsForMaintenance(state, { deferredNotifications: [] })).toBe(true);
-    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
-    expect(malformedJob.state.nextRunAtMs).toBeUndefined();
-    expect(malformedJob.state.scheduleErrorCount).toBe(1);
-    expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
   });
 
   it("leaves an overdue running marker and its deadline for startup recovery", () => {

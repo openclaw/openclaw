@@ -2,7 +2,11 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  captureOpenClawStateWorkerContext,
+  captureOpenClawStateReadContext,
+} from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
@@ -106,6 +110,16 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
   deviceId: string,
   baseDir?: string,
 ) {
+  const context = captureOpenClawStateReadContext(
+    resolveOpenClawStateSqlitePath(
+      baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
+    ),
+  );
+  const device = captureDevicePairingPublication(context.admission).readDevice(deviceId.trim());
+  if (device !== undefined) {
+    context.admission.assertCurrent();
+    return device;
+  }
   const { reply } = await readPairing(
     { type: "devicePairing.lookup", deviceId: deviceId.trim() },
     baseDir,

@@ -249,8 +249,50 @@ describe("createChatRunState", () => {
       expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
         { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
       ]);
+      event(5, "run_status", { phase: "waiting_for_model", reason: "slot" });
+      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+        { seq: 3, stream: "tool" },
+        { seq: 5, stream: "run_status", data: { phase: "waiting_for_model", reason: "slot" } },
+      ]);
+      event(6, "run_status", { phase: "starting_model" });
+      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
+        { seq: 3, stream: "tool" },
+        { seq: 6, stream: "run_status", data: { phase: "starting_model" } },
+      ]);
     },
   );
+
+  it.each(["full", "summary"] as const)("retains answer finalization for %s reconnects", (mode) => {
+    const state = createChatRunState();
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 1,
+        ts: 1,
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { stream: "lifecycle", data: { phase: "finishing" } },
+    ]);
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 2,
+        ts: 2,
+        stream: "assistant",
+        data: { text: "More output" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { seq: 2, stream: "assistant" },
+    ]);
+  });
 
   it.each(["full", "summary"] as const)(
     "replays the current fallback transition until resumed %s activity",

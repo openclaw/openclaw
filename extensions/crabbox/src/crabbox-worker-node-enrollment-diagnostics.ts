@@ -34,11 +34,11 @@ const state = path.join(require("node:os").homedir(), ".openclaw", ${JSON.string
 let runtime = "absent";
 let alive = false;
 let tail = "absent";
-try { runtime = fs.readlinkSync(path.join(state, "runtime")); } catch {}
+try { runtime = fs.readlinkSync(path.join(state, "runtime")); } catch { /* Unavailable runtime diagnostics retain the absent marker. */ }
 try {
   const text = fs.readFileSync(path.join(state, "node.pid"), "utf8").trim();
   if (/^[1-9][0-9]*$/.test(text)) { process.kill(Number(text), 0); alive = true; }
-} catch {}
+} catch { /* An unconfirmed process remains dead-or-absent in this best-effort diagnostic. */ }
 try {
   const fd = fs.openSync(path.join(state, "node.log"), "r");
   try {
@@ -55,7 +55,7 @@ try {
     if (!utf16) while (offset < bytes && (buffer[offset] & 0xc0) === 0x80) offset++;
     tail = buffer.subarray(offset, bytes).toString(utf16 ? "utf16le" : "utf8");
   } finally { fs.closeSync(fd); }
-} catch {}
+} catch { /* Missing logs must not replace the original enrollment failure. */ }
 process.stdout.write("node-runtime=" + runtime + " node-pid=" + (alive ? "alive" : "dead-or-absent") + " node.log tail: " + tail);`,
         params.target,
       ),

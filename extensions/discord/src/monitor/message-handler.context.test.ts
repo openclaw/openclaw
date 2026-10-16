@@ -6,12 +6,19 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import * as discordRuntime from "../runtime.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  shouldLogVerbose: () => true,
+  logVerbose: vi.fn(),
+}));
 
 async function context(
   overrides: Record<string, unknown> = {},
@@ -25,6 +32,17 @@ async function context(
 }
 
 describe("discord message context", () => {
+  it("keeps inbound text out of verbose diagnostics while preserving the agent context", async () => {
+    vi.mocked(logVerbose).mockClear();
+    const text = "private-discord-message-contents";
+    const payload = await context({ baseText: text, messageText: text }, text);
+    expect(payload.Body).toContain(text);
+    const diagnostics = vi.mocked(logVerbose).mock.calls.flat().join("\n");
+    expect(diagnostics).toContain("discord inbound: channel=");
+    expect(diagnostics).not.toContain(text);
+    expect(diagnostics).not.toContain("preview=");
+  });
+
   it("preserves batched reply identities", async () => {
     const payload = await context({
       replyToMode: "batched",

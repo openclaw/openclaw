@@ -9,12 +9,11 @@
     "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "3.13.0",
     "@codemirror/commands": "6.11.1",
-    "@codemirror/language": "6.12.4",
+    "@codemirror/language": "6.13.1",
     "@codemirror/language-data": "6.5.2",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.13",
+    "@codemirror/view": "6.43.14",
     "@lezer/highlight": "1.2.5",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
@@ -52,6 +51,7 @@
     "markdown-it": "15.0.2",
     "markdown-it-cjk-friendly": "3.0.0",
     "markdown-it-emoji": "3.1.0",
+    "mediabunny": "1.61.3",
     "parse5": "8.0.1",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.14",
@@ -62,15 +62,15 @@
     "@solidjs/testing-library": "1.0.0-beta.3",
     "@solidjs/vite-plugin": "3.0.0-next.49",
     "@types/markdown-it": "14.2.0",
-    "@vitest/browser": "5.0.1",
-    "@vitest/browser-playwright": "5.0.1",
+    "@vitest/browser": "5.0.3",
+    "@vitest/browser-playwright": "5.0.3",
     "fake-indexeddb": "6.2.5",
-    "jsdom": "30.1.1",
+    "jsdom": "30.1.2",
     "openclaw": "workspace:*",
     "pako": "3.0.2",
-    "playwright": "1.63.0",
+    "playwright": "1.64.0",
     "postcss": "8.5.29",
-    "vite": "8.3.2",
-    "vitest": "5.0.1"
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
   }
 }

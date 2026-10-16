@@ -103,10 +103,6 @@ suite.define(() => {
         ).toBe(30);
         await sidebar.locator('[data-sidebar-entry="plugin:team-scale-6/overview"]').waitFor();
         await sidebar.locator('[data-navigation-view="online"]').click();
-        const onlineToggle = sidebar.locator(".sidebar-online .sidebar-session-group-toggle");
-        if ((await onlineToggle.getAttribute("aria-expanded")) === "false") {
-          await onlineToggle.click();
-        }
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
 

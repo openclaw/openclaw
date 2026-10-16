@@ -14,7 +14,7 @@ import {
 } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import type { ControllerHost } from "../model-providers/page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 

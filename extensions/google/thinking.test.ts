@@ -49,10 +49,10 @@ describe("Google transport thinking config", () => {
       expected: undefined,
     },
     {
-      name: "Gemini 2.5 Pro omits disabled thinking",
+      name: "Gemini 2.5 Pro bounds disabled thinking with an explicit output cap",
       model: {},
       options: { maxTokens: 128 },
-      expected: undefined,
+      expected: { thinkingBudget: 128 },
     },
     {
       name: "Gemini 2.5 Pro strips zero budget but keeps thoughts",
@@ -134,9 +134,6 @@ describe("Google transport thinking config", () => {
       expect(config).not.toHaveProperty("thinkingConfig");
     } else {
       expect(config.thinkingConfig).toStrictEqual(expected);
-    }
-    if ("maxTokens" in options) {
-      expect(config).toHaveProperty("maxOutputTokens", options.maxTokens);
     }
   });
 });

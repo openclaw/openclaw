@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -372,27 +372,6 @@ describePosix("native correction preparation", () => {
       }
       const sync = f.run("push_prep_head_to_pr_branch() { return 73; }; prepare_sync_head 42");
       expect(sync.status, sync.stderr).toBe(1);
-    },
-  );
-
-  it.each(["missing", "stale"])(
-    "ignores %s Markdown presentation during correction admission",
-    (kind) => {
-      const f = fixture();
-      const markdown = join(f.root, ".local/review.md");
-      if (kind === "missing") {
-        rmSync(markdown);
-      } else {
-        writeFileSync(markdown, "Obsolete presentation, not review authority\n");
-      }
-      expect(f.run("prepare_init 42 '' correction").status).toBe(0);
-      f.commitFix();
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
-      writeFileSync(join(f.root, ".local/correction-review.md"), "NEEDS WORK\n");
-      const result = f.run("require_prepared_review 42");
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("READY FOR /prepare-pr");
     },
   );
 

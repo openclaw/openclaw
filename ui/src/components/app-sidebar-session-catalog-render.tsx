@@ -7,7 +7,6 @@ import type {
 import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   groupCatalogSessionsByPerson,
@@ -17,6 +16,8 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { renderCatalogSessionRow } from "./app-sidebar-session-catalog-row.tsx";
 import {
   catalogErrorMessages,
+  catalogSessionActivity,
+  catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
@@ -29,15 +30,7 @@ const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
-  const liveRowsByKey = createMemo(() => {
-    const rows = new Map<string, GatewaySessionRow>();
-    for (const row of params.liveRows) {
-      if (!rows.has(row.key)) {
-        rows.set(row.key, row);
-      }
-    }
-    return rows;
-  });
+  const liveRowsByKey = createMemo(() => catalogSessionRowsByKey(params.liveRows));
   return (
     <For each={params.catalogs} keyed={(catalog) => catalog.id}>
       {(catalog) => renderCatalogGroup(catalog, liveRowsByKey, params)}
@@ -238,16 +231,11 @@ function renderCatalogGroup(
   const sectionId = untrack(() => `catalog:${readCatalog().id}`);
   const collapsed = createMemo(() => params.collapsedSections.has(sectionId));
   const rows = createMemo(() => readCatalog().visibleHosts.flatMap((host) => host.sessions));
-  const liveRows = createMemo(() => {
-    const rowsValue = rows();
-    const readLiveRowsByKeyValue = readLiveRowsByKey();
-    return rowsValue.flatMap((session) => {
-      const row = session.sessionKey ? readLiveRowsByKeyValue.get(session.sessionKey) : undefined;
-      return row ? [row] : [];
-    });
-  });
-  const hasActiveRun = createMemo(() => liveRows().some(isSessionRunActive));
-  const hasUnread = createMemo(() => liveRows().some((row) => row.unread === true));
+  const activity = createMemo(() =>
+    catalogSessionActivity(rows(), readLiveRowsByKey(), params.isRunVisuallyActive),
+  );
+  const hasActiveRun = createMemo(() => activity().running);
+  const hasUnread = createMemo(() => activity().unread);
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
   const loadingMore = createMemo(() => params.loadingMoreCatalogIds.has(readCatalog().id));
   const hasMore = createMemo(() => readCatalog().hosts.some((host) => Boolean(host.nextCursor)));
@@ -399,7 +387,7 @@ function renderCatalogGroup(
                       catalogId: readCatalog().id,
                     };
                   },
-                  get className() {
+                  get class() {
                     return "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new";
                   },
                   get label() {

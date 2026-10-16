@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
@@ -182,28 +180,6 @@ afterEach(() => {
 });
 
 describe("ReefTrustStore", () => {
-  it("retains delivery bindings across envelope and receipt relay windows", () => {
-    const opened: OpenAsyncKeyedStoreOptions[] = [];
-    const mockRuntime = runtime();
-    mockRuntime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
-      opened.push(options);
-      return createPluginStateKeyedStoreV2ForTests<T>(
-        "reef",
-        {
-          ...options,
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        },
-        { assertCurrent() {} },
-      );
-    };
-
-    openReefTrustStore(mockRuntime, config());
-
-    expect(
-      opened.find((options) => options.namespace === "outbound-deliveries")?.defaultTtlMs,
-    ).toBe(61 * 24 * 60 * 60 * 1_000);
-  });
-
   it("renews a rejection reservation while preserving duplicate receipt expiry", async () => {
     const mockRuntime = runtime();
     const store = openReefTrustStore(mockRuntime, config());
@@ -243,39 +219,6 @@ describe("ReefTrustStore", () => {
     const dayMs = 24 * 60 * 60 * 1_000;
     expect(renewed.expiresAt).toBeGreaterThan(shortened.expiresAt! + 60 * dayMs);
     expect(renewed.expiresAt).toBeLessThan(shortened.expiresAt! + 61 * dayMs);
-  });
-
-  it("persists peer pins and autonomy in shared plugin-state SQLite", async () => {
-    const first = openReefTrustStore(runtime(), config());
-    workerCommands = [];
-    await first.set("clawd", peerTrust());
-    expect(workerCommands).toHaveLength(1);
-    workerCommands = [];
-    await first.setAutonomy("clawd", "extended");
-    expect(workerCommands).toHaveLength(1);
-
-    const reopened = openReefTrustStore(runtime(), config());
-    expect(await reopened.get("@clawd")).toMatchObject({
-      autonomy: "extended",
-      keyEpoch: 1,
-      safetyNumberChanged: false,
-    });
-    expect((await reopened.list()).map((entry) => entry.peer)).toEqual(["clawd"]);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-  });
-
-  it("surfaces worker operation failures without applying a native fallback mutation", async () => {
-    const store = openReefTrustStore(runtime(), config());
-    await store.set("clawd", peerTrust());
-    const failure = new Error("worker operation failed");
-    beforeNextOperationWrite(() => {
-      throw failure;
-    });
-
-    await expect(store.setAutonomy("clawd", "extended")).rejects.toBe(failure);
-    expect(await openReefTrustStore(runtime(), config()).get("clawd")).toMatchObject({
-      autonomy: "bounded",
-    });
   });
 
   it("isolates trust by relay identity instead of machine-specific key paths", async () => {

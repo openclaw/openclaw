@@ -592,7 +592,7 @@ client, one unambiguous matching current-channel presenter, or a persistent-sess
 automation whose server-authored tool policy explicitly allows pinned-only authoring:
 
 - `show_widget { title, widget_code?, report?, kind?, name?, pin?, size?, tab?, after?,
-presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
+  presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
   includes active registered kinds. HTML and registered source use `widget_code`.
   Native reports use `report` without `kind` or `widget_code`, require `pin: true`,
   and render only on the board. For HTML and registered kinds, `pin` also places the widget on the board.
@@ -622,7 +622,7 @@ agent is told about user tier-1 events via session notices, e.g.
 ## What this replaces
 
 - **`extensions/workspaces` is deleted.** Experimental, `enabledByDefault:
-false`, never in a stable release (first appeared in 2026.7.2 betas). No
+  false`, never in a stable release (first appeared in 2026.7.2 betas). No
   migration. A doctor rule removes stale `<stateDir>/workspaces/` if present.
   Harvested ideas: pure grid math, bridge security model (port bootstrap,
   binding gating, rate limits), byte-frozen approval.

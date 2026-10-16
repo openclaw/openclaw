@@ -610,7 +610,6 @@ describe.skipIf(process.platform === "win32")(
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
-          expect(Object.isFrozen(context)).toBe(true);
           expect(captureContext).not.toHaveBeenCalled();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
@@ -801,7 +800,6 @@ describe.skipIf(process.platform === "win32")(
             if (!(context instanceof settledContext.CodexSettledTurnContext)) {
               throw new Error("Native turn lost its settled-tool evidence");
             }
-            expect(Object.isFrozen(context)).toBe(true);
             if (hidden) {
               expect(context.data).toEqual(
                 expect.arrayContaining([

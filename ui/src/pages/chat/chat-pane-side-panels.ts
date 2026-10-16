@@ -89,10 +89,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.setSessionObserverVisibility(!closing);
   }
 
-  requestSubagentsPanel(intent: "open" | "toggle"): void {
-    this.requestBackgroundPanel("subagents", intent);
-  }
-
   /** Opens the Subagents panel on one subagent, or on its list. */
   protected showSubagents(subagentKey: string | null, focus = false): void {
     const sessionKey = this.state?.sessionKey;

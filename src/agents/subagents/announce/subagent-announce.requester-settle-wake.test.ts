@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { setLoggerOverride } from "../../../logging/logger.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
@@ -317,12 +317,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const findings = ["alpha findings", "bravo findings", "charlie findings"];
     for (const [index, child] of children.entries()) {
       const text = `${resultPrefix}${findings[index]}`;
-      const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: text });
+      const terminalReply = prepareAgentRunTerminalReply({ rawText: text }).terminalReply;
       expect(terminalReply.disposition).toBe("visible");
       if (terminalReply.disposition !== "visible") {
         throw new Error("expected visible terminal evidence");
       }
-      child.completion = { required: true, terminalReply, resultText: terminalReply.text };
+      child.completion = { required: true, terminalReply, resultText: text };
       expect(terminalReply.text).toHaveLength(4_096);
       const sessionId = `session-${child.runId}`;
       sessionStore[child.childSessionKey] = { sessionId };
@@ -466,13 +466,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     },
   );
 
-  it("wakes with captured fallback output after a resumed completion returns NO_REPLY", async () => {
+  it("does not revive captured fallback output after a resumed completion returns NO_REPLY", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({
         runId: "run-b",
         delivery: { status: "failed" },
         completion: {
           required: true,
+          terminalReply: { disposition: "silent" },
           resultText: "NO_REPLY",
           fallbackResultText: "findings captured before the wake",
         },
@@ -484,7 +485,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("findings captured before the wake");
+    expect(message).not.toContain("findings captured before the wake");
+    expect(message).toContain("(no output)");
     expect(message).not.toContain("<prompt-data>\nNO_REPLY\n</prompt-data>");
   });
 
@@ -878,7 +880,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       outcome: { status: "ok" },
       completion: {
         required: true,
-        terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
+        terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+        resultText: text,
       },
       requesterSettleWake: {
         status: "pending",
@@ -938,7 +941,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       makeSettledChild({
         runId: "run-b",
         outcome: { status: "error", error: "provider unavailable" },
-        completion: { required: true, resultText: "provider unavailable" },
+        completion: {
+          required: true,
+          resultText: "provider unavailable",
+          terminalReply: { disposition: "visible", text: "provider unavailable" },
+        },
       }),
       makeSettledChild({
         runId: "run-a",
@@ -951,9 +958,31 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           interruptionReason: "gateway-restart",
           outcome: { status: "error", error: "gateway restarted" },
         },
-        completion: { required: true, resultText: "saved partial work" },
+        completion: {
+          required: true,
+          resultText: "saved partial work",
+          terminalReply: { disposition: "visible", text: "saved partial work" },
+        },
       }),
     ]);
+    for (const child of listedRequesterRuns()) {
+      sessionStore[child.childSessionKey] = { sessionId: `session-${child.runId}` };
+    }
+    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
+      const child = listedRequesterRuns().find(
+        (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
+      );
+      const event = {
+        type: "message",
+        message: {
+          role: "assistant",
+          display: true,
+          content: [{ type: "text", text: child?.completion?.resultText }],
+          __openclaw: { runId: child?.runId },
+        },
+      };
+      return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
+    });
 
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
 

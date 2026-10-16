@@ -534,7 +534,16 @@ describe("SQLite transcript archive reads", () => {
         id,
         message: { role: "assistant", content, __openclaw: { runId } },
       });
-      const answer = message("latest", `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`);
+      const answer = {
+        type: "message",
+        id: "latest",
+        message: {
+          role: "assistant",
+          content: `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`,
+          display: true,
+          __openclaw: { runId: "completed-run" },
+        },
+      };
       const archives = [
         { sessionId: "old", sessionKey, events: [message("old")] },
         {

@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConfigForm as renderConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
+import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
@@ -151,7 +152,13 @@ describe("config form and navigation", () => {
       uiHints: { "browser.enabled": { advanced: false } },
       formValue: { browser: { enabled: true } },
       activeSection: "browser",
-      sectionPrelude: <BrowserLinkPreferencesRow enabled={false} onChange={vi.fn()} />,
+      sectionPrelude: (
+        <SettingsToggleRow
+          title={t("browserLinkPreferences.openInControlUi")}
+          checked={false}
+          onChange={vi.fn()}
+        />
+      ),
     });
 
     const groups = container.querySelectorAll("#config-section-browser .settings-group");

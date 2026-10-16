@@ -1,5 +1,4 @@
 import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
-import { icons } from "../../../components/icons.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -15,7 +14,7 @@ import {
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
-import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
@@ -87,13 +86,18 @@ defineSolidBridge<Props, Methods>(
         label,
         title: content.kind === "file" ? content.path : label,
         icon:
-          content.kind === "mcp-app"
-            ? icons.puzzle
-            : renderAttachmentFileIcon({ filename: label, mode: "preview-with-favicon" }),
+          content.kind === "mcp-app" ? (
+            <Icon name="puzzle" />
+          ) : (
+            <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
+          ),
         className: content.kind === "loading" ? "is-connecting" : undefined,
       }));
       return props.activeId === null && tabs.length
-        ? [{ id: "browse", label: t("chat.sidePanel.files"), icon: icons.folder }, ...tabs]
+        ? [
+            { id: "browse", label: t("chat.sidePanel.files"), icon: <Icon name="folder" /> },
+            ...tabs,
+          ]
         : tabs;
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
@@ -102,7 +106,7 @@ defineSolidBridge<Props, Methods>(
         id: tab.id,
         label: tab.label,
         title: tab.title,
-        icon: <LitContent render={() => tab.icon} />,
+        icon: tab.icon,
         className: tab.className,
         domId: `${contentId}-tab-${tab.id}`,
         closeLabel: `${t("browser.closeTab")}: ${tab.label}`,

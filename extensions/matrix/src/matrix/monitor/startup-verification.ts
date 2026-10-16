@@ -1,5 +1,6 @@
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { recordCurrentStorageMetaDeviceId, resolveMatrixStoragePaths } from "../client/storage.js";
@@ -134,7 +135,7 @@ export async function ensureMatrixStartupVerification(params: {
       DEFAULT_STARTUP_VERIFICATION_COOLDOWN_HOURS,
   );
   const cooldownMs = cooldownHours * 60 * 60 * 1000;
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = resolveDateTimestampMs(params.nowMs);
   const attemptedAt = new Date(nowMs).toISOString();
   const value = await createStartupVerificationStore(stateLocation).lookup(stateKey);
   const state = value && typeof value === "object" ? value : null;

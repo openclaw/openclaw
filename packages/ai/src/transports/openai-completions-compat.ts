@@ -5,6 +5,7 @@
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
 import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
+import { normalizeOpenRouterModelFamilyId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import {
   resolveOpenAIReasoningEffortMapping,
@@ -237,7 +238,7 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
       (isModelStudioLike && endpointClass !== "custom") ||
-      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+      (normalizeOpenRouterModelFamilyId(modelId)?.startsWith("anthropic/") === true &&
         (endpointClass === "openrouter" ||
           (isDefaultRoute && provider === "openrouter") ||
           provider === "deepinfra"))

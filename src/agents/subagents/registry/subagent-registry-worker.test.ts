@@ -1,4 +1,7 @@
+import { randomBytes } from "node:crypto";
+import { Session } from "node:inspector/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
@@ -53,6 +56,7 @@ import {
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   prepareSubagentRegistrationRows,
+  prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -105,6 +109,75 @@ async function register(...entries: SubagentRunRecord[]) {
     }),
   );
 }
+
+it.each(["0", "1"])(
+  "releases completed payloads with persisted catalog=%s",
+  async (readPersisted) => {
+    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", readPersisted);
+    const gc = async () => {
+      const inspector = new Session();
+      inspector.connect();
+      try {
+        await inspector.post("HeapProfiler.collectGarbage");
+      } finally {
+        inspector.disconnect();
+      }
+    };
+    await register(entry("warm-retention"));
+    await setImmediate();
+    await gc();
+    const before = process.memoryUsage().heapUsed;
+    // Independent flat strings expose sliced-preview and full-row cache retention.
+    for (let batch = 0; batch < 4; batch++) {
+      await register(
+        ...Array.from({ length: 16 }, (_, index) => {
+          const resultText = randomBytes(96 * 1024).toString("base64");
+          return {
+            ...entry(`retained-${batch * 16 + index}`),
+            task: randomBytes(96 * 1024).toString("base64"),
+            execution: {
+              status: "terminal" as const,
+              endedAt: 2,
+              outcome: { status: "ok" as const },
+            },
+            cleanupCompletedAt: 3,
+            completion: {
+              required: false,
+              resultText,
+              terminalReply: { disposition: "visible" as const, text: resultText.slice(0, 4096) },
+            },
+          };
+        }),
+      );
+    }
+    await setImmediate();
+    await gc();
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(6 * 1024 * 1024);
+    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
+    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
+
+    const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
+    const full = prepared.consume((rows) => rows.get("retained-0"));
+    expect(full.ready).toBe(true);
+    if (!full.ready) {
+      throw new Error("Expected a current completed run");
+    }
+    expect(full.value?.task).toHaveLength(128 * 1024);
+    expect(full.value?.completion?.resultText).toHaveLength(128 * 1024);
+    await change("retained-0", (row) => {
+      row.label = "updated after completion";
+    });
+    const durable = loadSubagentRegistryFromSqlite().get("retained-0");
+    expect(durable?.task).toBe(full.value?.task);
+    expect(durable?.completion?.resultText).toBe(full.value?.completion?.resultText);
+    expect(durable?.completion?.terminalReply).toEqual(full.value?.completion?.terminalReply);
+    expect(durable?.label).toBe("updated after completion");
+    subagentRuns.clear();
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
+    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
+  },
+);
 
 it("streams bounded restore batches in one read and retains one snapshot", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>

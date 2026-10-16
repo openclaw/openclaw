@@ -1,5 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -114,13 +116,26 @@ export async function runGatewayStartupObservers(params: {
           try {
             const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
             await recoverSessionSendDeliveries(context, params.signal);
-          } catch {
+          } catch (error) {
             if (!params.signal.aborted) {
               params.log.warn(
-                "Session delivery restart recovery could not complete; saved inputs remain available.",
+                `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
               );
             }
           }
+        }
+        if (!params.signal.aborted && !params.isClosing?.()) {
+          await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
+            try {
+              const { recoverExecExitNotifications } =
+                await import("../agents/bash-tools.exec-notify.js");
+              await recoverExecExitNotifications(params.config, params.signal);
+            } catch (error) {
+              if (!params.signal.aborted) {
+                params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
+              }
+            }
+          });
         }
         const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
         if (!params.signal.aborted && params.isClosing?.() !== true) {

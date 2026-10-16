@@ -64,13 +64,15 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 ## Community invitation
 
-The sidebar shows a community invitation with Reddit, Discord, and X links by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. The redesigned invitation appears again for browsers that dismissed the older Discord-only card. Dismissing this version keeps it hidden across routine updates. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
+The sidebar’s compact **Community** entry opens Discord, Reddit, and X links on demand. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
+
+This replaces the promotional invitation card. Existing browser-local card dismissals are left untouched; they do not hide the compact entry. To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
 
 ```bash
 openclaw config set gateway.controlUi.communityInvite false
 ```
 
-After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Setting it to `false` hides the card even in new browser profiles. Re-enabling it with `true` preserves existing browser-local dismissals.
+After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Re-enabling it with `true` restores the compact entry.
 
 ## Personal identity
 
@@ -179,7 +181,7 @@ In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custo
 
 Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
 
-Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
+Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Plugin theme artwork keeps its palette-safe strength at or below the default; above it, the slider lifts the artwork toward the same fixed cap custom images stop at, reaching it at 100%. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
 
 A missing image leaves the normal theme-colored canvas. Disabled surfaces do not request the private image. Increased contrast and forced colors suppress decorative imagery; reduced transparency suppresses custom artwork and restores opaque writing surfaces. No external image host is contacted.
 
@@ -563,6 +565,19 @@ app-update controls. Permissions include the access published by the device,
 including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
+
+## Claws (Labs)
+
+Enable **Settings → Labs → Claws** to browse official Claw packages from
+ClawHub on the **Agents** page. Search the catalog, review the files and
+capabilities a Claw will install, then select **Add** to create its agent.
+Add creates an ordinary agent and opens its chat. It does not create a separate
+installed Claw to update or remove. Delete the agent through normal agent
+controls; shared plugins and MCP servers remain installed. See
+[Claws](/cli/claws) for the package contract and local-source CLI commands.
+
+Turning the Labs switch off hides Claw discovery and Add. Existing agents keep
+running.
 
 ## Speech bubbles
 

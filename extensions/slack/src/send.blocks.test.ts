@@ -102,9 +102,7 @@ function slackDnsRequestError(): Error {
 }
 
 describe("sendMessageSlack NO_REPLY literal", () => {
-  // Silent-reply stripping is owned by core auto-reply normalization before
-  // payloads reach outbound; a literal NO_REPLY sent through the message tool
-  // must deliver on Slack exactly like every sibling channel.
+  // Producers prepare agent replies; message-tool text is literal channel content.
   it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const result = await send("NO_REPLY");
 

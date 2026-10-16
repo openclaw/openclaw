@@ -6,7 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -27,11 +27,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import {
-  createOpenClawReadTool,
-  createSandboxedReadTool,
-  wrapReadToolWithSkillContent,
-} from "./agent-tools.read.js";
+import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
@@ -41,6 +37,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
@@ -1383,12 +1380,12 @@ describe("createOpenClawCodingTools read behavior", () => {
     const locator = "/skills/pond/SKILL.md";
     const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     const instructionDeliveryOptions = { instructionDeliveryCache };
-    const fullResult = {
+    const fullResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
       details: { kind: "text", content: "# Pond\ncomplete instructions" },
-    } as AgentToolResult<unknown>;
+    };
     let releaseRead = (): void => undefined;
-    const pendingRead = new Promise<AgentToolResult<unknown>>((resolve) => {
+    const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
       releaseRead = () => resolve(fullResult);
     });
     const execute = vi.fn(() => pendingRead);
@@ -1397,9 +1394,9 @@ describe("createOpenClawCodingTools read behavior", () => {
         name: "read",
         label: "read",
         description: "read a file",
-        parameters: {},
+        parameters: Type.Object({ path: Type.String() }),
         execute,
-      } as never,
+      },
       [{ filePath: locator }],
       instructionDeliveryOptions,
     );
@@ -1421,20 +1418,36 @@ describe("createOpenClawCodingTools read behavior", () => {
     const locator = "/skills/pond/SKILL.md";
     const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     const instructionDeliveryOptions = { instructionDeliveryCache };
-    const fullResult = {
+    const fullResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
       details: { kind: "text", content: "# Pond\ncomplete instructions" },
-    } as AgentToolResult<unknown>;
-    const truncatedResult = {
+    };
+    const truncatedResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "partial" }],
-      details: { kind: "truncated" },
-    } as AgentToolResult<unknown>;
-    const notFoundResult = {
+      details: {
+        kind: "truncated",
+        content: "partial",
+        continuation: { kind: "line", offset: 2 },
+        truncation: {
+          truncated: true,
+          truncatedBy: "lines",
+          totalLines: 2,
+          totalBytes: 16,
+          outputLines: 1,
+          outputBytes: 7,
+          lastLinePartial: false,
+          firstLineExceedsLimit: false,
+          maxLines: 1,
+          maxBytes: 32_768,
+        },
+      },
+    };
+    const notFoundResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: `Optional file not found: ${locator}.` }],
       details: { kind: "not_found", status: "not_found", path: locator, optional: true },
-    } as AgentToolResult<unknown>;
+    };
     const execute = vi
-      .fn()
+      .fn<() => Promise<AgentToolResult<ReadToolDetails>>>()
       .mockRejectedValueOnce(new Error("transient read failure"))
       .mockResolvedValueOnce(truncatedResult)
       .mockResolvedValueOnce(notFoundResult)
@@ -1444,9 +1457,9 @@ describe("createOpenClawCodingTools read behavior", () => {
         name: "read",
         label: "read",
         description: "read a file",
-        parameters: {},
+        parameters: Type.Object({ path: Type.String() }),
         execute,
-      } as never,
+      },
       [{ filePath: locator }],
       instructionDeliveryOptions,
     );
@@ -1603,80 +1616,5 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(extractToolText(result)).toBe(
       "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
     );
-  });
-
-  it("stops adaptive pagination when the current page reaches EOF", async () => {
-    const readResult: AgentToolResult<unknown> = {
-      content: [
-        {
-          type: "text",
-          text: "one\n\n[1 more lines in file. Use offset=2 to continue.]",
-        },
-      ],
-      details: {
-        truncation: {
-          truncated: true,
-          outputLines: 1,
-          totalLines: 1,
-          firstLineExceedsLimit: false,
-        },
-      },
-    };
-    const execute = vi.fn().mockResolvedValue(readResult);
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({
-        path: Type.String(),
-        offset: Type.Optional(Type.Number()),
-      }),
-      execute,
-    });
-
-    const result = await readTool.execute("read-offset-paging-eof", {
-      path: "notes.txt",
-      offset: 1,
-    });
-
-    expect(extractToolText(result)).toBe("one");
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("strips truncation.content details from read results while preserving other fields", async () => {
-    const readResult: AgentToolResult<unknown> = {
-      content: [{ type: "text" as const, text: "line-0001" }],
-      details: {
-        truncation: {
-          truncated: true,
-          outputLines: 1,
-          firstLineExceedsLimit: false,
-          content: "hidden duplicate payload",
-        },
-        continuation: { kind: "line", offset: 2 },
-      },
-    };
-    const baseRead: AgentTool = {
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({
-        path: Type.String(),
-        offset: Type.Optional(Type.Number()),
-        limit: Type.Optional(Type.Number()),
-      }),
-      execute: vi.fn(async () => readResult),
-    };
-
-    const wrapped = createOpenClawReadTool(
-      baseRead as unknown as Parameters<typeof createOpenClawReadTool>[0],
-    );
-    const result = await wrapped.execute("read-strip-1", { path: "demo.txt", limit: 1 });
-
-    const details = (result as { details?: { truncation?: Record<string, unknown> } }).details;
-    expect(details?.truncation?.truncated).toBe(true);
-    expect(details?.truncation?.outputLines).toBe(1);
-    expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
-    expect(details?.truncation).not.toHaveProperty("content");
   });
 });

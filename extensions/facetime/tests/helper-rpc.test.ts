@@ -241,10 +241,27 @@ describe("FaceTime helper RPC", () => {
     sendHelperPayload(client, {
       transactionId: payload.transactionId,
       conversation_audio_started: true,
+      helperPeer: { processId: 9999 },
+      helperBundleIdentifier: "untrusted-payload",
+      helperResults: [{ found: false }],
+      helpersContacted: 99,
+      topologyGeneration: 99,
+      topologyComplete: false,
     });
     await expect(actionPromise).resolves.toMatchObject({
       transactionId: payload.transactionId,
       conversation_audio_started: true,
+      helperPeer: { processId: 1234 },
+      helperBundleIdentifier: "com.apple.FaceTime",
+      helpersContacted: 1,
+      topologyGeneration: 1,
+      topologyComplete: true,
+      helperResults: [
+        expect.objectContaining({
+          conversation_audio_started: true,
+          helperPeer: expect.objectContaining({ processId: 1234 }),
+        }),
+      ],
     });
   });
 
@@ -356,11 +373,21 @@ describe("FaceTime helper RPC", () => {
       error: "dial outcome is unknown",
       ambiguous: true,
       proxy_identifier: "proxy-3",
+      helpersContacted: 1,
+      topologyGeneration: 99,
+      topologyComplete: true,
+      helperResults: [{ outcome: "absent", found: false }],
     });
 
     await expect(actionPromise).rejects.toMatchObject({
       name: "FaceTimeHelperAmbiguousError",
-      result: { proxy_identifier: "proxy-3" },
+      result: {
+        proxy_identifier: "proxy-3",
+        helpersContacted: undefined,
+        topologyGeneration: undefined,
+        topologyComplete: undefined,
+        helperResults: undefined,
+      },
     });
   });
 

@@ -197,9 +197,9 @@ suite.define(() => {
           };
           for (const index of [0, 1, 2]) {
             await persist(index);
-            // Saved tool rows share a collapsed activity group once both steps arrive.
+            // Enabled persisted reasoning stays visible between tool steps.
             if (reasoningLevel === "on" && index === 1) {
-              await expandRawDetails();
+              await expect.poll(() => rawDetails.count()).toBe(0);
             }
             await expect.poll(() => reasoning(index).count()).toBe(1);
             expect(await pane.locator(".chat-thinking").count()).toBe(3);
@@ -216,6 +216,15 @@ suite.define(() => {
           await worked.click();
           await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
           await expandRawDetails();
+          for (const index of [0, 1]) {
+            await expect
+              .poll(() =>
+                pane
+                  .locator(".chat-tool-msg-summary", { hasText: `evidence-${index}.txt` })
+                  .count(),
+              )
+              .toBe(1);
+          }
           await expect
             .poll(() => pane.locator(".chat-thinking").count())
             .toBe(reasoningLevel === "on" ? 3 : 0);

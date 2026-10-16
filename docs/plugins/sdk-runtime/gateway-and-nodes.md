@@ -226,10 +226,18 @@ applicable policy also requires fresh publication admission.
     }
     ```
 
-    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    Requests default to `operator.write` scope. Trusted plugins can request a method-specific scope,
+    such as `operator.approvals` for `plugin.approval.request`, through the third argument; this does
+    not exceed an authenticated caller's scopes. Calls from arbitrary external plugins are rejected.
+    Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
+
+    Pass `signal` in the request options to cancel the request and cooperating handler work,
+    for example the signal supplied to an agent tool's `execute` callback. It composes with
+    the current request/work lifetime; caller and plugin authority checks still apply.
+    Omitting it preserves the existing request behavior. Cancellation does not undo effects
+    that already committed.
 
     `await api.runtime.gateway.openPluginPanel({ panelId, sessionKey, agentId })`
     opens this plugin's registered native session panel in the requesting

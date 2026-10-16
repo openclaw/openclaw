@@ -188,22 +188,35 @@ const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 4_096;
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 
 export class RealtimeTalkPcmOutputQueue {
+  private context: AudioContext | null = null;
+  private sampleRateHz = 0;
   private playhead = 0;
   private readonly sources = new Set<AudioBufferSourceNode>();
 
-  get queuedUntil(): number {
-    return this.playhead;
+  open(sampleRateHz: number): void {
+    this.context = new AudioContext({ sampleRate: sampleRateHz });
+    this.sampleRateHz = sampleRateHz;
+  }
+
+  close(): void {
+    this.stop();
+    void this.context?.close();
+    this.context = null;
   }
 
   get isPlaying(): boolean {
     return this.sources.size > 0;
   }
 
-  play(
-    base64: string,
-    outputContext: AudioContext | null,
-    outputSampleRateHz: number,
-  ): RealtimeTalkPcmOutputQueuePlayResult {
+  get playbackDelayMs(): number {
+    return this.context
+      ? Math.max(0, Math.ceil((this.playhead - this.context.currentTime) * 1000))
+      : 0;
+  }
+
+  play(base64: string): RealtimeTalkPcmOutputQueuePlayResult {
+    const outputContext = this.context;
+    const outputSampleRateHz = this.sampleRateHz;
     if (!outputContext) {
       return "ignored";
     }
@@ -252,12 +265,12 @@ export class RealtimeTalkPcmOutputQueue {
     return "queued";
   }
 
-  stop(outputContext: AudioContext | null): void {
+  stop(): void {
     // Release ownership first so synchronous or late `ended` events from stopped
     // sources cannot affect audio queued by a replacement playback turn.
     const sources = [...this.sources];
     this.sources.clear();
-    this.playhead = outputContext?.currentTime ?? 0;
+    this.playhead = this.context?.currentTime ?? 0;
     for (const source of sources) {
       try {
         source.stop();

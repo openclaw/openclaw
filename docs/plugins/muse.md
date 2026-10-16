@@ -54,6 +54,8 @@ itself in the middle of a Gateway run. Update Muse with its own installer.
 1. Open **Model Setup** (`/models`) in the Control UI.
 2. In **AI Setup**, choose **Connect provider**, then **Meta → Muse Code**.
 3. Start sign-in, confirm the displayed device code in the browser, and approve it.
+4. Accept **Use Muse Code’s native permissions?** to finish setup for the selected
+   OpenClaw agent.
 
 OpenClaw enables the Muse plugin and selects `meta/muse-spark-1.3` with the
 `muse` runtime by default. If you choose another Meta model during setup,
@@ -112,6 +114,10 @@ Keep the sign-in dialog open while it shows **Waiting for approval in your
 browser…**. The device code and **Open sign-in** link remain available during
 the wait. After approval, OpenClaw checks access before showing **Muse Code is
 connected**; you can then start a new chat or close the dialog.
+
+Setup shows **Testing your AI connection…** while checking model access, then
+**Turning on your AI connection…** while enabling the runtime and applying the
+Gateway configuration. The connection is ready when that application completes.
 
 For Muse-owned sign-ins, OpenClaw checks that Muse can fetch the candidate model
 from Meta's live catalog. It does not run a model turn or expose native tools
@@ -222,6 +228,19 @@ A conversation tool policy (for example `tools.deny`) does not block Muse once
 you accept the native-runtime prompt. Muse does not receive OpenClaw's agent
 tools, so the policy has nothing to filter, and its own tools follow the
 approval mode above. Without that consent, OpenClaw refuses the turn.
+
+**Provider Access** and **AI Setup** ask for this permission once, after browser
+sign-in and before verification. Successful setup remembers your choice for the
+selected OpenClaw agent, including when you connect Muse without changing the
+active model. New chats using Muse then start with **Full access** and optional
+sandboxing off, without repeating the prompt.
+
+If you set up Muse through the CLI or manual configuration instead, the Control
+UI may still offer **Continue for this chat** when consent is needed. Setup
+outside these flows does not grant permission automatically. That fallback
+changes only the current chat. Remove `muse` from
+`agents.entries.<agentId>.nativeRuntimeConsent` to revoke the remembered choice.
+Required sandbox and workspace boundaries still apply.
 
 A refused attempt fails before any `muse` process starts, with an error that
 names the setting.

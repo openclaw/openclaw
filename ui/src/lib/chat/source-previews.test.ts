@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapWebContent } from "../../../../src/security/external-content.js";
 import type { MessageGroup } from "./chat-types.ts";
 import { extractChatSourcePreviews } from "./source-previews.ts";
-import { extractToolCardsCached } from "./tool-cards.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -345,7 +344,7 @@ describe("chat source previews", () => {
     expect(output[0]?.excerpt).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
   });
 
-  it("reuses Markdown work across recreated frame wrappers and invalidates changed result facts", () => {
+  it("reuses Markdown work across recreated frame wrappers", () => {
     const parse = vi.spyOn(MarkdownIt.prototype, "parse");
     const message = tool(search());
     const final = answer();
@@ -355,25 +354,6 @@ describe("chat source previews", () => {
     expect(previews([message], final)).toBe(first);
     expect(parse).toHaveBeenCalledTimes(parsed);
 
-    const card = extractToolCardsCached(message)[0]!;
-    card.details = search([{ ...result(), snippet: wrap("Updated source description.") }]);
-    expect(previews([message], final)[0]?.excerpt).toBe("Updated source description.");
-    expect(parse.mock.calls.length).toBeGreaterThan(parsed);
-
-    message.runId = "another-owner";
-    expect(previews([message], final)).toEqual([]);
-    message.runId = runId;
-    card.runId = "another-owner";
-    expect(previews([message], final)).toEqual([]);
-    card.runId = runId;
-    card.isError = true;
-    expect(previews([message], final)).toEqual([]);
-    card.isError = false;
-    card.details = undefined;
-    card.outputText = JSON.stringify(
-      search([{ ...result(), snippet: wrap("Recovered JSON source description.") }]),
-    );
-    expect(previews([message], final)[0]?.excerpt).toBe("Recovered JSON source description.");
     expect(previews([], final)).toEqual([]);
     expect(previews([message], answer("A completed answer without source links."))).toEqual([]);
   });

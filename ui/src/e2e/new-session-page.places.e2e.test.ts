@@ -361,7 +361,7 @@ suite.define(() => {
         .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
         .toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-permissions-open.png", {
-        surface: page.locator('.chat-controls__permission-picker [part="menu"]'),
+        surface: page.locator(".chat-controls__permission-menu"),
         content: [page.locator(".chat-controls__permission-option").first()],
       });
       await page.keyboard.press("Escape");
@@ -374,7 +374,7 @@ suite.define(() => {
         await revealChatModelOption(capturedModelOption);
       }
       await captureProjectUiProof(suite, page, "mobile-new-session-model-open.png", {
-        surface: page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+        surface: page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
         content: [capturedModelOption],
       });
       expect(
@@ -387,7 +387,7 @@ suite.define(() => {
       await page.locator('[data-chat-thinking-select="true"]').click();
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
-        surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        surface: page.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
         content: [fastMode],
       });
       await page.keyboard.press("Escape");

@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import "./custom-elements.ts";
 
 // Mirrors renderCatalogCard's geometry (art tile, title, action slot, two summary
 // lines) inside the real grid so the layout does not jump on load. Fills are kept
@@ -37,12 +37,8 @@ export function renderCatalogGridSkeleton(params: { label?: string; cards: numbe
   );
 }
 
-type PluginCatalogSkeletonProps = { label?: string };
-function CatalogSkeletonContent(
-  props: PluginCatalogSkeletonProps,
-  host: SolidBridgeElement<PluginCatalogSkeletonProps>,
-): JSX.Element {
-  host.style.display = "contents";
+export function PluginCatalogSkeleton(props: { label?: string }): JSX.Element {
+  let host!: HTMLElement;
   const [cards, setCards] = createSignal(8);
   onSettled(() => {
     let frame = 0;
@@ -78,11 +74,14 @@ function CatalogSkeletonContent(
       window.removeEventListener("resize", scheduleMeasure);
     };
   });
-  return <>{renderCatalogGridSkeleton({ label: props.label, cards: cards() })}</>;
+  return (
+    <openclaw-plugin-catalog-skeleton
+      ref={(element) => {
+        host = element;
+      }}
+      style={{ display: "contents" }}
+    >
+      {renderCatalogGridSkeleton({ label: props.label ?? "", cards: cards() })}
+    </openclaw-plugin-catalog-skeleton>
+  );
 }
-
-export const PluginCatalogSkeleton = defineSolidBridge<PluginCatalogSkeletonProps>(
-  "openclaw-plugin-catalog-skeleton",
-  CatalogSkeletonContent,
-  { properties: { label: { default: "", attribute: false } } },
-);

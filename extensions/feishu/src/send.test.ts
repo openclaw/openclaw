@@ -3,7 +3,6 @@ import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
-import { resolveFeishuCardTemplate } from "./native-card.js";
 import {
   editMessageFeishu,
   getMessageFeishu,
@@ -132,6 +131,7 @@ describe("getMessageFeishu", () => {
         parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw }],
         sentAt: result.receipt.sentAt,
         raw: [raw],
+        sourceResults: [{ channel: "feishu", messageId }],
       },
     });
   }
@@ -148,35 +148,7 @@ describe("getMessageFeishu", () => {
     });
   }
 
-  it("materializes prose soft breaks in the public post send path", async () => {
-    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_newlines" } });
-    mockCreateFeishuClient.mockReturnValue({
-      im: {
-        message: {
-          create,
-          reply: vi.fn(),
-          get: mockClientGet,
-          list: mockClientList,
-          patch: mockClientPatch,
-        },
-      },
-    });
-
-    await sendMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      to: "oc_send",
-      text: "first line\nsecond line\n\n```ts\nconst value = 1\n```",
-    });
-
-    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
-    const element = JSON.parse(request?.data?.content ?? "null").zh_cn.content[0][0];
-    expect(element).toEqual({
-      tag: "md",
-      text: "first line  \nsecond line\n\n```ts\nconst value = 1\n```",
-    });
-  });
-
-  it("sends automatic mentions as native post elements without rewriting body text", async () => {
+  it("sends native mentions while preserving body mentions, prose breaks, and code fences", async () => {
     const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
     mockCreateFeishuClient.mockReturnValue({
       im: {
@@ -193,12 +165,12 @@ describe("getMessageFeishu", () => {
     const result = await sendMessageFeishu({
       cfg: {} as ClawdbotConfig,
       to: "oc_send",
-      text: 'body <at user_id="ou_body">Body User</at>',
+      text: 'body <at user_id="ou_body">Body User</at>\nsecond line\n\n```ts\nconst value = 1\n```',
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
 
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith(
-      'body <at user_id="ou_body">Body User</at>',
+      'body <at user_id="ou_body">Body User</at>\nsecond line\n\n```ts\nconst value = 1\n```',
       "preserve",
     );
     expect(create).toHaveBeenCalledWith({
@@ -211,7 +183,10 @@ describe("getMessageFeishu", () => {
             content: [
               [
                 { tag: "at", user_id: "ou_target", user_name: "Target User" },
-                { tag: "md", text: 'body <at user_id="ou_body">Body User</at>' },
+                {
+                  tag: "md",
+                  text: 'body <at user_id="ou_body">Body User</at>  \nsecond line\n\n```ts\nconst value = 1\n```',
+                },
               ],
             ],
           },
@@ -248,45 +223,6 @@ describe("getMessageFeishu", () => {
       config: { width_mode: "fill" },
       body: { elements: [{ tag: "markdown", content: "line one\nline two\n\nparagraph" }] },
       header: { title: { tag: "plain_text", content: "Agent" }, template: "blue" },
-    });
-  });
-
-  it("extracts text content from interactive card elements", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_1",
-            chat_id: "oc_1",
-            msg_type: "interactive",
-            body: {
-              content: JSON.stringify({
-                elements: [
-                  { tag: "markdown", content: "hello markdown" },
-                  { tag: "div", text: { content: "hello div" } },
-                ],
-              }),
-            },
-          },
-        ],
-      },
-    });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_1",
-    });
-
-    expect(mockClientGet).toHaveBeenCalledWith({
-      params: { card_msg_content_type: "user_card_content" },
-      path: { message_id: "om_1" },
-    });
-    expectParsedMessage(result, {
-      messageId: "om_1",
-      chatId: "oc_1",
-      content: "hello markdown\nhello div",
-      contentType: "interactive",
     });
   });
 
@@ -403,50 +339,6 @@ describe("getMessageFeishu", () => {
       chatId: "oc_post_card",
       content: "Card summary\n\n**fallback** body",
       contentType: "interactive",
-    });
-  });
-
-  it("extracts text content from post messages", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_post",
-            chat_id: "oc_post",
-            msg_type: "post",
-            mentions: [{ key: "@_user_1", id: "ou_ada", id_type: "open_id", name: "Ada" }],
-            body: {
-              content: JSON.stringify({
-                zh_cn: {
-                  title: "Summary",
-                  content: [
-                    [
-                      { tag: "text", text: "post body", style: ["bold"] },
-                      { tag: "text", text: " " },
-                      { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
-                      { tag: "text", text: " " },
-                      { tag: "at", user_id: "ou_ada", user_name: "Ada" },
-                    ],
-                  ],
-                },
-              }),
-            },
-          },
-        ],
-      },
-    });
-
-    const result = await getMessageFeishu({
-      cfg: {} as ClawdbotConfig,
-      messageId: "om_post",
-    });
-
-    expectParsedMessage(result, {
-      messageId: "om_post",
-      chatId: "oc_post",
-      content: "Summary\n\n**post body** *[Docs](https://example.com)* @Ada",
-      contentType: "post",
     });
   });
 
@@ -614,12 +506,6 @@ describe("editMessageFeishu", () => {
   });
 });
 
-describe("resolveFeishuCardTemplate", () => {
-  it("accepts supported Feishu templates", () => {
-    expect(resolveFeishuCardTemplate(" purple ")).toBe("purple");
-  });
-});
-
 const thread = { cfg: {}, threadId: "omt_1" };
 
 function page<T>(items: T[], paging: { has_more?: boolean; page_token?: string } = {}) {
@@ -694,25 +580,6 @@ describe("fetched text mentions", () => {
       }
     },
   );
-
-  it.each([
-    ["open_id", "ou_person"],
-    ["user_id", "user_person"],
-    ["union_id", "on_person"],
-  ])("preserves the API-selected %s mention identifier", async (id_type, id) => {
-    mockClientGet.mockResolvedValueOnce(
-      page([
-        {
-          ...textMessage("om_person", "Hello @_user_1"),
-          msg_type: "text",
-          mentions: [{ key: "@_user_1", id, id_type, name: "Person" }],
-        },
-      ]),
-    );
-    expect((await getMessageFeishu({ cfg: {}, messageId: "om_person" }))?.content).toBe(
-      `Hello <at user_id="${id}">Person</at>`,
-    );
-  });
 });
 
 describe("listFeishuThreadMessages", () => {

@@ -265,8 +265,8 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (
     reason: string,
-    error?: unknown,
-    hookReason = reason,
+    error: unknown,
+    hookReason: string,
     exitCode = 1,
   ) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {

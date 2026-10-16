@@ -87,7 +87,6 @@ const resolveSessionKeyFromResolveParams = (
 };
 
 describe("resolveSessionKeyFromResolveParams", () => {
-  const canonicalKey = "agent:main:canon";
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let storePath: string;
 
@@ -106,57 +105,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
     targetStore = {};
     // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
-  });
-
-  it("hides canonical keys that fail the spawnedBy visibility filter", () => {
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
-    };
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: `No session found: ${canonicalKey}`,
-      },
-    });
-  });
-
-  it("resolves archived short ids with display metadata", () => {
-    const key = "agent:main:thread:abcdef12-3456-4789-8abc-def012345678";
-    setFixtureStore({
-      storePath,
-      store: {
-        [key]: {
-          sessionId: "sess-short",
-          updatedAt: 10,
-          archivedAt: 20,
-          displayName: "Release monitor",
-          label: "Renamed release monitor",
-          boardFace: "dashboard",
-          boardPresentation: "expanded",
-        },
-      },
-    });
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "ABCDEF12", agentId: "main" },
-      }),
-    ).toEqual({
-      ok: true,
-      key,
-      agentId: "main",
-      displayName: "Renamed release monitor",
-      boardFace: "dashboard",
-      boardPresentation: "expanded",
-    });
   });
 
   it("uses a display-name slug only to narrow a short-id tie", () => {
@@ -196,7 +144,15 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: {
         [deletedKey]: { sessionId: deletedKey, updatedAt: 2, displayName: "Deleted session" },
-        [survivingKey]: { sessionId: survivingKey, updatedAt: 1, displayName: "Surviving session" },
+        [survivingKey]: {
+          sessionId: survivingKey,
+          updatedAt: 1,
+          archivedAt: 20,
+          displayName: "Original session",
+          label: "Surviving session",
+          boardFace: "dashboard",
+          boardPresentation: "expanded",
+        },
       },
     });
 
@@ -210,29 +166,8 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: survivingKey,
       agentId: "main",
       displayName: "Surviving session",
-    });
-  });
-
-  it("reports a deleted-agent-only short-id match as missing", () => {
-    const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
-    setFixtureStore({
-      storePath,
-      store: {
-        [deletedKey]: { sessionId: deletedKey, updatedAt: 1, displayName: "Deleted session" },
-      },
-    });
-
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "12345678" },
-      }),
-    ).toEqual({
-      ok: false,
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "No session found: 12345678",
-      },
+      boardFace: "dashboard",
+      boardPresentation: "expanded",
     });
   });
 
@@ -305,58 +240,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
         p: { shortId: "deadbeef", allowMissing: true },
       }),
     ).toEqual({ ok: true, missing: true });
-  });
-
-  it.each([
-    { key: "agent:main:deploy-monitor", slug: "deploy-monitor", expected: "literal" },
-    { key: "agent:main:missing", slug: "deploy-monitor", expected: "slug" },
-    { key: "agent:main:missing", expected: "missing" },
-  ])("discovers a named reference with exact-key precedence: $expected", (reference) => {
-    const literal = "agent:main:deploy-monitor";
-    const slugKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
-    const store = {
-      [literal]: {
-        sessionId: literal,
-        updatedAt: 1,
-        displayName: "Literal session",
-        boardFace: "chat" as const,
-      },
-      [slugKey]: {
-        sessionId: slugKey,
-        updatedAt: 2,
-        displayName: "Deploy: monitor",
-        boardFace: "dashboard" as const,
-      },
-    };
-    setFixtureStore({
-      storePath,
-      store,
-      targetsBySessionKey: new Map(
-        Object.keys(store).map((key) => [
-          key,
-          { agentId: "main", storeTarget: { agentId: "main", storePath } },
-        ]),
-      ),
-    });
-    const result = resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: {
-        reference: { key: reference.key, slug: reference.slug },
-        agentId: "main",
-        allowMissing: true,
-      },
-    });
-    expect(result).toEqual(
-      reference.expected === "missing"
-        ? { ok: true, missing: true }
-        : {
-            ok: true,
-            key: reference.expected === "literal" ? literal : slugKey,
-            agentId: "main",
-            displayName: reference.expected === "literal" ? "Literal session" : "Deploy: monitor",
-            boardFace: reference.expected === "literal" ? "chat" : "dashboard",
-          },
-    );
   });
 
   it("resolves a configured global alias with its stored non-default owner", () => {

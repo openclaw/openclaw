@@ -244,7 +244,7 @@ export function readDevicePairingStoreSnapshotFromDatabase(
   };
 }
 
-export function readPairedDevicePairingRecordsFromDatabase(
+function readPairedDevicePairingRecordsFromDatabase(
   db: EngineConnection,
 ): Record<string, PairedDevice> {
   const paired = transactionPairedRecords(db);

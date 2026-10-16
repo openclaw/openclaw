@@ -2,11 +2,14 @@
 import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+
+type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
 async function mount(overrides: Partial<ChatDetailsProps> = {}) {
   const value: ChatDetailsProps = {
@@ -54,6 +57,18 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   expect(element.querySelector("[data-details-group]")).toBeNull();
   expect(element.querySelector(".chat-details-session > summary")).toBeNull();
+  const openChanges = vi.fn();
+  element.props = { ...element.props!, onOpenSessionDiff: openChanges };
+  await element.updateComplete;
+  const changes = element.querySelector('[data-details-group="pull-requests"]')!;
+  expect(changes.querySelector("summary")?.textContent).toContain("Changes");
+  const allChanges = changes.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
+  expect(allChanges.textContent).toContain("All changes");
+  allChanges.click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  element.props = { ...element.props!, onOpenSessionDiff: undefined };
+  await element.updateComplete;
+  expect(element.querySelector("[data-details-group]")).toBeNull();
   element.props = { ...element.props!, pullRequests };
   await element.updateComplete;
   expect(

@@ -59,6 +59,7 @@ export function canApplySessionListSnapshot(
       spawnedBy: undefined,
       includeOwnerSessionCounts: false,
       involvingMe: false,
+      ownerId: undefined,
       excludeCron: countsOnly ? false : options.excludeCron,
       excludeSystem: countsOnly ? false : options.excludeSystem,
     })
@@ -145,6 +146,11 @@ export function canApplySessionListSnapshot(
     if (subagentExcluded) {
       covered = true;
       continue;
+    }
+    // Owner totals cover the full roster, not just this sampled page.
+    // Without the prior row, exclusion cannot prove its contribution is unchanged.
+    if (countsOnly && !existing) {
+      return false;
     }
     const excluded =
       !existing &&

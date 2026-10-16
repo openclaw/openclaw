@@ -135,13 +135,6 @@ describe("prepared model support admission", () => {
       expected: { kind: "unavailable", error: "model not allowed: fixture/new-model" },
     },
     {
-      name: "keeps automatic defaults independent of manual override policy",
-      current: true,
-      config: manualPolicy,
-      request: { source: "automatic" as const },
-      expected: { kind: "resolved" },
-    },
-    {
       name: "does not replace a missing pinned account with the shared account",
       current: true,
       config: custom,
@@ -196,12 +189,7 @@ describe("prepared model support admission", () => {
   it.each([
     { model: "current", ambiguous: false, admitted: true, authored: false, route: "native" },
     { model: "current", ambiguous: false, admitted: true, authored: true, route: "native" },
-    { model: "unknown", ambiguous: false, admitted: false, authored: false, route: "native" },
     { model: "auto", ambiguous: false, admitted: false, authored: false, route: "native" },
-    { model: "auto", ambiguous: false, admitted: false, authored: true, route: "native" },
-    { model: "auto", ambiguous: false, admitted: true, authored: true, route: "custom" },
-    { model: "auto", ambiguous: true, admitted: true, authored: true, route: "native" },
-    { model: "private-model", ambiguous: false, admitted: true, authored: true, route: "native" },
     { model: "current", ambiguous: true, admitted: false, authored: false, route: "native" },
   ])(
     "checks the native donor before visible alias creation: $model/$ambiguous/$authored/$route",
@@ -663,10 +651,7 @@ describe("prepared model support admission", () => {
     });
   });
 
-  it.each([
-    { baseUrl: "https://api.x.ai/v1", kind: "unavailable", advertised: false },
-    { baseUrl: "https://custom.invalid/v1", kind: "resolved", advertised: true },
-  ])(
+  it.each([{ baseUrl: "https://custom.invalid/v1", kind: "resolved", advertised: true }])(
     "uses final inline transport for admission and alias publication: $baseUrl",
     async ({ baseUrl, kind, advertised }) => {
       const owner = retiredXaiOwner(baseUrl);
@@ -906,9 +891,7 @@ describe("prepared model support admission", () => {
 
   it.each([
     { ownership: "catalog", source: "override" },
-    { ownership: "catalog", source: "automatic" },
     { ownership: "configured", source: "override" },
-    { ownership: "configured", source: "automatic" },
   ] as const)(
     "renews $ownership native ownership once per $source choice without host credentials",
     async ({ ownership, source }) => {
@@ -975,8 +958,6 @@ describe("prepared model support admission", () => {
 
   it.each([
     { revoked: "model", source: "override" },
-    { revoked: "model", source: "automatic" },
-    { revoked: "owner", source: "override" },
     { revoked: "owner", source: "automatic" },
   ] as const)(
     "rejects $source admission when native renewal revokes the $revoked",

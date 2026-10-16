@@ -1,3 +1,4 @@
+import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-image-renditions.js";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { buildChatMediaFetchHeaders } from "./chat-media-playback.ts";
 import {
@@ -16,6 +17,7 @@ import {
   scheduleChatMediaResourceRefresh,
   trimManagedImageMissResources,
   type ChatMediaResource,
+  type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
@@ -23,14 +25,22 @@ const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
 type ManagedImageVariant = "full" | "thumbnail";
 
+export function managedImageInlineVariant(image: ImageBlock): ManagedImageVariant {
+  // Bounded still previews intentionally do not encode GIF animation.
+  return image.mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "image/gif"
+    ? "full"
+    : "thumbnail";
+}
+
 function managedImageResourceIdentity(
   source: string | undefined,
   opts?: ImageRenderOptions,
   artifactId?: string,
   variant: ManagedImageVariant = "thumbnail",
+  previewWidth: ChatImageRenditionWidth = 960,
 ) {
   const variantUrl = source
-    ? buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)
+    ? buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath, previewWidth)
     : undefined;
   const authToken = opts?.authToken?.trim() ?? "";
   const artifactKey = artifactId?.trim() ?? "";
@@ -44,16 +54,24 @@ function managedImageResourceIdentity(
     variantUrl,
     artifactKey,
     variant,
+    variant === "thumbnail" ? previewWidth : undefined,
   ]);
-  return { cacheKey, subscriberScope: `${variantUrl}::${artifactKey}::${variant}` };
+  return {
+    cacheKey,
+    subscriberScope: `${variantUrl}::${artifactKey}::${variant}::${variant === "thumbnail" ? previewWidth : ""}`,
+  };
 }
 
 export function readCachedManagedImageUrl(
   source: string | undefined,
   opts?: ImageRenderOptions,
   artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
+  previewWidth: ChatImageRenditionWidth = 960,
 ) {
-  return readManagedImageBlobUrl(managedImageResourceIdentity(source, opts, artifactId).cacheKey);
+  return readManagedImageBlobUrl(
+    managedImageResourceIdentity(source, opts, artifactId, variant, previewWidth).cacheKey,
+  );
 }
 
 export function resolveManagedImageResource(
@@ -62,12 +80,14 @@ export function resolveManagedImageResource(
   artifactId?: string,
   variant: ManagedImageVariant = "thumbnail",
   retryFailed = false,
+  previewWidth: ChatImageRenditionWidth = 960,
 ): ChatMediaResource<string | null> {
   const { cacheKey, subscriberScope } = managedImageResourceIdentity(
     source,
     opts,
     artifactId,
     variant,
+    previewWidth,
   );
   const resource = observeChatMediaResource<string | null>(
     "managed-image",
@@ -112,7 +132,14 @@ export function resolveManagedImageResource(
     const controller = new AbortController();
     resource.abortController = controller;
     resource.pending = (async () => {
-      const blob = await fetchManagedImageBlob(source, opts, artifactId, variant, controller);
+      const blob = await fetchManagedImageBlob(
+        source,
+        opts,
+        artifactId,
+        variant,
+        controller,
+        previewWidth,
+      );
       if (!blob) {
         return markManagedImageUnavailable(resource);
       }
@@ -140,13 +167,15 @@ function buildManagedOutgoingImageVariantUrl(
   source: string,
   variant: ManagedImageVariant,
   resourceBasePath?: string,
+  previewWidth: ChatImageRenditionWidth = 960,
 ): string {
   try {
     const parsed = new URL(source, window.location.origin);
     parsed.pathname = parsed.pathname.replace(/\/(?:full|thumbnail)$/u, `/${variant}`);
     if (variant === "thumbnail") {
-      // Thumbnails are immutable in HTTP caches; replace the former 300px rendition.
-      parsed.searchParams.set("v", "2");
+      // Thumbnails are immutable in HTTP caches; replace pre-byte-limit renditions.
+      parsed.searchParams.set("v", "4");
+      parsed.searchParams.set("width", String(previewWidth));
     }
     if (/^https?:\/\//iu.test(source)) {
       return parsed.href;
@@ -166,6 +195,7 @@ async function fetchManagedImageBlob(
   artifactId: string | undefined,
   variant: ManagedImageVariant,
   controller: AbortController,
+  previewWidth: ChatImageRenditionWidth,
 ): Promise<Blob | null> {
   const requesterSessionKey = source
     ? resolveManagedOutgoingMediaSessionKey(source)
@@ -174,7 +204,12 @@ async function fetchManagedImageBlob(
     requesterSessionKey && artifactId && opts?.resolveArtifactDownload
       ? await opts
           .resolveArtifactDownload(
-            { sessionKey: requesterSessionKey, artifactId, variant },
+            {
+              sessionKey: requesterSessionKey,
+              artifactId,
+              variant,
+              ...(variant === "thumbnail" ? { previewWidth } : {}),
+            },
             controller.signal,
           )
           .catch(() => null)
@@ -190,7 +225,12 @@ async function fetchManagedImageBlob(
     return null;
   }
   const requestUrl = isManagedOutgoingMediaSource(imageSource)
-    ? buildManagedOutgoingImageVariantUrl(imageSource, variant, opts?.resourceBasePath)
+    ? buildManagedOutgoingImageVariantUrl(
+        imageSource,
+        variant,
+        opts?.resourceBasePath,
+        previewWidth,
+      )
     : imageSource;
   const headers = buildChatMediaFetchHeaders(artifactDownload ? undefined : opts?.authToken);
   headers.set("Accept", "image/*");

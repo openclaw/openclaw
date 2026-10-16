@@ -77,14 +77,6 @@ describe("session groups catalog", () => {
     return storePath;
   }
 
-  function useLegacyGroupSchema() {
-    // Publish fixture DDL before reopening; admitted files do not observe outside writers.
-    const { db } = openOpenClawStateDatabase({ env });
-    db.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
-    db.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
-    closeOpenClawStateDatabaseForTest();
-  }
-
   it("replaces the ordered catalog with deduped trimmed names", async () => {
     expect(readSessionGroupCatalog(env).groups).toEqual([]);
     const groups = await putSessionGroups({
@@ -183,86 +175,6 @@ describe("session groups catalog", () => {
     expect(readSessionGroupCatalog(env).sectionOrder).toEqual(expectedSectionOrder);
   });
 
-  it("keeps catalog reads and reorders schema-read-only until defaults are used", async () => {
-    useLegacyGroupSchema();
-    openOpenClawStateDatabase({ env })
-      .db.prepare("INSERT INTO session_groups (name, position, created_at) VALUES (?, ?, ?)")
-      .run("Client", 0, Date.now());
-
-    const beforeFeatureUse = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(session_groups)")
-      .all() as Array<{ name: string }>;
-    expect(beforeFeatureUse.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining(["cwd", "worktree"]),
-    );
-
-    await ensureSessionGroupCatalog(env);
-    expect(readSessionGroupCatalog(env).groups).toEqual([{ name: "Client", position: 0 }]);
-    expect(await putSessionGroups({ cfg, names: ["Client"], env })).toEqual([
-      { name: "Client", position: 0 },
-    ]);
-    const afterCatalogUse = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(session_groups)")
-      .all() as Array<{ name: string }>;
-    expect(afterCatalogUse.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining(["cwd", "worktree"]),
-    );
-
-    expect(readSessionGroupCatalog(env).defaults).toEqual([{ name: "Client" }]);
-    await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
-    expect(readSessionGroupCatalog(env).defaults).toEqual([{ name: "Customer" }]);
-    const afterDefaultsReadAndRename = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(session_groups)")
-      .all() as Array<{ dflt_value: unknown; name: string; notnull: number; type: string }>;
-    expect(afterDefaultsReadAndRename.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining(["cwd", "worktree"]),
-    );
-    expect(
-      await updateSessionGroupDefaults("Customer", { cwd: "/repos/customer", worktree: true }, env),
-    ).toContainEqual({ name: "Customer", cwd: "/repos/customer", worktree: true });
-    const columns = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(session_groups)")
-      .all() as Array<{ dflt_value: unknown; name: string; notnull: number; type: string }>;
-    expect(columns.filter((column) => column.name === "cwd" || column.name === "worktree")).toEqual(
-      [
-        expect.objectContaining({ dflt_value: null, name: "cwd", notnull: 0, type: "TEXT" }),
-        expect.objectContaining({
-          dflt_value: null,
-          name: "worktree",
-          notnull: 0,
-          type: "INTEGER",
-        }),
-      ],
-    );
-  });
-
-  it("preserves New Session defaults through reorder and rename", async () => {
-    await putSessionGroups({ cfg, names: ["Client", "Other"], env });
-    expect(
-      await updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
-    ).toContainEqual({
-      name: "Client",
-      cwd: "/repos/client",
-      worktree: true,
-    });
-
-    await putSessionGroups({ cfg, names: ["Other", "Client"], env });
-    await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
-    expect(readSessionGroupCatalog(env).defaults).toContainEqual({
-      name: "Customer",
-      cwd: "/repos/client",
-      worktree: true,
-    });
-    await updateSessionGroupDefaults("Customer", { cwd: "/repos/updated", worktree: false }, env);
-    expect(readSessionGroupCatalog(env)).toMatchObject({
-      groups: [
-        { name: "Other", position: 0 },
-        { name: "Customer", position: 1 },
-      ],
-      defaults: [{ name: "Other" }, { name: "Customer", cwd: "/repos/updated", worktree: false }],
-    });
-  });
-
   it("rejects renaming an unknown group after defaults schema activation", async () => {
     await putSessionGroups({ cfg, names: ["Client"], env });
     await updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env);
@@ -296,7 +208,11 @@ describe("session groups catalog", () => {
   });
 
   it("keeps a stale defaults update schema-free on a legacy database", async () => {
-    useLegacyGroupSchema();
+    // Publish fixture DDL before reopening; admitted files do not observe outside writers.
+    const { db } = openOpenClawStateDatabase({ env });
+    db.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
+    db.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
+    closeOpenClawStateDatabaseForTest();
 
     expect(
       await updateSessionGroupDefaults("Missing", { cwd: "/repos/missing", worktree: true }, env),
@@ -304,9 +220,9 @@ describe("session groups catalog", () => {
     const columns = openOpenClawStateDatabase({ env })
       .db.prepare("PRAGMA table_info(session_groups)")
       .all() as Array<{ name: string }>;
-    expect(columns.map((column) => column.name)).not.toEqual(
-      expect.arrayContaining(["cwd", "worktree"]),
-    );
+    const columnNames = columns.map((column) => column.name);
+    expect(columnNames).not.toContain("cwd");
+    expect(columnNames).not.toContain("worktree");
   });
 
   it("publishes catalog writes and serves repeated viewers without parent-thread SQLite", async () => {

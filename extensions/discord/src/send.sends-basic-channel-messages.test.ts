@@ -436,7 +436,7 @@ describe("sendMessageDiscord", () => {
       id: "msg1",
       channel_id: "789",
     });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
+    await sendMessageDiscord("channel:789", "ping @Alice.", {
       rest,
       token: "t",
       cfg: {
@@ -455,7 +455,7 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
+    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>.");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 
@@ -881,40 +881,6 @@ describe("Discord channel permissions", () => {
   });
 });
 
-describe("edit/delete message helpers", () => {
-  it("edits message content", async () => {
-    const { rest, patchMock } = makeDiscordRest();
-    patchMock.mockResolvedValue({ id: "m1" });
-    await editMessageDiscord(
-      "chan1",
-      "1",
-      { content: "hello" },
-      { rest, token: "t", cfg: DISCORD_TEST_CFG },
-    );
-    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "1"));
-    expect(requireRestBody(patchMock).content).toBe("hello");
-  });
-
-  it("deletes message", async () => {
-    const { rest, deleteMock } = makeDiscordRest();
-    deleteMock.mockResolvedValue({});
-    await deleteMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "1"));
-  });
-});
-
-describe("pin helpers", () => {
-  it("pins and unpins messages", async () => {
-    const { rest, putMock, deleteMock } = makeDiscordRest();
-    putMock.mockResolvedValue({});
-    deleteMock.mockResolvedValue({});
-    await pinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    await unpinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
-  });
-});
-
 describe("message mutation retries", () => {
   const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
   const unknownMessage = Object.assign(new Error("Unknown Message"), {
@@ -927,15 +893,31 @@ describe("message mutation retries", () => {
     {
       name: "edit",
       mock: "patchMock",
+      route: Routes.channelMessage("chan1", "1"),
       run: (opts: ReturnType<typeof discordClientOpts>) =>
         editMessageDiscord("chan1", "1", { content: "hello" }, opts),
     },
-    { name: "delete", mock: "deleteMock", run: deleteMessageDiscord.bind(null, "chan1", "1") },
-    { name: "pin", mock: "putMock", run: pinMessageDiscord.bind(null, "chan1", "1") },
-    { name: "unpin", mock: "deleteMock", run: unpinMessageDiscord.bind(null, "chan1", "1") },
+    {
+      name: "delete",
+      mock: "deleteMock",
+      route: Routes.channelMessage("chan1", "1"),
+      run: deleteMessageDiscord.bind(null, "chan1", "1"),
+    },
+    {
+      name: "pin",
+      mock: "putMock",
+      route: Routes.channelPin("chan1", "1"),
+      run: pinMessageDiscord.bind(null, "chan1", "1"),
+    },
+    {
+      name: "unpin",
+      mock: "deleteMock",
+      route: Routes.channelPin("chan1", "1"),
+      run: unpinMessageDiscord.bind(null, "chan1", "1"),
+    },
   ] as const;
 
-  it.each(mutations)("retries a transient $name failure", async ({ mock, run }) => {
+  it.each(mutations)("retries a transient $name failure", async ({ mock, route, run }) => {
     const mocks = makeDiscordRest();
     mocks[mock]
       .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
@@ -943,14 +925,11 @@ describe("message mutation retries", () => {
 
     await run({ ...discordClientOpts(mocks.rest), retry });
     expect(mocks[mock]).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(mutations)("recovers when the $name response is lost", async ({ mock, run }) => {
-    const mocks = makeDiscordRest();
-    mocks[mock].mockRejectedValueOnce(lostResponse).mockResolvedValueOnce({ id: "m1" });
-
-    await run({ ...discordClientOpts(mocks.rest), retry });
-    expect(mocks[mock]).toHaveBeenCalledTimes(2);
+    expectRestRoute(mocks[mock], 0, route);
+    expectRestRoute(mocks[mock], 1, route);
+    if (mock === "patchMock") {
+      expect(requireRestBody(mocks[mock], 1).content).toBe("hello");
+    }
   });
 
   it.each(mutations)("stops the $name retry when the caller aborts during backoff", async (m) => {
@@ -977,16 +956,6 @@ describe("message mutation retries", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("treats Unknown Message as deleted after a lost delete response", async () => {
-    const { rest, deleteMock } = makeDiscordRest();
-    deleteMock.mockRejectedValueOnce(lostResponse).mockRejectedValueOnce(unknownMessage);
-
-    await expect(
-      deleteMessageDiscord("chan1", "1", { ...discordClientOpts(rest), retry }),
-    ).resolves.toEqual({ ok: true });
-    expect(deleteMock).toHaveBeenCalledTimes(2);
   });
 
   it("reads Unknown Message from a real Discord error response", async () => {

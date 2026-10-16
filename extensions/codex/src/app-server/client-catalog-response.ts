@@ -4,8 +4,9 @@ import {
   projectCodexCatalogNativeThread,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
+import type { CodexCatalogNativeThread } from "../session-catalog-types.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
-import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
+import { parseCodexAppServerMessage } from "./client-message-decoder.js";
 import {
   codexCatalogResponseRoute,
   type CodexCatalogDecodeRoute,
@@ -21,35 +22,27 @@ export type CodexCatalogDecodeInput = {
   bytes: Uint8Array<ArrayBuffer>;
   route: CodexCatalogDecodeRoute;
   remainingRows?: number;
-  catalogRows?: Map<number, number | undefined>;
 };
 export type CodexCatalogDecodeResult = {
   message?: unknown;
-  previewStates?: (boolean | undefined)[];
+  preview?: { rows: CodexCatalogNativeThread[]; states: (boolean | undefined)[] };
   projectionError?: { id: number; error: Error };
-  pending: boolean;
   failures: { value: string; error: unknown; fragmentCount: number }[];
 };
 
-/** The worker retains recovery fragments, but never a completed native page. */
-export function createCodexCatalogDecoder() {
-  let failures: CodexCatalogDecodeResult["failures"] = [];
-  const decoder = new CodexAppServerMessageDecoder((value, error, fragmentCount) => {
-    // Redact before bounding: cutting a quoted token first loses its closing quote.
-    failures.push({ value: redactCodexAppServerLinePreview(value), error, fragmentCount });
-  });
-  return (input: CodexCatalogDecodeInput): CodexCatalogDecodeResult => {
-    failures = [];
-    const parsed = decoder.parse(
-      Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
-        "utf8",
-      ),
-    );
-    const result = projectCodexCatalogMessage(parsed, input);
-    result.pending = decoder.hasPending;
-    result.failures = failures;
-    return result;
-  };
+/** Each worker invocation parses and projects one complete transport frame. */
+export function decodeCodexCatalogFrame(input: CodexCatalogDecodeInput): CodexCatalogDecodeResult {
+  const failures: CodexCatalogDecodeResult["failures"] = [];
+  const parsed = parseCodexAppServerMessage(
+    Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
+      "utf8",
+    ),
+    (value, error, fragmentCount) => {
+      // Redact before bounding: cutting a quoted token first loses its closing quote.
+      failures.push({ value: redactCodexAppServerLinePreview(value), error, fragmentCount });
+    },
+  );
+  return { ...projectCodexCatalogMessage(parsed, input), failures };
 }
 
 export function projectCodexCatalogMessage(
@@ -57,7 +50,7 @@ export function projectCodexCatalogMessage(
   input: Omit<CodexCatalogDecodeInput, "bytes">,
   cachedPreview?: CodexCatalogPreviewCache,
 ): CodexCatalogDecodeResult {
-  const result: CodexCatalogDecodeResult = { pending: false, failures: [] };
+  const result: CodexCatalogDecodeResult = { failures: [] };
   if (!isJsonObject(parsed)) {
     return result;
   }
@@ -70,34 +63,31 @@ export function projectCodexCatalogMessage(
   if (message.error || !route) {
     return result;
   }
-  const remainingRows =
-    input.route === "unresolved"
-      ? input.catalogRows?.has(route.id)
-        ? input.catalogRows.get(route.id)
-        : 0
-      : input.remainingRows;
+  const remainingRows = input.route === "unresolved" ? 0 : input.remainingRows;
   try {
     if (!isJsonObject(message.result)) {
       throw new Error("Codex catalog response contains an invalid result");
     }
     if (route.kind === "list") {
       const raw = message.result;
-      message.result = projectCodexCatalogNativeResponse(
+      const page = projectCodexCatalogNativeResponse(
         raw,
         sanitizeTerminalText,
         cachedPreview,
         remainingRows,
       );
+      message.result = page;
       if (!cachedPreview) {
-        result.previewStates = Array.isArray(raw.data)
+        const states = Array.isArray(raw.data)
           ? raw.data
-              .slice(0, Array.isArray(message.result.data) ? message.result.data.length : 0)
+              .slice(0, page.data.length)
               .map((row) =>
                 isJsonObject(row) && typeof row.preview === "string"
                   ? Boolean(row.preview)
                   : undefined,
               )
           : [];
+        result.preview = { rows: page.data, states };
       }
     } else {
       const thread = message.result.thread;

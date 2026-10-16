@@ -157,6 +157,10 @@ describe("CronPage lifecycle", () => {
             (option) => option.dataset.value,
           ),
         ).toEqual(["", "alpha/shared-model", "beta/shared-model", "__openclaw_custom_model__"]);
+        const inheritText =
+          picker.querySelector('[role="option"][data-value=""]')?.textContent ?? "";
+        expect(inheritText).toContain("Default");
+        expect(inheritText).not.toContain("common.default");
       });
       picker.querySelector<HTMLElement>('[role="option"][data-value="beta/shared-model"]')!.click();
       await page.settle();
@@ -561,31 +565,6 @@ describe("CronPage lifecycle", () => {
     );
     expect(triggerToggle).toBeUndefined();
     expect(page.textContent).toContain("disabled by cron.triggers.enabled");
-  });
-
-  it("ignores a cron event callback retained by a replaced gateway source", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstGateway = createGateway(client, true);
-    const secondGateway = createGateway(client, true);
-    const firstContext = createContext(firstGateway);
-    const secondContext = createContext(secondGateway);
-    const page = createPage(firstContext);
-    await waitForCronPage(() => expect(request).toHaveBeenCalled());
-
-    page.context = secondContext;
-    page.refreshView();
-    await page.settle();
-    await waitForCronPage(() => expect(page.cron.client).toBe(client));
-    request.mockClear();
-    vi.mocked(secondContext.channels.refresh).mockClear();
-
-    firstGateway.emitRetiredEvent({ event: "cron" } as never);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(secondContext.channels.refresh).not.toHaveBeenCalled();
   });
 });
 

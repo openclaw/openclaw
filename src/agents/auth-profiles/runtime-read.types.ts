@@ -9,6 +9,7 @@ export type LoadAuthProfileStoreOptions = {
   migrationProvider?: string;
   deferScopedMigrationRefusals?: boolean;
   onReadOwner?: (owner: AuthProfileReadOwner) => void;
+  onReadSource?: (source: { databasePath: string; hasStore: boolean }) => void;
   /** Materialize only this explicitly selected personal account into the returned view. */
   profileId?: string;
   allowKeychainPrompt?: boolean;

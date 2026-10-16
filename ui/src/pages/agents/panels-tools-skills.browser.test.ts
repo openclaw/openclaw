@@ -439,23 +439,6 @@ describe("agents tools panel (browser)", () => {
     expect(cancel?.disabled).toBe(true);
   });
 
-  it("shows fallback warning when runtime catalog fails", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      AgentTools,
-      createBaseParams({
-        toolsCatalogError: "unavailable",
-        toolsCatalogResult: null,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
-      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
-    );
-  });
-
   it("enables the fallback setup helper without selecting Full", async () => {
     const container = document.createElement("div");
     const onOverridesChange = vi.fn();
@@ -464,6 +447,7 @@ describe("agents tools panel (browser)", () => {
       AgentTools,
       createBaseParams({
         configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
+        toolsCatalogError: "unavailable",
         toolsCatalogResult: null,
         onOverridesChange,
         onProfileChange,
@@ -472,6 +456,9 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    );
     expect(container.textContent).toContain(
       "Full selects tools; it does not grant Full Access execution permissions.",
     );

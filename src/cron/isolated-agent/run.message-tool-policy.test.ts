@@ -170,6 +170,20 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
   });
   afterEach(() => restoreFastTestEnv(previousFastTestEnv));
 
+  it.each([undefined, "event"] as const)(
+    "carries trusted caller classification %s through embedded execution",
+    async (trigger) => {
+      const result = await runCronIsolatedAgentTurn({ ...makeParams(), trigger });
+
+      expect(result.status, result.error).toBe("ok");
+      embedded({
+        trigger: trigger ?? "cron",
+        bootstrapContextRunKind: "cron",
+        terminalReplyExpectation: "optional",
+      });
+    },
+  );
+
   describe("message tool policy", () => {
     beforeEach(() => {
       getChannelPluginMock.mockImplementation((channelId: string) =>

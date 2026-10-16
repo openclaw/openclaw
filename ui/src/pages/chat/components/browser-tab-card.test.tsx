@@ -16,7 +16,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { ToolPreview } from "./widget-card-view.tsx";
 
 const hosts: HTMLElement[] = [];
 const templateUpdates = new Map<HTMLElement, (value: unknown) => void>();
@@ -166,17 +166,17 @@ async function card(
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
   const host = container();
-  renderTemplate(
-    renderToolPreview(
-      { kind: "browser-tab", ...tab, url: "https://example.com/page" },
-      "chat_tool",
-      {
-        browserTabRevision: "one",
-        browserTabLatest: latest,
-      },
+  mountSolid(
+    () => (
+      <ToolPreview
+        preview={{ kind: "browser-tab", ...tab, url: "https://example.com/page" }}
+        surface="chat_tool"
+        options={{ browserTabRevision: "one", browserTabLatest: latest }}
+      />
     ),
-    host,
+    { container: host },
   );
+  flush();
   const element = host.querySelector("openclaw-browser-tab-card")!;
   element.context = context;
   await element.updateComplete;
@@ -184,45 +184,6 @@ async function card(
 }
 
 describe("browser tab card", () => {
-  it("shows tweet author, text and media without truncating everything to a link chip", async () => {
-    vi.useFakeTimers();
-    const gateway = gatewayContext([], ["operator.read"], true);
-    gateway.request.mockResolvedValue({
-      title: "OpenClaw (@openclaw) on X",
-      description: "Readable posts keep the conversation in context.",
-      imageDataUrl: "data:image/png;base64,c29jaWFs",
-    });
-    const element = await card(gateway.context, false);
-    element.preview = {
-      ...element.preview!,
-      url: "https://x.com/openclaw/status/123456789",
-      title: "X",
-    };
-    await element.updateComplete;
-    await vi.runAllTimersAsync();
-    await element.updateComplete;
-    expect(element.querySelector(".tweet-author")?.textContent).toBe("OpenClaw");
-    expect(element.querySelector(".tweet-handle")?.textContent).toBe("@openclaw");
-    expect(element.querySelector(".tweet-text")?.textContent).toBe(
-      "Readable posts keep the conversation in context.",
-    );
-    expect(element.querySelector(".shot.social img")?.getAttribute("src")).toBe(
-      "data:image/png;base64,c29jaWFs",
-    );
-    expect(element.querySelector(".url")).toBeNull();
-    const toggle = vi.fn();
-    element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
-    element.querySelector<HTMLButtonElement>(".actions button")?.click();
-    expect(toggle).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        detail: {
-          open: true,
-          browserTab: { target: "host", profile: "managed", targetId: "tab-1" },
-        },
-      }),
-    );
-  });
-
   it("retains browser-title post text when metadata only supplies the author", async () => {
     vi.useFakeTimers();
     const gateway = gatewayContext([], ["operator.read"], true);
@@ -237,6 +198,7 @@ describe("browser tab card", () => {
     await vi.runAllTimersAsync();
     await element.updateComplete;
     expect(element.querySelector(".tweet-author")?.textContent).toBe("OpenClaw");
+    expect(element.querySelector(".tweet-handle")?.textContent).toBe("@openclaw");
     expect(element.querySelector(".tweet-text")?.textContent).toBe("Text from the browser title");
   });
 

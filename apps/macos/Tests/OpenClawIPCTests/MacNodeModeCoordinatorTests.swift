@@ -237,10 +237,10 @@ struct MacNodeModeCoordinatorTests {
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker)
 
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         #expect(await worker.stops() == 1)
 
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         #expect(await worker.stops() == 2)
 
         await coordinator.stopAndWait()
@@ -254,8 +254,8 @@ struct MacNodeModeCoordinatorTests {
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker)
 
-        coordinator.enqueueRouteInvalidationForTesting()
-        await coordinator.waitForRouteInvalidationForTesting()
+        coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
+        await coordinator.awaitStableRouteInvalidationDrain()
 
         #expect(await worker.stops() == 0)
         await coordinator.stopAndWait()
@@ -303,7 +303,7 @@ struct MacNodeModeCoordinatorTests {
             coordinator.handleNodeHostWorkerFailureForTesting()
             notificationCenter.removeObserver(observer)
         }
-        await coordinator.waitForRouteInvalidationForTesting()
+        await coordinator.awaitStableRouteInvalidationDrain()
         #expect(await worker.stops() == 0)
     }
 
@@ -347,7 +347,7 @@ struct MacNodeModeCoordinatorTests {
         let command = ["/usr/local/bin/openclaw", "node", "worker"]
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
 
         // Generation zero belongs to the replaced process. Handle it only after
@@ -374,14 +374,14 @@ struct MacNodeModeCoordinatorTests {
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(
             command: ["/usr/local/bin/openclaw", "node", "worker"])
-        let initialFailure = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
         #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
         #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
 
         coordinator.handleNodeHostWorkerFailureForTesting()
-        await coordinator.waitForRouteInvalidationForTesting()
+        await coordinator.awaitStableRouteInvalidationDrain()
 
-        let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        let resolved = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
         #expect(resolved.manifest == nil)
         #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
         #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
@@ -672,9 +672,10 @@ struct MacNodeModeCoordinatorTests {
 
             let originalRoute = try #require(await gateway.currentRoute())
             let generationsBeforeRefresh = coordinator.generationsForTesting()
-            coordinator.refreshForTesting(
+            coordinator.refresh(
                 isPaused: false,
-                computerControlEnabled: true)
+                computerControlEnabled: true,
+                computerControlProvider: .peekaboo)
             for _ in 0..<20 {
                 await Task.yield()
             }
@@ -685,16 +686,17 @@ struct MacNodeModeCoordinatorTests {
             #expect(!stateAfterOrdinaryRefresh.invalidated)
             #expect(generationsAfterOrdinaryRefresh.endpointAttempt == generationsBeforeRefresh.endpointAttempt + 1)
             #expect(generationsAfterOrdinaryRefresh.routeAuthority == generationsBeforeRefresh.routeAuthority)
-            #expect(coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(coordinator.routeAuthorityAllowsInvoke(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: false))
 
-            coordinator.refreshForTesting(
+            coordinator.refresh(
                 isPaused: true,
-                computerControlEnabled: true)
+                computerControlEnabled: true,
+                computerControlProvider: .peekaboo)
             let generationsAfterPause = coordinator.generationsForTesting()
             #expect(generationsAfterPause.routeAuthority == generationsBeforeRefresh.routeAuthority + 1)
-            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(!coordinator.routeAuthorityAllowsInvoke(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: true))
             try await TestWait.state("route invalidation start") {
@@ -703,7 +705,7 @@ struct MacNodeModeCoordinatorTests {
 
             let successorURL = try #require(URL(string: "ws://successor.example.invalid"))
             let successorTask = Task {
-                await coordinator.waitForRouteInvalidationForTesting(
+                await coordinator.awaitStableRouteInvalidationDrain(
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
@@ -718,7 +720,7 @@ struct MacNodeModeCoordinatorTests {
             try await TestWait.state("successor captured first invalidation") {
                 await drainSnapshot.hasCaptured()
             }
-            coordinator.enqueueRouteInvalidationForTesting()
+            coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
             let generationsAfterSecondRevocation = coordinator.generationsForTesting()
             #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
             #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
@@ -732,7 +734,7 @@ struct MacNodeModeCoordinatorTests {
             let generationsWhileSecondRevocationBlocked = coordinator.generationsForTesting()
             #expect(generationsWhileSecondRevocationBlocked.completedRouteAuthority ==
                 generationsBeforeRefresh.routeAuthority + 1)
-            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(!coordinator.routeAuthorityAllowsInvoke(
                 generationsAfterSecondRevocation.routeAuthority,
                 isPaused: false))
 
@@ -945,17 +947,17 @@ extension MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
-        let numericNestedEnable: [String: Any] = [
+        let numericCatalogEnable: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
+                        "config": ["sessionCatalog": ["enabled": NSNumber(value: 1)]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericCatalogEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [

@@ -25,7 +25,6 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   CONNECTION_PING_SAMPLE_LIMIT,
   summarizeConnectionPing,
@@ -56,12 +55,12 @@ class ConnectionDraft {
 
   constructor(
     readonly context: ApplicationContext,
-    readonly host: HTMLElement,
     readonly changed: () => void,
   ) {}
 
-  private get isConnected() {
-    return this.host.isConnected;
+  private get isActive() {
+    // Lazy routes can bind before DOM insertion; the binding owns their lifetime.
+    return this.gateway.gateway === this.context.gateway;
   }
 
   dispose() {
@@ -127,7 +126,7 @@ class ConnectionDraft {
   syncDiagnosticsPolling() {
     const snapshot = this.context.gateway.snapshot;
     if (
-      !this.isConnected ||
+      !this.isActive ||
       document.visibilityState === "hidden" ||
       snapshot.phase !== "connected" ||
       !snapshot.client
@@ -165,7 +164,7 @@ class ConnectionDraft {
     this.changed();
     const isCurrent = () =>
       this[requestKey] === request &&
-      this.isConnected &&
+      this.isActive &&
       document.visibilityState !== "hidden" &&
       this.context.gateway === gatewaySource &&
       this.gateway.isCurrent(scope);
@@ -267,7 +266,7 @@ class ConnectionDraft {
     // A confirmation for one Gateway must never reset a newly selected Gateway.
     if (
       confirmed &&
-      this.isConnected &&
+      this.isActive &&
       this.context.gateway === gateway &&
       gateway.connection.gatewayUrl === gatewayUrl
     ) {
@@ -362,11 +361,11 @@ class ConnectionDraft {
   }
 }
 
-function ConnectionContent(_props: object, host: HTMLElement) {
+export function ConnectionPage() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const changed = () => setRevision((value) => value + 1);
-  const draft = new ConnectionDraft(context, host, changed);
+  const draft = new ConnectionDraft(context, changed);
   draft.polling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () => draft.refreshDiagnostics());
   draft.gateway = useGatewayPage({
     getGateway: () => context.gateway,
@@ -378,12 +377,12 @@ function ConnectionContent(_props: object, host: HTMLElement) {
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
   onCleanup(() => draft.dispose());
-  const props = () => {
+  const viewProps = () => {
     revision();
     return draft.viewProps();
   };
   return (
-    <>
+    <openclaw-connection-page>
       <SettingsPageHeader
         title={titleForRoute("connection", t)}
         subtitle={
@@ -393,12 +392,8 @@ function ConnectionContent(_props: object, host: HTMLElement) {
         }
       />
       <SettingsWorkspace>
-        <ConnectionView {...props()} />
+        <ConnectionView {...viewProps()} />
       </SettingsWorkspace>
-    </>
+    </openclaw-connection-page>
   );
 }
-
-export const ConnectionPage = defineSolidBridge("openclaw-connection-page", ConnectionContent, {
-  properties: {},
-});

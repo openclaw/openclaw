@@ -12,7 +12,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -591,7 +590,7 @@ class TalkSettingsController {
   }
 }
 
-function TalkSettingsContent(props: TalkSettingsPageProps) {
+export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const context = useApplication();
   const controller = new TalkSettingsController(context, props);
   const catalog = projectSource(controller, {
@@ -617,41 +616,31 @@ function TalkSettingsContent(props: TalkSettingsPageProps) {
     controller.dispose();
   });
   return (
-    <Talk
-      nativeDeviceSettings={context.nativeDeviceSettings}
-      nativeDeviceSnapshot={device?.read()}
-      voiceWake={{
-        get state() {
-          return voiceWakeState.read();
-        },
-        onInput: (text) => voiceWake.edit(text),
-        onRetry: () => voiceWake.retry(),
-      }}
-      selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
-      catalog={catalog.read().catalog}
-      modelDefaultPending={catalog.read().modelDefaultPending}
-      configBusy={
-        props.mutationDisabled ||
-        runtime.read().state.configLoading ||
-        runtime.read().state.configSaving ||
-        runtime.read().state.configApplying
-      }
-      onProviderChange={(providerId) => controller.changeProvider(providerId)}
-      onModelChange={(model) => controller.changeModel(model)}
-      onVoiceChange={(voice) => controller.changeVoice(voice)}
-      editor={props.buildEditor?.()}
-    />
+    <openclaw-talk-settings>
+      <Talk
+        nativeDeviceSettings={context.nativeDeviceSettings}
+        nativeDeviceSnapshot={device?.read()}
+        voiceWake={{
+          get state() {
+            return voiceWakeState.read();
+          },
+          onInput: (text) => voiceWake.edit(text),
+          onRetry: () => voiceWake.retry(),
+        }}
+        selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
+        catalog={catalog.read().catalog}
+        modelDefaultPending={catalog.read().modelDefaultPending}
+        configBusy={
+          props.mutationDisabled ||
+          runtime.read().state.configLoading ||
+          runtime.read().state.configSaving ||
+          runtime.read().state.configApplying
+        }
+        onProviderChange={(providerId) => controller.changeProvider(providerId)}
+        onModelChange={(model) => controller.changeModel(model)}
+        onVoiceChange={(voice) => controller.changeVoice(voice)}
+        editor={props.buildEditor?.()}
+      />
+    </openclaw-talk-settings>
   );
 }
-
-export const TalkSettingsPage = defineSolidBridge<TalkSettingsPageProps>(
-  "openclaw-talk-settings",
-  (props) => <TalkSettingsContent {...props} />,
-  {
-    properties: {
-      configObject: { default: {}, attribute: false },
-      mutationDisabled: { default: false, type: Boolean },
-      buildEditor: { default: () => null, attribute: false },
-    },
-  },
-);

@@ -1,4 +1,3 @@
-import { flush } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeEmbedHost } from "../../app/native-web-chrome.ts";
@@ -15,7 +14,7 @@ import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lit/subscriptions-controller.ts";
+} from "../../lib/subscriptions-controller.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { ChatPageCloseFocus } from "./chat-page-close-focus.ts";
 import { ChatPageDropIndicator } from "./chat-page-drop-indicator.ts";
@@ -24,6 +23,7 @@ import {
   ownedChatPaneRouteData,
   ownedChatPaneSessionKey,
   sameChatPaneRoute,
+  subscribeChatPageRouteDefaults,
 } from "./chat-page-navigation.ts";
 import {
   type ChatPageSnapshot,
@@ -137,20 +137,12 @@ export class ChatPageState extends ControllerHost {
     super();
     this.layout = this.nativeConversation ? undefined : loadSettings().chatSplitLayout;
     new SubscriptionsController(this)
-      .watchStore(
-        () => this.context?.sessions,
-        undefined,
-        () => {
-          this.performUpdate();
-          flush();
-        },
-      )
       .watch(
         () => this.context?.chatSubmissions,
         (submissions, notify) => submissions.subscribeCreate(notify),
       )
       .watchStore(() => this.context?.placementStartup)
-      .watchStore(() => this.context?.gateway)
+      .watch(() => this.context?.gateway, subscribeChatPageRouteDefaults)
       .watchStore(() => this.context?.nativeConversation);
     this.prefetch = new SessionPrefetchController(
       this.host,

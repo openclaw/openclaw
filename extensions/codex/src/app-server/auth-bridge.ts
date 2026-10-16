@@ -47,6 +47,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import type {
   CodexAppServerAuthRequirement,
@@ -56,22 +57,14 @@ import type {
   CodexAppServerResolvedPreparedAuth,
 } from "./auth-types.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  ensureCodexManagedBundledMarketplace,
-  resolveCodexManagedBundledMarketplaceSource,
-} from "./computer-use-marketplace.js";
+import { resolveCompleteComputerUseArtifactCandidate } from "./computer-use-artifact-candidate.js";
+import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import { ensureOwnedCodexHome } from "./computer-use-service-path.js";
-import {
-  ensureCodexComputerUseServiceApp,
-  resolveCodexComputerUseServiceAppSourcePath,
-} from "./computer-use-service.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import { reconcileManagedCodexComputerUseCache } from "./computer-use-unified.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
-import {
-  resolveMacOSDesktopCodexAppPathCandidates,
-  type MacOSDesktopCodexAppPathCandidate,
-} from "./desktop-app-paths.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
@@ -118,7 +111,10 @@ export async function bridgeCodexAppServerStartOptions(
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
+    withCodexHomeEnvironment(
+      withManagedCodexThreadUnloading(withEphemeralCodexAuthStore(params)),
+      params.agentDir,
+    );
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
@@ -530,6 +526,8 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
             ownershipRoot: provisioningAgentDir,
             computerUsePluginName: computerUseConfig.pluginName,
             computerUseMcpServerName: computerUseConfig.mcpServerName,
+            desktopFingerprint: params.desktopGeneration?.fingerprint,
+            forceRefresh: params.forceCacheRefresh,
             ...(artifactCandidate
               ? {
                   appServerCommand: artifactCandidate.appServerCommandPath,
@@ -582,28 +580,6 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
     forceRefresh: params.forceCacheRefresh,
     previousCacheBinding: params.previousCacheBinding,
   });
-}
-
-async function resolveCompleteComputerUseArtifactCandidate(params: {
-  candidates: readonly MacOSDesktopCodexAppPathCandidate[];
-  needsBundledMarketplace: boolean;
-}): Promise<MacOSDesktopCodexAppPathCandidate | undefined> {
-  for (const candidate of params.candidates) {
-    if (
-      params.needsBundledMarketplace &&
-      !(await resolveCodexManagedBundledMarketplaceSource({ candidates: [candidate] }))
-    ) {
-      continue;
-    }
-    if (
-      await resolveCodexComputerUseServiceAppSourcePath({
-        sourceAppCandidates: candidate.computerUseServiceAppPaths,
-      })
-    ) {
-      return candidate;
-    }
-  }
-  return undefined;
 }
 
 function pruneComputerUseArtifactOwners(): void {
@@ -959,7 +935,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     ? resolveOpenAICodexAuthIdentity(currentCredential).accountId?.trim()
     : undefined;
   const callbackAccountId =
-    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim() ?? undefined;
+    params.authHandoff?.chatgptAccountId.trim() ?? params.previousAccountId?.trim();
   if (callbackAccountId && selectedAccountId && callbackAccountId !== selectedAccountId) {
     throw codexWorkspaceChangedError("before");
   }

@@ -3,6 +3,7 @@ import type { EventLogEntry } from "../../api/event-log.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import {
   SettingsPage,
   SettingsRow as Row,
@@ -17,7 +18,6 @@ import type {
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { sanitizedHtml } from "../../lib/solid-dom.ts";
 import { CommandLaneRows } from "./lane-table.tsx";
 
 export type DebugProps = {
@@ -52,12 +52,13 @@ function CodeBlock(props: { title: string; value: unknown; format: () => string 
     return untrack(() => highlightJsonHtml(props.format()));
   });
   return (
-    <pre
+    <SanitizedHtml
+      tag="pre"
       class="code-block"
       role="group"
       aria-label={props.title}
       tabindex={0}
-      ref={sanitizedHtml(content)}
+      html={content()}
     />
   );
 }

@@ -691,7 +691,7 @@
 }
 
 .agent-chat__input-btn:disabled,
-.agent-chat__attach-menu > button:disabled {
+.agent-chat__attach-menu .agent-chat__input-btn--attach:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -703,7 +703,7 @@
   flex: 0 0 auto;
 }
 
-.agent-chat__attach-menu[open] > button {
+.agent-chat__attach-menu[open] .agent-chat__input-btn--attach {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -1043,17 +1043,6 @@
     max-height: 56px;
     overflow-y: auto;
   }
-}
-
-.agent-chat__input [data-chat-pointer-restored-focus]:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.agent-chat__input
-  wa-dropdown[data-chat-pointer-opened-picker]
-  wa-dropdown-item:is(:focus, :focus-visible) {
-  outline: none;
 }
 
 .chat-thread-inner {

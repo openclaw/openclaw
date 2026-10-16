@@ -247,22 +247,24 @@ export function parseEventCatalog(value: unknown): {
   const events: EventDefinition[] = [];
   for (const input of result.events) {
     const event = record(input);
+    const inputSchema =
+      typeof event?.inputSchema === "boolean" ? event.inputSchema : record(event?.inputSchema);
+    const payloadSchema =
+      typeof event?.payloadSchema === "boolean"
+        ? event.payloadSchema
+        : record(event?.payloadSchema);
     if (
       !event ||
       !boundedString(event.name, 256) ||
       !Array.isArray(event.delivery) ||
-      !(typeof event.inputSchema === "boolean" || record(event.inputSchema)) ||
-      !(typeof event.payloadSchema === "boolean" || record(event.payloadSchema))
+      inputSchema === undefined ||
+      payloadSchema === undefined
     ) {
       throw new Error("Invalid MCP event definition");
     }
     if (!event.delivery.includes("webhook")) {
       continue;
     }
-    const inputSchema =
-      typeof event.inputSchema === "boolean" ? event.inputSchema : record(event.inputSchema)!;
-    const payloadSchema =
-      typeof event.payloadSchema === "boolean" ? event.payloadSchema : record(event.payloadSchema)!;
     // Compile now: a broken catalog must not create a subscription that can never accept data.
     validateJsonSchemaValue({ schema: inputSchema, value: {} });
     validateJsonSchemaValue({ schema: payloadSchema, value: {} });

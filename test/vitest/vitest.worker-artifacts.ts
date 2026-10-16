@@ -42,15 +42,15 @@ export function compiledSubprocessesPlugin(): Plugin {
       ) {
         return;
       }
+      // Declaration selection changes source versus compiled imports; generations
+      // with the same selection can share parent transforms.
+      defineCacheKeyGenerator(() =>
+        nativeSchtasksIntegrationEnabled
+          ? "openclaw:compiled-subprocesses:native-schtasks"
+          : "openclaw:compiled-subprocesses",
+      );
       const instance = vitest as WorkerVitest;
       if (!instance[ownerKey]) {
-        // Declaration selection changes source versus compiled imports; generations
-        // with the same selection can share parent transforms.
-        defineCacheKeyGenerator(() =>
-          nativeSchtasksIntegrationEnabled
-            ? "openclaw:compiled-subprocesses:native-schtasks"
-            : "openclaw:compiled-subprocesses",
-        );
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;

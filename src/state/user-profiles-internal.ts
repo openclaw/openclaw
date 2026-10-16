@@ -71,6 +71,40 @@ export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">
   };
 }
 
+export function projectUserProfileSnapshot(
+  rows: ReadonlyMap<string, ProfileDisplayRow>,
+  bindings: UserProfileEmailBindingIndex,
+  githubAccountIds?: readonly number[],
+) {
+  const ordered = [...rows.values()].toSorted(
+    (left, right) =>
+      left.created_at - right.created_at ||
+      Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
+  );
+  return {
+    profiles: ordered.map((row) =>
+      Object.assign(toUserProfile(row), {
+        emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
+          Buffer.compare(Buffer.from(left), Buffer.from(right)),
+        ),
+        githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
+        hasAvatar: row.has_avatar === 1,
+      }),
+    ),
+    ...(githubAccountIds
+      ? {
+          githubProfiles: ordered.flatMap((row) =>
+            (row.githubAccountIds ?? []).flatMap((accountId) =>
+              !row.merged_into && githubAccountIds.includes(accountId)
+                ? [{ accountId, profileId: row.id }]
+                : [],
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
 // Selection metadata is immutable and carries no database handle or profile state.
 export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase, "user_profiles">()(
   "avatar",
@@ -174,6 +208,7 @@ export function selectProfileDisplayEntries(db: EngineConnection, ids?: string[]
     .selectFrom("user_profiles")
     .select([
       ...userProfileDisplaySelection,
+      "created_at",
       ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
     ])
     .select((eb) =>
@@ -402,7 +437,7 @@ export function readUserProfileAvatarCommand(
 }
 
 export function projectUserProfileDisplay(
-  profile: Omit<ProfileDisplayRow, "role">,
+  profile: Omit<ProfileDisplayRow, "role" | "created_at">,
 ): UserProfileDisplay {
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {

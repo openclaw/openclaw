@@ -216,3 +216,30 @@ it("grants a deadline admission while the host thread runs fake timers ahead of 
     admission.finish();
   }
 });
+
+it("grants a deadline admission when the host thread clock origin is ahead of the worker's", () => {
+  // Bun starts process.hrtime at zero per thread; a worker spawned after Gateway
+  // startup reads a clock far behind the host that services its admission.
+  let now = process.hrtime.bigint();
+  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    now += 60_000_000_000n;
+    admission.service();
+    return "ok";
+  });
+  try {
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: undefined,
+        deadlineMs: 1_000,
+      }),
+    );
+    expect(admit).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+  } finally {
+    admission.finish();
+  }
+});

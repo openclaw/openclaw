@@ -24,6 +24,7 @@ import {
   modelSupportsInput,
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   resolveScheduledToolCallerContext,
@@ -88,6 +89,7 @@ export function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
+  const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -237,6 +239,7 @@ export function createCronPromptExecutor(
     }
     const { modelResolve, currentChannelId } = await prepareCronModelResolveInput({
       ...params,
+      trigger,
       prompt: promptText,
       messageChannel,
     });
@@ -364,11 +367,6 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (cliExecution && !params.job.runtimeAuthority && !binding) {
-          throw new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-        }
         if (binding && (providerOverride !== binding.provider || cliExecution)) {
           throw new Error(
             "Automation candidate is incompatible with its recorded inference account and route.",
@@ -424,7 +422,7 @@ export function createCronPromptExecutor(
             sessionKey: params.runSessionKey,
             sessionTarget,
             agentId: params.agentId,
-            trigger: "cron",
+            trigger,
             jobId: params.job.id,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
@@ -508,6 +506,14 @@ export function createCronPromptExecutor(
                         : undefined,
                     })
                   : undefined;
+                if (trigger === "cron" && !binding && authProfileId) {
+                  const refusal = new Error(
+                    "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+                  );
+                  // Another model would only bypass the operator's account choice.
+                  recordModelFallbackStop(refusal);
+                  throw refusal;
+                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -529,6 +535,7 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
@@ -568,7 +575,7 @@ export function createCronPromptExecutor(
               {
                 preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
-                trigger: "cron",
+                trigger,
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
               },
             );

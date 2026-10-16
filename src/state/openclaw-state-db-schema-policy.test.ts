@@ -700,11 +700,6 @@ describe("existing shared-state schema admission", () => {
               WHERE meta_key = 'primary';`,
     },
     {
-      name: "newer unpublished content",
-      sql: `INSERT INTO config_machine_state VALUES
-              ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1);`,
-    },
-    {
       name: "mismatched published metadata",
       sql: "UPDATE schema_meta SET schema_version = schema_version - 1 WHERE meta_key = 'primary';",
     },

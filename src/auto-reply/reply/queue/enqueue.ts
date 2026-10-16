@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
@@ -19,11 +20,7 @@ import {
   rememberFollowupDrainCallback,
 } from "./drain.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
-import {
-  peekRecentQueueMessageId,
-  recordRecentQueueMessageId,
-  resetRecentQueuedMessageIdDedupe,
-} from "./recent-message-ids.js";
+import { peekRecentQueueMessageId, recordRecentQueueMessageId } from "./recent-message-ids.js";
 import {
   FOLLOWUP_QUEUES,
   getExistingFollowupQueue,
@@ -268,7 +265,7 @@ export function claimNextQueuedFollowupRequestFrom(
     (item) =>
       !queue.inFlight.has(item) &&
       !isFollowupRunAborted(item) &&
-      item.run.terminalReplyExpectation === "required" &&
+      isRequiredReplyExpectation(item.run.terminalReplyExpectation) &&
       item.strandedReplyRetry !== true,
   );
   if (
@@ -396,11 +393,5 @@ export function parkSteerCandidate(
       }
       return true;
     },
-  };
-}
-
-if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueEnqueueTestApi")] = {
-    resetRecentQueuedMessageIdDedupe,
   };
 }
