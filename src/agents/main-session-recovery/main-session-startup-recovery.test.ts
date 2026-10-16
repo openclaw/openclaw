@@ -312,14 +312,11 @@ describe("main-session startup recovery", () => {
         started: 3,
         settled: 0,
         failed: 0,
-        skipped: 1,
+        skipped: 0,
       });
       expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
-        expect.stringContaining("skipReasons=archived:1"),
-      );
-      expect(info.mock.calls.map(([line]) => line)).toContainEqual(
-        expect.stringContaining('"decision":"deferred","reason":"archived","nextOwner":"none"'),
+      expect(info.mock.calls.map(([line]) => line)).not.toContainEqual(
+        expect.stringContaining('"reason":"archived"'),
       );
     } finally {
       info.mockRestore();
@@ -470,7 +467,7 @@ describe("main-session startup recovery", () => {
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
-    expect(recovered).toEqual({ started: 2, settled: 0, failed: 0, skipped: 1 });
+    expect(recovered).toEqual({ started: 2, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledTimes(2);
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
