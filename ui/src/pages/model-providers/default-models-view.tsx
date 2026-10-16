@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import { BASE_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
@@ -65,11 +64,6 @@ const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 
-// The global default intentionally omits "minimal"; the full list stays
-// available on session-level pickers.
-const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
-const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
-
 function modelOption(
   model: ModelPickerEntry,
   authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
@@ -128,7 +122,7 @@ function BehaviorSetting<Value extends string>(props: {
   field: "thinking" | "fastMode";
   view: DefaultModelsViewProps;
   value: Value | "";
-  options: { value: Value; label: string }[];
+  options: { value: Value; label: string; disabled?: boolean }[];
   overridden: boolean;
   onChange: (value: Value) => void;
   onReset: () => void;
@@ -195,11 +189,55 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = () => !props.canMutate || props.models.length === 0;
   const saving = () => Boolean(props.busy.defaults);
   const title = () => props.mutationBlockedReason ?? "";
-  const thinkingLevels = () =>
-    props.thinkingLevel && !THINKING_LEVEL_SET.has(props.thinkingLevel)
-      ? [...THINKING_LEVELS, props.thinkingLevel]
-      : THINKING_LEVELS;
+  const primaryModel = createMemo(() =>
+    props.models.find((model) => modelCatalogRef(model) === props.selection.primary),
+  );
+  const thinkingOptions = () => {
+    const options: { value: string; label: string; disabled?: boolean }[] = dedupeByKey(
+      primaryModel()?.thinkingLevels ?? [],
+      (level) => level.id,
+    ).map((level) => ({
+      value: level.id,
+      label: formatThinkingOverrideLabel(level.id, level.label),
+    }));
+    // Catalog refreshes and model switches must not rewrite a saved global preference.
+    if (props.thinkingLevel && !options.some((option) => option.value === props.thinkingLevel)) {
+      options.push({
+        value: props.thinkingLevel,
+        label: formatThinkingOverrideLabel(props.thinkingLevel),
+        disabled: true,
+      });
+    }
+    return options;
+  };
   const fastMode = () => (props.fastMode === undefined ? "" : formatFastModeValue(props.fastMode));
+  const fastModeOptions = () => {
+    const model = primaryModel();
+    const priority =
+      model?.supportsFastMode === true &&
+      (model.serviceTiers === undefined || model.serviceTiers.includes("priority"));
+    const ultrafast =
+      model?.supportsFastMode === true &&
+      model.available === true &&
+      model.serviceTiers?.includes("ultrafast") === true;
+    const options = [
+      {
+        value: "auto" as const,
+        label: t("quickSettings.model.fastModes.auto"),
+        supported: priority,
+      },
+      { value: "on" as const, label: t("quickSettings.model.fastModes.on"), supported: priority },
+      {
+        value: "ultrafast" as const,
+        label: t("chat.modelControls.ultrafast"),
+        supported: ultrafast,
+      },
+      { value: "off" as const, label: t("quickSettings.model.fastModes.off"), supported: true },
+    ];
+    return options
+      .filter((option) => option.supported || option.value === fastMode())
+      .map((option) => ({ value: option.value, label: option.label, disabled: !option.supported }));
+  };
   const fallback = () => props.selection.fallbacks[0] ?? "";
   const authProviders = createMemo(
     () =>
@@ -365,12 +403,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           field={"thinking"}
           view={props}
           value={props.thinkingLevel ?? ""}
-          options={thinkingLevels().map((level) => ({
-            value: level,
-            label: THINKING_LEVEL_SET.has(level)
-              ? t(`quickSettings.model.thinkingLevels.${level}`)
-              : formatThinkingOverrideLabel(level),
-          }))}
+          options={thinkingOptions()}
           overridden={props.thinkingOverridden}
           onChange={props.onThinkingChange}
           onReset={props.onThinkingReset}
@@ -379,11 +412,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           field={"fastMode"}
           view={props}
           value={fastMode()}
-          options={[
-            { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-            { value: "on", label: t("quickSettings.model.fastModes.on") },
-            { value: "off", label: t("quickSettings.model.fastModes.off") },
-          ]}
+          options={fastModeOptions()}
           overridden={props.fastModeOverridden}
           onChange={(value) => {
             if (value !== fastMode()) {

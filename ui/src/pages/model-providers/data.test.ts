@@ -420,6 +420,49 @@ describe("model provider configuration data", () => {
     ]);
   });
 
+  it.each([
+    { profile: "openai:account-a", tiers: ["priority", "ultrafast"] },
+    { profile: "openai:account-b", tiers: [] },
+  ])("does not lend account-scoped speed evidence to saved $profile", ({ profile, tiers }) => {
+    const model = catalogEntry({
+      provider: "openai",
+      id: "gpt-5",
+      available: true,
+      supportsFastMode: true,
+      serviceTiers: tiers,
+      supportsServiceTierRecovery: true,
+      serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+      thinkingLevels: [{ id: "max", label: "Maximum" }],
+      runtimeChoices: [
+        { agentRuntime: { id: "codex", source: "model" }, available: true, serviceTiers: tiers },
+      ],
+    });
+    const primary = `openai/gpt-5@${profile}`;
+    const choices = defaultModelChoices([model], { primary, fallbacks: [], utilityModel: null });
+    const pinned = expectDefined(
+      choices.find((entry) => modelCatalogRef(entry) === primary),
+      "pinned model",
+    );
+    expect(choices[0]).toBe(model);
+    expect(model.serviceTiers).toEqual(tiers);
+    expect(pinned).toMatchObject({
+      provider: "openai",
+      id: "gpt-5",
+      name: model.name,
+      thinkingLevels: model.thinkingLevels,
+    });
+    for (const field of [
+      "available",
+      "supportsFastMode",
+      "supportsServiceTierRecovery",
+      "serviceTiers",
+      "serviceTierObservation",
+      "runtimeChoices",
+    ]) {
+      expect(pinned).not.toHaveProperty(field);
+    }
+  });
+
   it("reads string and object model defaults", () => {
     expect(
       readModelProviderConfig({

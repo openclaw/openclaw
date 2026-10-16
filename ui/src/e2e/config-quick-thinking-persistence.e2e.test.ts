@@ -13,6 +13,21 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
+const models = [
+  {
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    provider: "openai",
+    reasoning: true,
+    thinkingLevels: [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High" },
+    ],
+    supportsFastMode: true,
+    serviceTiers: ["priority"],
+  },
+];
+
 function configResponse(
   thinkingDefault: "low" | "high",
   hash: string,
@@ -64,6 +79,7 @@ suite.define(() => {
       const initialConfig = configResponse("low", "hash-1");
       const savedConfig = configResponse("high", "hash-2");
       const gateway = await installMockGateway(page, {
+        models,
         methodResponses: {
           "config.get": { sequence: [initialConfig, savedConfig] },
           "config.patch": savedConfig,
@@ -96,6 +112,7 @@ suite.define(() => {
 
       const freshPage = await context.newPage();
       await installMockGateway(freshPage, {
+        models,
         methodResponses: { "config.get": savedConfig },
       });
       await freshPage.goto(`${suite.server.baseUrl}settings/model-providers`);
@@ -118,6 +135,7 @@ suite.define(() => {
         const initialConfig = configResponse("low", "hash-1", initial);
         const savedConfig = configResponse("low", "hash-2", next);
         const gateway = await installMockGateway(page, {
+          models,
           methodResponses: {
             "config.get": { sequence: [initialConfig, savedConfig] },
             "config.patch": savedConfig,
@@ -153,6 +171,7 @@ suite.define(() => {
 
         const freshPage = await context.newPage();
         await installMockGateway(freshPage, {
+          models,
           methodResponses: { "config.get": savedConfig },
         });
         const reloadResponse = await freshPage.goto(
