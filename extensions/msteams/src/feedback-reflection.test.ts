@@ -32,7 +32,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getMSTeamsRuntime: () => ({ state: { openKeyedStoreV2: mocks.openKeyedStoreV2 } }),
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
