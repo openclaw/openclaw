@@ -4,7 +4,7 @@ import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
 import {
   createGateway,

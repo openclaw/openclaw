@@ -1,7 +1,7 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   downloadLightboxImage,
   externalLightboxImageUrl,

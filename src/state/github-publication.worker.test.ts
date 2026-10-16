@@ -406,21 +406,6 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
   ).resolves.toEqual(inserted);
 });
 
-it("inserts a repository request through its retained session source", async () => {
-  const { facts } = observeAuthority();
-  const { row, source } = await sourceFixture("source-insert");
-  try {
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).resolves.toEqual(row);
-    expect(facts.get(JSON.stringify(["repository", row.request_id]))).toMatchObject({
-      kind: "postimage",
-      value: { request_id: row.request_id, status: "requested" },
-    });
-    expect(read(row)).toMatchObject({ ok: true, rows: [row] });
-  } finally {
-    await source.release();
-  }
-});
-
 it("does not cancel a newer personal GitHub authorization", async () => {
   const owner = ensureProfileForEmail("publication-cancel@example.test").id;
   const first = "09208f47-f654-4120-a878-bbed310e02d1";

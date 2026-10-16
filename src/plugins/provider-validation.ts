@@ -133,6 +133,14 @@ export function normalizeRegisteredProvider(params: {
     diagnose("error", "provider registration missing id");
     return null;
   }
+  if (
+    params.provider.authScope !== undefined &&
+    params.provider.authScope !== "agent" &&
+    params.provider.authScope !== "plugin"
+  ) {
+    diagnose("error", `provider "${id}" authScope must be agent or plugin`);
+    return null;
+  }
   function normalizeWizardSurface<T extends { methodId?: string }>(
     surface: T | undefined,
     metadataKind: "setup" | "model-picker",

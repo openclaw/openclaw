@@ -4,7 +4,7 @@ import type {
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { HoverPreviewTarget, LinkReaderTarget } from "./link-reader-target.ts";
 
 export type HovercardProperties = {

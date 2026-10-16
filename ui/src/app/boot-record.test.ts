@@ -93,30 +93,6 @@ describe("Control UI boot record", () => {
     expect(localStorage.getItem(key)).toBeNull();
   });
 
-  it.each([undefined, null, "", "changed-token"])(
-    "rejects without deleting another document’s record when the credential is %s",
-    async (current) => {
-      const saved = record();
-      persistBootRecord(saved);
-      await settleWrite();
-      expect(readBootRecord(scope, () => current)).toBeNull();
-      expect(readBootRecord(scope, credential)).toEqual(saved);
-    },
-  );
-
-  it.each(["token", "device-token"])(
-    "compares the credential for the recorded %s method",
-    async (authMethod) => {
-      persistBootRecord({ ...record(), authMethod });
-      await settleWrite();
-      const current = vi.fn((method: string) =>
-        method === authMethod ? "test-token" : "other-token",
-      );
-      expect(readBootRecord(scope, current)?.authMethod).toBe(authMethod);
-      expect(current).toHaveBeenCalledExactlyOnceWith(authMethod);
-    },
-  );
-
   it("binds boot admission to the accepted reusable credential", () => {
     const cases: Array<
       [

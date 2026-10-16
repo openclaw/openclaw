@@ -133,7 +133,6 @@ export function createRealtimePlaybackFixture(
       player: roomPlayer,
       harness,
       markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
       onTerminalError,
       providerId: () => "openai",
       realtimeConfig: () =>

@@ -77,7 +77,7 @@ export function readSessionActorProjectionReceiptFromCells(
       database.nativeLocation !== params.path ||
       (params.sessionKey !== undefined && sessionKey !== params.sessionKey) ||
       snapshot?.entry?.sessionId !== params.sessionId ||
-      !snapshot.transcript.projection
+      (!snapshot.transcript.projection && !snapshot.transcript.contextStats)
     ) {
       continue;
     }
@@ -92,6 +92,7 @@ export function readSessionActorProjectionReceiptFromCells(
         ...snapshot.dependencySessionIds.map(sqliteSessionIdWriteScope),
       ],
       facts: snapshot.transcript.projection,
+      contextStats: snapshot.transcript.contextStats,
     };
   }
   return undefined;

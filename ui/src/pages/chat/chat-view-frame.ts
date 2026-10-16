@@ -196,9 +196,13 @@ export function createChatViewFrame(props: ChatProps) {
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
     onReopen: (itemId, scope) => {
-      const composerState = getChatComposerState(props.paneId);
-      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
-      composerState.questionCollapsed = false;
+      const composer = getChatComposerState(props.paneId);
+      composer.restoreComposerFocus ||= composer.questionTakeoverActive;
+      composer.questionTakeoverActive = false;
+      composer.updatePresentation((draft) => {
+        draft.activeQuestionKey = JSON.stringify([scope, itemId]);
+        draft.questionCollapsed = false;
+      });
     },
   });
   const openImage = props.onOpenImage

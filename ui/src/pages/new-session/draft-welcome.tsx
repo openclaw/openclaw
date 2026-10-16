@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, untrack } from "solid-js";
+import { createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
@@ -19,12 +19,13 @@ export function DraftWelcome(props: {
   composer?: JSX.Element;
 }) {
   const source = createMemo(() => props.sessions);
-  const sessions = projectSource(untrack(source), {
-    read: (owner) => owner?.state.result,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  createEffect(source, (next) => sessions.replaceSource(next));
+  const sessions = createMemo(() =>
+    projectSource(source(), {
+      read: (owner) => owner?.state.result,
+      subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
+      equality: "revision",
+    }),
+  );
   // Legacy render props can publish in-place edits; only selected fields gate work.
   const options = createMemo(() => props.options, { equals: false });
   const scope = createMemo(
@@ -48,7 +49,7 @@ export function DraftWelcome(props: {
     i18nRevision();
     const selected = scope();
     return prepareWelcomeRecentSessions(
-      sessions.read(),
+      sessions().read(),
       selected.sessionKey,
       selected.defaultAgentId,
     );

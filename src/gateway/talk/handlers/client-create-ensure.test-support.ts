@@ -128,7 +128,7 @@ export function createBrowserHarness(
   };
 }
 
-export function observeTargetSql(targetPath: string, pattern: RegExp, enabled = () => true) {
+function observeTargetSql(targetPath: string, pattern: RegExp, enabled = () => true) {
   const targets = new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
   const queries: string[] = [];
   const observed = observeHostDataSql((sql, database) => {

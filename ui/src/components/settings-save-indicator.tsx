@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 

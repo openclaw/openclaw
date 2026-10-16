@@ -221,6 +221,17 @@ the `packageManager` resource category includes its runtime dependencies and lic
 Documentation, source maps, and TypeScript declarations are excluded from this closure.
 Installed plugins resolve host SDK imports to the embedded image through the
 existing native plugin resolvers; host SDK JavaScript is not restored on disk.
+
+An installed plugin's `openclaw` peer can point to another copy of the same
+standalone artifact, such as the desktop bundle before its runtime is seeded.
+Peer admission compares the source commit, version, executable digest, and
+sidecar digest from the two manifests. It remains read-only; the running image
+supplies the SDK. Installing or explicitly repairing plugins rebinds their peer
+links to the selected runtime. If the original copy is removed or a new build is
+selected, run `openclaw doctor --fix` with the selected runtime before loading
+those plugins. Loose Node and Bun installations still require the selected host
+package path to match.
+
 The builder captures constant conditional-export resolutions before compilation;
 these modules remain lazy and do not require JavaScript in the sidecar.
 

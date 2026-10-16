@@ -14,11 +14,14 @@ import {
   setQuestionPromptClient,
 } from "../app/question-prompt.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,

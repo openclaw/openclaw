@@ -377,10 +377,9 @@ describe("registered decision capability", () => {
       expect(evaluate.mock.calls[0]?.[1].model).toBe(model);
     },
   );
-  it("leaves off, missing and cold credentials network-free", async () => {
+  it("leaves disabled and unconfigured evaluations network-free", async () => {
     const call = vi.fn(async () => answer);
-    const host = registered(call, () => false);
-    expect(await host.run()).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
+    const host = registered(call);
     expect(await evaluateDecisionInRegistry(batch, options(), host.registry, {})).toEqual({
       status: "unavailable",
       reason: "disabled",
@@ -391,6 +390,36 @@ describe("registered decision capability", () => {
     });
     expect(call).not.toHaveBeenCalled();
   });
+  it.each([
+    { state: "unconfirmed", isReady: undefined, credentialReady: false, callable: true },
+    { state: "ready", isReady: () => true, credentialReady: true, callable: true },
+    { state: "unavailable", isReady: () => false, credentialReady: false, callable: false },
+  ])(
+    "reports $state readiness without confusing credential evidence with admission",
+    async ({ isReady, credentialReady, callable }) => {
+      const call = vi.fn(async () => answer);
+      const host = registered(call, isReady);
+      const providerHost = host.registry.decisionProviders[0]!.host;
+      expect(providerHost.inspect(config)).toMatchObject({ credentialReady, callable });
+      if (callable) {
+        await expect(host.run()).resolves.toMatchObject({ status: "ok" });
+        expect(call).toHaveBeenCalledOnce();
+      } else {
+        await expect(host.run()).resolves.toEqual({
+          status: "unavailable",
+          reason: "credentials-unavailable",
+        });
+        expect(call).not.toHaveBeenCalled();
+      }
+      expect(providerHost.inspect(config)).toMatchObject({ credentialReady, callable });
+      providerHost.retire();
+      expect(providerHost.inspect(config)).toMatchObject({
+        credentialReady: false,
+        callable: false,
+      });
+      await expect(host.run()).resolves.toEqual({ status: "unavailable", reason: "retiring" });
+    },
+  );
   it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
     const releases = new Map<string, () => void>();
     const started = createDeferredCore();

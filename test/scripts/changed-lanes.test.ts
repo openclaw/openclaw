@@ -896,7 +896,7 @@ describe("scripts/changed-lanes", () => {
       name: "mixed UI TypeScript and CSS",
       paths: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
       oxlintTargets: ["ui/src/app-routes.ts"],
-      stylelintTargets: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+      stylelintTargets: ["ui/src/styles/base.css"],
     },
     {
       name: "UI CSS only",

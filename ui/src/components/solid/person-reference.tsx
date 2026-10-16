@@ -24,7 +24,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
@@ -192,6 +192,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
   }
 
   function renderCard() {
+    // Native hovercard events snapshot current facts without owning reactive subscriptions.
     untrack(() => {
       activityExpiry.sync();
       const card = portal.card;

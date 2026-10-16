@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
@@ -9,6 +10,7 @@ import { appendSessionTranscriptReport } from "../config/sessions/session-access
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionSendRecoveryPage } from "../config/sessions/session-pending-input-history.js";
 import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
+import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -30,7 +32,30 @@ import {
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-class SessionSendEndpointChangedError extends Error {}
+function sessionKeyHash(key: string): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
+class SessionSendEndpointChangedError extends Error {
+  constructor(
+    endpoint: "source" | "target",
+    expected: SessionSendDeliveryEndpoint,
+    current: CommunicationEndpoint,
+    message = "Session delivery endpoint was replaced",
+  ) {
+    super(
+      `${message}: ${JSON.stringify({
+        endpoint,
+        sessionKeyHash: sessionKeyHash(expected.sessionKey),
+        previousSessionId: expected.sessionId,
+        currentSessionId: current.entry?.sessionId ?? null,
+        previousGeneration: expected.lifecycleRevision ?? null,
+        currentGeneration: current.entry?.lifecycleRevision ?? null,
+        archived: Boolean(current.entry?.archivedAt),
+      })}`,
+    );
+  }
+}
 
 function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryEndpoint): boolean {
   return (
@@ -87,6 +112,7 @@ export async function recoverSessionSendDeliveries(
     }),
   );
   let blockedCount = 0;
+  let cancelledCount = 0;
   for (const target of targets) {
     assertCurrent();
     const entries = await retry(() => readPendingInputRecoveryEntriesInWorker(target));
@@ -107,6 +133,7 @@ export async function recoverSessionSendDeliveries(
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
+      const undeliverableRunIds: string[] = [];
       const blocked: {
         inputId: string;
         sourceSessionKey: string;
@@ -149,6 +176,7 @@ export async function recoverSessionSendDeliveries(
                 return;
               }
               const load = async (
+                side: "source" | "target",
                 endpoint: SessionSendDeliveryEndpoint,
               ): Promise<CommunicationEndpoint> => {
                 const loaded = await resolveGatewaySessionStoreTargetInWorker({
@@ -165,15 +193,13 @@ export async function recoverSessionSendDeliveries(
                   entry: loaded.store[loaded.canonicalKey],
                 };
                 if (!matches(result, endpoint) || result.entry?.archivedAt) {
-                  throw new SessionSendEndpointChangedError(
-                    "Session delivery endpoint was replaced",
-                  );
+                  throw new SessionSendEndpointChangedError(side, endpoint, result);
                 }
                 return result;
               };
               const [source, destination] = await Promise.all([
-                load(delivery.source),
-                load(delivery.target),
+                load("source", delivery.source),
+                load("target", delivery.target),
               ]);
               if (
                 destination.sessionKey !== sessionKey ||
@@ -181,6 +207,9 @@ export async function recoverSessionSendDeliveries(
                 destination.agentId !== target.agentId
               ) {
                 throw new SessionSendEndpointChangedError(
+                  "target",
+                  delivery.target,
+                  destination,
                   "Session delivery target does not own this input",
                 );
               }
@@ -238,6 +267,9 @@ export async function recoverSessionSendDeliveries(
             return;
           }
           blockedCount++;
+          if (error instanceof SessionSendEndpointChangedError) {
+            undeliverableRunIds.push(input.runId);
+          }
           blocked.push({
             inputId: input.id,
             sourceSessionKey: delivery.source.sessionKey,
@@ -258,7 +290,7 @@ export async function recoverSessionSendDeliveries(
             ...new Set((getRetryAttemptErrors(error) ?? [error]).map(formatErrorMessageWithCode)),
           ];
           context.logGateway.warn(
-            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))}`,
+            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
           );
         }
       }
@@ -284,7 +316,10 @@ export async function recoverSessionSendDeliveries(
           (blocked.length > displayed.length
             ? `\n${blocked.length - displayed.length} more updates were not delivered.`
             : "") +
-          "\nThe updates remain saved; no sender task was rerun. Resend the update or ask the sender to retry.";
+          "\nThe updates remain saved; no sender task was rerun. Resend the update or ask the sender to retry." +
+          (undeliverableRunIds.length > 0
+            ? " Updates with replaced endpoints will not be retried automatically."
+            : "");
         const result = await retry(() =>
           withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
             appendSessionTranscriptReport(scope, {
@@ -308,13 +343,21 @@ export async function recoverSessionSendDeliveries(
           context.logGateway.warn(
             "Could not record blocked agent-update delivery notice; inputs retained.",
           );
+        } else {
+          // Keep the notice durable before withdrawing replay. A crash between
+          // these writes may retry cleanup, but cannot silently lose the update.
+          for (const runId of undeliverableRunIds) {
+            if (await retry(() => discardSessionPendingInput(scope, runId, assertCurrent))) {
+              cancelledCount++;
+            }
+          }
         }
       }
     }
   }
   if (blockedCount > 0) {
     context.logGateway.warn(
-      `Session delivery recovery blocked for ${blockedCount} saved inputs; inputs retained.`,
+      `Session delivery recovery blocked for ${blockedCount} saved inputs; ${cancelledCount} cancelled as undeliverable, ${blockedCount - cancelledCount} retained for retry.`,
     );
   }
 }

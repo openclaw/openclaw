@@ -7,7 +7,7 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { QuestionPanelProps } from "./chat-question-types.ts";
 
 type CardProps = { props?: QuestionPanelProps };

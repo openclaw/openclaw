@@ -10,6 +10,10 @@ import {
 } from "../app/lazy-custom-element.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../lib/reactive/solid-controller-host.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
@@ -23,9 +27,8 @@ import {
   resolveUiConversationIdentity,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   CHAT_ROUTE_READY_EVENT,

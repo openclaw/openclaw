@@ -11,8 +11,8 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
 import { createAttachmentDownload } from "./chat-attachment-download.ts";
 import { createFileCopy } from "./chat-file-copy.ts";

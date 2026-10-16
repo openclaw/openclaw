@@ -98,6 +98,11 @@ function HeaderActions(
 }
 
 function Toolbar(props: ControllerProps & { embedded: boolean }) {
+  // The address node belongs to this toolbar's retained synchronous panel owner.
+  const controller = untrack(() => props.controller);
+  onCleanup(() => {
+    controller.addressInput = undefined;
+  });
   const nativeTab = createMemo(() => props.controller.native.activeTab);
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
   return (
@@ -148,6 +153,7 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
       />
       <input
         class="bp-url"
+        ref={(element) => (controller.addressInput = element)}
         type="text"
         spellcheck="false"
         autocomplete="off"

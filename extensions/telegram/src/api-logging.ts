@@ -1,3 +1,4 @@
+import { HttpError } from "grammy";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -18,7 +19,7 @@ type TelegramApiLoggingParams<T> = {
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-function formatTransportDiagnostics(error: unknown): string {
+export function formatTelegramTransportDiagnostics(error: unknown): string {
   const fields: { code?: string; syscall?: string } = {};
   for (const candidate of collectErrorGraphCandidates(error, (current) => [
     current.cause,
@@ -50,8 +51,11 @@ export async function withTelegramApiErrorLogging<T>(
     return await fn();
   } catch (err) {
     if (!shouldLog || shouldLog(err)) {
-      const transport = formatTransportDiagnostics(err);
-      const errText = transport ? `network request failed${transport}` : formatErrorMessage(err);
+      const transport = formatTelegramTransportDiagnostics(err);
+      const errText =
+        err instanceof HttpError || transport
+          ? `network request failed${transport}`
+          : formatErrorMessage(err);
       const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
       log(`telegram ${operation} failed: ${errText}`);
     }

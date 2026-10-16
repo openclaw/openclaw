@@ -18,6 +18,7 @@ import { createWorkerBundleProducer } from "../../src/gateway/worker-environment
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
@@ -40,7 +41,7 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
-  it.each(["escaped.mjs", "worker/runtime.wasm"])(
+  it.each(["escaped.mjs", "worker/runtime.wasm", "worker/unowned.exe"])(
     "rejects an unstaged emitted %s before publishing the worker graph",
     (fileName) => {
       const plugin = createWorkerDeployBuildPlugin();
@@ -60,9 +61,9 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
-    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.map(
-      (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
-    );
+    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.filter((artifact) =>
+      artifact.endsWith(".mjs"),
+    ).map((artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`);
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -176,6 +177,7 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
           chunks.every(
             (file) =>
               file === "worker/worker.mjs" ||
+              file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
               (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
           ),
         ).toBe(true);
@@ -214,6 +216,16 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
           const relocated = path.join(root, "dist", "worker");
           fs.mkdirSync(relocated, { recursive: true });
           await tar.extract({ file: preparedArchive, cwd: relocated });
+          expect(
+            fs.readFileSync(path.join(relocated, WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH)),
+          ).toEqual(
+            fs.readFileSync(
+              path.resolve(
+                "node_modules/@openclaw/fs-safe/dist",
+                WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+              ),
+            ),
+          );
           const result = await fixtureLifetime.track(
             runNodeScript(
               [
@@ -245,6 +257,7 @@ try {
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
   });
   assertCurrent();
+  console.log("relocated exec authorization committed");
   await closeOpenClawStateDatabaseAsync();
   const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
   assert.equal(stored.lastUsedCommand, command);
@@ -283,7 +296,10 @@ console.log("relocated exec authorization persisted");
               { cwd: root, signal },
             ),
           );
-          expect(result.status, result.stderr).toBe(0);
+          const diagnostics = `${result.stderr}\n${result.stdout}`;
+          expect(result.error, diagnostics).toBeUndefined();
+          expect(result.status, diagnostics).toBe(0);
+          expect(result.stdout).toContain("relocated exec authorization committed");
           expect(result.stdout).toContain("relocated exec authorization persisted");
         }),
       180_000,

@@ -424,7 +424,6 @@ export async function recoverStuckDiagnosticSession(
       void logWithSessionDiagnosticContext({
         level: "warn",
         sessionKey: params.sessionKey,
-        activeSessionId,
         cronNameLabel: "stopped",
         format: (stoppedFields) =>
           `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${

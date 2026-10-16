@@ -2,7 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";

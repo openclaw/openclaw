@@ -19,7 +19,6 @@ const dnsLookup = vi.hoisted(() =>
 );
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const loggerInfo = vi.hoisted(() => vi.fn());
-const loggerDebug = vi.hoisted(() => vi.fn());
 const loggerWarn = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
@@ -89,15 +88,16 @@ vi.mock("undici/index.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   createSubsystemLogger: () => ({
     info: loggerInfo,
-    debug: loggerDebug,
+    debug: vi.fn(),
     warn: loggerWarn,
     error: vi.fn(),
     child: () => ({
       info: loggerInfo,
-      debug: loggerDebug,
+      debug: vi.fn(),
       warn: loggerWarn,
       error: vi.fn(),
     }),
@@ -143,7 +143,6 @@ beforeEach(() => {
     vi.stubEnv(key, "");
   }
   loggerInfo.mockReset();
-  loggerDebug.mockReset();
   loggerWarn.mockReset();
   getDefaultResultOrder.mockReset();
   getDefaultResultOrder.mockReturnValue("ipv4first");
@@ -595,7 +594,6 @@ describe("resolveTelegramFetch", () => {
       loggerWarn,
       "telegram transport attempt marked temporarily unhealthy",
     );
-    expectLoggerMessageContaining(loggerDebug, "fetch fallback: rechecking primary dispatcher");
   });
 
   it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {

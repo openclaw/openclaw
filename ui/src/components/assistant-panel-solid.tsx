@@ -1,7 +1,7 @@
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
+import { useSolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   AssistantPanelController,
   type AssistantPanelProps,

@@ -645,12 +645,26 @@ transcript indexes, per-event byte tables, and retry history. The Gateway retain
 selected positive anchors from hydration and append receipts. A missing anchor
 is unknown, so requests for it use the canonical reader.
 
+The actor retains exact context event and byte totals separately from its bounded
+transcript window. Cold admission counts once; ordinary appends and metadata-only
+rewrites update those totals in the writer transaction and publish them with its
+receipt. Context boundaries and uncovered historical rewrites recompute the totals
+through the history owner. Rollback preserves the previous totals. Completion
+hydration retains at most 512 successful or failed receipts; an uncached retry uses
+its indexed durable completion record, preserving idempotency after eviction.
+
 A context window retains its header and at most the requested event limit plus
 128 rows, with a stored-byte limit of the requested byte limit plus 512 KiB,
 including the header. Reads still honor the caller's original limits. The separate
 committed tail retains at most 128 events and 512 KiB; selected anchors retain at
 most 128 entries and 128 KiB of estimated memory. These bounded facts share the
 actor's eviction and write-receipt invalidation lifecycle.
+
+The history worker retains visible marker positions for recently read sessions.
+Repeated pages reuse that projection, and ordinary appends extend it from new
+navigation rows without rereading old markers or message bodies. Branch changes,
+reset, and rewritten markers rebuild the projection. Page payloads retain their
+existing byte and event bounds; model-context selection is unchanged.
 
 Covered prompt-metadata rewrites that preserve admission and navigation can
 update retained windows from their receipt rows. Cold or evicted facts,

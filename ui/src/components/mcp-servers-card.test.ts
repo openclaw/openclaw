@@ -204,6 +204,33 @@ describe("openclaw-mcp-servers-card", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
+  it("keeps form toggles ordered before the next render", async () => {
+    const { card } = await mountCard();
+    const add = actionButton(card, "Add server");
+    add.click();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).toBeNull();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).not.toBeNull();
+  });
+  it("admits one mutation before rendering busy and releases it after completion", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+    });
+    const completion = deferred<boolean>();
+    harness.patch.mockReturnValueOnce(completion.promise);
+    const disable = actionButton(card, "Disable");
+    disable.click();
+    actionButton(card, "Remove local").click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    expect(disable.disabled).toBe(true);
+    completion.resolve(true);
+    await waitForFast(() => expect(disable.disabled).toBe(false));
+    disable.click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+  });
   it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
     const { card, request, open, connection } = await mountLoginCard();
     request

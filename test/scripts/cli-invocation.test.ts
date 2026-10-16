@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   isStandaloneRuntimeExecutable,
   readStandaloneRuntimeManifest,
+  readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -61,14 +62,18 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
   const manifest = {
     schemaVersion: 1,
     mode: "jit",
-    executable: { path: "renamed-runtime" },
-    runtime: { path: "runtime" },
-    openclaw: { version: "2026.10.3" },
+    executable: { path: "renamed-runtime", sha256: "a".repeat(64) },
+    runtime: { path: "runtime", sha256: "b".repeat(64) },
+    openclaw: { version: "2026.10.3", commit: "c".repeat(40) },
     bun: { version: "1.4.3" },
   };
   fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify(manifest));
   // No executable bytes are needed: packaging owns hashes; planning owns the argv shape.
   expect(readStandaloneRuntimeManifest(executable)).toEqual(manifest);
+  expect(readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toEqual(manifest);
+  expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "unrelated"))).toThrow(
+    "Invalid standalone",
+  );
   expect(
     resolveOpenClawCliInvocation({
       execPath: executable,
@@ -98,6 +103,13 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
     JSON.stringify({ ...manifest, executable: { path: "another-runtime" } }),
   );
   expect(() => isStandaloneRuntimeExecutable(executable)).toThrow("Invalid standalone");
+  fs.writeFileSync(
+    path.join(root, "manifest.json"),
+    JSON.stringify({ ...manifest, executable: { ...manifest.executable, path: "../outside" } }),
+  );
+  expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toThrow(
+    "Invalid standalone",
+  );
   fs.writeFileSync(path.join(root, "manifest.json"), "{");
   expect(() => readStandaloneRuntimeManifest(executable)).toThrow("Invalid standalone");
 });
