@@ -38,9 +38,7 @@ const refuseChild = () => {
 
 test("delegated authority closes exactly once on replacement, exact close, and lifecycle rotation", () => {
   const closed: string[] = [];
-  observeClosure((authority) => {
-    closed.push(authority.operationalRunInstance.instanceId);
-  });
+  observeClosure(({ operationalRunInstance }) => closed.push(operationalRunInstance.instanceId));
   claimAuthority("instance-1", "shared-run");
   const second = claimAuthority("instance-2", "shared-run");
   expect(closed).toEqual(["instance-1"]);
@@ -57,15 +55,15 @@ test("delegated authority closes exactly once on replacement, exact close, and l
 
 test("authority closure reaches concurrent observers despite errors and independent unsubscribe", () => {
   const closed: string[] = [];
-  observeClosure((authority) => {
-    closed.push(`approval:${authority.operationalRunInstance.instanceId}`);
-  });
+  observeClosure(({ operationalRunInstance }) =>
+    closed.push(`approval:${operationalRunInstance.instanceId}`),
+  );
   observeClosure(() => {
     throw new Error("observer failed");
   });
-  const stopTransferObserver = observeClosure((authority) => {
-    closed.push(`transfer:${authority.operationalRunInstance.instanceId}`);
-  });
+  const stopTransferObserver = observeClosure(({ operationalRunInstance }) =>
+    closed.push(`transfer:${operationalRunInstance.instanceId}`),
+  );
   const first = claimAuthority("first");
   releaseAgentRunDelegatedAuthority(first);
   expect(closed).toEqual(["approval:first", "transfer:first"]);
@@ -80,10 +78,9 @@ test.each(["close", "replacement", "restart"])(
   (reason) => {
     const instance = { instanceId: "instance-scopes", runId: "run-scopes" };
     const parent = claimAgentRunDelegatedAuthority(instance);
-    const outer = new AbortController();
-    const inner = new AbortController();
+    const [outer, inner] = [new AbortController(), new AbortController()] as const;
     const scope = claimAgentRunApprovalAuthority(parent, [outer.signal, inner.signal]);
-    const copied = { ...scope, operationalRunInstance: { ...instance } };
+    const copied = structuredClone(scope);
     expect(claimAgentRunApprovalAuthority(parent, [inner.signal, outer.signal])).toBe(scope);
     expect(validateAgentRunDelegatedAuthority(copied)).toBe(true);
     inner.abort();
@@ -119,23 +116,17 @@ test.each(["release", "abort"])(
     expect(validateAgentRunDelegatedAuthority(copiedChild, worker)).toBe(true);
     expect(validateAgentRunDelegatedAuthority(worker, request)).toBe(false);
     expect(validateAgentRunDelegatedAuthority(sibling, worker)).toBe(false);
-    const closed: Array<{
-      claimId: string;
-      reason: string | undefined;
-      childCurrent: boolean;
-      rootCurrent: boolean;
-      siblingCurrent: boolean;
-      releasedAgain: boolean;
-    }> = [];
+    // Claim, reason, child/root/sibling liveness, and repeated-release result at notification time.
+    const closed: Array<[string, string | undefined, boolean, boolean, boolean, boolean]> = [];
     const stop = registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
-      closed.push({
-        claimId: authority.claimId,
+      closed.push([
+        authority.claimId,
         reason,
-        childCurrent: validateAgentRunDelegatedAuthority(copiedChild),
-        rootCurrent: validateAgentRunDelegatedAuthority(root),
-        siblingCurrent: validateAgentRunDelegatedAuthority(sibling),
-        releasedAgain: releaseAgentRunDelegatedAuthority(child),
-      });
+        validateAgentRunDelegatedAuthority(copiedChild),
+        validateAgentRunDelegatedAuthority(root),
+        validateAgentRunDelegatedAuthority(sibling),
+        releaseAgentRunDelegatedAuthority(child),
+      ]);
     });
     onTestFinished(() => {
       stop();
@@ -146,15 +137,11 @@ test.each(["release", "abort"])(
     } else {
       workerLifetime.abort();
     }
+    const closedState = ["approval-scope-closed", false, true, true, false];
     expect(closed).toEqual(
-      [child.claimId, request.claimId, worker.claimId].map((claimId) => ({
-        claimId,
-        reason: "approval-scope-closed",
-        childCurrent: false,
-        rootCurrent: true,
-        siblingCurrent: true,
-        releasedAgain: false,
-      })),
+      [child.claimId, request.claimId, worker.claimId].map((claimId) =>
+        closedState.toSpliced(0, 0, claimId),
+      ),
     );
     expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
     expect(() => source?.assertCurrent()).toThrow("child authority closed");
@@ -186,14 +173,9 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
     { trackOwner: true },
   );
   const closed: string[] = [];
-  observeClosure((authority) => {
-    closed.push(authority.claimId);
-  });
+  observeClosure((authority) => closed.push(authority.claimId));
   const authority = claimAuthority("instance-delayed", "delayed-terminal-run");
-  const copiedAuthority = {
-    ...authority,
-    operationalRunInstance: { ...authority.operationalRunInstance },
-  };
+  const copiedAuthority = structuredClone(authority);
   expect(validateAgentRunDelegatedAuthority(copiedAuthority)).toBe(true);
   clearAgentRunContext("delayed-terminal-run", lifecycleGeneration);
 
@@ -210,31 +192,52 @@ test("terminal clear preserves exact authority until its outer owner closes", ()
   expect(getAgentRunContext("delayed-terminal-run")).toBeUndefined();
 });
 
-test.each(["parent", "approval"])("exact %s cleanup does not consult a revoked source", (kind) => {
-  let current = true;
-  const assertSourceCurrent = vi.fn(() => {
-    if (!current) {
-      throw new Error("source retired");
+test.each(["parent cleanup", "approval cleanup", "omitted rebind", "replaced rebind"] as const)(
+  "preserves source binding through %s after revocation",
+  (kind) => {
+    let current = true;
+    const assertSourceCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("source retired");
+      }
+    });
+    const instance = { instanceId: "bound-instance", runId: "bound-run" };
+    const parent = claimAgentRunDelegatedAuthority(instance, assertSourceCurrent);
+    onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(parent);
+    });
+    const rebind = kind === "omitted rebind" || kind === "replaced rebind";
+    if (rebind) {
+      expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(parent);
     }
-  });
-  const parent = claimAuthority(
-    "source-cleanup-instance",
-    "source-cleanup-run",
-    assertSourceCurrent,
-  );
-  const authority =
-    kind === "parent"
-      ? parent
-      : claimAgentRunApprovalAuthority(parent, [new AbortController().signal]);
-  current = false;
-  assertSourceCurrent.mockClear();
-  expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
-  expect(assertSourceCurrent).not.toHaveBeenCalled();
-  if (kind === "approval") {
-    expect(releaseAgentRunDelegatedAuthority(parent)).toBe(true);
-  }
-  expect(getAgentRunContext("source-cleanup-run")).toBeUndefined();
-});
+    const authority =
+      kind === "approval cleanup"
+        ? claimAgentRunApprovalAuthority(parent, [new AbortController().signal])
+        : parent;
+    current = false;
+    assertSourceCurrent.mockClear();
+    if (rebind) {
+      const replacement = vi.fn();
+      expect(() =>
+        claimAgentRunDelegatedAuthority(
+          instance,
+          kind === "replaced rebind" ? replacement : undefined,
+        ),
+      ).toThrow("already bound");
+      expect(replacement).not.toHaveBeenCalled();
+    }
+    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    if (!rebind) {
+      expect(assertSourceCurrent).not.toHaveBeenCalled();
+    }
+    if (kind === "approval cleanup") {
+      expect(releaseAgentRunDelegatedAuthority(parent)).toBe(true);
+    }
+    if (!rebind) {
+      expect(getAgentRunContext(instance.runId)).toBeUndefined();
+    }
+  },
+);
 
 test.each(["replacement", "restart"])(
   "rechecks the exact owner after a source callback causes %s",
@@ -257,32 +260,6 @@ test.each(["replacement", "restart"])(
     expect(validateAgentRunDelegatedAuthority(successor!)).toBe(true);
     expect(releaseAgentRunDelegatedAuthority(first)).toBe(false);
     expect(releaseAgentRunDelegatedAuthority(successor!)).toBe(true);
-  },
-);
-
-test.each(["omitted", "replaced"])(
-  "refuses a %s source binding for the same instance after revocation",
-  (binding) => {
-    const instance = { instanceId: "bound-instance", runId: "bound-run" };
-    let current = true;
-    const assertSourceCurrent = () => {
-      if (!current) {
-        throw new Error("source retired");
-      }
-    };
-    const authority = claimAgentRunDelegatedAuthority(instance, assertSourceCurrent);
-    const replacement = vi.fn();
-    onTestFinished(() => {
-      releaseAgentRunDelegatedAuthority(authority);
-    });
-    expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(authority);
-    current = false;
-    expect(() =>
-      claimAgentRunDelegatedAuthority(instance, binding === "replaced" ? replacement : undefined),
-    ).toThrow("already bound");
-    expect(replacement).not.toHaveBeenCalled();
-    // Refusing admission must leave the original owner available for exact cleanup.
-    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
   },
 );
 

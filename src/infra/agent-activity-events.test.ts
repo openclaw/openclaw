@@ -37,7 +37,7 @@ function nestedEntry(
   };
 }
 
-function call(messageId: string, id: string | undefined, name = "exec", args = {}, metadata = {}) {
+function call(messageId: string, id: string | undefined, metadata = {}, name = "exec", args = {}) {
   return {
     messageId,
     message: {
@@ -48,17 +48,12 @@ function call(messageId: string, id: string | undefined, name = "exec", args = {
   };
 }
 
+function toolResult<T extends string | undefined>(toolCallId: T, toolName = "exec", metadata = {}) {
+  return { role: "toolResult", toolCallId, toolName, isError: false, ...metadata };
+}
+
 function resultEntry(messageId: string, toolCallId: string | undefined, metadata = {}) {
-  return {
-    messageId,
-    message: {
-      role: "toolResult",
-      toolCallId,
-      toolName: "exec",
-      isError: false,
-      ...metadata,
-    },
-  };
+  return { messageId, message: toolResult(toolCallId, "exec", metadata) };
 }
 
 test("emits every activity stream with shared sequencing and context", () => {
@@ -129,13 +124,9 @@ test("projects Tool Search names for live and history activity without changing 
     status: "running",
     commandBearing: true,
   });
-  const result = {
-    role: "toolResult",
-    toolCallId: tool.toolCallId,
-    toolName: tool.name,
+  const result = toolResult(tool.toolCallId, tool.name, {
     details: { status: "completed", exitCode: 2 },
-    isError: false,
-  };
+  });
   // Presentation must not reinterpret the dispatcher's result as a native exec result.
   expect(
     projectAgentToolActivity({ ...tool, phase: "result", result, isError: false }),
@@ -147,7 +138,7 @@ test("projects Tool Search names for live and history activity without changing 
     isError: true,
   };
   const history = projectAgentHistoryActivity([
-    call("call", tool.toolCallId, tool.name, args),
+    call("call", tool.toolCallId, {}, tool.name, args),
     { messageId: "result", message: skipped },
   ]);
   for (const entry of history) {
@@ -184,13 +175,7 @@ test.each([
   { details: { status: "approval-unavailable" }, status: "blocked" },
   { details: { status: "error" }, status: "failed" },
 ])("preserves $details as $status in live and history activity", ({ details, status }) => {
-  const result = {
-    role: "toolResult",
-    toolCallId: "read-context",
-    toolName: "read",
-    details,
-    isError: true,
-  };
+  const result = toolResult("read-context", "read", { details, isError: true });
   const live = projectAgentToolActivity({
     toolCallId: result.toolCallId,
     name: result.toolName,
@@ -218,13 +203,9 @@ test.each([
   { outcome: "no-call-id", hidden: false },
 ])("keeps recorded child failures with a $outcome wrapper", ({ outcome, hidden }) => {
   const runId = outcome === "other-run" ? "other" : outcome === "no-run" ? undefined : "run";
-  const wrapper = call(
-    "wrapper",
-    outcome === "no-call-id" ? undefined : "outer",
-    "exec",
-    {},
-    { __openclaw: { runId } },
-  );
+  const wrapper = call("wrapper", outcome === "no-call-id" ? undefined : "outer", {
+    __openclaw: { runId },
+  });
   const messages: HistoryMessage[] = outcome === "result-only" ? [] : [wrapper];
   if (outcome === "duplicate") {
     messages.push({ ...wrapper, messageId: "duplicate-wrapper" });
@@ -260,16 +241,10 @@ test.each([
 
 test("keeps a completed step countable when its only child is routine progress", () => {
   const projected = projectAgentHistoryActivity([
-    call(
-      "step",
-      "step",
-      "exec",
-      {
-        title: "Check the release checklist",
-        code: "await tools.progress_card({});",
-      },
-      { runId: "run" },
-    ),
+    call("step", "step", { runId: "run" }, "exec", {
+      title: "Check the release checklist",
+      code: "await tools.progress_card({});",
+    }),
     nestedEntry("progress", {
       afterEntryId: "step",
       parentToolCallId: "step",
@@ -284,28 +259,27 @@ test("keeps a completed step countable when its only child is routine progress",
   expect(projected.find((entry) => entry.messageId === "progress")?.items).toEqual([]);
 });
 
-// Tools record one level of nesting today; these rows pin the rule for deeper graphs.
 test.each([
-  {
-    shape: "a nested step holds the routine call",
-    nested: [
-      { id: "inner", name: "exec", parent: "outer" },
-      { id: "plan", name: "progress_card", parent: "inner" },
+  [
+    "a nested step holds the routine call",
+    [
+      ["inner", "exec", "outer"],
+      ["plan", "progress_card", "inner"],
     ],
-    counted: [["inner", "inner"]],
-  },
-  {
-    shape: "a visible call sits under a hidden one",
-    nested: [
-      { id: "plan", name: "progress_card", parent: "outer" },
-      { id: "read", name: "read", parent: "plan" },
+    "inner",
+  ],
+  [
+    "a visible call sits under a hidden one",
+    [
+      ["plan", "progress_card", "outer"],
+      ["read", "read", "plan"],
     ],
-    counted: [["read", "read"]],
-  },
-])("counts one operation for a completed step when $shape", ({ nested, counted }) => {
+    "read",
+  ],
+] as const)("counts one operation for a completed step when %s", (_, nested, counted) => {
   const projected = projectAgentHistoryActivity([
-    call("outer", "outer", "exec", {}, { __openclaw: { runId: "run" } }),
-    ...nested.map(({ id, name, parent }, index) =>
+    call("outer", "outer", { __openclaw: { runId: "run" } }),
+    ...nested.map(([id, name, parent], index) =>
       nestedEntry(id, {
         afterEntryId: "outer-call",
         startOrder: index + 1,
@@ -315,10 +289,9 @@ test.each([
     ),
     resultEntry("outer-result", "outer", { __openclaw: { runId: "run" } }),
   ]);
-  // The step is never counted alongside a call beneath it that stays visible.
   expect(
     projected.flatMap((entry) => entry.items.map((item) => [entry.messageId, item.toolCallId])),
-  ).toEqual(counted);
+  ).toEqual([[counted, counted]]);
 });
 
 test.each([true, false])("does not expose a child assignment in progress (named: %s)", (named) => {

@@ -164,11 +164,8 @@ test("keeps audit-only events private and releases their terminal sequence state
     });
   }
   expect(shared).toEqual([]);
-  expect(audit.map((event) => [event.data.phase, event.seq])).toEqual([
-    ["start", 1],
-    ["end", 2],
-    ["start", 1],
-  ]);
+  expect(audit.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+  expect(audit.map((event) => event.seq)).toEqual([1, 2, 1]);
   expect(audit[0]).toMatchObject({
     runId: "audit",
     sessionKey: "agent:main:acp:session",
@@ -321,12 +318,9 @@ test("stamps each overlapping run's own start onto its terminal event", () => {
   emit("newer", "lifecycle", { phase: "start", startedAt: 2_000 });
   emit("older", "lifecycle", { phase: "error", endedAt: 3_000 });
   emit("newer", "lifecycle", { phase: "end", endedAt: 4_000 });
-  expect(seen.map((event) => [event.runId, event.data.phase, event.data.startedAt])).toEqual([
-    ["older", "start", 1_000],
-    ["newer", "start", 2_000],
-    ["older", "error", 1_000],
-    ["newer", "end", 2_000],
-  ]);
+  expect(seen.map((event) => event.runId)).toEqual(["older", "newer", "older", "newer"]);
+  expect(seen.map((event) => event.data.phase)).toEqual(["start", "start", "error", "end"]);
+  expect(seen.map((event) => event.data.startedAt)).toEqual([1_000, 2_000, 1_000, 2_000]);
 });
 
 test("does not invent or replace producer-owned lifecycle start timestamps", () => {
@@ -390,10 +384,8 @@ test("shares context, listeners, and sequences across duplicate module instances
   second.events.emitAgentEvent(event);
   first.events.emitAgentEvent(event);
   expect(second.registry.getAgentRunContext("run")?.sessionKey).toBe("session");
-  expect(seen.map(({ seq, sessionKey }) => ({ seq, sessionKey }))).toEqual([
-    { seq: 1, sessionKey: "session" },
-    { seq: 2, sessionKey: "session" },
-  ]);
+  expect(seen.map((received) => received.seq)).toEqual([1, 2]);
+  expect(seen.map((received) => received.sessionKey)).toEqual(["session", "session"]);
 });
 
 test("sweeps stale contexts and sequences without clearing active runs", () => {
@@ -411,10 +403,8 @@ test("sweeps stale contexts and sequences without clearing active runs", () => {
   const seen = captureEvents();
   emit("stale");
   emit("active");
-  expect(seen.map((event) => [event.runId, event.seq])).toEqual([
-    ["stale", 1],
-    ["active", 2],
-  ]);
+  expect(seen.map((event) => event.runId)).toEqual(["stale", "active"]);
+  expect(seen.map((event) => event.seq)).toEqual([1, 2]);
 });
 
 test("protects active queue leases while tracked and abandoned owners expire", () => {

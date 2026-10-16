@@ -56,14 +56,17 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     warn: vi.fn(),
   });
 
-  const createApprovalPlugin = () =>
-    ({
-      id: "slack",
-      meta: { label: "Slack" },
-      approvalCapability: {
-        nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
-      },
-    }) as never;
+  const approvalPlugin = (
+    id: string,
+    label: string,
+    approvalCapability: Parameters<
+      typeof startChannelApprovalHandlerBootstrap
+    >[0]["plugin"]["approvalCapability"],
+  ) => ({
+    id,
+    meta: { id, label, selectionLabel: label, docsPath: `/channels/${id}`, blurb: label },
+    approvalCapability,
+  });
 
   const makeHandler = () => ({
     start: vi.fn().mockResolvedValue(undefined),
@@ -80,7 +83,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   const startTestBootstrap = (logger?: unknown) =>
     startChannelApprovalHandlerBootstrap({
       scheduler,
-      plugin: createApprovalPlugin(),
+      plugin: approvalPlugin("slack", "Slack", {
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
+      }),
       cfg: {} as never,
       accountId: "default",
       channelRuntime,
@@ -171,34 +176,24 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     });
     const cleanup = await startChannelApprovalHandlerBootstrap({
       scheduler,
-      plugin: {
-        id: "matrix",
-        meta: {
-          id: "matrix",
-          label: "Matrix",
-          selectionLabel: "Matrix",
-          docsPath: "/channels/matrix",
-          blurb: "Matrix",
-        },
-        approvalCapability: {
-          nativeAsync: {
-            describeDeliveryCapabilities: async () => ({
-              enabled: true,
-              preferredSurface: "both",
-              supportsOriginSurface: true,
-              supportsApproverDmSurface: true,
-            }),
-            resolveOriginTarget: () => ({ to: "room:!origin:example.org" }),
-            resolveApproverDmTargets: () => [{ to: "user:@approver:example.org" }],
-          },
-          nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
-            capabilityBoundary: true,
-            isConfigured: async () => true,
-            shouldHandle: async () => true,
-            load: async () => runtime,
+      plugin: approvalPlugin("matrix", "Matrix", {
+        nativeAsync: {
+          describeDeliveryCapabilities: async () => ({
+            enabled: true,
+            preferredSurface: "both",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
           }),
+          resolveOriginTarget: () => ({ to: "room:!origin:example.org" }),
+          resolveApproverDmTargets: () => [{ to: "user:@approver:example.org" }],
         },
-      },
+        nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
+          capabilityBoundary: true,
+          isConfigured: async () => true,
+          shouldHandle: async () => true,
+          load: async () => runtime,
+        }),
+      }),
       cfg: {},
       accountId: "default",
       channelRuntime,
@@ -266,30 +261,43 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("restarts the shared approval handler when the runtime context is replaced", async () => {
+  it.each([false, true])("replaces a context with stale retry=%s", async (retryPending) => {
     const first = makeHandler();
+    if (retryPending) {
+      first.start.mockReset().mockRejectedValueOnce(new Error("boom"));
+    }
     const second = makeHandler();
     handlerFactory.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
-
-    const cleanup = await startTestBootstrap();
-
+    if (retryPending) {
+      handlerFactory.mockResolvedValueOnce(second);
+    }
+    const failure = retryPending ? loggedFailure() : undefined;
+    const cleanup = await startTestBootstrap(failure?.logger);
     const firstLease = registerApprovalContext({ ok: "first" });
-    await flushTransitions();
-
+    if (failure) {
+      await failure.failed.promise;
+      expect(first.start).toHaveBeenCalledTimes(1);
+    } else {
+      await flushTransitions();
+    }
     const secondLease = registerApprovalContext({ ok: "second" });
     await flushTransitions();
-
-    expect(handlerFactory).toHaveBeenCalledTimes(2);
-    expect(first.start).toHaveBeenCalledTimes(1);
+    if (retryPending) {
+      expect(second.start).toHaveBeenCalledTimes(1);
+      await clock.advanceBy(1_000);
+      expect(second.stop).not.toHaveBeenCalled();
+    } else {
+      expect(handlerFactory).toHaveBeenCalledTimes(2);
+      expect(first.start).toHaveBeenCalledTimes(1);
+    }
     expect(first.stop).toHaveBeenCalledTimes(1);
     expect(second.start).toHaveBeenCalledTimes(1);
-
-    secondLease.dispose();
-    await flushTransitions();
-
-    expect(second.stop).toHaveBeenCalledTimes(1);
-
-    firstLease.dispose();
+    if (!retryPending) {
+      secondLease.dispose();
+      await flushTransitions();
+      expect(second.stop).toHaveBeenCalledTimes(1);
+      firstLease.dispose();
+    }
     await cleanup();
   });
 
@@ -384,34 +392,5 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(stop).toHaveBeenCalledTimes(1);
     expect(scheduler.nextWakeAtMs).toBeNull();
     lease.dispose();
-  });
-
-  it("does not let a stale retry stop a newer active handler", async () => {
-    const first = makeHandler();
-    first.start.mockReset().mockRejectedValueOnce(new Error("boom"));
-    const second = makeHandler();
-    const { logger, failed } = loggedFailure();
-    handlerFactory
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second)
-      .mockResolvedValueOnce(second);
-
-    const cleanup = await startTestBootstrap(logger);
-
-    registerApprovalContext({ ok: "first" });
-    await failed.promise;
-    expect(first.start).toHaveBeenCalledTimes(1);
-
-    registerApprovalContext({ ok: "second" });
-    await flushTransitions();
-    expect(second.start).toHaveBeenCalledTimes(1);
-
-    await clock.advanceBy(1_000);
-
-    expect(first.stop).toHaveBeenCalledTimes(1);
-    expect(second.start).toHaveBeenCalledTimes(1);
-    expect(second.stop).not.toHaveBeenCalled();
-
-    await cleanup();
   });
 });
