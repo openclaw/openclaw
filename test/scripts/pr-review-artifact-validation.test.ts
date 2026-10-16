@@ -309,10 +309,7 @@ describePosix("scripts/pr review artifact validation", () => {
 
   it("rejects a review guard whose PR metadata describes another PR", () => {
     const fixtureRoot = tempDirs.make("openclaw-pr-review-guard-");
-    const localDir = join(fixtureRoot, ".local");
-    mkdirSync(localDir);
-    writeFileSync(join(localDir, "review-mode.env"), "REVIEW_MODE=pr\n");
-    writeFileSync(join(localDir, "pr-meta.env"), "PR_NUMBER=113928\n");
+    writeReviewArtifacts(fixtureRoot, validReview(), { prNumber: 113928 });
 
     const result = runReviewShellFunction(fixtureRoot, `review_guard ${REVIEWED_PR}`);
 
