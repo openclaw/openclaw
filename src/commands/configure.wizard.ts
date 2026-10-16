@@ -8,7 +8,6 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +24,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
+import { checkConfigureConfigSnapshot } from "./configure.config.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 import {
@@ -47,7 +47,6 @@ import {
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveLocalControlUiProbeLinks,
-  summarizeExistingConfig,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
@@ -235,6 +234,9 @@ export async function runConfigureWizard(
 
     const prepared = await readConfigFileSnapshotForWrite();
     const snapshot = prepared.snapshot;
+    if (!checkConfigureConfigSnapshot(snapshot, runtime)) {
+      return;
+    }
     // Keep only path ownership across the interactive wizard. Each commit re-reads under
     // the mutation lock and must use that fresh snapshot's env/include conflict facts.
     const configWriteOwnership = {
@@ -248,28 +250,6 @@ export async function runConfigureWizard(
     const baseConfig: OpenClawConfig = snapshot.valid
       ? (snapshot.sourceConfig ?? snapshot.config)
       : {};
-
-    if (snapshot.exists) {
-      const title = snapshot.valid ? "Existing config detected" : "Invalid config";
-      note(summarizeExistingConfig(baseConfig), title);
-      if (!snapshot.valid && snapshot.issues.length > 0) {
-        note(
-          [
-            ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
-            "",
-            "Docs: https://docs.openclaw.ai/gateway/configuration",
-          ].join("\n"),
-          "Config issues",
-        );
-      }
-      if (!snapshot.valid) {
-        outro(
-          `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run configure.`,
-        );
-        runtime.exit(1);
-        return;
-      }
-    }
 
     const selectedSections = opts.sections;
     const shouldPromptGatewayRunMode =

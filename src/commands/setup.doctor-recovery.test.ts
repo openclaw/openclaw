@@ -121,3 +121,37 @@ it("points failed setup to a repair that works without a terminal", async () => 
     }
   }
 }, 30_000);
+
+it("reports unreadable setup config before repair advice or setup prompts", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const configPath = await writeOpenClawConfig(home, { $include: "missing.json" });
+    const original = await fs.readFile(configPath, "utf8");
+    const baseline = createRuntime();
+    await expect(setupCommand({ json: true }, baseline)).rejects.toThrow("exit:1");
+    const nonInteractive = createRuntime();
+    await expect(
+      runNonInteractiveSetup(
+        { nonInteractive: true, acceptRisk: true, json: true },
+        nonInteractive,
+      ),
+    ).rejects.toThrow("exit:1");
+    const prompter = makePrompter();
+    await expect(runSetupWizard({ acceptRisk: true }, createRuntime(), prompter)).rejects.toThrow(
+      "exit:1",
+    );
+    for (const host of [baseline, nonInteractive]) {
+      const diagnostic = host.error.mock.calls.flat().join("\n");
+      expect(diagnostic).toContain("OpenClaw config could not be read");
+      expect(diagnostic).toContain("Failed to read include file: missing.json");
+      expect(diagnostic).not.toContain("doctor --fix");
+      expect(host.log).toHaveBeenCalledTimes(1);
+      expect(String(host.log.mock.calls[0]?.[0])).toContain("OpenClaw config could not be read");
+    }
+    expect(prompter.outro).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw config could not be read"),
+    );
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(vi.mocked(prompter.note).mock.calls.flat().join("\n")).not.toContain("Invalid config");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+});

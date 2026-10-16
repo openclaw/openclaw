@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
@@ -72,6 +73,12 @@ async function runSetupWizardOnce(
   await prompter.intro(t("wizard.setup.intro"));
 
   const snapshot = await readSetupConfigFileSnapshot();
+  const readFailure = formatConfigReadFailureForCli(snapshot);
+  if (readFailure) {
+    await prompter.outro(readFailure);
+    runtime.exit(1);
+    return;
+  }
   let currentSetupSnapshot = snapshot;
   let baseConfig: OpenClawConfig = snapshot.valid
     ? (snapshot.runtimeConfig ?? snapshot.config)
@@ -233,7 +240,8 @@ async function runSetupWizardOnce(
           const latest = await readSetupConfigFileSnapshot();
           if (!latest.valid) {
             throw new Error(
-              "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+              formatConfigReadFailureForCli(latest) ??
+                "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
             );
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
@@ -271,7 +279,8 @@ async function runSetupWizardOnce(
     const migratedSnapshot = await readSetupConfigFileSnapshot();
     if (!migratedSnapshot.valid) {
       throw new Error(
-        "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
+        formatConfigReadFailureForCli(migratedSnapshot) ??
+          "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
       );
     }
     currentSetupSnapshot = migratedSnapshot;

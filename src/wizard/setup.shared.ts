@@ -1,4 +1,5 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
@@ -223,7 +224,8 @@ export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.valid) {
     throw new Error(
-      "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+      formatConfigReadFailureForCli(snapshot) ??
+        "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
     );
   }
   return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};

@@ -6,6 +6,10 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  formatConfigReadFailureForCli,
+  writeInvalidConfigCliJson,
+} from "../cli/config-validation-output.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   configIncludeOwnsAgentRoster,
@@ -46,19 +50,13 @@ async function setupUnderOwner(
   const configPath = io.configPath;
   const prepared = await io.readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
-  if (snapshot.exists && !snapshot.valid) {
+  if (!snapshot.valid) {
     if (opts?.json) {
-      const [{ formatCliJsonFailure }, { normalizeConfigIssues }] = await Promise.all([
-        import("../cli/failure-output.js"),
-        import("../config/issue-format.js"),
-      ]);
-      writeRuntimeJson(runtime, {
-        ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(configPath)}`),
-        issues: normalizeConfigIssues(snapshot.issues),
-      });
+      writeInvalidConfigCliJson(runtime, snapshot);
     }
     runtime.error(
-      `Config invalid at ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
+      formatConfigReadFailureForCli(snapshot) ??
+        `Config invalid at ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;
