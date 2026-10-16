@@ -278,9 +278,8 @@ async function syncWorkboardLifecycleSessions(params: {
   complete?: boolean;
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
-}): Promise<number> {
+}): Promise<void> {
   const now = params.now ?? Date.now();
-  let count = 0;
   for (const card of params.cards) {
     const lookupKey = workboardCardSessionLookupKey(card);
     const candidates = lookupKey.startsWith("subagent:workboard-")
@@ -304,15 +303,12 @@ async function syncWorkboardLifecycleSessions(params: {
       launch?.phase === "prepared" &&
       (preparedAcceptanceAt === undefined || preparedAcceptanceAt < launch.preparedAt)
     ) {
-      if (
-        params.complete &&
-        (await params.store.failPreparedLaunch(card.id, {
+      if (params.complete) {
+        await params.store.failPreparedLaunch(card.id, {
           expectedLaunch: launch,
           reason: "Gateway did not accept the prepared Workboard session before restart.",
           failedAt: now,
-        }))
-      ) {
-        count += 1;
+        });
       }
       continue;
     }
@@ -334,13 +330,11 @@ async function syncWorkboardLifecycleSessions(params: {
         },
       })
     ) {
-      count += 1;
       if (observation.state === "succeeded" || observation.state === "failed") {
         await params.onMatched?.({ cards: [card], sessionKey: session.key });
       }
     }
   }
-  return count;
 }
 
 function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined {
