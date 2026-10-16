@@ -296,7 +296,9 @@ describe("worker detached model-context branch parity", () => {
       try {
         const { result } = await withAsyncReadHook(
           // Readiness may arrive after the former fixture deadline on a loaded host.
-          () => vi.advanceTimersByTimeAsync(5_001),
+          async () => {
+            await vi.advanceTimersByTimeAsync(5_001);
+          },
           () => launchProbe("persisted-current", { suppressNextUserMessagePersistence: true }),
           "before",
         );

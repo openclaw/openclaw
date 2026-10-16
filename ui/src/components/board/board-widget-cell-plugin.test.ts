@@ -5,112 +5,70 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { CORE_BOARD_WIDGET_ELEMENTS } from "../../lib/board/widgets/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { boardWidget } from "./board-view.test-support.ts";
-import { callbacks, cleanupCells, mountCell } from "./board-widget-cell.test-support.ts";
+import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
 
-const progressError = (cell: Element) =>
-  cell.querySelector('[data-test-id="session-progress-error"]');
-const progress = (cell: Element) => cell.querySelector("openclaw-session-progress-widget");
-
-function pluginWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
-  return boardWidget({
-    contentKind: "plugin",
-    pluginKind: "session:progress",
-    title: "Session progress",
-    ...overrides,
-  });
+const disposers: Array<() => void> = [];
+function mount(element: HTMLElement): void {
+  disposers.push(mountSolid(() => element, { container: document.body }).unmount);
 }
 
-const progressKinds = [
-  { pluginId: "session", kind: "session:progress", label: "Session progress" },
-];
-const noSubscription = () => () => undefined;
-const emptySessions = () => ({
-  subscribe: noSubscription,
-  subscribeList: noSubscription,
-  listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
-  refreshList: async () => undefined,
-});
-function progressGateway(request: ReturnType<typeof vi.fn>) {
+function callbacks(): BoardWidgetCellCallbacks {
+  const noAction = vi.fn(async () => undefined);
   return {
-    snapshot: {
-      phase: "connected",
-      client: { request },
-      hello: { features: { methods: ["progressCard.get"] }, controlUiWidgetKinds: progressKinds },
-    },
-    subscribe: noSubscription,
-    subscribeEvents: noSubscription,
+    appViewGeneration: () => 0,
+    grant: noAction,
+    movePointerDown: vi.fn(),
+    resizePointerDown: vi.fn(),
+    moveToTab: noAction,
+    resizeTo: noAction,
+    setHeightMode: noAction,
+    reportContentHeight: vi.fn(),
+    remove: noAction,
+    nudge: noAction,
+    focus: vi.fn(),
+    focusChanged: vi.fn(),
+    frameLoadFailed: noAction,
+    widgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
+    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
   };
 }
-const agentSelection = () => ({ state: { scopeId: null }, subscribe: noSubscription });
-const progressResponse = (sessionKey: string, step: string, markdown?: string, updatedAt = 1) => ({
-  card: {
-    sessionKey,
-    revision: 1,
-    updatedAt,
-    ...(markdown === undefined ? {} : { markdown }),
-    steps: [{ step, status: "in_progress" }],
-  },
-});
-const listSnapshot = <T>(result: T) => ({ result, agentId: null, loading: false, error: null });
-const finishedSession = (key: string, agentId: string, status: string) => ({
-  key,
-  agentId,
-  status,
-  startedAt: 0,
-  endedAt: 2,
-});
-const progressContext = <Sessions extends object, Gateway extends object>(
-  request: ReturnType<typeof vi.fn>,
-  sessions?: Sessions,
-  gateway?: Gateway,
-) =>
-  ({
-    agentSelection: agentSelection(),
-    sessions: sessions ?? emptySessions(),
-    gateway: gateway ?? progressGateway(request),
-  }) as unknown as ApplicationContext;
-const waitForProgress = (cell: Element, text: string) =>
-  vi.waitFor(() => expect(progress(cell)?.textContent).toContain(text), CHUNK_LOAD_WAIT);
-const visibleCard = (cell: Element) => cell.querySelector('[data-progress-card-placement="board"]');
-const retryButton = (cell: Element) => progressError(cell)?.querySelector("button") ?? null;
-const waitForRequest = (
-  request: ReturnType<typeof vi.fn>,
-  sessionKey: string,
-  agentId?: string,
-  options?: { timeout: number },
-) =>
-  vi.waitFor(
-    () =>
-      expect(request).toHaveBeenCalledWith("progressCard.get", {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-      }),
-    options,
-  );
-const accessDenied = (message: string) =>
-  new GatewayRequestError({
-    code: "INVALID_REQUEST",
-    message,
-    details: { code: "SESSION_PARTICIPATION_REQUIRED" },
-  });
 
-afterEach(cleanupCells);
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
+  document.body.replaceChildren();
+});
 
-// Lazy-chunk transforms can exceed the default wait on loaded machines.
+// The session progress element arrives via a lazy chunk; a cold transform can
+// exceed vi.waitFor's 1s default on loaded machines, so these waits get a
+// real budget instead of flaking.
 const CHUNK_LOAD_WAIT = { timeout: 10_000 };
 
 describe("plugin board widget cells", () => {
   it("updates a healthy frame when only its URL resolver changes", async () => {
-    const widget = pluginWidget({
+    const widget: BoardWidget = {
       name: "external-report",
-      title: undefined,
+      tabId: "main",
+      contentKind: "plugin",
       pluginKind: "reports:external",
       frameUrl: "https://reports.example.test/report",
-    });
-    const cell = mountCell(widget, { widgetFrameUrl: () => "/report/initial" });
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.callbacks = callbacks();
+    cell.widgetFrameUrl = () => "/report/initial";
+    mount(cell);
     await cell.updateComplete;
     const frame = cell.querySelector("iframe")!;
     expect(frame.getAttribute("src")).toBe("/report/initial");
@@ -125,15 +83,22 @@ describe("plugin board widget cells", () => {
   it.each([false, true])(
     "preserves a removable unavailable widget (Labs disabled: %s)",
     async (labsDisabled) => {
-      const widget = pluginWidget({
+      const widget: BoardWidget = {
         name: "work-item",
+        tabId: "main",
         title: "Work item",
+        contentKind: "plugin",
         pluginKind: "custom-review:card",
         props: { cardId: "card-123" },
-      });
+        sizeW: 6,
+        sizeH: 4,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+      };
       const cellCallbacks = callbacks();
       const navigate = vi.fn();
-      const context = {
+      const provider = createApplicationContextProvider({
         basePath: "/console",
         navigate,
         gateway: { snapshot: { phase: "connected" } },
@@ -151,12 +116,14 @@ describe("plugin board widget cells", () => {
           isLoading: () => false,
           subscribe: () => () => undefined,
         },
-      } as unknown as ApplicationContext;
-      const cell = mountCell(widget, {
-        context,
-        callbacks: cellCallbacks,
-        sessionKey: "agent:main:test",
-      });
+      } as unknown as ApplicationContext);
+      const cell = document.createElement("openclaw-board-widget-cell");
+      cell.widget = widget;
+      cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+      cell.sessionKey = "agent:main:test";
+      cell.callbacks = cellCallbacks;
+      provider.append(cell);
+      mount(provider);
       await cell.updateComplete;
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
@@ -197,7 +164,7 @@ describe("plugin board widget cells", () => {
     });
     const request = vi.fn();
     const registrations = vi.fn(() => []);
-    const context = {
+    const provider = createApplicationContextProvider({
       gateway: {
         snapshot: {
           phase: "connected",
@@ -210,16 +177,25 @@ describe("plugin board widget cells", () => {
         },
       },
       plugins: { registrations, isLoading: () => false, errors: [], subscribe: () => () => {} },
-    } as unknown as ApplicationContext;
-    const cell = mountCell(
-      pluginWidget({
-        name: "summary",
-        title: undefined,
-        pluginKind: "session:report",
-        props: { blocks: [{ type: "text", text: "Saved report content" }] },
-      }),
-      { context, sessionKey: "agent:main:dashboard" },
-    );
+    } as unknown as ApplicationContext);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = {
+      name: "summary",
+      tabId: "main",
+      contentKind: "plugin",
+      pluginKind: "session:report",
+      props: { blocks: [{ type: "text", text: "Saved report content" }] },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    cell.rect = { name: "summary", x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:dashboard";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    mount(provider);
     await waitForSolid(() => {
       expect(load).toHaveBeenCalledOnce();
       expect(cell.querySelector(".board-widget__plugin-loading")).not.toBeNull();
@@ -245,11 +221,15 @@ describe("plugin board widget cells", () => {
       {
         dashboardSessionKey,
         props: { sessionKey: targetSessionKey },
-        response: progressResponse(
-          targetSessionKey,
-          "Run focused checks",
-          "**Release** validation is active.",
-        ),
+        response: {
+          card: {
+            sessionKey: targetSessionKey,
+            revision: 1,
+            updatedAt: 1,
+            markdown: "**Release** validation is active.",
+            steps: [{ step: "Run focused checks", status: "in_progress" }],
+          },
+        },
         text: "Run focused checks",
         requestedSessionKey: targetSessionKey,
         requestedAgentId: "main",
@@ -275,11 +255,15 @@ describe("plugin board widget cells", () => {
       ).map(([scopedDashboardSessionKey, override, requestedSessionKey]) => ({
         dashboardSessionKey: scopedDashboardSessionKey,
         props: override ? { sessionKey: override } : undefined,
-        response: progressResponse(
-          requestedSessionKey,
-          "Owned work",
-          `Progress for ${requestedSessionKey}`,
-        ),
+        response: {
+          card: {
+            sessionKey: requestedSessionKey,
+            revision: 1,
+            updatedAt: 1,
+            markdown: `Progress for ${requestedSessionKey}`,
+            steps: [{ step: "Owned work", status: "in_progress" }],
+          },
+        },
         text: `Progress for ${requestedSessionKey}`,
         requestedSessionKey: !override || override === "global" ? "global" : requestedSessionKey,
         requestedAgentId: requestedSessionKey.split(":")[1],
@@ -288,30 +272,108 @@ describe("plugin board widget cells", () => {
 
     for (const [index, scenario] of responses.entries()) {
       const request = vi.fn(async () => scenario.response);
-      const result = {
-        sessions: [
-          finishedSession("global", "main", "failed"),
-          finishedSession("global", "research", "done"),
-          finishedSession("agent:main:notes", "main", "failed"),
-          finishedSession("agent:research:notes", "research", "done"),
-        ],
-      };
-      const context = progressContext(request, {
-        state: { result },
-        ...emptySessions(),
-        listSnapshot: () => listSnapshot(result),
-      });
-      const widget = pluginWidget({
+      const context = {
+        agentSelection: {
+          state: { scopeId: null },
+          subscribe: () => () => undefined,
+        },
+        sessions: {
+          state: {
+            result: {
+              sessions: [
+                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+                {
+                  key: "agent:main:notes",
+                  agentId: "main",
+                  status: "failed",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+                {
+                  key: "agent:research:notes",
+                  agentId: "research",
+                  status: "done",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+              ],
+            },
+          },
+          subscribe: () => () => undefined,
+          subscribeList: () => () => undefined,
+          listSnapshot: () => ({
+            result: {
+              sessions: [
+                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+                {
+                  key: "agent:main:notes",
+                  agentId: "main",
+                  status: "failed",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+                {
+                  key: "agent:research:notes",
+                  agentId: "research",
+                  status: "done",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+              ],
+            },
+            agentId: null,
+            loading: false,
+            error: null,
+          }),
+          refreshList: async () => undefined,
+        },
+        gateway: {
+          snapshot: {
+            phase: "connected",
+            client: { request },
+            hello: {
+              features: {
+                methods: ["progressCard.get"],
+              },
+              controlUiWidgetKinds: [
+                { pluginId: "session", kind: "session:progress", label: "Session progress" },
+              ],
+            },
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
+        },
+      } as unknown as ApplicationContext;
+      const widget: BoardWidget = {
         name: `session-progress-${index}`,
+        tabId: "main",
+        title: "Session progress",
+        contentKind: "plugin",
+        pluginKind: "session:progress",
         ...(scenario.props ? { props: scenario.props } : {}),
+        sizeW: 6,
+        sizeH: 4,
         position: index,
-      });
-      const cell = mountCell(widget, {
-        context,
-        sessionKey: scenario.dashboardSessionKey,
-        scopedSession: true,
-        active: index !== 0,
-      });
+        grantState: "none",
+        revision: 1,
+      };
+      const provider = createApplicationContextProvider(context);
+      const cell = document.createElement("openclaw-board-widget-cell");
+      cell.widget = widget;
+      cell.rect = { name: widget.name, x: 0, y: index * 4, w: 6, h: 4 };
+      cell.sessionKey = scenario.dashboardSessionKey;
+      cell.session = {
+        sessionKey: scenario.dashboardSessionKey.endsWith(":global")
+          ? "global"
+          : scenario.dashboardSessionKey,
+        agentId: scenario.dashboardSessionKey.split(":")[1],
+      };
+      cell.active = index !== 0;
+      cell.callbacks = callbacks();
+      provider.append(cell);
+      mount(provider);
 
       if (index === 0) {
         await cell.updateComplete;
@@ -321,13 +383,23 @@ describe("plugin board widget cells", () => {
 
       await cell.updateComplete;
       await vi.dynamicImportSettled();
-      await waitForRequest(
-        request,
-        scenario.requestedSessionKey,
-        scenario.requestedSessionKey === "global" ? scenario.requestedAgentId : undefined,
+      await vi.waitFor(
+        () =>
+          expect(request).toHaveBeenCalledWith("progressCard.get", {
+            sessionKey: scenario.requestedSessionKey,
+            ...(scenario.requestedSessionKey === "global"
+              ? { agentId: scenario.requestedAgentId }
+              : {}),
+          }),
         CHUNK_LOAD_WAIT,
       );
-      await waitForProgress(cell, scenario.text);
+      await vi.waitFor(
+        () =>
+          expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+            scenario.text,
+          ),
+        CHUNK_LOAD_WAIT,
+      );
       if (
         (scenario.requestedSessionKey === "global" && scenario.requestedAgentId === "research") ||
         scenario.requestedSessionKey.endsWith(":notes")
@@ -354,45 +426,97 @@ describe("plugin board widget cells", () => {
     const deniedSessionKey = "agent:main:private";
     const request = vi.fn(async (_method: string, params: { sessionKey: string }) => {
       if (params.sessionKey === deniedSessionKey) {
-        throw accessDenied("session is private for this connection");
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session is private for this connection",
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
       }
       attempts += 1;
       if (attempts === 1) {
         throw new Error("session not shared");
       }
-      return progressResponse(sessionKey, "Recovered progress");
+      return {
+        card: {
+          sessionKey,
+          revision: 1,
+          updatedAt: 1,
+          steps: [{ step: "Recovered progress", status: "in_progress" }],
+        },
+      };
     });
-    const context = progressContext(request, emptySessions(), {
-      ...progressGateway(request),
-      snapshot: {
-        ...progressGateway(request).snapshot,
-        hello: { features: { methods: [] }, controlUiWidgetKinds: progressKinds },
+    const context = {
+      agentSelection: {
+        state: { scopeId: null },
+        subscribe: () => () => undefined,
       },
-      subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
-        gatewayListeners.add(listener);
-        return () => gatewayListeners.delete(listener);
+      sessions: {
+        subscribe: () => () => undefined,
+        subscribeList: () => () => undefined,
+        listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
+        refreshList: async () => undefined,
       },
-      subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
-        onEvent = listener;
-        return () => {
-          onEvent = undefined;
-        };
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            features: { methods: [] },
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:progress", label: "Session progress" },
+            ],
+          },
+        },
+        subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
+          gatewayListeners.add(listener);
+          return () => gatewayListeners.delete(listener);
+        },
+        subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
+          onEvent = listener;
+          return () => {
+            onEvent = undefined;
+          };
+        },
       },
-    });
-    const widget = pluginWidget({
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
       name: "protected-session-progress",
+      tabId: "main",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
       props: { sessionKey },
-    });
-    const cell = mountCell(widget, {
-      context,
-      sessionKey: "agent:main:dashboard",
-      scopedSession: true,
-    });
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:dashboard";
+    cell.session = { sessionKey: "agent:main:dashboard", agentId: "main" };
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    mount(provider);
 
-    await vi.waitFor(() => expect(progressError(cell)).not.toBeNull(), CHUNK_LOAD_WAIT);
-    retryButton(cell)?.click();
+    await vi.waitFor(
+      () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
+    );
+    cell
+      .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
+      ?.click();
 
-    await waitForProgress(cell, "Recovered progress");
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector("openclaw-session-progress-widget")?.textContent).toContain(
+          "Recovered progress",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
     expect(request).toHaveBeenCalledTimes(2);
 
     const emitChange = () =>
@@ -403,8 +527,12 @@ describe("plugin board widget cells", () => {
       });
     request.mockRejectedValueOnce(new Error("Refresh temporarily unavailable"));
     emitChange();
-    await vi.waitFor(() => expect(progressError(cell)).not.toBeNull());
-    expect(visibleCard(cell)?.textContent).toContain("Recovered progress");
+    await vi.waitFor(() =>
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
+    );
+    expect(cell.querySelector('[data-progress-card-placement="board"]')?.textContent).toContain(
+      "Recovered progress",
+    );
     expect(request).toHaveBeenCalledTimes(3);
     cell.session = { ...cell.session! };
     for (const listener of gatewayListeners) {
@@ -412,35 +540,51 @@ describe("plugin board widget cells", () => {
     }
     await cell.updateComplete;
     await waitForSolid(() => {
-      expect(progressError(cell)).not.toBeNull();
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull();
       expect(request).toHaveBeenCalledTimes(3);
     });
-    retryButton(cell)?.click();
-    await vi.waitFor(() => expect(progressError(cell)).toBeNull());
-    expect(visibleCard(cell)?.textContent).toContain("Recovered progress");
+    cell
+      .querySelector<HTMLButtonElement>('[data-test-id="session-progress-error"] button')
+      ?.click();
+    await vi.waitFor(() =>
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')).toBeNull(),
+    );
+    expect(cell.querySelector('[data-progress-card-placement="board"]')?.textContent).toContain(
+      "Recovered progress",
+    );
     expect(request).toHaveBeenCalledTimes(4);
 
-    request.mockRejectedValueOnce(accessDenied("Participation required"));
+    request.mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Participation required",
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      }),
+    );
     emitChange();
     await vi.waitFor(() =>
-      expect(progressError(cell)?.textContent).toContain(
+      expect(cell.querySelector('[data-test-id="session-progress-error"]')?.textContent).toContain(
         "Select a session you can access or change sharing for this session.",
       ),
     );
-    expect(visibleCard(cell)).toBeNull();
-    expect(retryButton(cell)).toBeNull();
+    expect(cell.querySelector('[data-progress-card-placement="board"]')).toBeNull();
+    expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
     expect(request).toHaveBeenCalledTimes(5);
 
     cell.widget = { ...widget, props: { sessionKey: deniedSessionKey } };
-    await waitForRequest(request, deniedSessionKey);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("progressCard.get", {
+        sessionKey: deniedSessionKey,
+      }),
+    );
     await vi.waitFor(
       () =>
-        expect(progressError(cell)?.textContent).toContain(
-          "Select a session you can access or change sharing for this session.",
-        ),
+        expect(
+          cell.querySelector('[data-test-id="session-progress-error"]')?.textContent,
+        ).toContain("Select a session you can access or change sharing for this session."),
       CHUNK_LOAD_WAIT,
     );
-    expect(retryButton(cell)).toBeNull();
+    expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
     expect(request).toHaveBeenCalledTimes(6);
   });
 
@@ -456,39 +600,89 @@ describe("plugin board widget cells", () => {
       startedAt: now - 60_000,
     };
     const rosterQueries: Array<{ hasBoard?: boolean }> = [];
-    const request = vi.fn(async () =>
-      progressResponse(boardlessTargetKey, "Owned work", `Progress for ${boardlessTargetKey}`, now),
-    );
-    const context = progressContext(request, {
-      state: { result: null },
-      ...emptySessions(),
-      subscribeList: (query: { hasBoard?: boolean }) => {
-        rosterQueries.push(query);
-        return () => undefined;
+    const request = vi.fn(async () => ({
+      card: {
+        sessionKey: boardlessTargetKey,
+        revision: 1,
+        updatedAt: now,
+        markdown: `Progress for ${boardlessTargetKey}`,
+        steps: [{ step: "Owned work", status: "in_progress" }],
       },
-      listSnapshot: (query: { hasBoard?: boolean }) =>
-        listSnapshot({
+    }));
+    const context = {
+      agentSelection: {
+        state: { scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      sessions: {
+        state: { result: null },
+        subscribe: () => () => undefined,
+        subscribeList: (query: { hasBoard?: boolean }) => {
+          rosterQueries.push(query);
+          return () => undefined;
+        },
+        listSnapshot: (query: { hasBoard?: boolean }) => ({
           // The Gateway filters hasBoard against each session's own board
           // inventory, so the board-less target only exists in the shared roster.
-          sessions: [
-            finishedSession(boardOwnerKey, "main", "done"),
-            ...(query.hasBoard ? [] : [targetRow]),
-          ],
+          result: {
+            sessions: [
+              { key: boardOwnerKey, agentId: "main", status: "done", startedAt: 0, endedAt: 2 },
+              ...(query.hasBoard ? [] : [targetRow]),
+            ],
+          },
+          agentId: null,
+          loading: false,
+          error: null,
         }),
-    });
-    const widget = pluginWidget({
+        refreshList: async () => undefined,
+      },
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            features: { methods: ["progressCard.get"] },
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:progress", label: "Session progress" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
       name: "cross-session-progress",
+      tabId: "main",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
       props: { sessionKey: boardlessTargetKey },
-    });
-    const cell = mountCell(widget, {
-      context,
-      sessionKey: boardOwnerKey,
-      scopedSession: true,
-      active: true,
-    });
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = boardOwnerKey;
+    cell.session = { sessionKey: boardOwnerKey, agentId: "main" };
+    cell.active = true;
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    mount(provider);
 
-    await waitForRequest(request, boardlessTargetKey, undefined, CHUNK_LOAD_WAIT);
-    const element = progress(cell);
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("progressCard.get", {
+          sessionKey: boardlessTargetKey,
+        }),
+      CHUNK_LOAD_WAIT,
+    );
+    const element = cell.querySelector("openclaw-session-progress-widget");
     await vi.waitFor(
       () => expect(element?.querySelector(".session-run-spinner")).not.toBeNull(),
       CHUNK_LOAD_WAIT,

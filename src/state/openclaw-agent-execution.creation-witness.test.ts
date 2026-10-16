@@ -385,12 +385,12 @@ it.skipIf(process.platform === "win32")(
 
 it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
   const options = fixture();
-  const creator = captureOpenClawAgentDatabaseExecution(options, {
+  const creator = capture(options, {
     expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
   });
   fs.mkdirSync(path.dirname(options.path), { recursive: true });
   fs.writeFileSync(options.path, "");
-  const later = captureOpenClawAgentDatabaseExecution(options, {
+  const later = capture(options, {
     expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
   });
   try {

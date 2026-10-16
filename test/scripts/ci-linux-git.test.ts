@@ -1,13 +1,5 @@
 import path from "node:path";
-import {
-  beforeAll,
-  expect,
-  it,
-  vi,
-  type TestAPI,
-  type TestContext,
-  type TestFunction,
-} from "vitest";
+import { beforeAll, expect, it, vi, type TestContext, type TestFunction } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 beforeAll(() => {
@@ -20,7 +12,7 @@ const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
-function timed(test: TestAPI) {
+function timed(test: typeof it.concurrent) {
   return Object.assign((name: string, fn: TestFunction) => test(name, fn, 55_000), {
     for:
       <T>(cases: readonly T[]) =>

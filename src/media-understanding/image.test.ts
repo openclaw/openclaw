@@ -20,6 +20,7 @@ import {
 const {
   completeMock,
   acquireAgentRunPreparedModelRuntimeMock,
+  shouldPreferProviderRuntimeResolvedModelMock,
   prepareProviderRuntimeAuthMock,
   releasePreparedModelRuntimeMock,
   getApiKeyForModelMock,
@@ -399,6 +400,7 @@ describe("image runtime cancellation and retries", () => {
         modelRegistry: {},
       };
       resolveModelAsyncMock.mockResolvedValue(resolved);
+      shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(stage === "credential-model");
       if (stage === "admission") {
         acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(() =>
           delay({

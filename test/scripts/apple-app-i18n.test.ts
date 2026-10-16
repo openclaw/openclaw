@@ -126,7 +126,7 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
         "active format key",
       );
       const retired = "Retired empty title";
-      const obsolete = {
+      const obsolete: typeof catalog & { strings: typeof strings } = {
         ...catalog,
         strings: {
           ...strings,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
@@ -27,7 +27,7 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let fetchSpy: ReturnType<typeof vi.spyOn<typeof globalThis, "fetch">>;
+let fetchSpy: MockInstance<typeof fetch>;
 beforeEach(() => {
   fetchSpy = vi.spyOn(globalThis, "fetch");
 });

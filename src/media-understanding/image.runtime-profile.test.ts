@@ -24,6 +24,7 @@ const {
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
+  shouldPreferProviderRuntimeResolvedModelMock,
 } = imageRuntimeMocks;
 
 const resolveProviderRuntimePluginHandleMock = vi.hoisted(() => vi.fn());
@@ -122,6 +123,7 @@ describe("describeImageWithModelCore", () => {
       mode: "token",
       profileId: "github-copilot:backup",
     });
+    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValueOnce(true);
     completeMock.mockResolvedValue(
       imageCompletion("openai-responses", "github-copilot", "gpt-5.6-sol", "ok"),
     );

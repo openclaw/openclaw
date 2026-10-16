@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -270,13 +271,14 @@ describe("resolveWorkerToolAuthority", () => {
       toolsAllow: ["exec", "process"],
     });
     expect(resolved.exec).toMatchObject({ host: "node", node: "bound-node" });
+    assert(resolved.exec?.host === "node");
     await expect(
       resolveNodeExecutionTarget({
         command: "echo worker-node-binding",
         workdir: undefined,
         env: {},
         requestedNode: "other-node",
-        boundNode: resolved.exec?.node,
+        boundNode: resolved.exec.node,
         security: "full",
         ask: "off",
         defaultTimeoutSec: 30,

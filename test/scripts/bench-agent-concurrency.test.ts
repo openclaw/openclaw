@@ -73,7 +73,7 @@ it("parses bounded options and rejects ambiguous arguments", () => {
     ["--fanout 1,1", "--fanout contains duplicate values"],
     ["--runs 1 --runs 2", "--runs was provided more than once"],
     ["--wat", "Unknown argument: --wat"],
-  ]) {
+  ] as const) {
     expect(() => testing.parseOptions(invalid.split(" "))).toThrow(error);
   }
 });

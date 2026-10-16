@@ -140,7 +140,9 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
           }),
         )
       : undefined;
-  const candidate = vi.fn(record("candidate"));
+  const candidate = vi.fn(() => {
+    events.push("candidate");
+  });
   let terminal:
     | Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>
     | undefined;

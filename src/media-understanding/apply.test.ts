@@ -238,6 +238,7 @@ async function applyFile(
 describe("applyMediaUnderstanding", () => {
   beforeAll(async () => {
     vi.resetModules();
+    // mock-isolation: Keep credential lookup synthetic and avoid live auth-store discovery.
     vi.doMock("../agents/model-auth.js", async () => ({
       ...(await vi.importActual<typeof import("../agents/model-auth-runtime-shared.js")>(
         "../agents/model-auth-runtime-shared.js",
@@ -264,6 +265,7 @@ describe("applyMediaUnderstanding", () => {
       convertHeicToJpeg: convertHeicToJpegMock,
       readImageMetadataFromHeader: () => null,
     }));
+    // mock-isolation: All external media commands are supplied by the test fixture.
     vi.doMock("../process/exec.js", () => ({ runExec: runExecMock }));
     vi.doMock("../media/input-files.js", async () => {
       const actual =
@@ -438,8 +440,8 @@ describe("applyMediaUnderstanding", () => {
     await applyAudio(ctx, transcribeAudio, { cfg, processingMode: "audio-only" });
 
     expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(ctx).toMatchObject({
-      MediaUnderstanding: undefined,
       Transcript: undefined,
       Body: "[Audio attachment could not be analyzed]",
       BodyForAgent: ctx.Body,
@@ -657,7 +659,7 @@ describe("applyMediaUnderstanding", () => {
     const transcribeAudio = vi.fn(async () => ({ text: "duplicate transcript" }));
     const ctx = await createAudioCtx({ fileName: "voice.ogg", body: "preflight transcript" });
     ctx.Transcript = "preflight transcript";
-    ctx.media![0].transcribed = true;
+    ctx.media![0]!.transcribed = true;
     await applyAudio(ctx, transcribeAudio, { cfg: createGroqAudioConfig({ maxBytes: undefined }) });
 
     expect(transcribeAudio).not.toHaveBeenCalled();
@@ -1043,4 +1045,3 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
