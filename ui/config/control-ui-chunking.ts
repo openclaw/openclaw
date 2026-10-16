@@ -55,14 +55,6 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  if (
-    normalized.startsWith("\0@oxc-project+runtime@") &&
-    normalized.endsWith("/helpers/esm/decorate.js")
-  ) {
-    // Chat and New Session still use decorators; neither route owns their shared helper.
-    return "decorator-runtime";
-  }
-
   switch (controlUiBootManifestKey(id)) {
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
@@ -123,8 +115,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Zod validates boot snapshots; JSON5 loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {

@@ -48,6 +48,7 @@ type Trace = {
   agentId?: string;
   modelContextWindow?: number;
   resultReads?: number;
+  resultOverride?: { value: unknown };
   modelBilling?: unknown;
   modelBaseUrl?: string;
   modelHeaders?: Record<string, string>;
@@ -153,7 +154,7 @@ it.each([
             ? 'normalizeResolvedModel(context) { return { ...context.model, api: "openai-responses" }; }, prepareRuntimeAuth(context) { trace.preparedApi=context.model.api; return { apiKey: context.apiKey, baseUrl: "https://entitlement.fixture.invalid/v1", request: { headers: { "x-fixture-entitlement": "synthetic-entitlement" }, auth: { mode: "header", headerName: "x-fixture-auth", value: "synthetic-exchanged-header" } } }; },'
             : "") +
           "} ,",
-        'async evaluate(batch, context) { trace.calls++; trace.profileId=context.auth.profileId; trace.agentId=context.agentId; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); trace.authenticated = context.auth.apiKey === "synthetic-prepared-token"; trace.modelKeys = Object.keys(context.model); trace.modelContextWindow = context.model.contextWindow; trace.modelBilling=context.model.inference?.decision?.billing; trace.modelBaseUrl=context.model.baseUrl; trace.modelHeaders=context.model.headers; trace.modelRequest=context.model[Symbol.for("openclaw.modelProviderRequestTransport")]; trace.modelApi=context.model.api; let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; return { model: context.model.id, answers: { q: reads === 1 ? { type: "boolean", answer: null } : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
+        'async evaluate(batch, context) { trace.calls++; trace.profileId=context.auth.profileId; trace.agentId=context.agentId; trace.onDispatch?.(); await trace.work; trace.beforeRequest?.(context); if (!context.isAdmissible()) return { status: "unavailable", reason: "unsupported-input" }; await trace.fetch?.("https://dispatch.fixture.invalid/v1/decisions", { method: "POST" }); trace.authenticated = context.auth.apiKey === "synthetic-prepared-token"; trace.modelKeys = Object.keys(context.model); trace.modelContextWindow = context.model.contextWindow; trace.modelBilling=context.model.inference?.decision?.billing; trace.modelBaseUrl=context.model.baseUrl; trace.modelHeaders=context.model.headers; trace.modelRequest=context.model[Symbol.for("openclaw.modelProviderRequestTransport")]; trace.modelApi=context.model.api; let reads = 0; return { status: "ok", get result() { trace.resultReads = ++reads; if (trace.resultOverride) return trace.resultOverride.value; return { model: context.model.id, answers: { q: reads === 1 ? { type: "boolean", answer: null } : { type: "boolean", probabilityTrue: 0.75 } }, usage: trace.usage }; } }; }',
         "}); trace.evaluate = api.runtime.decisions.evaluateV2; } };",
       ].join("\n"),
     );
@@ -427,6 +428,22 @@ it.each([
         ).resolves.toMatchObject({ status: "unavailable", reason: "credentials-unavailable" });
         expect(trace.calls).toBe(2);
         setRuntimeConfigSnapshot(cfg);
+      }
+
+      if (authScope === "plugin") {
+        for (const invalid of [
+          { model: "native", answers: { q: { type: "boolean", probabilityTrue: 0.75 } } },
+          { model: "native", answers: {} },
+        ]) {
+          trace.resultOverride = { value: invalid };
+          expect(await evaluateFixture()).toEqual({
+            status: "unavailable",
+            reason: "invalid-response",
+          });
+          expect(trace.resultReads).toBe(1);
+          expect(usageEvents).toHaveLength(2);
+        }
+        delete trace.resultOverride;
       }
 
       let started!: () => void;

@@ -646,7 +646,8 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     // Retire synchronously before later cumulative updates, but retain the wire
     // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
-    const publication = createDeferredCore();
+    const publication = createDeferredCore<boolean>();
+    let published = true;
     // Committed publication retains Gateway work, not the producer's actor handle.
     const dispatch = runWithRetainedGatewayRootWork(() =>
       runInDetachedAsyncContext(() =>
@@ -658,18 +659,25 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 () => undefined,
               );
             }
-            return getTranscriptUpdateHandler();
+            const handler = await getTranscriptUpdateHandler();
+            return async (event) => {
+              published = (await handler(event)) !== false;
+            };
           },
           event: evt,
           log: params.log,
           failureMessage: "Transcript update dispatch failed",
           context: { sessionKey: evt.sessionKey },
+          // Intentional non-publication (hidden/stale/no recipients) keeps its existing semantics.
+          onFailure: () => {
+            published = false;
+          },
         }),
       ),
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => {
-      publication.resolve();
+      publication.resolve(published);
       agentEventDispatches.delete(dispatch);
     });
   });

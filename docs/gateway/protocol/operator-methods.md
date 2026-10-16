@@ -71,6 +71,13 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `agentId` is optional; omit it to read the default agent workspace.
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
+- `skills.files.get({ agentId?, path })` (`operator.read`) reads the current
+  `SKILL.md` of an installed skill. `path` is absolute, home-relative, or relative
+  to the selected agent's workspace; it must match a discovered skill. The
+  response contains `path`, `name`, and full UTF-8 `content`. Reads stay inside
+  that skill's directory and use the configured skill-file byte limit. Unknown
+  agents, unavailable files, paths outside the installed inventory, and oversized
+  files return `INVALID_REQUEST`. The method does not read arbitrary host files.
 - `skills.search` and `skills.detail` (`operator.read`) return ClawHub
   discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
   `installRef` from search and reads that release's card and scan summary. See

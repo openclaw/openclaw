@@ -5,7 +5,6 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
@@ -154,7 +153,7 @@ async function writeRestartRecoveryTombstoneNotice(params: {
   expectedSessionState: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
   reason: string;
-}): Promise<"failed" | "stale" | "written"> {
+}): Promise<boolean> {
   const result = await appendAssistantMessageToSessionTranscript({
     ...params,
     expectedSessionId: params.entry.sessionId,
@@ -166,11 +165,7 @@ async function writeRestartRecoveryTombstoneNotice(params: {
       `failed to write restart recovery tombstone notice ${params.sessionKey}: ${result.reason}`,
     );
   }
-  return result.ok
-    ? "written"
-    : "code" in result && result.code === "session-rebound"
-      ? "stale"
-      : "failed";
+  return result.ok;
 }
 
 export async function tombstoneMainRestartRecoveryWithNotice(params: {
@@ -192,67 +187,35 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   if (!deliveryContext) {
     // The transcript notice and tombstone share one SQLite transaction so a
     // foreground takeover cannot leave behind a false terminal notice.
-    let entry = params.entry;
-    let observation = params.observation;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const recoveryState = entry.mainRestartRecovery;
-      if (
-        !recoveryState ||
-        recoveryState.cycleId !== observation.cycleId ||
-        recoveryState.revision !== observation.revision
-      ) {
-        return "skipped";
-      }
-      const now = Date.now();
-      const notice = await writeRestartRecoveryTombstoneNotice({
-        ...params,
-        entry,
-        expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
-        sessionLifecyclePatch: {
-          abortedLastRun: false,
-          endedAt: now,
-          lifecycleRunId: undefined,
-          lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
-          mainRestartRecovery: {
-            ...recoveryState,
-            revision: recoveryState.revision + 1,
-            tombstone: { reason: params.reason },
-          },
-          runtimeMs: Math.max(0, now - (entry.startedAt ?? now)),
-          status: "failed",
-          updatedAt: now,
-        },
-      });
-      if (notice === "written") {
-        return "tombstoned";
-      }
-      if (notice === "failed") {
-        return "notice_failed";
-      }
-      const current = await readSessionEntryReadOnlyInWorker({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        readConsistency: "latest",
-      });
-      const state = current?.mainRestartRecovery;
-      if (
-        !current ||
-        current.sessionId !== params.entry.sessionId ||
-        state?.cycleId !== params.observation.cycleId ||
-        state.tombstone ||
-        current.abortedLastRun !== true
-      ) {
-        return "skipped";
-      }
-      entry = current;
-      observation = {
-        sessionId: current.sessionId,
-        cycleId: state.cycleId,
-        revision: state.revision,
-      };
+    const { entry, observation } = params;
+    const recoveryState = entry.mainRestartRecovery;
+    if (
+      !recoveryState ||
+      recoveryState.cycleId !== observation.cycleId ||
+      recoveryState.revision !== observation.revision
+    ) {
+      return "skipped";
     }
-    return "notice_failed";
+    const now = Date.now();
+    const written = await writeRestartRecoveryTombstoneNotice({
+      ...params,
+      expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
+      sessionLifecyclePatch: {
+        abortedLastRun: false,
+        endedAt: now,
+        lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
+        mainRestartRecovery: {
+          ...recoveryState,
+          revision: recoveryState.revision + 1,
+          tombstone: { reason: params.reason },
+        },
+        runtimeMs: Math.max(0, now - (entry.startedAt ?? now)),
+        status: "failed",
+        updatedAt: now,
+      },
+    });
+    return written ? "tombstoned" : "notice_failed";
   }
   const claim = await commitMainSessionRecovery({
     command: {
