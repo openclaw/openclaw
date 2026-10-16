@@ -52,13 +52,18 @@ export async function writeTsdownDeclarations(
       const environment = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
         JSON.stringify([name, process.env[name] ?? ""]),
       );
-      const generatorInputs = resolveTsdownDeclarationGeneratorInputs(root, generatorEntry);
+      const cacheEnabled = process.env.OPENCLAW_BUILD_CACHE !== "0";
+      const generatorInputs = cacheEnabled
+        ? resolveTsdownDeclarationGeneratorInputs(root, generatorEntry)
+        : [];
       // All groups share configuration, topology, tools and overlapping source reads.
-      const before = new CompilerInputSnapshot(root, {
-        toolchainFiles: resolveTsdownCompilerFiles(),
-        generatorInputs,
-        isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
-      });
+      const before = cacheEnabled
+        ? new CompilerInputSnapshot(root, {
+            toolchainFiles: resolveTsdownCompilerFiles(),
+            generatorInputs,
+            isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+          })
+        : undefined;
       const liveDist = path.join(root, "dist");
       const prepared = groups.map((name) => {
         const config = configs.find((candidate: { name?: string }) => candidate.name === name);
@@ -136,16 +141,11 @@ export async function writeTsdownDeclarations(
             ...process.env,
             OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
           },
-          inputSignature: (inputs: string[]) =>
-            before.signature("tsconfig.json", identity, inputs, liveDist),
+          inputSignature: before
+            ? (inputs: string[]) => before.signature("tsconfig.json", identity, inputs, liveDist)
+            : undefined,
         };
-        const state =
-          process.env.OPENCLAW_BUILD_CACHE === "0"
-            ? undefined
-            : resolveBuildStepCacheState(step, params);
-        if (!state) {
-          params.inputSignature([]);
-        }
+        const state = before ? resolveBuildStepCacheState(step, params) : undefined;
         // Record the lookup before compilation replaces the signature and cache record.
         console.error(
           `[${label}] ${name}: cache ${state?.fresh ? "hit" : "miss"} (${state?.reason ?? "disabled"})`,
@@ -176,7 +176,7 @@ export async function writeTsdownDeclarations(
         () => {
           for (const group of prepared) {
             const inputs = readDeclarationInputs(group.output, group.name);
-            if (group.state) {
+            if (group.state && before) {
               group.state.signature = before.signature(
                 "tsconfig.json",
                 group.identity,
