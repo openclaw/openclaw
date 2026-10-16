@@ -4,7 +4,6 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
-  type WorkerTaskChannel,
   type WorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
