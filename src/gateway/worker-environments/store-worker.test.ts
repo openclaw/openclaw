@@ -46,32 +46,20 @@ const delivery = vi.hoisted(() => ({
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (delivery.afterTransition || delivery.afterTouch) {
-                delivery.commands.push(command.type);
-              }
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "workerEnvironments.transition") {
-                await delivery.afterTransition?.();
-              }
-              if (command.type === "workerEnvironments.touchSessionAttachment") {
-                await delivery.afterTouch?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
+  const { interceptWorkerExecution } = await import("./store.test-support.js");
+  return interceptWorkerExecution(actual, (scope) => async (command, executeOptions) => {
+    if (delivery.afterTransition || delivery.afterTouch) {
+      delivery.commands.push(command.type);
+    }
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "workerEnvironments.transition") {
+      await delivery.afterTransition?.();
+    }
+    if (command.type === "workerEnvironments.touchSessionAttachment") {
+      await delivery.afterTouch?.();
+    }
+    return result;
+  });
 });
 
 const fixture = createFixtureLifetime();
@@ -508,8 +496,7 @@ it("touches the current attachment with one guarded write and no preliminary row
         .filter((context): context is StatementSync => context instanceof StatementSync)
         .map((statement) => statement.sourceSQL)
         .filter((statement) => statement.includes('"worker_environment_session_attachments"'));
-      expect(attachmentStatements).toHaveLength(1);
-      expect(attachmentStatements[0]).toMatch(/^update /i);
+      expect(attachmentStatements).toEqual([expect.stringMatching(/^update /i)]);
       expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
         ...attachment,
         lastUsedAtMs: at,

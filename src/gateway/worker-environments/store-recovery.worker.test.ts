@@ -60,54 +60,40 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const creating = command.type === "workerEnvironments.createIntent";
-              const revoking = command.type === "workerEnvironments.revokeEnvironmentCredential";
-              if (creating) {
-                delivery.intentWrites += 1;
-              }
-              if (revoking) {
-                delivery.revocationWrites += 1;
-              }
-              const result = await scope
-                .execute(command, executeOptions)
-                .catch((error: unknown) => {
-                  if (revoking && delivery.loseRevocationFailure) {
-                    delivery.loseRevocationFailure = false;
-                    delivery.hideReceipt = true;
-                    delivery.hideSettlement = true;
-                    throw delivery.resultFailure;
-                  }
-                  throw error;
-                });
-              if (creating && delivery.loseIntentResult) {
-                delivery.loseIntentResult = false;
-                delivery.hideReceipt = true;
-                delivery.hideSettlement = true;
-                throw delivery.resultFailure;
-              }
-              if (revoking && delivery.loseRevocationResult) {
-                const recovery = delivery.loseRevocationResult;
-                delivery.loseRevocationResult = undefined;
-                delivery.hideReceipt = recovery !== "receipt";
-                delivery.hideSettlement = recovery === "unknown";
-                throw delivery.resultFailure;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
+  const { interceptWorkerExecution } = await import("./store.test-support.js");
+  return interceptWorkerExecution(actual, (scope) => async (command, executeOptions) => {
+    const creating = command.type === "workerEnvironments.createIntent";
+    const revoking = command.type === "workerEnvironments.revokeEnvironmentCredential";
+    if (creating) {
+      delivery.intentWrites += 1;
+    }
+    if (revoking) {
+      delivery.revocationWrites += 1;
+    }
+    const result = await scope.execute(command, executeOptions).catch((error: unknown) => {
+      if (revoking && delivery.loseRevocationFailure) {
+        delivery.loseRevocationFailure = false;
+        delivery.hideReceipt = true;
+        delivery.hideSettlement = true;
+        throw delivery.resultFailure;
+      }
+      throw error;
+    });
+    if (creating && delivery.loseIntentResult) {
+      delivery.loseIntentResult = false;
+      delivery.hideReceipt = true;
+      delivery.hideSettlement = true;
+      throw delivery.resultFailure;
+    }
+    if (revoking && delivery.loseRevocationResult) {
+      const recovery = delivery.loseRevocationResult;
+      delivery.loseRevocationResult = undefined;
+      delivery.hideReceipt = recovery !== "receipt";
+      delivery.hideSettlement = recovery === "unknown";
+      throw delivery.resultFailure;
+    }
+    return result;
+  });
 });
 vi.mock("../../state/openclaw-state-db-readonly.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-state-db-readonly.js")>();
@@ -140,6 +126,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     delivery.intentWrites = 0;
     delivery.revocationWrites = 0;
     delivery.readbackIds = [];
+    await Promise.all(stores.splice(0).map((store) => store.close()));
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -149,7 +136,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 let database: ReturnType<typeof openOpenClawStateDatabase>;
 let first: Awaited<ReturnType<typeof createWorkerEnvironmentStore>>;
 let survivor: typeof first;
-const openStore = () => createWorkerEnvironmentStore({ database, now: () => 1_000 });
+const stores: (typeof first)[] = [];
+async function openStore() {
+  const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  stores.push(store);
+  return store;
+}
 const createIntent = (environmentId: string) =>
   first.createIntent({
     environmentId,
@@ -171,30 +163,23 @@ beforeEach(async () => {
 });
 
 it("reloads the durable write in a new inventory after failed readback closes the old one", async () => {
-  try {
-    delivery.loseIntentResult = true;
-    delivery.failReadback = true;
-    await expect(createIntent("worker-recovery")).rejects.toBe(delivery.resultFailure);
-    expect(() => survivor.get("worker-recovery")).toThrow("inventory has closed");
-    await Promise.all([first.close(), survivor.close()]);
-    showNativeConfirmation();
-    const reloaded = await openStore();
-    try {
-      expect(reloaded.get("worker-recovery")).toMatchObject({
-        state: "requested",
-        environmentId: "worker-recovery",
-      });
-    } finally {
-      await reloaded.close();
-    }
-    expect(delivery.intentWrites).toBe(1);
-    expect(database.db.prepare("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
-      count: 1,
-    });
-    expect(delivery.readbackIds).toEqual([["worker-recovery"]]);
-  } finally {
-    await Promise.all([first.close(), survivor.close()]);
-  }
+  delivery.loseIntentResult = true;
+  delivery.failReadback = true;
+  await expect(createIntent("worker-recovery")).rejects.toBe(delivery.resultFailure);
+  expect(() => survivor.get("worker-recovery")).toThrow("inventory has closed");
+  await Promise.all([first.close(), survivor.close()]);
+  showNativeConfirmation();
+  const reloaded = await openStore();
+  expect(reloaded.get("worker-recovery")).toMatchObject({
+    state: "requested",
+    environmentId: "worker-recovery",
+  });
+  await reloaded.close();
+  expect(delivery.intentWrites).toBe(1);
+  expect(database.db.prepare("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
+    count: 1,
+  });
+  expect(delivery.readbackIds).toEqual([["worker-recovery"]]);
 });
 
 it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
@@ -213,51 +198,46 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
   survivor.onCredentialRevoked((id) => survivorNotifications.push(id));
   const revoke = () =>
     first.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.exec(`CREATE TABLE revocation_commit_guard (
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.exec(`CREATE TABLE revocation_commit_guard (
         environment_id TEXT REFERENCES worker_environment_credentials(environment_id) DEFERRABLE INITIALLY DEFERRED
       )`);
-        db.prepare("INSERT INTO revocation_commit_guard(environment_id) VALUES (?)").run(
-          environmentId,
-        );
-      },
-      { database },
-    );
-    await expect(revoke()).rejects.toThrow(/FOREIGN KEY/i);
-    expect(firstNotifications).toEqual([]);
-    expect(survivorNotifications).toEqual([]);
-    expect(survivor.getCredential(environmentId)).toBeDefined();
-    expect(delivery.readbackIds).toEqual([]);
+      db.prepare("INSERT INTO revocation_commit_guard(environment_id) VALUES (?)").run(
+        environmentId,
+      );
+    },
+    { database },
+  );
+  await expect(revoke()).rejects.toThrow(/FOREIGN KEY/i);
+  expect(firstNotifications).toEqual([]);
+  expect(survivorNotifications).toEqual([]);
+  expect(survivor.getCredential(environmentId)).toBeDefined();
+  expect(delivery.readbackIds).toEqual([]);
 
-    // Lost rollback confirmation is unknown; a still-present credential forbids a fence event.
-    delivery.loseRevocationFailure = true;
+  // Lost rollback confirmation is unknown; a still-present credential forbids a fence event.
+  delivery.loseRevocationFailure = true;
+  await expect(revoke()).rejects.toBe(delivery.resultFailure);
+  expect(survivor.getCredential(environmentId)).toBeDefined();
+  expect(survivorNotifications).toEqual([]);
+  showNativeConfirmation();
+  runOpenClawStateWriteTransaction(({ db }) => db.exec("DROP TABLE revocation_commit_guard"), {
+    database,
+  });
+
+  // Committed no-ops still carry explicit permanent transfer-fencing requests.
+  for (const [index, outcome] of (["settlement", "receipt", "unknown"] as const).entries()) {
+    delivery.loseRevocationResult = outcome;
     await expect(revoke()).rejects.toBe(delivery.resultFailure);
-    expect(survivor.getCredential(environmentId)).toBeDefined();
-    expect(survivorNotifications).toEqual([]);
-    showNativeConfirmation();
-    runOpenClawStateWriteTransaction(({ db }) => db.exec("DROP TABLE revocation_commit_guard"), {
-      database,
-    });
-
-    // Committed no-ops still carry explicit permanent transfer-fencing requests.
-    for (const [index, outcome] of (["settlement", "receipt", "unknown"] as const).entries()) {
-      delivery.loseRevocationResult = outcome;
-      await expect(revoke()).rejects.toBe(delivery.resultFailure);
-      expect(survivor.getCredential(environmentId)).toBeUndefined();
-      expect(survivorNotifications).toEqual(Array.from({ length: index + 1 }, () => environmentId));
-      if (outcome === "settlement") {
-        showNativeConfirmation();
-      }
-    }
-    expect(firstNotifications).toEqual(survivorNotifications);
     expect(survivor.getCredential(environmentId)).toBeUndefined();
-    showNativeConfirmation();
-
-    expect(delivery.revocationWrites).toBe(5);
-  } finally {
-    showNativeConfirmation();
-    await Promise.all([first.close(), survivor.close()]);
+    expect(survivorNotifications).toEqual(Array.from({ length: index + 1 }, () => environmentId));
+    if (outcome === "settlement") {
+      showNativeConfirmation();
+    }
   }
+  expect(firstNotifications).toEqual(survivorNotifications);
+  expect(survivor.getCredential(environmentId)).toBeUndefined();
+  showNativeConfirmation();
+
+  expect(delivery.revocationWrites).toBe(5);
 });

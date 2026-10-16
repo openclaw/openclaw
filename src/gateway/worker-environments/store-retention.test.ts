@@ -156,9 +156,7 @@ describe("worker environment terminal retention", () => {
       Array.from({ length: 257 }, (_, index) => `worker-${String(index).padStart(4, "0")}`),
     );
     expect(visited.slice(257).every((id) => id === "worker-0256")).toBe(true);
-    expect(sql("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
-      count: 256,
-    });
+    expect(sql("SELECT count(*) AS count FROM worker_environments").get()).toEqual({ count: 256 });
   });
 
   it("defers the batch when live demand changes at worker commit and preserves policy errors", async () => {

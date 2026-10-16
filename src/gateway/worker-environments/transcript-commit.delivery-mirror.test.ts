@@ -9,15 +9,12 @@ import {
 import { persistInternalSourceReply } from "../internal-source-reply-persistence.js";
 import {
   createTranscriptCommitFixture,
+  expectedCommitReceipt,
+  requireSuccess,
   IDENTITY,
   SESSION_KEY,
 } from "./transcript-commit.fixture.test-support.js";
-import {
-  createInterruptedCommitter,
-  createRequest,
-  createTurnMessages,
-  SESSION_ID,
-} from "./transcript-commit.test-support.js";
+import { createRequest, createTurnMessages, SESSION_ID } from "./transcript-commit.test-support.js";
 
 describe("worker transcript delivery mirrors", () => {
   let fixture: Awaited<ReturnType<typeof createTranscriptCommitFixture>>;
@@ -25,13 +22,6 @@ describe("worker transcript delivery mirrors", () => {
 
   const commit = (request: ReturnType<typeof createRequest>) =>
     fixture.committer.commit({ ...fixture.owner, request });
-  const interrupt = (request: ReturnType<typeof createRequest>, message: string) =>
-    expect(
-      createInterruptedCommitter(() => cfg, fixture.ledgerStore, message).commit({
-        ...fixture.owner,
-        request,
-      }),
-    ).rejects.toThrow(message);
   const mirror = (idempotencyKey: string, runId = expectDefined(IDENTITY.runId, "worker run ID")) =>
     persistInternalSourceReply({
       cfg,
@@ -54,13 +44,8 @@ describe("worker transcript delivery mirrors", () => {
     stopReason: "stop" as const,
     content: [{ type: "text" as const, text }],
   });
-  const commitStart = async (messages: ReturnType<typeof createTurnMessages>) => {
-    const first = await commit(createRequest({ messages }));
-    if (!first.ok) {
-      throw new Error("Expected the worker tool call to commit");
-    }
-    return first.result.newLeafId;
-  };
+  const commitStart = async (messages: ReturnType<typeof createTurnMessages>) =>
+    requireSuccess(await commit(createRequest({ messages }))).result.newLeafId;
 
   let close: Awaited<ReturnType<typeof createTranscriptCommitFixture>>["close"] | undefined;
 
@@ -86,7 +71,7 @@ describe("worker transcript delivery mirrors", () => {
         baseLeafId,
         messages: [toolResult, { ...finalMessage(assistant), itemId: "abandoned-final" }],
       });
-      await interrupt(request, "lost batch receipt");
+      await fixture.interrupt(request, "lost batch receipt");
       const manager = await SessionManager.openAsync(fixture.sessionTarget);
       const committedEntryIds = manager
         .getBranch()
@@ -120,10 +105,7 @@ describe("worker transcript delivery mirrors", () => {
       );
       try {
         const replay = await commit(request);
-        expect(replay).toEqual({
-          ok: true,
-          result: { entryIds: committedEntryIds, newLeafId: committedEntryIds.at(-1) },
-        });
+        expect(replay).toEqual(expectedCommitReceipt(committedEntryIds));
         const reopened = await SessionManager.openAsync(fixture.sessionTarget);
         expect(reopened.getEntries()).toEqual(entriesBeforeReplay);
         expect(reopened.getBranch().map((entry) => entry.id)).toEqual(branchBeforeReplay);
@@ -170,13 +152,10 @@ describe("worker transcript delivery mirrors", () => {
         return;
       }
 
-      await interrupt(request, "lost result receipt");
+      await fixture.interrupt(request, "lost result receipt");
       // Delivery bookkeeping can also follow the committed result before its ACK is recovered.
       await mirrorForRun("source-reply-after-result");
-      const recovered = await commit(request);
-      if (!recovered.ok) {
-        throw new Error("Expected the committed tool result receipt to recover");
-      }
+      const recovered = requireSuccess(await commit(request));
       expect(recovered.result.entryIds).toHaveLength(1);
       const final = await commit(
         createRequest({

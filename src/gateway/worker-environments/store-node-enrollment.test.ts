@@ -30,26 +30,12 @@ const delivery = vi.hoisted(() => ({
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      context: Parameters<typeof actual.runOpenClawStateWorkerOperation>[0],
-      operation: Parameters<typeof actual.runOpenClawStateWorkerOperation>[1],
-      options: Parameters<typeof actual.runOpenClawStateWorkerOperation>[2],
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              await delivery.afterResult?.(command.type);
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
+  const { interceptWorkerExecution } = await import("./store.test-support.js");
+  return interceptWorkerExecution(actual, (scope) => async (command, executeOptions) => {
+    const result = await scope.execute(command, executeOptions);
+    await delivery.afterResult?.(command.type);
+    return result;
+  });
 });
 
 const BOOTSTRAP_RECEIPT = {
@@ -311,9 +297,7 @@ describe("worker environment node enrollment store", () => {
     await expect(verifyDeviceBootstrapToken(replacement.verification)).resolves.toEqual({
       ok: true,
     });
-    await expect(consume(replacement)).resolves.toMatchObject({
-      completion: { deviceId: replacement.verification.deviceId },
-    });
+    await expect(consume(replacement)).resolves.toMatchObject({ completion: { deviceId } });
     expect(store.get(environmentId)?.nodeDeviceId).toBe(deviceId);
   });
 
@@ -327,7 +311,7 @@ describe("worker environment node enrollment store", () => {
     });
     expect(store.get(environmentId)).toMatchObject({
       nodeSetupId: enrollment.setupId,
-      nodeDeviceId: verification.deviceId,
+      nodeDeviceId: deviceId,
     });
     manager.close(enrollment);
 
