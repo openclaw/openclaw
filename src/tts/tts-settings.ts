@@ -57,7 +57,7 @@ export function normalizeConfiguredSpeechProviderId(
 }
 
 export function normalizeTtsPersonaId(personaId: string | null | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(personaId ?? undefined);
+  return normalizeOptionalLowercaseString(personaId);
 }
 
 export function resolveModelOverridePolicy(

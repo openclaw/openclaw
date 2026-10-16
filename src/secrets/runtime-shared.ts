@@ -222,14 +222,11 @@ export function collectSecretInputAssignment(
   });
 }
 
-/** Binds core config collection to one snapshot and defers writes to its selected property. */
-export function createConfigSecretInputCollector({
-  defaults,
-  context,
-}: {
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}) {
+/** Binds collection to one config snapshot and defers writes to its selected property. */
+export function createConfigSecretInputCollector(
+  { defaults, context }: { defaults: SecretDefaults | undefined; context: ResolverContext },
+  collectAssignment = collectCanonicalSecretInputAssignment,
+) {
   return (
     target: Record<string, unknown>,
     key: string,
@@ -239,7 +236,7 @@ export function createConfigSecretInputCollector({
       "active" | "inactiveReason" | "owner"
     > = {},
   ): void => {
-    collectCanonicalSecretInputAssignment({
+    collectAssignment({
       ...options,
       value: target[key],
       path,
@@ -316,5 +313,5 @@ export function isChannelAccountEffectivelyEnabled(
   channel: Record<string, unknown>,
   account: Record<string, unknown>,
 ): boolean {
-  return isEnabledFlag(channel) && isEnabledFlag(account);
+  return channel.enabled !== false && account.enabled !== false;
 }

@@ -65,9 +65,11 @@ export function resolveEffectiveTtsConfig(
   const accounts = isPlainObject(channelConfig?.accounts) ? channelConfig.accounts : undefined;
   const accountConfig = resolveRecordEntry(accounts, context.accountId, normalizeAccountId);
   const accountOverride = asTtsConfig(asObjectRecord(accountConfig)?.tts);
-  let merged: unknown = base;
-  for (const override of [agentOverride, channelOverride, accountOverride]) {
-    merged = mergeDeep(merged, override ?? {});
+  let merged = mergeDeep(base, agentOverride ?? {});
+  for (const override of [channelOverride, accountOverride]) {
+    if (override) {
+      merged = mergeDeep(merged, override);
+    }
   }
   return merged as TtsConfig;
 }
@@ -113,6 +115,7 @@ export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
   try {
     return asNonArrayRecord(JSON.parse(readFileSync(prefsPath, "utf8"))) as TtsUserPrefs;
   } catch {
+    // Optional preferences leave configured defaults in effect when unavailable or invalid.
     return {};
   }
 }

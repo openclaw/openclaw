@@ -1,78 +1,54 @@
 import {
-  collectSecretInputAssignment,
-  createChannelSecretTargetRegistryEntries,
-  getChannelSurface,
+  createChannelSecretContract,
   hasOwnProperty,
-  type ResolverContext,
-  type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/setup";
 
-export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+export const channelSecrets = createChannelSecretContract({
   channelKey: "msteams",
   account: ["appPassword"],
   channel: ["appPassword"],
-});
+  collect(params) {
+    const { channel: msteams, surface } = params;
 
-export function collectRuntimeConfigAssignments(params: {
-  config: { channels?: Record<string, unknown> };
-  defaults?: SecretDefaults;
-  context: ResolverContext;
-}): void {
-  const resolved = getChannelSurface(params.config, "msteams");
-  if (!resolved) {
-    return;
-  }
-  const { channel: msteams, surface } = resolved;
-
-  collectSecretInputAssignment({
-    value: msteams.appPassword,
-    path: "channels.msteams.appPassword",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: isRootDefaultIdentityActive(msteams, surface),
-    inactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
-    owner: {
-      ownerKind: "account",
-      ownerId: "msteams:default",
-      requiredForGateway: false,
-      disposition: "isolate",
-      contract: msteams,
-    },
-    apply: (value) => {
-      msteams.appPassword = value;
-    },
-  });
-
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (!hasOwnProperty(account, "appPassword")) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: account.appPassword,
-      path: `channels.msteams.accounts.${accountId}.appPassword`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: "Microsoft Teams account is disabled.",
+    params.collectSecret(msteams, "appPassword", "channels.msteams.appPassword", {
+      active: isRootDefaultIdentityActive(msteams, surface),
+      inactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
       owner: {
         ownerKind: "account",
-        ownerId: `msteams:${normalizeAccountId(accountId)}`,
+        ownerId: "msteams:default",
         requiredForGateway: false,
         disposition: "isolate",
-        contract: account,
-      },
-      apply: (value) => {
-        account.appPassword = value;
+        contract: msteams,
       },
     });
-  }
-}
+
+    if (!surface.hasExplicitAccounts) {
+      return;
+    }
+    for (const { accountId, account, enabled } of surface.accounts) {
+      if (!hasOwnProperty(account, "appPassword")) {
+        continue;
+      }
+      params.collectSecret(
+        account,
+        "appPassword",
+        `channels.msteams.accounts.${accountId}.appPassword`,
+        {
+          active: enabled,
+          inactiveReason: "Microsoft Teams account is disabled.",
+          owner: {
+            ownerKind: "account",
+            ownerId: `msteams:${normalizeAccountId(accountId)}`,
+            requiredForGateway: false,
+            disposition: "isolate",
+            contract: account,
+          },
+        },
+      );
+    }
+  },
+});
 
 function isConfiguredIdentityField(value: unknown): boolean {
   if (typeof value === "string") {
@@ -99,7 +75,4 @@ function isRootDefaultIdentityActive(
   );
 }
 
-export const channelSecrets = {
-  secretTargetRegistryEntries,
-  collectRuntimeConfigAssignments,
-};
+export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;

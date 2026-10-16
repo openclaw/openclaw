@@ -6,6 +6,7 @@ import {
   collectConditionalChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
   collectSecretInputAssignment,
+  createChannelSecretContract,
   resolveChannelAccountSurface,
   type ResolverContext,
 } from "./channel-secret-basic-runtime.js";
@@ -22,6 +23,32 @@ function createContext(): ResolverContext {
 }
 
 describe("channel secret assignments", () => {
+  it("binds public providerless collection and deferred writes to the contract snapshot", () => {
+    const context = createContext();
+    const channel: Record<string, unknown> = {
+      token: { source: "env", id: "SYNTHETIC_CHANNEL_KEY" },
+    };
+    const contract = createChannelSecretContract({
+      channelKey: "example",
+      channel: ["token"],
+      collect({ channel: target, collectSecret }) {
+        collectSecret(target, "token", "channels.example.token");
+      },
+    });
+
+    contract.collectRuntimeConfigAssignments({
+      config: { channels: { example: channel } },
+      defaults: { env: "channel-env" },
+      context,
+    });
+
+    expect(context.assignments.map(({ ref }) => ref)).toEqual([
+      { source: "env", provider: "channel-env", id: "SYNTHETIC_CHANNEL_KEY" },
+    ]);
+    context.assignments[0]?.apply("synthetic-materialized-value");
+    expect(channel.token).toBe("synthetic-materialized-value");
+  });
+
   it("keeps providerless refs accepted by the public assignment collector", () => {
     const context = createContext();
     collectSecretInputAssignment({

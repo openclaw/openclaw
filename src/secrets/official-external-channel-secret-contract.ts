@@ -14,6 +14,7 @@ import {
 } from "./channel-secret-basic-runtime.js";
 import {
   collectSecretInputAssignment,
+  createConfigSecretInputCollector,
   isChannelAccountEffectivelyEnabled,
   isEnabledFlag,
   type ResolverContext,
@@ -70,6 +71,10 @@ export function loadOfficialExternalChannelSecretContractApi(
       if (!channel) {
         return;
       }
+      const collectSecret = createConfigSecretInputCollector(
+        { defaults, context },
+        collectSecretInputAssignment,
+      );
       for (const field of contract.fields) {
         const activationEnvValue = field.activationEnv
           ? normalizeOptionalString(context.env[field.activationEnv])
@@ -102,12 +107,7 @@ export function loadOfficialExternalChannelSecretContractApi(
           const accountPath = root
             ? `channels.${contract.channelId}`
             : appendConfigPathSegment(`channels.${contract.channelId}.accounts`, accountId);
-          collectSecretInputAssignment({
-            value: account[field.field],
-            path: `${accountPath}.${field.field}`,
-            expected: "string",
-            defaults,
-            context,
+          collectSecret(account, field.field, `${accountPath}.${field.field}`, {
             active:
               (root
                 ? isEnabledFlag(channel)
@@ -127,9 +127,6 @@ export function loadOfficialExternalChannelSecretContractApi(
               root ? defaultAccount : account,
               ownerContract,
             ),
-            apply: (value) => {
-              account[field.field] = value;
-            },
           });
         };
         collectAccount("default", channel, true, defaultAccount);

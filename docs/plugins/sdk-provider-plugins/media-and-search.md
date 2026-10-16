@@ -134,8 +134,10 @@ merging a nested value such as voice settings.
     from the private `openclaw/plugin-sdk/video-generation` subpath to round an
     optional duration and reject values outside 1–9007199254740991 seconds after
     rounding. Omission returns `undefined`; provider defaults remain provider-owned.
-    `selectSupportedVideoDuration` selects the nearest value from a nonempty list,
-    preferring the longer duration on ties. Keep provider-specific bounds in the provider.
+    Pass `supportedDurationSeconds` to the same helper to select the nearest allowed
+    value, preferring the longer duration on ties. `selectSupportedVideoDuration`
+    provides selection alone for an already-normalized duration and a nonempty list.
+    Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({

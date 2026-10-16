@@ -362,10 +362,9 @@ export function buildConfigSetOperations(params: {
     return parseBatchOperations(batchEntries);
   }
 
-  const parsedConcretePath =
-    typeof params.path === "string" && params.path.trim()
-      ? parseConcreteConfigPathWithProvenance(params.path)
-      : undefined;
+  const parsedConcretePath = params.path?.trim()
+    ? parseConcreteConfigPathWithProvenance(params.path)
+    : undefined;
   if (!parsedConcretePath) {
     throw modeError(
       mode === "ref_builder"
