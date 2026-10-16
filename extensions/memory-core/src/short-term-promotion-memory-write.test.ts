@@ -215,7 +215,7 @@ it("refuses to rewrite a memory file that is not valid UTF-8", async () => {
   expect(await fs.readFile(memoryPath)).toEqual(malformed);
 });
 
-it("refuses before any write attempt even when the parent directory is read-only", async () => {
+it("preserves malformed memory when the parent directory is read-only", async () => {
   const malformed = Buffer.concat([
     Buffer.from("# Long-Term Memory\n\n- note: a", "utf-8"),
     Buffer.from([0xff]),
@@ -234,7 +234,7 @@ it("refuses before any write attempt even when the parent directory is read-only
       allowInPlaceFallback: true,
       content: `${lossy}- promoted entry\n`,
     }),
-  ).rejects.toMatchObject({ name: "MemoryFileNotUtf8Error" });
+  ).rejects.toThrow("not valid UTF-8");
 
   expect(await fs.readFile(memoryPath)).toEqual(malformed);
 });
