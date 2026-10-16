@@ -37,9 +37,17 @@ type AnthropicBilledUsage = {
   cacheRead: number;
   cacheWrite: number;
   cacheWrite1h: number;
+  cacheWrite5m: number;
 };
 
-const BILLED_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"] as const;
+const BILLED_USAGE_KEYS = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+  "cacheWrite1h",
+  "cacheWrite5m",
+] as const;
 
 function readAnthropicBilledUsage(
   usage: AnthropicUsagePayload,
@@ -52,7 +60,7 @@ function readAnthropicBilledUsage(
     cacheWrite: readAnthropicUsageTokenCount(
       usage.cache_creation_input_tokens ?? missingCacheTokens,
     ),
-    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+    ...readAnthropicCacheWriteUsage(usage),
   };
 }
 
@@ -70,7 +78,8 @@ function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | und
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const { input, output, cacheRead, cacheWrite, cacheWrite1h } = readAnthropicBilledUsage(value);
+  const { input, output, cacheRead, cacheWrite, cacheWrite1h, cacheWrite5m } =
+    readAnthropicBilledUsage(value);
   if (
     input === undefined ||
     output === undefined ||
@@ -79,7 +88,14 @@ function readAnthropicIterationUsage(value: unknown): AnthropicBilledUsage | und
   ) {
     return undefined;
   }
-  return { input, output, cacheRead, cacheWrite, cacheWrite1h: cacheWrite1h ?? 0 };
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cacheWrite1h: cacheWrite1h ?? 0,
+    cacheWrite5m: cacheWrite5m ?? 0,
+  };
 }
 
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
@@ -155,6 +171,7 @@ function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBille
     cacheRead: 0,
     cacheWrite: 0,
     cacheWrite1h: 0,
+    cacheWrite5m: 0,
   };
   for (const iteration of iterations) {
     const resolved = readAnthropicIterationUsage(iteration);

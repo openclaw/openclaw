@@ -25,13 +25,14 @@ describe("normalizeUsage", () => {
     },
   );
 
-  it.each([0])("preserves recorded cost %s and 1h writes through normalization", (total) => {
+  it.each([0])("preserves recorded cost %s and TTL writes through normalization", (total) => {
     const raw = {
       input: 20,
       output: 10,
       cacheRead: 30,
       cacheWrite: 60,
       cacheWrite1h: 40,
+      cacheWrite5m: 20,
       totalTokens: 120,
       cost: { total, totalOrigin: "provider-billed" as const },
     };
@@ -42,11 +43,21 @@ describe("normalizeUsage", () => {
       cacheRead: 30,
       cacheWrite: 60,
       cacheWrite1h: 40,
+      cacheWrite5m: 20,
       total: 120,
       cost: { total, totalOrigin: "provider-billed" },
     });
     expect(normalizeUsage(normalized)).toEqual(normalized);
   });
+
+  it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+    "retains %s-only usage, including reported zero",
+    (bucket) => {
+      for (const value of [0, 12]) {
+        expect(normalizeUsage({ [bucket]: value })).toMatchObject({ [bucket]: value });
+      }
+    },
+  );
 
   it.each([0])("retains a valid cost-only fact %s", (total) => {
     const normalized = normalizeUsage({ cost: { total } });

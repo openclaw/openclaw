@@ -593,6 +593,14 @@ function handleMetadata(
     if (cacheWrite1h) {
       output.usage.cacheWrite1h = cacheWrite1h;
     }
+    const cacheWrite5m = event.usage.cacheDetails?.reduce(
+      (total, detail) =>
+        detail.ttl === CacheTTL.FIVE_MINUTES ? total + (detail.inputTokens ?? 0) : total,
+      0,
+    );
+    if (cacheWrite5m) {
+      output.usage.cacheWrite5m = cacheWrite5m;
+    }
     calculateCost(model, output.usage);
   }
 }

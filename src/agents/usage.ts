@@ -22,6 +22,7 @@ export type UsageLike = {
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheWrite5m?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   usageReport?: Usage["usageReport"];
@@ -72,6 +73,7 @@ export type NormalizedUsage = {
   cacheRead?: number;
   cacheWrite?: number;
   cacheWrite1h?: number;
+  cacheWrite5m?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   usageReport?: Usage["usageReport"];
@@ -198,6 +200,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.prompt_tokens_details?.cache_creation_input_tokens,
   );
   const cacheWrite1h = normalizeTokenCount(raw.cacheWrite1h);
+  const cacheWrite5m = normalizeTokenCount(raw.cacheWrite5m);
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
@@ -275,9 +278,18 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   if (
-    [input, output, cacheRead, cacheWrite, contextUsage, reasoningTokens, total, cost].every(
-      (value) => value === undefined,
-    )
+    [
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      cacheWrite1h,
+      cacheWrite5m,
+      contextUsage,
+      reasoningTokens,
+      total,
+      cost,
+    ].every((value) => value === undefined)
   ) {
     return undefined;
   }
@@ -288,6 +300,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     cacheRead,
     cacheWrite,
     ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(cacheWrite5m !== undefined ? { cacheWrite5m } : {}),
     ...(raw.cacheTelemetry?.state === "available" || raw.cacheTelemetry?.state === "unavailable"
       ? { cacheTelemetry: { state: raw.cacheTelemetry.state } }
       : {}),

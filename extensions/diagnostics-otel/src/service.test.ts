@@ -3158,62 +3158,105 @@ describe("diagnostics-otel service", () => {
   });
 
   test.each([
-    { label: "mixed TTLs", cacheWrite: 10, cacheWrite1h: 4, expected1h: 4, expected5m: 6 },
-    { label: "all one-hour", cacheWrite: 10, cacheWrite1h: 10, expected1h: 10, expected5m: 0 },
-    { label: "excess one-hour", cacheWrite: 10, cacheWrite1h: 20, expected1h: 10, expected5m: 0 },
-    { label: "all five-minute", cacheWrite: 10, cacheWrite1h: 0, expected1h: 0, expected5m: 10 },
-    { label: "zero writes", cacheWrite: 0, cacheWrite1h: 0, expected1h: 0, expected5m: 0 },
-  ])("exports bounded cache-write TTL buckets for $label on model call spans", async (row) => {
-    await startServiceFixture(["traces"]);
-    await emitTrustedAndFlush({
-      type: "model.call.started",
-      ...EVENT_FIXTURES["model.call.started"],
-      provider: "anthropic",
-    });
-    expect(spanByName("openclaw.model.call").end).not.toHaveBeenCalled();
-    await emitTrustedAndFlush({
-      type: "model.call.completed",
-      ...EVENT_FIXTURES["model.call.completed"],
-      provider: "anthropic",
-      durationMs: 30,
-      usage: { cacheWrite: row.cacheWrite, cacheWrite1h: row.cacheWrite1h },
-    });
-
-    expect(firstSpanAttributes("openclaw.model.call")).toMatchObject({
-      "gen_ai.usage.input_cache_creation_1h": row.expected1h,
-      "gen_ai.usage.input_cache_creation_5m": row.expected5m,
-      "openclaw.model_call.usage.cache_creation_input_tokens_1h": row.expected1h,
-      "openclaw.model_call.usage.cache_creation_input_tokens_5m": row.expected5m,
-      "gen_ai.usage.cache_creation.input_tokens": row.cacheWrite,
-      "openclaw.model_call.usage.cache_creation_input_tokens": row.cacheWrite,
-    });
-    expect(spanByName("openclaw.model.call").end).toHaveBeenCalled();
-  });
-
-  test.each([undefined, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "omits cache-write TTL buckets without valid one-hour usage (%s)",
-    async (cacheWrite1h) => {
+    { label: "mixed TTLs", cacheWrite: 10, cacheWrite5m: 6, cacheWrite1h: 4 },
+    { label: "all one-hour", cacheWrite: 10, cacheWrite5m: 0, cacheWrite1h: 10 },
+    { label: "excess one-hour", cacheWrite: 10, cacheWrite5m: 0, cacheWrite1h: 20 },
+    { label: "one-hour only", cacheWrite: undefined, cacheWrite5m: undefined, cacheWrite1h: 4 },
+    { label: "five-minute only", cacheWrite: undefined, cacheWrite5m: 6, cacheWrite1h: undefined },
+    { label: "all five-minute", cacheWrite: 10, cacheWrite5m: 10, cacheWrite1h: 0 },
+    { label: "zero writes", cacheWrite: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+  ])(
+    "exports reported cache-write TTL buckets verbatim for $label on model call spans",
+    async (row) => {
       await startServiceFixture(["traces"]);
-      await emitAndFlush({
-        type: "model.call.error",
-        ...MODEL_CALL_FIXTURE,
+      await emitTrustedAndFlush({
+        type: "model.call.started",
+        ...EVENT_FIXTURES["model.call.started"],
+        provider: "anthropic",
+      });
+      expect(spanByName("openclaw.model.call").end).not.toHaveBeenCalled();
+      await emitTrustedAndFlush({
+        type: "model.call.completed",
+        ...EVENT_FIXTURES["model.call.completed"],
+        provider: "anthropic",
         durationMs: 30,
-        errorCategory: "TimeoutError",
-        usage: { cacheWrite: 7, cacheWrite1h },
+        usage: {
+          cacheWrite: row.cacheWrite,
+          cacheWrite1h: row.cacheWrite1h,
+          cacheWrite5m: row.cacheWrite5m,
+        },
       });
 
       const attrs = firstSpanAttributes("openclaw.model.call");
-      expect(attrs).toMatchObject({
-        "gen_ai.usage.cache_creation.input_tokens": 7,
-        "openclaw.model_call.usage.cache_creation_input_tokens": 7,
-      });
-      expectAbsent(
-        attrs,
-        "gen_ai.usage.input_cache_creation_1h",
-        "gen_ai.usage.input_cache_creation_5m",
-        "openclaw.model_call.usage.cache_creation_input_tokens_1h",
-        "openclaw.model_call.usage.cache_creation_input_tokens_5m",
+      for (const [value, keys] of [
+        [
+          row.cacheWrite1h,
+          [
+            "gen_ai.usage.input_cache_creation_1h",
+            "openclaw.model_call.usage.cache_creation_input_tokens_1h",
+          ],
+        ],
+        [
+          row.cacheWrite5m,
+          [
+            "gen_ai.usage.input_cache_creation_5m",
+            "openclaw.model_call.usage.cache_creation_input_tokens_5m",
+          ],
+        ],
+        [
+          row.cacheWrite,
+          [
+            "gen_ai.usage.cache_creation.input_tokens",
+            "openclaw.model_call.usage.cache_creation_input_tokens",
+          ],
+        ],
+      ] as const) {
+        if (value === undefined) {
+          expectAbsent(attrs, ...keys);
+        } else {
+          for (const key of keys) {
+            expect(attrs?.[key]).toBe(value);
+          }
+        }
+      }
+      expect(spanByName("openclaw.model.call").end).toHaveBeenCalled();
+    },
+  );
+
+  test.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+    "omits invalid %s without dropping its reported sibling",
+    async (bucket) => {
+      await startServiceFixture(["traces"]);
+      const sibling = bucket === "cacheWrite1h" ? "cacheWrite5m" : "cacheWrite1h";
+      const ttl = bucket === "cacheWrite1h" ? "1h" : "5m";
+      const siblingTtl = bucket === "cacheWrite1h" ? "5m" : "1h";
+      for (const invalid of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        await emitAndFlush({
+          type: "model.call.error",
+          ...MODEL_CALL_FIXTURE,
+          durationMs: 30,
+          errorCategory: "TimeoutError",
+          usage: { cacheWrite: 7, [bucket]: invalid, [sibling]: 3 },
+        });
+      }
+      const spans = telemetryState.tracer.startSpan.mock.calls.filter(
+        (call) => call[0] === "openclaw.model.call",
       );
+      expect(spans).toHaveLength(4);
+      for (const call of spans) {
+        const attrs = (call[1] as { attributes?: Record<string, unknown> }).attributes;
+        expect(attrs).toMatchObject({
+          "gen_ai.usage.cache_creation.input_tokens": 7,
+          "openclaw.model_call.usage.cache_creation_input_tokens": 7,
+          [`gen_ai.usage.input_cache_creation_${siblingTtl}`]: 3,
+          [`openclaw.model_call.usage.cache_creation_input_tokens_${siblingTtl}`]: 3,
+        });
+        expectAbsent(
+          attrs,
+          `gen_ai.usage.input_cache_creation_${ttl}`,
+          `openclaw.model_call.usage.cache_creation_input_tokens_${ttl}`,
+        );
+      }
     },
   );
 

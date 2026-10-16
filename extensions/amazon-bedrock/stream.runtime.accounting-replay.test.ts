@@ -505,6 +505,7 @@ describe("Bedrock token usage", () => {
       cacheRead: 70,
       cacheWrite: 10,
       cacheWrite1h: 6,
+      cacheWrite5m: 4,
       totalTokens: 105,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
     });
