@@ -12,7 +12,6 @@ import {
   SettingsRow,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { isMobileBrowserPlatform } from "../../lib/browser-platform.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { languageLabel, LanguageSelect } from "./language-select.tsx";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
@@ -260,33 +259,33 @@ export function ChatPreferencesSection(props: ConfigProps) {
           hint={t("configView.chatPrefs.collapseTaskProgressHint")}
           disabled={!props.chatShowTaskProgress}
         />
-        <Show when={!isMobileBrowserPlatform()}>
-          <SettingsSelectRow
-            title={t("chat.sendShortcut")}
-            value={props.chatSendShortcut}
-            setting={"send-shortcut"}
-            description={
-              <>
-                {sendShortcutDefaultDescription} {sendShortcutProvenance()}
-              </>
-            }
-            options={[
-              {
-                value: "enter",
-                label: t("chat.sendShortcutEnter"),
-              },
-              {
-                value: "modifier-enter",
-                label: t("chat.sendShortcutModifierEnter"),
-              },
-            ]}
-            onChange={(value) =>
-              props.onAppearanceChange({
-                chatSendShortcut: normalizeChatSendShortcut(value),
-              })
-            }
-          />
-        </Show>
+        <SettingsSelectRow
+          title={t("chat.sendShortcut")}
+          value={props.chatSendShortcut}
+          setting={"send-shortcut"}
+          description={
+            <>
+              {t("chat.sendShortcutHint")}
+              <br />
+              {sendShortcutDefaultDescription} {sendShortcutProvenance()}
+            </>
+          }
+          options={[
+            {
+              value: "enter",
+              label: t("chat.sendShortcutEnter"),
+            },
+            {
+              value: "modifier-enter",
+              label: t("chat.sendShortcutModifierEnter"),
+            },
+          ]}
+          onChange={(value) =>
+            props.onAppearanceChange({
+              chatSendShortcut: normalizeChatSendShortcut(value),
+            })
+          }
+        />
         <SettingsRow
           title={t("chat.followUpMode")}
           description={

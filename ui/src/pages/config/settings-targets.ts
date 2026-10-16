@@ -390,6 +390,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
+      "chat.sendShortcutHint",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
       "chat.followUpMode",

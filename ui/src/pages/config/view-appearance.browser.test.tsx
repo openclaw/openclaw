@@ -664,13 +664,28 @@ describe("config appearance preferences", () => {
   });
 });
 
-it("keeps the desktop send preference out of mobile settings without rewriting it", () => {
-  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
-  onTestFinished(() => {
-    vi.restoreAllMocks();
-  });
-  const { container, props } = renderAppearance({ chatSendShortcut: "modifier-enter" });
-  expect(container.querySelector("[data-settings-send-shortcut]")).toBeNull();
-  expect(container.textContent).not.toContain("Send shortcut");
-  expect(props.onAppearanceChange).not.toHaveBeenCalled();
-});
+it.each(["iPhone", "Android", "Windows NT 10.0"])(
+  "keeps the desktop send preference editable with its mobile policy explained on %s",
+  (userAgent) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const { container, props } = renderAppearance({ chatSendShortcut: "modifier-enter" });
+    const row = settingsRow(container, "Send shortcut");
+    expect(row.textContent).toContain("Desktop only.");
+    expect(row.textContent).toContain(
+      "On mobile, Enter adds a new line; use the Send button to send.",
+    );
+    const select = row.querySelector<HTMLSelectElement>("[data-settings-send-shortcut]");
+    expect(select?.value).toBe("modifier-enter");
+    expect(select?.disabled).toBe(false);
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
+    if (!select) {
+      throw new Error("Missing send shortcut preference");
+    }
+    select.value = "enter";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({ chatSendShortcut: "enter" });
+  },
+);

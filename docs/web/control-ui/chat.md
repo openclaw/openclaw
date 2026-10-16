@@ -167,7 +167,9 @@ are open. Queued-message edits also use Return for line breaks and their save
 button to commit.
 
 Desktop browsers keep their existing **Send shortcut** preference, including in
-narrow windows and on touchscreen computers. Android browsers that mask their
+narrow windows and on touchscreen computers. The synced preference stays visible
+in **Settings → Appearance → Chat** on every device, so you can configure your
+desktop shortcut from mobile; it does not change mobile sending. Android browsers that mask their
 platform as a Linux desktop also keep desktop shortcuts; touch capability and
 window size alone do not identify a mobile platform.
 
