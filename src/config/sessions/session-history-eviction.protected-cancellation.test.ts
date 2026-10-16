@@ -1,19 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { describe, expect, it, vi } from "vitest";
 import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -21,37 +10,24 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
+import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("protected historical session cancellation", () => {
-  let testState: OpenClawTestState;
   let tempDir: string;
   let storePath: string;
+  const { database, settlePhysicalUsage, setSessionUpdatedAt, sessionExists, readArchiveNames } =
+    createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      prefix: "openclaw-protected-history-cancellation-",
-      layout: "state-only",
-    });
-    tempDir = testState.sessionsDir();
-    fs.mkdirSync(tempDir, { recursive: true });
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    resetAgentRunRegistryForTest();
-    vi.restoreAllMocks();
-    await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "warn",
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await testState.cleanup();
-  });
+  installHistoryBudgetState(
+    "openclaw-protected-history-cancellation-",
+    (_state, dir, store) => {
+      tempDir = dir;
+      storePath = store;
+    },
+    false,
+  );
 
   it.each(["planning", "materialization", "worker", "archived entry"] as const)(
     "retains history after %s cancellation releases pressure",
@@ -198,7 +174,7 @@ describe("protected historical session cancellation", () => {
           ),
         );
       try {
-        const sweep = enforceSqliteSessionHistoryDiskBudget({
+        const result = await enforceSqliteSessionHistoryDiskBudget({
           storePath,
           mode: "enforce",
           maintenance: {
@@ -207,7 +183,6 @@ describe("protected historical session cancellation", () => {
             preserveRecentMs: 7 * dayMs,
           },
         });
-        const result = await sweep;
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
         if (stage === "materialization" || stage === "worker" || stage === "archived entry") {
@@ -250,82 +225,24 @@ describe("protected historical session cancellation", () => {
     },
     archivedEntry: boolean,
   ): Promise<void> {
-    await replaceSessionEntry(
-      { sessionKey: params.sessionKey, storePath },
-      { sessionId: params.sessionId, updatedAt: params.updatedAt },
-    );
-    await appendTranscriptMessage(
-      { sessionId: params.sessionId, sessionKey: params.sessionKey, storePath },
-      { message: { role: "user", content: params.content } },
-    );
+    const { sessionKey, sessionId, updatedAt, content, nextSessionId } = params;
+    const scope = { sessionKey, storePath };
+    const entry = { sessionId, updatedAt };
+    await replaceSessionEntry(scope, entry);
+    await appendTranscriptMessage({ ...scope, sessionId }, { message: { role: "user", content } });
     if (archivedEntry) {
-      await replaceSessionEntry(
-        { sessionKey: params.sessionKey, storePath },
-        {
-          sessionId: params.sessionId,
-          updatedAt: params.updatedAt,
-          archivedAt: params.updatedAt,
-          archiveReason: "active-session-cap",
-        },
-      );
+      await replaceSessionEntry(scope, {
+        ...entry,
+        archivedAt: updatedAt,
+        archiveReason: "active-session-cap",
+      });
     } else {
       await resetSessionEntryLifecycle({
         storePath,
-        target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
-        buildNextEntry: () => ({
-          sessionId: params.nextSessionId,
-          updatedAt: params.updatedAt + 1,
-        }),
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        buildNextEntry: () => ({ sessionId: nextSessionId, updatedAt: updatedAt + 1 }),
       });
     }
-    setSessionUpdatedAt(params.sessionId, params.updatedAt);
-  }
-
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath);
-    if (!target.path) {
-      throw new Error("expected SQLite database path");
-    }
-    return openOpenClawAgentDatabase({ agentId: target.agentId ?? "main", path: target.path });
-  }
-
-  function settlePhysicalUsage(): void {
-    const owner = database();
-    owner.walMaintenance.checkpoint();
-    const row = owner.db.prepare("PRAGMA freelist_count").get() as
-      | { freelist_count?: unknown }
-      | undefined;
-    const freePages = Number(row?.freelist_count ?? 0);
-    if (Number.isSafeInteger(freePages) && freePages > 0) {
-      owner.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
-    }
-    owner.walMaintenance.checkpoint();
-  }
-
-  function setSessionUpdatedAt(sessionId: string, updatedAt: number): void {
-    const owner = database();
-    const db = getSessionKysely(owner.db);
-    executeSqliteQuerySync(
-      owner.db,
-      db
-        .updateTable("session_windows")
-        .set({ updated_at: updatedAt })
-        .where("session_id", "=", sessionId),
-    );
-  }
-
-  function sessionExists(sessionId: string): boolean {
-    const owner = database();
-    const db = getSessionKysely(owner.db);
-    return (
-      executeSqliteQuerySync(
-        owner.db,
-        db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
-      ).rows.length === 1
-    );
-  }
-
-  function readArchiveNames(sessionId: string): string[] {
-    return fs.readdirSync(tempDir).filter((name) => name.startsWith(`${sessionId}.jsonl.deleted.`));
+    setSessionUpdatedAt(sessionId, updatedAt);
   }
 });

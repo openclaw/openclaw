@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 
@@ -22,23 +22,14 @@ vi.mock("../../logging/subsystem.js", async () => {
     },
   };
 });
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
-import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import * as diskBudgetModule from "./disk-budget.js";
@@ -54,6 +45,7 @@ import {
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import * as sessionLifecycleState from "./session-accessor.sqlite-lifecycle-state.js";
 import * as archivePruning from "./session-history-archive-pruning.js";
+import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -78,29 +70,35 @@ describe("SQLite historical session disk budget", () => {
     readArchiveNames,
   } = createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      prefix: "openclaw-session-history-budget-",
-      layout: "state-only",
-    });
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
-    tempDir = testState.sessionsDir();
-    fs.mkdirSync(tempDir, { recursive: true });
-    storePath = path.join(tempDir, "sessions.json");
+  installHistoryBudgetState("openclaw-session-history-budget-", (state, dir, store) => {
+    testState = state;
+    tempDir = dir;
+    storePath = store;
   });
 
-  afterEach(async () => {
-    resetAgentRunRegistryForTest();
-    vi.restoreAllMocks();
-    await enforceSqliteSessionHistoryDiskBudget({
+  const enforce = (maxDiskBytes = 1, highWaterBytes = maxDiskBytes) =>
+    enforceSqliteSessionHistoryDiskBudget({
       storePath,
-      mode: "warn",
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+      mode: "enforce",
+      maintenance: { maxDiskBytes, highWaterBytes },
     });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await testState.cleanup();
-  });
+  const append = (sessionKey: string, sessionId: string, content: string) =>
+    appendTranscriptMessage(
+      { sessionId, sessionKey, storePath },
+      { message: { role: "user", content } },
+    );
+  const reset = (sessionKey: string, sessionId: string, updatedAt: number) =>
+    resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId, updatedAt }),
+    });
+  const remove = (sessionKey: string) =>
+    deleteSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      archiveTranscript: true,
+    });
 
   it.each([
     { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false, execution: "worker" },
@@ -122,15 +120,8 @@ describe("SQLite historical session disk budget", () => {
           sessionKey,
           updatedAt: 10,
         });
-        await appendTranscriptMessage(
-          { sessionId: "newer-history", sessionKey, storePath },
-          { message: { role: "user", content: "newer " + "y".repeat(64 * 1024) } },
-        );
-        await resetSessionEntryLifecycle({
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 30 }),
-        });
+        await append(sessionKey, "newer-history", "newer " + "y".repeat(64 * 1024));
+        await reset(sessionKey, "live-history", 30);
         if (capArchive) {
           replaceSessionEntrySync(
             { sessionKey, storePath },
@@ -278,11 +269,7 @@ describe("SQLite historical session disk budget", () => {
         .get("idx_agent_session_windows_updated_at");
     expect(readWindowStatistics()).toEqual({ stat: expect.stringMatching(/^130\b/u) });
 
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-    });
+    const result = await enforce();
 
     expect(result?.removedEntries).toBe(65);
     expect(database().db.prepare("SELECT COUNT(*) AS count FROM session_windows").get()).toEqual({
@@ -311,10 +298,7 @@ describe("SQLite historical session disk budget", () => {
         archiveReason: "active-session-cap",
       },
     );
-    await appendTranscriptMessage(
-      { sessionId: "cap-archived", sessionKey: capKey, storePath },
-      { message: { role: "user", content: "cap archive " + "x".repeat(64 * 1024) } },
-    );
+    await append(capKey, "cap-archived", "cap archive " + "x".repeat(64 * 1024));
     await replaceSessionEntry(
       { sessionKey: manualKey, storePath },
       {
@@ -324,10 +308,7 @@ describe("SQLite historical session disk budget", () => {
         archiveReason: "manual",
       },
     );
-    await appendTranscriptMessage(
-      { sessionId: "manual-archived", sessionKey: manualKey, storePath },
-      { message: { role: "user", content: "manual archive " + "y".repeat(64 * 1024) } },
-    );
+    await append(manualKey, "manual-archived", "manual archive " + "y".repeat(64 * 1024));
     await replaceSessionEntry(
       { sessionKey: legacyKey, storePath },
       { sessionId: "legacy-archived", updatedAt: 3, archivedAt: 3 },
@@ -394,14 +375,7 @@ describe("SQLite historical session disk budget", () => {
     const before = await measureSessionPhysicalDiskUsage(storePath);
     const highWaterBytes = before.totalBytes - 1;
 
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: {
-        maxDiskBytes: highWaterBytes,
-        highWaterBytes,
-      },
-    });
+    const result = await enforce(highWaterBytes);
     const actualAfter = await measureSessionPhysicalDiskUsage(storePath);
 
     expect(result?.removedEntries).toBe(1);
@@ -456,15 +430,8 @@ describe("SQLite historical session disk budget", () => {
       { sessionKey: archivedSessionKey, storePath },
       { sessionId: archivedSessionId, updatedAt: 1 },
     );
-    await appendTranscriptMessage(
-      { sessionId: archivedSessionId, sessionKey: archivedSessionKey, storePath },
-      { message: { role: "user", content: "canonical archive pressure" } },
-    );
-    const deleted = await deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      storePath,
-      target: { canonicalKey: archivedSessionKey, storeKeys: [archivedSessionKey] },
-    });
+    await append(archivedSessionKey, archivedSessionId, "canonical archive pressure");
+    const deleted = await remove(archivedSessionKey);
     const archivePath = deleted.archivedTranscripts[0]?.archivedPath;
     expect(archivePath).toBeTruthy();
 
@@ -491,14 +458,7 @@ describe("SQLite historical session disk budget", () => {
       }
       return await rm(...args);
     });
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: {
-        maxDiskBytes: before.totalBytes - 1,
-        highWaterBytes: before.totalBytes - 1,
-      },
-    });
+    const result = await enforce(before.totalBytes - 1);
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(archivePath ?? "")).toBe(false);
@@ -515,15 +475,8 @@ describe("SQLite historical session disk budget", () => {
     const sessionId = "pending-pressure";
     const sessionKey = "agent:main:pending-pressure";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-    await appendTranscriptMessage(
-      { sessionId, sessionKey, storePath },
-      { message: { role: "user", content: "sole crash-recovery copy" } },
-    );
-    const deleted = await deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
+    await append(sessionKey, sessionId, "sole crash-recovery copy");
+    const deleted = await remove(sessionKey);
     const pendingArchivePath = deleted.archivedTranscripts[0]?.archivedPath;
     database()
       .db.prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
@@ -531,14 +484,7 @@ describe("SQLite historical session disk budget", () => {
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
 
-    const result = await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "enforce",
-      maintenance: {
-        maxDiskBytes: before.totalBytes - 1,
-        highWaterBytes: before.totalBytes - 1,
-      },
-    });
+    const result = await enforce(before.totalBytes - 1);
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
     expect(
@@ -555,32 +501,14 @@ describe("SQLite historical session disk budget", () => {
       { sessionKey, storePath },
       { sessionId: "admitted-history", updatedAt: 1 },
     );
-    await appendTranscriptMessage(
-      { sessionId: "admitted-history", sessionKey, storePath },
-      { message: { role: "user", content: "admitted" } },
-    );
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      buildNextEntry: () => ({ sessionId: "route-history", updatedAt: 2 }),
-    });
-    await appendTranscriptMessage(
-      { sessionId: "route-history", sessionKey, storePath },
-      { message: { role: "user", content: "route protected" } },
-    );
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      buildNextEntry: () => ({ sessionId: "trajectory-history", updatedAt: 3 }),
-    });
+    await append(sessionKey, "admitted-history", "admitted");
+    await reset(sessionKey, "route-history", 2);
+    await append(sessionKey, "route-history", "route protected");
+    await reset(sessionKey, "trajectory-history", 3);
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "trajectory-history", storePath }, [
       createTrajectoryEvent("trajectory-history", sessionKey),
     ]);
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: Date.now() }),
-    });
+    await reset(sessionKey, "live-history", Date.now());
     addRouteReference("route-only", "route-history");
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
@@ -589,11 +517,7 @@ describe("SQLite historical session disk budget", () => {
     });
     try {
       const before = await measureSessionPhysicalDiskUsage(storePath);
-      const result = await enforceSqliteSessionHistoryDiskBudget({
-        storePath,
-        mode: "enforce",
-        maintenance: { maxDiskBytes: before.totalBytes - 1, highWaterBytes: 0 },
-      });
+      const result = await enforce(before.totalBytes - 1, 0);
 
       expect(result?.removedEntries).toBe(1);
       expect(sessionExists("trajectory-history")).toBe(false);
@@ -645,13 +569,7 @@ describe("SQLite historical session disk budget", () => {
           : null,
     );
     try {
-      expect(
-        await enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-        }),
-      ).toMatchObject({ removedEntries: 0 });
+      expect(await enforce()).toMatchObject({ removedEntries: 0 });
       expect(admission).toBeDefined();
       expect(reads.counts.history).toBe(0);
     } finally {
@@ -728,13 +646,7 @@ describe("SQLite historical session disk budget", () => {
       ).not.toEqual([]);
       expect(readArchiveNames("race-old")).toEqual([]);
       // An explicit operator delete still owns every generation, even when pinned or archived.
-      expect(
-        await deleteSessionEntryLifecycle({
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          archiveTranscript: true,
-        }),
-      ).toMatchObject({ deleted: true });
+      expect(await remove(sessionKey)).toMatchObject({ deleted: true });
       expect(sessionExists("race-old")).toBe(false);
     },
   );
@@ -811,26 +723,14 @@ describe("SQLite historical session disk budget", () => {
           }
           return prepared;
         });
-      expect(
-        await enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
-        }),
-      ).toMatchObject({ removedEntries: 0 });
+      expect(await enforce()).toMatchObject({ removedEntries: 0 });
       expect(materialization).toHaveBeenCalledOnce();
       expect(
         loadTranscriptEventsSync({ sessionId: "reference-old", sessionKey, storePath }),
       ).not.toEqual([]);
       expect(readArchiveNames("reference-old")).toEqual([]);
       // Excluding the deliberately deleted owner must not exclude a surviving reference.
-      expect(
-        await deleteSessionEntryLifecycle({
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          archiveTranscript: true,
-        }),
-      ).toMatchObject({ deleted: true });
+      expect(await remove(sessionKey)).toMatchObject({ deleted: true });
       expect(sessionExists("reference-old")).toBe(true);
       expect(
         loadTranscriptEventsSync({

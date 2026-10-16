@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -64,39 +63,52 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
+async function fixture(scenario: "minimal" | "empty" = "minimal", prefix = "wal-budget-") {
+  state = await createOpenClawTestState({ prefix, layout: "state-only", scenario });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  ensureSessionTranscriptArchiveSchema(database.db);
+  database.db.exec("PRAGMA wal_autocheckpoint=0");
+  const sessions = state.sessionsDir();
+  fs.mkdirSync(sessions, { recursive: true });
+  return { options, database, sessions, storePath: path.join(sessions, "sessions.json") };
+}
+
+function observePruning(after?: (facts: SqliteSessionArchivePruningDiagnostics) => void) {
+  const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
+  const observe = archivePruningDiagnostics.observeSessionArchivePruning;
+  vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
+    async <T>(...args: Parameters<typeof observe<T>>) => {
+      try {
+        const result = await observe(...args);
+        after?.(args[0]);
+        return result;
+      } finally {
+        diagnostics.push(structuredClone(args[0]));
+      }
+    },
+  );
+  return diagnostics;
+}
+
 it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handoff"] as const)(
   "prunes archives after checkpoint recovery: %s",
   async (kind) => {
     const newerFrames = kind !== "checkpointed";
     const canonical = kind === "deleted-rows";
-    state = await createOpenClawTestState({
-      prefix: "wal-budget-checkpointed-",
-      layout: "state-only",
-      scenario: "minimal",
-    });
-    const options = { agentId: "main", env: state.env };
-    const database = openOpenClawAgentDatabase(options);
-    ensureSessionTranscriptArchiveSchema(database.db);
-    database.db.exec("PRAGMA wal_autocheckpoint=0");
-    fs.mkdirSync(state.sessionsDir(), { recursive: true });
-    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const { options, database, storePath } = await fixture("minimal", "wal-budget-checkpointed-");
     const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
     const write = database.db.prepare(
       "INSERT OR REPLACE INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,?)",
     );
     let pendingRecovery: (() => void) | undefined;
-    const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
-    vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
-      async <T>(...args: Parameters<typeof observePruning<T>>) => {
-        const result = await observePruning(...args);
-        if (args[0].checkpointIncomplete && pendingRecovery) {
-          const recover = pendingRecovery;
-          pendingRecovery = undefined;
-          recover();
-        }
-        return result;
-      },
-    );
+    observePruning((facts) => {
+      if (facts.checkpointIncomplete && pendingRecovery) {
+        const recover = pendingRecovery;
+        pendingRecovery = undefined;
+        recover();
+      }
+    });
     // Settle schema and initial allocation before measuring steady-state traffic.
     write.run(Buffer.from("committed-init"), -1);
     expect(database.walMaintenance.checkpoint()).toBe(true);
@@ -197,19 +209,8 @@ it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handof
 it.each(["transaction", "iterator"] as const)(
   "defers WAL-only pressure without deleting archives, names the %s, and resumes after checkpoint recovery",
   async (kind) => {
-    state = await createOpenClawTestState({
-      prefix: "wal-budget-",
-      layout: "state-only",
-      scenario: "minimal",
-    });
-    const options = { agentId: "main", env: state.env };
-    const database = openOpenClawAgentDatabase(options);
+    const { options, database, sessions, storePath } = await fixture();
     const databasePathKey = sqliteReaderDatabasePathKey(database.path);
-    ensureSessionTranscriptArchiveSchema(database.db);
-    database.db.exec("PRAGMA wal_autocheckpoint=0");
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const storePath = path.join(sessions, "sessions.json");
     const insert = database.db.prepare(`INSERT INTO session_transcript_archives
       (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at,published_at)
       VALUES (?, 'generation', ?, 'deleted', 'identity', ?, ?, ?, 1, 1)`);
@@ -280,18 +281,7 @@ it.each(["transaction", "iterator"] as const)(
         reader.exec("ROLLBACK");
       }
     };
-    const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
-    const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
-    vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
-      async <T>(...args: Parameters<typeof observePruning<T>>) => {
-        const [facts, run] = args;
-        try {
-          return await observePruning(facts, run);
-        } finally {
-          diagnostics.push(structuredClone(facts));
-        }
-      },
-    );
+    const diagnostics = observePruning();
     warn.mockClear();
     try {
       const write = database.db.prepare(
@@ -390,7 +380,6 @@ it.each(["transaction", "iterator"] as const)(
         );
       }
       const recovered = await enforce();
-      const lastPruning = diagnostics.at(-1);
       expect(
         recovered?.deferredReason,
         recovered?.deferredReason === undefined
@@ -399,19 +388,8 @@ it.each(["transaction", "iterator"] as const)(
               {
                 blockedCheckpoint: blocked.checkpoint,
                 hostCheckpoint: database.walMaintenance.health,
-                now: Date.now(),
-                realClock: performance.timeOrigin + performance.now(),
-                dateNowMocked: vi.isMockFunction(Date.now),
                 recovered,
-                diagnosticsCount: diagnostics.length,
-                lastArchivePruning: {
-                  completed: lastPruning?.completed,
-                  checkpointCalls: lastPruning?.checkpointCalls,
-                  checkpointIncomplete: lastPruning?.checkpointIncomplete,
-                  checkpoint: lastPruning?.checkpoint,
-                  walBytesBefore: lastPruning?.walBytesBefore,
-                  walBytesAfter: lastPruning?.walBytesAfter,
-                },
+                lastArchivePruning: diagnostics.at(-1),
               },
               // Checkpoint errors can contain paths; retain only the recorded health facts.
               (key, value) => (key === "error" ? undefined : value),
@@ -433,13 +411,8 @@ it.each(["transaction", "iterator"] as const)(
 );
 
 it("retries retained WAL after a complete passive checkpoint and reader release on the budget cadence", async () => {
-  state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
-  const options = { agentId: "main", env: state.env };
-  const database = openOpenClawAgentDatabase(options);
-  ensureSessionTranscriptArchiveSchema(database.db);
-  database.db.exec("PRAGMA wal_autocheckpoint=0");
+  const { options, database, storePath } = await fixture("empty");
   expect(database.walMaintenance.checkpoint()).toBe(true);
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
   const payload = Buffer.alloc(512 * 1024, 65);
   database.db
     .prepare(
@@ -451,15 +424,7 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
   expect(
     reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
   ).toEqual(new Uint8Array(payload));
-  const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
-  const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
-  vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
-    async <T>(...args: Parameters<typeof observePruning<T>>) => {
-      const result = await observePruning(...args);
-      diagnostics.push(structuredClone(args[0]));
-      return result;
-    },
-  );
+  const diagnostics = observePruning();
   const maintenance = resolveMaintenanceConfigFromInput({
     mode: "enforce",
     maxDiskBytes: 1,

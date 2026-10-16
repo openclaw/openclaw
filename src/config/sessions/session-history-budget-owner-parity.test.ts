@@ -75,6 +75,25 @@ function row(databasePath: string, sql: string, ...values: SQLInputValue[]) {
   }
 }
 
+const sessionNode = (databasePath: string, key: string) =>
+  row(databasePath, "SELECT current_session_id FROM session_nodes WHERE session_key = ?", key);
+const transcriptCount = (databasePath: string, id: string) =>
+  Number(
+    row(databasePath, "SELECT count(*) AS count FROM transcript_events WHERE session_id = ?", id)
+      ?.count,
+  );
+
+async function closeAndCheckLeases(state: OpenClawTestState) {
+  await closeOpenClawAgentDatabasesAsync(state.root);
+  closeOpenClawAgentDatabasesForTest(state.root);
+  expect(
+    row(
+      resolveOpenClawStateSqlitePath(state.env),
+      "SELECT count(*) AS count FROM agent_database_leases",
+    ),
+  ).toEqual({ count: 0 });
+}
+
 function retain<T>(promise: Promise<T>): Promise<T> {
   pending.push(promise);
   return promise;
@@ -247,22 +266,8 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
   const victimReceipt = seedReceipt(victimAgent, victimKey, victimId);
   const survivorReceipt = seedReceipt("main", survivorKey, survivorId);
   expect(row(databasePath, "SELECT agent_id FROM schema_meta")).toEqual({ agent_id: "main" });
-  expect(
-    row(
-      databasePath,
-      "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-      victimKey,
-    ),
-  ).toEqual({ current_session_id: victimId });
-  expect(
-    Number(
-      row(
-        databasePath,
-        "SELECT count(*) AS count FROM transcript_events WHERE session_id = ?",
-        victimId,
-      )?.count,
-    ),
-  ).toBeGreaterThan(0);
+  expect(sessionNode(databasePath, victimKey)).toEqual({ current_session_id: victimId });
+  expect(transcriptCount(databasePath, victimId)).toBeGreaterThan(0);
   const secondaryCanonicalPath = resolveOpenClawAgentSqlitePath({
     agentId: "secondary",
     env: state.env,
@@ -272,14 +277,7 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
     ({ agentId, path: registeredPath }) => ({ agentId, path: registeredPath }),
   );
   expect(registryBefore).toContainEqual({ agentId: "main", path: databasePath });
-  await closeOpenClawAgentDatabasesAsync(state.root);
-  closeOpenClawAgentDatabasesForTest(state.root);
-  expect(
-    row(
-      resolveOpenClawStateSqlitePath(state.env),
-      "SELECT count(*) AS count FROM agent_database_leases",
-    ),
-  ).toEqual({ count: 0 });
+  await closeAndCheckLeases(state);
   return {
     state,
     storePath,
@@ -307,12 +305,7 @@ function observeVictim(f: Fixture) {
       if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(f.victimKey)) {
         facts.push({
           mutation,
-          rowExists:
-            row(
-              f.databasePath,
-              "SELECT session_key FROM session_nodes WHERE session_key = ?",
-              f.victimKey,
-            ) !== undefined,
+          rowExists: sessionNode(f.databasePath, f.victimKey) !== undefined,
           receiptExists: readRepositoryGitHubPublication(f.victimReceipt) !== undefined,
         });
       }
@@ -340,13 +333,7 @@ function enforce(f: Fixture, agentId?: string) {
 async function assertCustody(f: Fixture) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(f.state.stateDir);
   expect(row(f.databasePath, "SELECT agent_id FROM schema_meta")).toEqual({ agent_id: "main" });
-  expect(
-    row(
-      f.databasePath,
-      "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-      f.survivorKey,
-    ),
-  ).toEqual({ current_session_id: f.survivorId });
+  expect(sessionNode(f.databasePath, f.survivorKey)).toEqual({ current_session_id: f.survivorId });
   expect(readRepositoryGitHubPublication(f.survivorReceipt)).toMatchObject({
     agent_id: "main",
     session_key: f.survivorKey,
@@ -358,14 +345,7 @@ async function assertCustody(f: Fixture) {
   const sorted = (rows: Array<{ agentId: string; path: string }>) =>
     rows.toSorted((a, b) => a.path.localeCompare(b.path));
   expect(sorted(registry)).toEqual(sorted(f.registryBefore));
-  await closeOpenClawAgentDatabasesAsync(f.state.root);
-  closeOpenClawAgentDatabasesForTest(f.state.root);
-  expect(
-    row(
-      resolveOpenClawStateSqlitePath(f.state.env),
-      "SELECT count(*) AS count FROM agent_database_leases",
-    ),
-  ).toEqual({ count: 0 });
+  await closeAndCheckLeases(f.state);
 }
 
 describe("budget cap-entry logical ownership", () => {
@@ -382,13 +362,7 @@ describe("budget cap-entry logical ownership", () => {
       await expect(enforce(f, scenario.explicit ? "secondary" : undefined)).resolves.toMatchObject({
         removedEntries: 1,
       });
-      expect(
-        row(
-          f.databasePath,
-          "SELECT session_key FROM session_nodes WHERE session_key = ?",
-          f.victimKey,
-        ),
-      ).toBeUndefined();
+      expect(sessionNode(f.databasePath, f.victimKey)).toBeUndefined();
       expect(
         row(
           f.databasePath,
@@ -436,22 +410,8 @@ describe("budget cap-entry logical ownership", () => {
       await expect(enforce(f)).rejects.toThrow(
         "SQLite session store path belongs to agent main; requested agent secondary.",
       );
-      expect(
-        row(
-          f.databasePath,
-          "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-          f.victimKey,
-        ),
-      ).toEqual({ current_session_id: f.victimId });
-      expect(
-        Number(
-          row(
-            f.databasePath,
-            "SELECT count(*) AS count FROM transcript_events WHERE session_id = ?",
-            f.victimId,
-          )?.count,
-        ),
-      ).toBeGreaterThan(0);
+      expect(sessionNode(f.databasePath, f.victimKey)).toEqual({ current_session_id: f.victimId });
+      expect(transcriptCount(f.databasePath, f.victimId)).toBeGreaterThan(0);
       expect(readRepositoryGitHubPublication(f.victimReceipt)).toMatchObject({
         agent_id: "secondary",
         session_key: f.victimKey,

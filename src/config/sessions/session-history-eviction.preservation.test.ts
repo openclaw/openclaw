@@ -1,24 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  registerAgentRunContext,
-  resetAgentRunRegistryForTest,
-} from "../../infra/agent-run-registry.js";
-import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { loadTranscriptEventsSync, replaceSessionEntry } from "./session-accessor.js";
+import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -27,7 +20,6 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("SQLite historical session preservation", () => {
-  let testState: OpenClawTestState;
   let tempDir: string;
   let storePath: string;
   const {
@@ -38,28 +30,9 @@ describe("SQLite historical session preservation", () => {
     readArchiveNames,
   } = createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      prefix: "openclaw-session-history-preservation-",
-      layout: "state-only",
-    });
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
-    tempDir = testState.sessionsDir();
-    fs.mkdirSync(tempDir, { recursive: true });
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    resetAgentRunRegistryForTest();
-    vi.restoreAllMocks();
-    await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "warn",
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await testState.cleanup();
+  installHistoryBudgetState("openclaw-session-history-preservation-", (_state, dir, store) => {
+    tempDir = dir;
+    storePath = store;
   });
   it.each(["registry", "recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -10,26 +10,20 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
-import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import * as queue from "../../shared/store-writer-queue.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceConfigFile } from "../config.js";
 import * as diskBudget from "./disk-budget.js";
 import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
 import * as archivePublication from "./session-archive-publication.js";
 import * as archivePruningOwner from "./session-history-archive-pruning.js";
+import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import {
   createSessionHistoryBudgetFixture,
   joinSessionHistoryBudgetSweeps,
@@ -59,28 +53,10 @@ describe("SQLite post-commit history maintenance", () => {
   const { createHistoricalTranscript, database, sessionExists, readArchiveNames } =
     createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      prefix: "openclaw-session-history-budget-",
-      layout: "state-only",
-    });
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
-    tempDir = testState.sessionsDir();
-    fs.mkdirSync(tempDir, { recursive: true });
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    resetAgentRunRegistryForTest();
-    vi.restoreAllMocks();
-    await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "warn",
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await testState.cleanup();
+  installHistoryBudgetState("openclaw-session-history-budget-", (state, dir, store) => {
+    testState = state;
+    tempDir = dir;
+    storePath = store;
   });
 
   it
