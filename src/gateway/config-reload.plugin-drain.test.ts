@@ -25,9 +25,11 @@ import {
 } from "./config-reload.test-support.js";
 import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 
-const codexConfig = (sandbox: string): OpenClawConfig => ({
-  plugins: { entries: { codex: { enabled: true, config: { sandbox } } } },
+const pluginConfig = <T extends NonNullable<OpenClawConfig["plugins"]>["entries"]>(entries: T) => ({
+  plugins: { entries },
 });
+const codexConfig = (sandbox: string): OpenClawConfig =>
+  pluginConfig({ codex: { enabled: true, config: { sandbox } } });
 const pluginRuntime = (operationId: string) => ({
   operationId,
   generation: getPluginRuntimeGeneration(),
@@ -77,23 +79,15 @@ afterEach(async () => {
 
 describe("plugin drain recovery", () => {
   it("hot-applies model settings without replacing the Codex generation", async () => {
-    const initialConfig: OpenClawConfig = {
-      plugins: { entries: { codex: { enabled: true } } },
-    };
+    const initialConfig = pluginConfig({ codex: { enabled: true } });
     let config = initialConfig;
-    const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
-      initialConfig,
-    });
+    const harness = createReloaderHarness(async () => makeSnapshot({ config }), { initialConfig });
     await harness.reloader.ready;
 
     for (const update of [
       { agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "primary" } } } } },
       { agents: { entries: { worker: { model: { primary: "openai/gpt-5.6-sol" } } } } },
-      {
-        models: {
-          providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } },
-        },
-      },
+      { models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } } },
     ] satisfies OpenClawConfig[]) {
       config = { ...initialConfig, ...update };
       await flushWatcherChange(harness);
@@ -109,10 +103,7 @@ describe("plugin drain recovery", () => {
       ...codexConfig("read-only"),
       agents: { entries: { main: {} } },
     };
-    let config: OpenClawConfig = {
-      ...initialConfig,
-      ...codexConfig("workspace-write"),
-    };
+    let config: OpenClawConfig = { ...initialConfig, ...codexConfig("workspace-write") };
     const builder = createTestPluginRegistry();
     const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
     builder.registry.plugins.push(record);
@@ -139,10 +130,7 @@ describe("plugin drain recovery", () => {
           );
         }
         return plan.reloadPlugins
-          ? {
-              status: "applied",
-              runtime: pluginRuntime("codex-replacement"),
-            }
+          ? { status: "applied", runtime: pluginRuntime("codex-replacement") }
           : "applied";
       },
     });
@@ -220,10 +208,7 @@ describe("plugin drain recovery", () => {
         await flushWatcherChange(harness);
         expect(harness.onConfigAccepted.mock.lastCall?.[0]).toEqual(config);
         const attempts = harness.onHotReload.mock.calls.length;
-        config = {
-          ...config,
-          ...codexConfig("new-settings"),
-        };
+        config = { ...config, ...codexConfig("new-settings") };
         await flushWatcherChange(harness);
         expect(harness.onHotReload).toHaveBeenCalledTimes(attempts + 1);
         expect(harness.log.error).toHaveBeenCalledTimes(2);
@@ -258,16 +243,15 @@ describe("plugin drain recovery", () => {
         config: { sandbox: "read-only", appServer: { args: ["--original"] } },
       };
       const other = { enabled: true, config: { value: "original" } };
-      const initialConfig: OpenClawConfig = existingEntries
-        ? { plugins: { entries: { codex, other } } }
-        : {};
+      const initialConfig = existingEntries ? pluginConfig({ codex, other }) : {};
       const pendingCodex = {
         ...codex,
         config: { sandbox: "workspace-write", appServer: { args: ["--replacement"] } },
       };
-      let config: OpenClawConfig = {
-        plugins: { entries: { codex: pendingCodex, ...(existingEntries ? { other } : {}) } },
-      };
+      let config: OpenClawConfig = pluginConfig({
+        codex: pendingCodex,
+        ...(existingEntries ? { other } : {}),
+      });
       const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
         initialConfig,
       });
@@ -277,26 +261,20 @@ describe("plugin drain recovery", () => {
       expect(harness.onHotReload).toHaveBeenCalledOnce();
 
       const nextOther = { ...other, config: { value: "replacement" } };
-      config = {
-        plugins: {
-          entries: {
-            codex: {
-              ...pendingCodex,
-              config: existingEntries
-                ? { ...pendingCodex.config, sandbox: codex.config.sandbox }
-                : { appServer: pendingCodex.config.appServer },
-            },
-            other: nextOther,
-          },
+      config = pluginConfig({
+        codex: {
+          ...pendingCodex,
+          config: existingEntries
+            ? { ...pendingCodex.config, sandbox: codex.config.sandbox }
+            : { appServer: pendingCodex.config.appServer },
         },
-      };
+        other: nextOther,
+      });
       await flushWatcherChange(harness);
       expect(harness.onHotReload).toHaveBeenCalledOnce();
       expect(harness.onConfigApplied).not.toHaveBeenCalled();
 
-      config = {
-        plugins: { entries: { ...(existingEntries ? { codex } : {}), other: nextOther } },
-      };
+      config = pluginConfig({ ...(existingEntries ? { codex } : {}), other: nextOther });
       await flushWatcherChange(harness);
       expect(harness.onHotReload).toHaveBeenCalledTimes(2);
       expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
