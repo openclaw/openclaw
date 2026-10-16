@@ -664,9 +664,8 @@ describe("plugin registry facade", () => {
     const readdir = vi.spyOn(fs, "readdirSync");
     try {
       const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, env, config: disabled });
-      expect(readdir.mock.calls.filter(([dir]) => String(dir).startsWith(extensionsDir))).toEqual(
-        [],
-      );
+      // Discovery lists the extensions root; freshness checks may still read plugin dirs.
+      expect(readdir.mock.calls.filter(([dir]) => String(dir) === extensionsDir)).toEqual([]);
       expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
         "persisted-registry-stale-policy",
       ]);
