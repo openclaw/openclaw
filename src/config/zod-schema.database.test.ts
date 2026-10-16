@@ -52,19 +52,55 @@ describe("experimental database config", () => {
     expect(hints.database?.docsUrl).toBe("https://docs.openclaw.ai/reference/database-engines");
   });
 
-  it.each([{}, { engine: "sqlite" }, { engine: "postgres" }])(
-    "preserves optional database config %j for runtime admission",
-    (database) => {
-      expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+  it.each([
+    {},
+    { engine: "sqlite" },
+    { engine: "postgres" },
+    { families: {} },
+    { families: { state: { engine: "postgres" }, agent: { engine: "sqlite" } } },
+    {
+      engine: "postgres",
+      families: {
+        state: { engine: "sqlite" },
+        agent: { engine: "sqlite" },
+        workboard: { engine: "postgres" },
+        logbook: { engine: "sqlite" },
+        "team-reports": { engine: "postgres" },
+      },
     },
-  );
+  ])("preserves optional database config %j for runtime admission", (database) => {
+    expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+  });
 
   it.each([
     { engine: "unknown" },
     { postgres: { connection: 123 } },
     { postgres: { schemaPrefix: 'bad"prefix' } },
     { postgres: { schemaPrefix: "a".repeat(28) } },
+    { families: { state: {} } },
+    { families: { state: "postgres" } },
+    { families: { state: { engine: "unknown" } } },
+    { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
+    { families: { agent: { engine: "postgres" } } },
+    { families: { agents: { engine: "sqlite" } } },
+    { families: { quarantine: { engine: "sqlite" } } },
+    { families: { "managed-update": { engine: "sqlite" } } },
+    { families: { "package-activation": { engine: "sqlite" } } },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
+  });
+
+  it("reports the unsupported agent override at its config path", () => {
+    expect(
+      validateConfigObjectRaw({ database: { families: { agent: { engine: "postgres" } } } }),
+    ).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          path: "database.families.agent.engine",
+          message: "Agent PostgreSQL is not supported by this build; select sqlite.",
+        },
+      ],
+    });
   });
 });

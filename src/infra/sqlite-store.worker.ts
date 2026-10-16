@@ -199,7 +199,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         };
       }
       if (request.stateContext) {
-        installDatabaseEngineSelection({ input: request.stateContext.databaseEngineInput });
+        if (request.stateContext.databaseEngineSelection) {
+          installDatabaseEngineSelection(request.stateContext.databaseEngineSelection);
+        }
         const retained = stateContexts.get(request.actor);
         if (retained) {
           if (Object.hasOwn(request.stateContext, "stateIntegrity")) {

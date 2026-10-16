@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
@@ -495,7 +495,7 @@ export function readRegisteredAgentDatabases(
 export async function inspectOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): Promise<OpenClawRegisteredAgentDatabase[]> {
-  if (getDatabaseEngineSelection()?.input) {
+  if (getDatabaseEngineInput("state")) {
     const read = await executeExistingOpenClawStateRead(
       options,
       { type: "agentDatabaseRegistry.read" },

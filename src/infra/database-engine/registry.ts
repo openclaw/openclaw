@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DatabaseEngineId } from "./types.js";
+import type { DatabaseEngineFamily, DatabaseEngineId } from "./types.js";
 export type { DatabaseEngineId } from "./types.js";
 
 export type DatabaseEngineStore = {
-  id: string;
+  id: DatabaseEngineFamily;
   label: string;
   postgres?: boolean;
 };
@@ -25,8 +25,36 @@ export function listDatabaseEngineStores(): readonly DatabaseEngineStore[] {
 }
 
 export function selectDatabaseEngine(
-  store: Pick<DatabaseEngineStore, "postgres">,
+  store: Pick<DatabaseEngineStore, "id" | "postgres">,
   config: Pick<OpenClawConfig, "database">,
 ): DatabaseEngineId {
-  return config.database?.engine === "postgres" && store.postgres ? "postgres" : "sqlite";
+  const override =
+    store.id === "quarantine" || store.id === "managed-update" || store.id === "package-activation"
+      ? undefined
+      : config.database?.families?.[store.id]?.engine;
+  if (override === "postgres" && !store.postgres) {
+    throw new Error(`database.families.${store.id}.engine does not support postgres.`);
+  }
+  return (
+    override ?? (config.database?.engine === "postgres" && store.postgres ? "postgres" : "sqlite")
+  );
+}
+
+export function resolveDatabaseFamilyEngines(
+  config: Pick<OpenClawConfig, "database">,
+): Record<DatabaseEngineFamily, DatabaseEngineId> {
+  const effectiveEngines: Record<DatabaseEngineFamily, DatabaseEngineId> = {
+    state: "sqlite",
+    agent: "sqlite",
+    workboard: "sqlite",
+    logbook: "sqlite",
+    "team-reports": "sqlite",
+    quarantine: "sqlite",
+    "managed-update": "sqlite",
+    "package-activation": "sqlite",
+  };
+  for (const store of stores) {
+    effectiveEngines[store.id] = selectDatabaseEngine(store, config);
+  }
+  return effectiveEngines;
 }

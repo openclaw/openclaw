@@ -71,11 +71,15 @@ export function readEngineAnchor(
   }
 }
 
-function refusePostgresAnchor(db: DatabaseSync): void {
+function familySetting(schema: StoreSchema): string {
+  return `database.families.${schema.id === "team_reports" ? "team-reports" : schema.id}.engine`;
+}
+
+function refusePostgresAnchor(db: DatabaseSync, schema: StoreSchema): void {
   const rows = readEngineAnchor(db, "schema");
   if (rows) {
     throw new Error(
-      `This store lives in PostgreSQL schema ${String(rows[0]?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
+      `This store lives in PostgreSQL schema ${String(rows[0]?.schema ?? "unknown")}; set ${familySetting(schema)} to postgres and configure database.postgres.connection.`,
     );
   }
 }
@@ -102,11 +106,11 @@ export function openEngineStore(ref: {
   if (!postgres) {
     if (known?.engine === "postgres") {
       throw new Error(
-        `This store lives in PostgreSQL schema ${known.namespace}; set database.engine to postgres and configure database.postgres.connection.`,
+        `This store lives in PostgreSQL schema ${known.namespace}; set ${familySetting(schema)} to postgres and configure database.postgres.connection.`,
       );
     }
     if (!known && ref.inspectSqlite().hasEngineAnchor) {
-      refusePostgresAnchor(anchor);
+      refusePostgresAnchor(anchor, schema);
     }
     ref.prepareAnchor();
     databaseEngineAdapters.sqlite.schema.bootstrap({ ...ref, input: ref.input }, anchor);
@@ -115,7 +119,7 @@ export function openEngineStore(ref: {
   }
   if (known?.engine === "sqlite") {
     throw new Error(
-      `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing database.engine.`,
+      `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
     );
   }
   ref.prepareAnchor();
@@ -126,7 +130,7 @@ export function openEngineStore(ref: {
           const inspection = ref.inspectSqlite();
           if (inspection.hasExistingData) {
             throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing database.engine.`,
+              `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
             );
           }
           if (!inspection.hasEngineAnchor && ref.existingOnly) {

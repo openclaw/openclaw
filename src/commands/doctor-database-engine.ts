@@ -3,11 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import {
   listDatabaseEngineStores,
+  resolveDatabaseFamilyEngines,
   selectDatabaseEngine,
 } from "../infra/database-engine/registry.js";
 
 export function collectDatabaseEngineHealthFindings(cfg: OpenClawConfig): HealthFinding[] {
-  if (cfg.database?.engine !== "postgres") {
+  if (!Object.values(resolveDatabaseFamilyEngines(cfg)).includes("postgres")) {
     return [];
   }
   return [
@@ -25,9 +26,13 @@ export function collectDatabaseEngineHealthFindings(cfg: OpenClawConfig): Health
 }
 
 export function noteDatabaseEngines(cfg: OpenClawConfig): void {
-  const lines = listDatabaseEngineStores().map(
-    (store) => `${store.label}: ${selectDatabaseEngine(store, cfg)}`,
-  );
+  const defaultEngine = cfg.database?.engine ?? "sqlite";
+  const lines = listDatabaseEngineStores().map((store) => {
+    const { id } = store;
+    const local = id === "quarantine" || id === "managed-update" || id === "package-activation";
+    const override = local ? "fixed local" : (cfg.database?.families?.[id]?.engine ?? "inherit");
+    return `${store.label}: default=${defaultEngine}, override=${override}, effective=${selectDatabaseEngine(store, cfg)} (configured)`;
+  });
   for (const finding of collectDatabaseEngineHealthFindings(cfg)) {
     lines.push("", finding.message, finding.fixHint ?? "");
   }

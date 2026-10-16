@@ -9,6 +9,10 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getDatabaseEngineSelection,
+  installDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
@@ -316,6 +320,12 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
   mode: "runtime" | "metadata" = "runtime",
 ): Promise<PluginCliCommandGroupEntry[]> {
   const prepared = resolvePreparedPluginCliLoad(params);
+  if (mode === "runtime" && !getDatabaseEngineSelection()) {
+    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+    installDatabaseEngineSelection(
+      await resolveDatabaseEngineSelection(prepared.context.config, params.env),
+    );
+  }
   const buildEntries = (registry: PluginRegistry): PluginCliCommandGroupEntry[] => {
     const primary = mode === "metadata" && normalizeLowercaseStringOrEmpty(params.primaryCommand);
     // Metadata discovery can include unrelated legacy roots without manifest ownership.
