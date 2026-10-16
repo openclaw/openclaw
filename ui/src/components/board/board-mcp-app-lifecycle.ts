@@ -134,7 +134,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
 
   async function load(
     widget: BoardWidget,
-    callbacks: AppViewCallbacks,
+    requestCallbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
     if (!host.active() || loading || !visibility.nearVisible) {
@@ -178,8 +178,8 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
     let appView: BoardWidgetAppViewState;
     try {
       appView = await (mode === "cached"
-        ? callbacks.widgetAppView(widget.name, widget.revision)
-        : callbacks.refreshWidgetAppView(widget.name, widget.revision));
+        ? requestCallbacks.widgetAppView(widget.name, widget.revision)
+        : requestCallbacks.refreshWidgetAppView(widget.name, widget.revision));
     } catch (error) {
       if (!isCurrent()) {
         return;
@@ -200,7 +200,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
     clearTimers();
     state = appView;
     loading = false;
-    scheduleRenewal(widget, callbacks, appView, mode !== "cached");
+    scheduleRenewal(widget, requestCallbacks, appView, mode !== "cached");
     publish();
   }
 
@@ -233,7 +233,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
 
   function scheduleRenewal(
     widget: BoardWidget,
-    callbacks: AppViewCallbacks,
+    requestCallbacks: AppViewCallbacks,
     appView: BoardWidgetAppViewState,
     renewed: boolean,
   ): void {
@@ -253,7 +253,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
       if (renewed) {
         scheduleExpiry(widget, appView);
       } else {
-        void load(widget, callbacks, "refresh");
+        void load(widget, requestCallbacks, "refresh");
       }
       return;
     }
@@ -268,7 +268,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
         current?.name === widget.name &&
         current.revision === widget.revision
       ) {
-        void load(current, callbacks, "refresh");
+        void load(current, requestCallbacks, "refresh");
       }
     }, delayMs);
   }
