@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTranscriptionSession,
+  createTranscriptionSocketHarness,
   emitCommitted,
   emitCompleted,
   emitDelta,
@@ -19,35 +20,8 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
-type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-
-async function waitForFakeSocket(index = 0): Promise<FakeWebSocketInstance> {
-  await vi.dynamicImportSettled();
-  let socket: FakeWebSocketInstance | undefined;
-  await vi.waitFor(() => {
-    socket = FakeWebSocket.instances[index];
-    if (!socket) {
-      throw new Error("expected session to create a websocket");
-    }
-  });
-  if (!socket) {
-    throw new Error("expected session to create a websocket");
-  }
-  return socket;
-}
-
-async function connectFakeSession(
-  session: { connect(): Promise<void> },
-  socketIndex = 0,
-): Promise<FakeWebSocketInstance> {
-  const connecting = session.connect();
-  const socket = await waitForFakeSocket(socketIndex);
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emitJson(socket, { type: "session.updated" });
-  await connecting;
-  return socket;
-}
+const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
+const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
 describe("OpenAI realtime transcription terminal history bounds", () => {
   beforeEach(() => {
@@ -56,6 +30,7 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
   });
 
   afterEach(() => {
+    socketHarness.close();
     vi.unstubAllEnvs();
   });
 
@@ -180,7 +155,7 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
       expect(session.isConnected()).toBe(false);
 
       const reconnecting = session.connect();
-      const replacementSocket = await waitForFakeSocket(1);
+      const replacementSocket = await waitForFakeSocket(session, 1);
       replacementSocket.readyState = FakeWebSocket.OPEN;
       replacementSocket.emit("open");
       emitJson(replacementSocket, { type: "session.updated" });
