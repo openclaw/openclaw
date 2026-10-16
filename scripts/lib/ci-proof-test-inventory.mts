@@ -4074,7 +4074,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/lobster-pet.test.ts",
-  "ui/src/components/markdown-clipboard.browser.test.ts",
+  "ui/src/components/markdown-clipboard.browser.test.tsx",
   "ui/src/components/markdown.progress.node.test.ts",
   "ui/src/components/menu-surface.browser.test.ts",
   "ui/src/components/modal-dialog.test.ts",

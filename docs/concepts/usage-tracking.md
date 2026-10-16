@@ -435,6 +435,9 @@ provider-neutral for CLI, app, and Control UI consumers.
   (`XIAOMI_API_KEY`); the Token Plan uses a separate key (`XIAOMI_TOKEN_PLAN_API_KEY`).
   Neither currently reports quota windows.
 - **z.ai**: API key via env/config/auth store (`ZAI_API_KEY` or `Z_AI_API_KEY`).
+  Shows provider-reported token periods, including weekly windows, and monthly
+  tool quotas. Reset countdowns accept epoch milliseconds or date strings;
+  missing or invalid resets leave the quota visible without a countdown.
 
 ## Related
 

@@ -2007,7 +2007,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   {
     testFile: "ui/src/components/web-awesome-migration.node.test.ts",
-    watchGlobs: ["ui/src/**/*.ts"],
+    watchGlobs: ["ui/src/**/*.{ts,tsx}"],
   },
   {
     testFile: "ui/src/styles/base-theme-tokens.node.test.ts",

@@ -4,11 +4,11 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
-import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
+import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
+import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
@@ -196,29 +196,29 @@ function GroupAvatar(props: { frame: MessageGroupFrame }) {
   const options = () => frame().options;
   return (
     <Show when={frame().hasAvatar}>
-      <LitContent
-        value={
-          frame().isForwarded
-            ? renderForwardedAvatar(frame().group.senderSession?.agentId, options())
-            : renderChatAvatar(
-                frame().group.role,
-                {
-                  agentId: options().agentId,
-                  name: frame().assistantName,
-                  avatar: options().assistantAvatar ?? null,
-                  textAvatar: options().assistantTextAvatar,
-                },
-                frame().isOwnGroup
-                  ? {
-                      name: options().userName ?? null,
-                      avatar: options().userAvatar ?? null,
-                    }
-                  : undefined,
-                frame().group.sender,
-                options().channelAvatar,
-              )
+      <Show
+        when={frame().isForwarded}
+        fallback={
+          <ChatAvatar
+            role={frame().group.role}
+            assistant={{
+              agentId: options().agentId,
+              name: frame().assistantName,
+              avatar: options().assistantAvatar ?? null,
+              textAvatar: options().assistantTextAvatar,
+            }}
+            user={
+              frame().isOwnGroup
+                ? { name: options().userName ?? null, avatar: options().userAvatar ?? null }
+                : undefined
+            }
+            sender={frame().group.sender}
+            channelAvatar={options().channelAvatar}
+          />
         }
-      />
+      >
+        <ForwardedAvatar agentId={frame().group.senderSession?.agentId} options={options()} />
+      </Show>
     </Show>
   );
 }
@@ -457,13 +457,9 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <LitContent
-                  value={renderChatAuthorAvatar(
-                    props.group.sender,
-                    "chat-author-avatar",
-                    undefined,
-                    options().channelAvatar,
-                  )}
+                <ChatAuthorAvatar
+                  sender={props.group.sender}
+                  channelAvatar={options().channelAvatar}
                 />
               ) : undefined}
               <SenderIdentity frame={frame()} />

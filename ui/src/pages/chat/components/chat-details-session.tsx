@@ -2,13 +2,9 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import {
@@ -116,15 +112,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     <For each={people()}>
                       {(person) => (
                         <div class="chat-details__person">
-                          <LitContent
-                            render={() =>
-                              renderChatAuthorAvatar({
-                                id: person.identity.id,
-                                name: person.label || person.identity.id,
-                                identity: person.identity,
-                                profileAvatarUrl: person.avatarUrl,
-                              })
-                            }
+                          <ChatAuthorAvatar
+                            sender={{
+                              id: person.identity.id,
+                              name: person.label || person.identity.id,
+                              identity: person.identity,
+                              profileAvatarUrl: person.avatarUrl,
+                            }}
                           />
                           <span title={person.label || person.identity.id}>
                             {person.label || person.identity.id}

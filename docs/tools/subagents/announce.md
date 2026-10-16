@@ -144,7 +144,11 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer.
+child session does not replace that run's answer. Once cleanup and requester obligations
+have settled, the in-memory registry keeps a short task preview and lifecycle
+metadata. Full task and result text remain in SQLite and are loaded for selected
+reads or later mutations. Pending delivery, suspended delivery, cancellation, and
+yielded work keep their payloads until those obligations settle.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first

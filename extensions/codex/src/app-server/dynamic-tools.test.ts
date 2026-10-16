@@ -14,6 +14,7 @@ import {
   createContractToolTerminalObserver,
   createOwnerBackedContractTool,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import type { DecisionOutcome } from "openclaw/plugin-sdk/decisions";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -45,6 +46,7 @@ import {
   handleDynamicToolCallWithTimeout,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
+import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
@@ -150,6 +152,29 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
     execute: vi.fn(),
     ...overrides,
   } as unknown as AnyAgentTool;
+}
+
+function createDecisionToolForBridge(workspaceDir: string): AnyAgentTool {
+  const tool = createOpenClawCodingTools({
+    agentId: "main",
+    sessionKey: "agent:main:decisions",
+    workspaceDir,
+    config: {
+      agents: { defaults: { decisionModel: "openai/gpt-6-luna" } },
+      tools: { allow: ["decision_evaluate"] },
+    },
+    toolConstructionPlan: {
+      includeBaseCodingTools: false,
+      includeShellTools: false,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  }).find((entry) => entry.name === "decision_evaluate");
+  if (!tool) {
+    throw new Error("Configured decision_evaluate tool was not assembled");
+  }
+  return tool;
 }
 
 function createSingleToolBridge(
@@ -306,6 +331,94 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it.each(["direct", "searchable"] as const)(
+    "preserves Decision outcomes through the %s tool surface",
+    async (loading) => {
+      const outcomes: DecisionOutcome[] = [
+        {
+          status: "ok",
+          result: {
+            model: "gpt-6-luna",
+            answers: {
+              incident: { type: "boolean", probabilityTrue: 0.95 },
+              route: {
+                type: "choice",
+                choice: "support",
+                probabilities: { support: 0.9, billing: 0.1 },
+              },
+              urgency: { type: "score", score: 1.75, probabilities: [0, 0.25, 0.75] },
+            },
+            usage: { inputTokens: 100, outputTokens: 0 },
+          },
+          provenance: { providerId: "openai", rubricVersion: "test", runtimeGeneration: "test" },
+        },
+        { status: "unavailable", reason: "credentials-unavailable" },
+      ];
+      await withOpenClawTestState(
+        { layout: "split", prefix: "codex-decisions-" },
+        async (state) => {
+          const tool = createDecisionToolForBridge(state.workspaceDir);
+          const tools = filterCodexDynamicTools([tool], {});
+          expect(tools).toEqual([tool]);
+          const createBridge = () =>
+            createCodexDynamicToolBridge({
+              tools,
+              loading,
+              signal: new AbortController().signal,
+            });
+          const batch = {
+            state: { message: "Checkout is unavailable." },
+            questions: {
+              incident: { type: "boolean" },
+              route: { type: "choice", criteria: { support: "Outages", billing: "Invoices" } },
+              urgency: { type: "score", criteria: ["Routine", "Soon", "Immediate"] },
+            },
+          };
+          for (const outcome of outcomes) {
+            const execute = vi.fn<AnyAgentTool["execute"]>(async () =>
+              textToolResult(JSON.stringify(outcome), outcome),
+            );
+            tool.execute = execute;
+            const bridge = createBridge();
+            expect(specNames(bridge.availableSpecs)).toContain("decision_evaluate");
+            const response = await bridge.handleToolCall(
+              createDynamicToolCall("decision_evaluate", batch),
+            );
+            expect(response.success).toBe(outcome.status === "ok");
+            expect(JSON.parse(firstInputText(response))).toEqual(outcome);
+            expect(execute).toHaveBeenCalledOnce();
+            expect(execute.mock.calls[0]?.[1]).toEqual(batch);
+          }
+
+          const started = createDeferred<AbortSignal>();
+          const cancellation = new Error("Decision caller cancelled");
+          tool.execute = vi.fn(async (_id, _args, signal) => {
+            if (!signal) {
+              throw new Error("Decision call requires a cancellation signal");
+            }
+            started.resolve(signal);
+            await new Promise<never>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(cancellation), { once: true });
+            });
+            throw new Error("Cancelled Decision must not return a result");
+          });
+          const call = new AbortController();
+          const pending = createBridge().handleToolCall(
+            createDynamicToolCall("decision_evaluate", batch),
+            {
+              signal: call.signal,
+            },
+          );
+          const signal = await started.promise;
+          call.abort(cancellation);
+          expect(signal.aborted).toBe(true);
+          expect((await pending).success).toBe(false);
+          expect(tool.execute).toHaveBeenCalledOnce();
+        },
+      );
+    },
+  );
+
   it("awaits execution policy before dispatch and refuses a stale policy", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();

@@ -9,10 +9,9 @@ import {
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/mention-menu.css";
-import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
@@ -434,13 +433,13 @@ export class HumanMentionMenu {
                       requestUpdate();
                     },
                     icon: (
-                      <LitContent
-                        value={renderChatAuthorAvatar({
+                      <ChatAuthorAvatar
+                        sender={{
                           id: person.profileId,
                           name: person.displayName,
                           identity: { type: "profile", id: person.profileId },
                           profileAvatarUrl: person.avatarUrl,
-                        })}
+                        }}
                       />
                     ),
                     iconHidden: true,
