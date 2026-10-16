@@ -17,7 +17,7 @@ type WorkerAdmissionBoundaryResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerProtocolCloseReason | "rate-limited" | "claim-rejected" };
 
-/** Serialize public credential checks and charge only failed admission attempts. */
+/** Serialize public credential checks without charging server outages. */
 export async function runWorkerAdmissionBoundary(params: {
   service: WorkerAdmissionService | undefined;
   admission: WorkerConnectParams["admission"];
@@ -34,12 +34,16 @@ export async function runWorkerAdmissionBoundary(params: {
       (await params.service?.admitWorker(params.admission)) ??
       ({ ok: false, reason: "environment-unavailable" } as const);
     if (!admission.ok) {
-      rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      if (admission.reason !== "environment-unavailable") {
+        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      }
       return admission;
     }
     const ownershipFailure = params.service?.validateWorkerConnection(admission.identity);
     if (ownershipFailure) {
-      rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      if (ownershipFailure !== "environment-unavailable") {
+        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      }
       return { ok: false, reason: ownershipFailure };
     }
     if (!params.claim(admission.identity)) {

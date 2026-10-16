@@ -14,7 +14,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
-import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+  createGatewayAuthRateLimiter,
+} from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
@@ -383,6 +386,64 @@ describe("public worker ingress", () => {
       await waitForOpen(worker);
       worker.send(JSON.stringify(connectFrame(workerConnect(harness.credential))));
       await expect(workerClose).resolves.toEqual({ code: 1008, reason: "invalid-handshake" });
+    });
+  });
+
+  it("preserves the worker credential budget through server outages and recovery", async () => {
+    await withHarness({ rateLimitMaxAttempts: 3 }, async (harness) => {
+      let invalidateAfterAdmission = false;
+      using validation = vi.spyOn(harness.workerService, "validateWorkerConnection");
+      validation.mockImplementation((identity) => {
+        if (invalidateAfterAdmission) {
+          harness.environment.state = "provisioning";
+        }
+        return validateWorkerConnectionIdentity({
+          store: harness.store,
+          identity,
+          nowMs: Date.now(),
+        });
+      });
+      for (const phase of ["admission", "ownership"] as const) {
+        harness.environment.state = phase === "admission" ? "provisioning" : "ready";
+        await rejectWorker(harness.url(), workerConnect("invalid-worker-credential"));
+        expect(
+          harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+        ).toMatchObject({ allowed: true, remaining: 2 });
+        invalidateAfterAdmission = phase === "ownership";
+        for (let retry = 0; retry < 3; retry += 1) {
+          harness.environment.state = phase === "admission" ? "provisioning" : "ready";
+          const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
+          expect(rejected).toMatchObject({
+            response: {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "worker admission rejected",
+                details: { reason: "invalid-handshake" },
+              },
+            },
+            close: { code: 1008, reason: "invalid-handshake" },
+          });
+          expect(
+            harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+          ).toMatchObject({ allowed: true, remaining: 2 });
+        }
+        invalidateAfterAdmission = false;
+        harness.environment.state = "ready";
+        const client = createWorkerConnection({
+          endpoint: { kind: "websocket", url: harness.url() },
+          connectParams: workerConnect(harness.credential),
+        });
+        try {
+          await client.start();
+          expect(client.state.kind).toBe("ready");
+          expect(
+            harness.publicRateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION),
+          ).toMatchObject({ allowed: true, remaining: 3 });
+        } finally {
+          await client.stop();
+        }
+      }
     });
   });
 
