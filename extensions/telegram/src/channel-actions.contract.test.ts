@@ -152,6 +152,25 @@ describe("telegram actions contract", () => {
     }
   });
 
+  it("asks rich-message turns for Markdown lists and keeps HTML for Telegram-only islands", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { accounts: { rich: { botToken: "tok-rich", richMessages: true } } } },
+    };
+    const rich = telegramPlugin.agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "rich" });
+    const rules = rich?.rules.join("\n") ?? "";
+
+    // The reply is also readable in Control UI, so ordinary lists and inline styling must be Markdown.
+    expect(rules).toContain("Ordinary lists, bold, italic, inline code and links = Markdown");
+    expect(rules).toContain("`[label](url)`");
+    expect(rules).toContain("authored HTML shows up as literal tags in Control UI");
+    expect(rules).not.toMatch(/structured bullets|not literal bullets/);
+
+    // Telegram-only islands survive, and HTML lists stay scoped to checkbox tasks.
+    expect(rules).toContain("`<details><summary>`");
+    expect(rules).toContain("HTML `<ul>`/`<ol>` only for checkbox tasks");
+    expect(rules).toContain('<ul><li><input type="checkbox" checked/>');
+  });
+
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
     const request = telegramPlugin.actions?.resolveCliActionRequest?.({
       action: "thread-create",
