@@ -8,7 +8,7 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
-import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { openaiTTS } from "./tts.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -210,7 +210,7 @@ describe("openai tts", () => {
     });
 
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-      const streamed = createStreamingErrorResponse({
+      const streamed = createStreamingResponse({
         status: 200,
         chunkCount: 20,
         chunkSize: 1024,
@@ -227,7 +227,7 @@ describe("openai tts", () => {
     });
 
     it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
-      const streamed = createStreamingErrorResponse({
+      const streamed = createStreamingResponse({
         status: 503,
         chunkCount: 200,
         chunkSize: 1024,

@@ -143,10 +143,11 @@ describe("chat pane session menu boundary", () => {
     expect(menu.openMenu()).toBe(true);
     flush();
     await menu.updateComplete;
+    const dropdown = menu.querySelector(".chat-header-session-menu__panel")!;
+    await openSubmenu(dropdown, "View");
     const items = [...menu.querySelectorAll('[role^="menuitem"]')];
     expect(items.length).toBeGreaterThan(0);
     await menu.updateComplete;
-    const dropdown = menu.querySelector(".chat-header-session-menu__panel")!;
     const reasoning = menu.querySelector('[value="view:reasoning"]')!;
     const expectRetainedMenu = () => {
       expect(menu.querySelector(".chat-header-session-menu__panel")).toBe(dropdown);
@@ -506,6 +507,7 @@ describe("chat pane session menu boundary", () => {
       expect(menu?.openMenu()).toBe(true);
       flush();
       await menu?.updateComplete;
+      await openSubmenu(menu!.querySelector(".chat-header-session-menu__panel")!, "Advanced");
       const deleteItem = menu?.querySelector<HTMLElement & { disabled: boolean }>(
         '[value="delete"]',
       );

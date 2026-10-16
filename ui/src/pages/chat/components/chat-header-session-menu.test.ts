@@ -108,6 +108,7 @@ async function mountMenu(
   if (open) {
     expect(menu.openMenu()).toBe(true);
     flush();
+    await materializeSubmenus(menu);
     await menu.updateComplete;
   }
   return menu;
@@ -144,6 +145,31 @@ function item(menu: ParentNode, label: string): MenuItemElement {
     throw new Error(`Expected menu item: ${label}`);
   }
   return found;
+}
+
+async function materializeSubmenus(menu: HeaderMenuElement): Promise<void> {
+  const visit = async (root: HTMLElement) => {
+    for (const trigger of root.querySelectorAll<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )) {
+      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) {
+        continue;
+      }
+      trigger.click();
+      flush();
+      await menu.updateComplete;
+      const branch = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+      if (!branch) {
+        throw new Error("Expected submenu panel");
+      }
+      await visit(branch);
+      if (branch.matches(":popover-open")) {
+        trigger.click();
+        flush();
+      }
+    }
+  };
+  await visit(panel(menu));
 }
 
 function submenuItems(trigger: HTMLElement): MenuItemElement[] {
@@ -356,6 +382,10 @@ describe("chat header session menu", () => {
       expect(menu?.openMenu()).toBe(true);
       flush();
       await menu?.updateComplete;
+      if (!menu) {
+        throw new Error("Expected chat header session menu");
+      }
+      await materializeSubmenus(menu);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
       expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
@@ -421,6 +451,7 @@ describe("chat header session menu", () => {
     flush();
     await menu.updateComplete;
 
+    await materializeSubmenus(menu);
     const moveToGroup = item(menu, "Move to group");
     const groupLabels = submenuItems(moveToGroup).map(itemLabel);
     expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);

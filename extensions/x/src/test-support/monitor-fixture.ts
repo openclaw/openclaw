@@ -99,6 +99,9 @@ export function fixture(options: {
     getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(async () => {
       throw new Error("Unexpected batch user lookup");
     }),
+    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(async () => {
+      throw new Error("Unexpected media upload");
+    }),
     reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
       const assertCurrent = await params.assertActive?.();
       assertCurrent?.();

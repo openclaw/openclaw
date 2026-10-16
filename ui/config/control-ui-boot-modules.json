@@ -2353,7 +2353,7 @@
   "ui/src/lib/sessions/unread.ts",
   "ui/src/lib/sessions/usage.ts",
   "ui/src/lib/sessions/workspace.ts",
-  "ui/src/lib/tabs-controller.ts",
+  "ui/src/lib/tabs.ts",
   "ui/src/lib/widget-theme.ts",
   "ui/src/pages/chat/board-session-surface.tsx",
   "ui/src/pages/chat/browser-annotation-admission.ts",

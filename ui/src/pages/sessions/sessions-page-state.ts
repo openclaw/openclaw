@@ -1247,7 +1247,15 @@ export function createSessionsPage(
             break;
           }
           case "toggle-unread":
-            void actions.patchSession(row.key, { unread: row.unread !== true });
+            void actions.patchSession(
+              row.key,
+              { unread: row.unread !== true },
+              undefined,
+              row.sessionId,
+              {
+                sessionScope: true,
+              },
+            );
             break;
           case "rename":
             void renameSession(row);

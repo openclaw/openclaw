@@ -97,6 +97,9 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Attachment staging retains the managed workspace owner until the copy settles.
+If the worktree is removed while an attachment is being read, staging stops
+before creating its input directory or file; the original attachment remains available.
 
 `image_generate`, `video_generate`, and `music_generate` also copy locally saved
 outputs into a private, Git-ignored directory under `media/inbound/` in the

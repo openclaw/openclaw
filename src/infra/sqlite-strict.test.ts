@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
+import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../daemon/runtime-pin-schema.js";
+import { DEPLOYED_FTS_ROWS_SCHEMA } from "../state/openclaw-agent-transcript-fts-schema-source.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateSqliteSchemaToStrict, withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
 
@@ -16,6 +19,15 @@ function readStrictFlag(database: import("node:sqlite").DatabaseSync, tableName:
     .prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?")
     .get(tableName) as { strict?: unknown } | undefined;
   return Number(row?.strict ?? -1);
+}
+
+function catalogMigrationOptions(schemaSql: string, useCatalog: boolean) {
+  if (!useCatalog) {
+    return {};
+  }
+  const canonical = createDatabase();
+  canonical.exec(schemaSql);
+  return { expectedSchema: readSqliteSchemaCatalog(canonical) };
 }
 
 afterEach(() => {
@@ -182,7 +194,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     ]);
   });
 
-  it("preserves AUTOINCREMENT high-water marks", () => {
+  it.each([false, true])("preserves AUTOINCREMENT high-water marks (catalog=%s)", (useCatalog) => {
     const database = createDatabase();
     database.exec(`
       CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
@@ -191,13 +203,11 @@ describe("migrateSqliteSchemaToStrict", () => {
       UPDATE sqlite_sequence SET seq = 40.0 WHERE name = 'entries';
     `);
 
-    migrateSqliteSchemaToStrict(
-      database,
-      `CREATE TABLE IF NOT EXISTS entries (
+    const schema = `CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         value TEXT NOT NULL
-      ) STRICT;`,
-    );
+      ) STRICT;`;
+    migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog));
     database.prepare("INSERT INTO entries (value) VALUES (?)").run("fourth");
 
     expect(database.prepare("SELECT id, value FROM entries ORDER BY id").all()).toEqual([
@@ -207,9 +217,11 @@ describe("migrateSqliteSchemaToStrict", () => {
     ]);
   });
 
-  it("preserves implicit and declared row identities across table shapes", () => {
-    const database = createDatabase();
-    database.exec(`
+  it.each([false, true])(
+    "preserves row identities across table shapes (catalog=%s)",
+    (useCatalog) => {
+      const database = createDatabase();
+      database.exec(`
       CREATE TABLE implicit_items (value TEXT NOT NULL);
       INSERT INTO implicit_items (rowid, value) VALUES (100, 'implicit');
 
@@ -235,9 +247,7 @@ describe("migrateSqliteSchemaToStrict", () => {
       INSERT INTO without_items (id, value) VALUES ('without', 'without-rowid');
     `);
 
-    migrateSqliteSchemaToStrict(
-      database,
-      `
+      const schema = `
         CREATE TABLE IF NOT EXISTS implicit_items (value TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS composite_items (
           left_key TEXT NOT NULL,
@@ -257,32 +267,33 @@ describe("migrateSqliteSchemaToStrict", () => {
           id TEXT PRIMARY KEY,
           value TEXT NOT NULL
         ) STRICT, WITHOUT ROWID;
-      `,
-    );
+      `;
+      migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog));
 
-    expect(database.prepare("SELECT rowid, value FROM implicit_items").get()).toEqual({
-      rowid: 100,
-      value: "implicit",
-    });
-    expect(database.prepare("SELECT rowid, value FROM composite_items").get()).toEqual({
-      rowid: 200,
-      value: "composite",
-    });
-    expect(
-      database.prepare("SELECT _rowid_ AS hidden_rowid, rowid, value FROM shadowed_items").get(),
-    ).toEqual({ hidden_rowid: 300, rowid: "named", value: "shadowed" });
-    expect(
-      database.prepare("SELECT rowid AS stored_rowid, id, value FROM integer_items").get(),
-    ).toEqual({
-      stored_rowid: 400,
-      id: 400,
-      value: "integer-primary-key",
-    });
-    expect(database.prepare("SELECT id, value FROM without_items").get()).toEqual({
-      id: "without",
-      value: "without-rowid",
-    });
-  });
+      expect(database.prepare("SELECT rowid, value FROM implicit_items").get()).toEqual({
+        rowid: 100,
+        value: "implicit",
+      });
+      expect(database.prepare("SELECT rowid, value FROM composite_items").get()).toEqual({
+        rowid: 200,
+        value: "composite",
+      });
+      expect(
+        database.prepare("SELECT _rowid_ AS hidden_rowid, rowid, value FROM shadowed_items").get(),
+      ).toEqual({ hidden_rowid: 300, rowid: "named", value: "shadowed" });
+      expect(
+        database.prepare("SELECT rowid AS stored_rowid, id, value FROM integer_items").get(),
+      ).toEqual({
+        stored_rowid: 400,
+        id: 400,
+        value: "integer-primary-key",
+      });
+      expect(database.prepare("SELECT id, value FROM without_items").get()).toEqual({
+        id: "without",
+        value: "without-rowid",
+      });
+    },
+  );
 
   it("rejects implicit-rowid tables that shadow every usable alias", () => {
     const database = createDatabase();
@@ -313,19 +324,17 @@ describe("migrateSqliteSchemaToStrict", () => {
     expect(readStrictFlag(database, "entries")).toBe(0);
   });
 
-  it("rolls back when an existing value violates the canonical type", () => {
+  it.each([false, true])("rolls back a canonical type violation (catalog=%s)", (useCatalog) => {
     const database = createDatabase();
     database.exec("PRAGMA foreign_keys = ON; CREATE TABLE counters (id TEXT, value TEXT);");
     database.prepare("INSERT INTO counters (id, value) VALUES (?, ?)").run("one", "not-a-number");
 
-    expect(() =>
-      migrateSqliteSchemaToStrict(
-        database,
-        `CREATE TABLE IF NOT EXISTS counters (
+    const schema = `CREATE TABLE IF NOT EXISTS counters (
           id TEXT,
           value INTEGER NOT NULL
-        ) STRICT;`,
-      ),
+        ) STRICT;`;
+    expect(() =>
+      migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, useCatalog)),
     ).toThrow("Failed migrating SQLite table counters to STRICT");
 
     expect(readStrictFlag(database, "counters")).toBe(0);
@@ -436,5 +445,51 @@ describe("migrateSqliteSchemaToStrict", () => {
       id: "one",
       value: null,
     });
+  });
+
+  it("installs a generated schema once and retains data on readmission", () => {
+    const database = createDatabase();
+    const options = { expectedSchema: DAEMON_RUNTIME_PIN_SCHEMA_SQL };
+    expect(migrateSqliteSchemaToStrict(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual({
+      migratedTables: [],
+    });
+    database
+      .prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)")
+      .run("runtime", '{"version":"synthetic"}', 123);
+    expect(migrateSqliteSchemaToStrict(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual({
+      migratedTables: [],
+    });
+    expect(database.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([
+      { state_key: "runtime", value_json: '{"version":"synthetic"}', updated_at_ms: 123 },
+    ]);
+  });
+
+  it("repairs generated-schema indexes when the caller does not own object creation", () => {
+    const database = createDatabase();
+    database.exec(DEPLOYED_FTS_ROWS_SCHEMA);
+    database.exec("DROP INDEX idx_agent_transcript_fts_rows_session;");
+    expect(migrateSqliteSchemaToStrict(database, DEPLOYED_FTS_ROWS_SCHEMA)).toEqual({
+      migratedTables: [],
+    });
+    expect(database.prepare("PRAGMA index_list(session_transcript_fts_rows)").all()).toContainEqual(
+      expect.objectContaining({ name: "idx_agent_transcript_fts_rows_session" }),
+    );
+  });
+
+  it("creates missing catalog tables while preserving existing rows during migration", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY); INSERT INTO entries VALUES (7);");
+    const schema = `
+      CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY) STRICT;
+      CREATE TABLE IF NOT EXISTS added (value TEXT) STRICT;
+    `;
+    expect(
+      migrateSqliteSchemaToStrict(database, schema, catalogMigrationOptions(schema, true)),
+    ).toEqual({
+      migratedTables: ["entries"],
+    });
+    expect(readStrictFlag(database, "entries")).toBe(1);
+    expect(readStrictFlag(database, "added")).toBe(1);
+    expect(database.prepare("SELECT * FROM entries").all()).toEqual([{ id: 7 }]);
   });
 });

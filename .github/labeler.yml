@@ -924,6 +924,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/ollama/**"
+"extensions: omlx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/omlx/**"
 "extensions: opencode":
   - changed-files:
       - any-glob-to-any-file:

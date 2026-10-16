@@ -10,7 +10,7 @@ import {
   onSettled,
   untrack,
 } from "solid-js";
-import { createTabsController } from "../lib/tabs-controller.ts";
+import { createTabList } from "../lib/tabs.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { bindShadowStyles } from "./solid/shadow-styles.ts";
@@ -118,7 +118,22 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     setDropPreview(undefined);
     group.removeAttribute("data-dragged-panel-tab");
   };
-  let controller: ReturnType<typeof createTabsController> | undefined;
+  const tabs = createTabList(
+    () => ({
+      active: props.activeId,
+      onSelect: (value) => props.onSelect(value),
+      onActivate: (value) => {
+        const tab = props.tabs.find((entry) => entry.id === value);
+        if (tab?.onActivate) {
+          tab.onActivate();
+          return false;
+        }
+        return true;
+      },
+    }),
+    () => props.tabs.map((tab) => ({ value: tab.id })),
+    () => group,
+  );
   let scheduleMeasurement = () => {};
   const controlsFor = (tab: T) =>
     typeof props.ariaControls === "string" ? props.ariaControls : props.ariaControls(tab);
@@ -130,18 +145,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   );
 
   onSettled(() => {
-    controller = createTabsController(group, () => ({
-      active: props.activeId,
-      onSelect: (value) => props.onSelect(value),
-      onActivate: (value) => {
-        const tab = props.tabs.find((entry) => entry.id === value);
-        if (tab?.onActivate) {
-          tab.onActivate();
-          return false;
-        }
-        return true;
-      },
-    }));
     const styles = bindShadowStyles(group, [tabsStyles]);
     let disposed = false;
     let resizeObserver: ResizeObserver | undefined;
@@ -201,8 +204,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     schedule();
     return () => {
       disposed = true;
-      controller?.dispose();
-      controller = undefined;
       styles.dispose();
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
@@ -219,7 +220,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   createEffect(
     () => ({ key: layoutKey(), focusedId: deepestActiveElementId() }),
     ({ focusedId }) => {
-      controller?.sync();
       queueMicrotask(() => {
         if (!group.isConnected) {
           return;
@@ -278,10 +278,13 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         }}
         class="oc-tabs tabstrip"
         role="tablist"
+        aria-orientation="horizontal"
         onScroll={() => scheduleMeasurement()}
       >
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
+            // The keyed id is this node's lifetime identity.
+            const ref = tabs.ref(untrack(() => tab().id));
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
@@ -329,6 +332,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                 <button
                   type="button"
                   role="tab"
+                  ref={ref}
                   id={tab().domId}
                   class={[
                     "oc-tab tabstrip-tab",
@@ -341,9 +345,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   data-tab-value={tab().id}
                   aria-controls={controlsFor(tab())}
                   aria-selected={selected() ? "true" : "false"}
+                  {...{ active: selected() ? "" : undefined }}
                   title={tab().title || undefined}
                   draggable={draggable() ? "true" : undefined}
-                  tabindex={selected() ? 0 : -1}
+                  tabindex={tabs.tabIndex(tab().id)}
+                  onClick={tabs.onClick}
+                  onKeyDown={tabs.onKeyDown}
                   onAuxClick={(event: MouseEvent) => {
                     if (event.button === 1) {
                       event.preventDefault();
