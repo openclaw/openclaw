@@ -265,8 +265,11 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
         props.params.place.applyFolder(folder);
         return;
       }
-      props.params.place.selectDeviceFolder();
-      props.params.place.setDeviceFolderPath(folder);
+      // An emptied draft names no device folder; keep the current device path.
+      if (folder) {
+        props.params.place.selectDeviceFolder();
+        props.params.place.setDeviceFolderPath(folder);
+      }
     },
     onBrowse: () =>
       view().browser.selectGatewayBrowser(
