@@ -91,9 +91,7 @@ export async function runGatewayClosePrelude(params: {
   );
   params.stopReadinessEventLoopHealth?.();
   await measureGatewayCloseStep("restart.close.mcp-server", () =>
-    params.closeMcpServer?.().catch((error: unknown) => {
-      shutdownLog.warn(`mcp-server: ${formatErrorMessage(error)}`);
-    }),
+    params.closeMcpServer?.().catch(() => {}),
   );
 }
 

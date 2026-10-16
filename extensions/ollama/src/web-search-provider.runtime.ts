@@ -246,6 +246,8 @@ async function runOllamaWebSearch(params: {
       );
       params.signal?.throwIfAborted();
       break;
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       // The 401/403 branches throw before the stream is touched, leaving release
       // to force-close the active dispatcher. Start cancellation first; awaiting

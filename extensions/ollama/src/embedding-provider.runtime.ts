@@ -25,7 +25,10 @@ import {
   hasConfiguredSecretInput,
   resolveConfiguredSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  formatErrorMessage,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL, OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
@@ -468,7 +471,13 @@ export async function createOllamaEmbeddingProvider(
     provider,
     client: {
       ...client,
-      embedBatch: async (texts) => await provider.embedBatch(texts, { inputType: "document" }),
+      embedBatch: async (texts) => {
+        try {
+          return await provider.embedBatch(texts, { inputType: "document" });
+        } catch (err) {
+          throw new Error(formatErrorMessage(err), { cause: err });
+        }
+      },
     },
   };
 }

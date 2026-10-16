@@ -99,6 +99,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let subscribed: Array<Record<string, unknown>>;
   let unsubscribed: Array<Record<string, unknown>>;
   let rejectedWrites: number;
+  let rejectedDeletes: number;
   let beforeReply: (() => Promise<void>) | undefined;
   let callback: OpenClawPluginHttpRouteHandler;
 
@@ -132,6 +133,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     bindingId = "";
     beforeReply = undefined;
     rejectedWrites = 0;
+    rejectedDeletes = 0;
     sources = [
       {
         jobId: "authored-job",
@@ -174,6 +176,13 @@ describe("MCP Events callback and subscription lifecycle", () => {
                       throw new Error("Injected state write failure");
                     }
                     return admitted.register(...args);
+                  },
+                  delete: async (...args) => {
+                    if (rejectedDeletes > 0) {
+                      rejectedDeletes--;
+                      throw new Error("Injected state delete failure");
+                    }
+                    return admitted.delete(...args);
                   },
                 };
               },
@@ -571,52 +580,76 @@ describe("MCP Events callback and subscription lifecycle", () => {
     },
   );
 
-  it("surfaces subscription bookkeeping failures and recovers on reconciliation", async () => {
+  it("retains a bounded refresh deadline while subscription failure bookkeeping is unavailable", async () => {
     await current!.start();
     const key = "refresh:" + bindingId;
     now = schedules.get(key)!.atMs;
     rejectedWrites = 2;
     await expect(runSchedule(key)).rejects.toThrow("Injected state write failure");
     expect(subscribed).toHaveLength(1);
-    await current!.reconcile();
+    const retry = schedules.get(key);
+    expect(retry, "Store recovery must not require a Cron edit or restart").toBeDefined();
+    if (!retry) {
+      throw new Error("Missing subscription retry deadline");
+    }
+    expect(retry.atMs - now).toBeGreaterThan(0);
+    expect(retry.atMs - now).toBeLessThanOrEqual(300_000);
+    now = retry.atMs;
+    await runSchedule(key);
     expect(subscribed).toHaveLength(2);
     expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
   });
 
-  it("keeps callbacks revoked when retirement bookkeeping fails", async () => {
-    await current!.start();
-    sources = [];
-    rejectedWrites = 1;
-    await expect(current!.reconcile()).rejects.toThrow("Injected state write failure");
-    expect((await post(JSON.stringify(event("evt-retired")), "evt-retired")).status).toBe(410);
-    await current!.reconcile();
-    expect(current!.diagnostics()).toEqual([]);
-    expect(unsubscribed).toHaveLength(1);
-  });
-
-  it("retries a transient remote unsubscribe failure", async () => {
-    const prepare = deps.prepareSource;
-    deps.prepareSource = async (input) => {
-      const source = await prepare(input);
-      return {
-        ...source,
-        unsubscribe: vi
-          .fn(source.unsubscribe)
-          .mockRejectedValueOnce(new Error("Remote cleanup unavailable")),
+  it.each(["retirement", "cleanup", "deletion"] as const)(
+    "retains cleanup after a %s bookkeeping write fails",
+    async (phase) => {
+      const prepare = deps.prepareSource;
+      let attempts = 0;
+      deps.prepareSource = async (input) => {
+        const source = await prepare(input);
+        return {
+          ...source,
+          unsubscribe: async (signal) => {
+            attempts++;
+            if (phase === "cleanup" && attempts <= 2) {
+              rejectedWrites = attempts === 2 ? 1 : 0;
+              throw new Error("Injected remote cleanup failure");
+            }
+            return await source.unsubscribe(signal);
+          },
+        };
       };
-    };
-    await current!.start();
-    sources = [];
-    await current!.reconcile();
-    expect(current!.diagnostics()).toEqual([
-      expect.objectContaining({ status: "revoked", lastError: "cleanup_failed" }),
-    ]);
-    const key = "cleanup:" + bindingId;
-    now = schedules.get(key)!.atMs;
-    await runSchedule(key);
-    expect(current!.diagnostics()).toEqual([]);
-    expect(unsubscribed).toHaveLength(1);
-  });
+      await current!.start();
+      const key = "cleanup:" + bindingId;
+      sources = [];
+      if (phase === "retirement") {
+        rejectedWrites = 1;
+        await expect(current!.reconcile()).rejects.toThrow("Injected state write failure");
+      } else if (phase === "cleanup") {
+        await current!.reconcile();
+        const retry = schedules.get(key);
+        if (!retry) {
+          throw new Error("Missing first cleanup retry");
+        }
+        now = retry.atMs;
+        await expect(runSchedule(key)).rejects.toThrow("Injected state write failure");
+      } else {
+        rejectedDeletes = 1;
+        await current!.reconcile();
+      }
+      expect((await post(JSON.stringify(event("evt-retired")), "evt-retired")).status).toBe(410);
+      const retry = schedules.get(key);
+      expect(retry, "Retired bindings must recover without another edit or restart").toBeDefined();
+      if (!retry) {
+        throw new Error("Missing cleanup recovery deadline");
+      }
+      now = retry.atMs;
+      await runSchedule(key);
+      expect(current!.diagnostics()).toEqual([]);
+      expect(unsubscribed).toHaveLength(1);
+      expect(schedules.has(key)).toBe(false);
+    },
+  );
 
   it("wakes committed ingress even when checkpoint persistence fails after enqueue", async () => {
     await current!.start();

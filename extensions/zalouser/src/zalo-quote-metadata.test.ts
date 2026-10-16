@@ -179,10 +179,7 @@ describe("Zalo payload bounds", () => {
           sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
             profile: "payload-bounds",
           }),
-        ).resolves.toMatchObject({
-          messageId: "message-1",
-          receipt: { platformMessageIds: ["message-1"] },
-        });
+        ).resolves.toMatchObject({ ok: true });
       },
     });
 

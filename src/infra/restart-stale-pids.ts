@@ -107,8 +107,15 @@ function sleepSync(ms: number): void {
   if (timeoutMs <= 0) {
     return;
   }
-  const lock = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(lock, 0, 0, timeoutMs);
+  try {
+    const lock = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(lock, 0, 0, timeoutMs);
+  } catch {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      // Best-effort fallback when Atomics.wait is unavailable.
+    }
+  }
 }
 
 /** Protect the caller and every known ancestor, including an unreadable parent, from cleanup. */

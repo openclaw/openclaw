@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkZaloAuthenticatedMock,
   listZaloFriendsMatchingMock,
-  sendZaloReactionMock,
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
@@ -28,8 +27,7 @@ describe("zalouser target classification", () => {
   });
 });
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
-import { createZalouserSendReceipt } from "./send-receipt.js";
-import { sendMessageZalouser } from "./send.js";
+import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
@@ -39,15 +37,13 @@ vi.mock("./send.js", async () => {
   const actual = (await vi.importActual("./send.js")) as Record<string, unknown>;
   return {
     ...actual,
-    sendMessageZalouser: vi.fn(async () => ({
-      messageId: "mid-1",
-      receipt: createZalouserSendReceipt({ messageId: "mid-1" }),
-    })),
+    sendMessageZalouser: vi.fn(async () => ({ ok: true, messageId: "mid-1" })),
+    sendReactionZalouser: vi.fn(async () => ({ ok: true })),
   };
 });
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
-const mockSendReaction = sendZaloReactionMock;
+const mockSendReaction = vi.mocked(sendReactionZalouser);
 
 function getResolveToolPolicy() {
   const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
@@ -124,7 +120,7 @@ describe("zalouser outbound chunking", () => {
 describe("zalouser channel policies", () => {
   beforeEach(() => {
     mockSendReaction.mockClear();
-    mockSendReaction.mockResolvedValue(undefined);
+    mockSendReaction.mockResolvedValue({ ok: true } as never);
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {

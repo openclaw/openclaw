@@ -122,7 +122,7 @@ beforeEach(() => {
     lines: [],
   });
   fixture.readConfig.mockResolvedValue({ config: {}, runtimeConfig: {}, sourceConfig: {} });
-  fixture.prepare.mockRejectedValue(new Error("Could not install the official Codex plugin."));
+  fixture.prepare.mockResolvedValue({ error: "Could not install the official Codex plugin." });
   fixture.audit.mockResolvedValue(undefined);
 });
 
@@ -250,7 +250,7 @@ describe("Gateway automatic inference setup", () => {
       }),
     );
     fixture.activate.mockResolvedValue({ ok: false, status: "auth", error: "Sign-in expired." });
-    fixture.prepare.mockResolvedValue({});
+    fixture.prepare.mockResolvedValue({ ok: true, config: {} });
 
     expect(await runGatewayAutomaticSetup(context(), () => {})).toEqual({
       status: "needs-sign-in",
@@ -343,7 +343,7 @@ describe("Gateway automatic inference setup", () => {
           },
         },
       };
-      fixture.prepare.mockResolvedValue(prepared);
+      fixture.prepare.mockResolvedValue({ ok: true, config: prepared });
       fixture.detect.mockResolvedValueOnce(detection()).mockResolvedValueOnce(
         detection([], {
           authOptions: [

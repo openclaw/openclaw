@@ -75,6 +75,19 @@ export function createOpenAIRealtimeSessionLease(params: {
       // Retirement removes admission before callbacks; the cleanup capability and
       // reservation remain owned until the remote operation actually settles.
       session.closing = closing;
+      let retirement: void | Promise<void> = undefined;
+      if (activeSessions.delete(session.token)) {
+        session.initialRetirement = closing;
+        retiringSessions.set(session.token, session);
+        try {
+          if (disposition === "detach") {
+            session.detach?.();
+          }
+          retirement = session.retire?.(error);
+        } catch {
+          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
+        }
+      }
       const complete = () => {
         retiringSessions.delete(session.token);
         params.releaseReservation(session.token);
@@ -100,23 +113,26 @@ export function createOpenAIRealtimeSessionLease(params: {
         }
         reject(failure);
       };
-      void (async () => {
-        if (activeSessions.delete(session.token)) {
-          session.initialRetirement = closing;
-          retiringSessions.set(session.token, session);
-          try {
-            if (disposition === "detach") {
-              session.detach?.();
-            }
-            await session.retire?.(error);
-          } catch {
-            params.logger.warn(
-              "OpenAI realtime local retirement failed; attempting remote cleanup",
-            );
+      const dispose = () => {
+        try {
+          const disposal = session.dispose?.();
+          if (disposal) {
+            void Promise.resolve(disposal).then(complete, failed);
+          } else {
+            complete();
           }
+        } catch (failure) {
+          failed(failure);
         }
-        await session.dispose?.();
-      })().then(complete, failed);
+      };
+      if (retirement) {
+        void retirement.then(dispose, () => {
+          params.logger.warn("OpenAI realtime local retirement failed; attempting remote cleanup");
+          dispose();
+        });
+      } else {
+        dispose();
+      }
       return closing;
     },
     expireIn: (session: OpenAIRealtimeSession, ttlMs: number) => {

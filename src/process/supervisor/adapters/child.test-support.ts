@@ -65,7 +65,10 @@ export async function createChildAdapterHarness(
   },
 ) {
   const stub = createStubChild(params?.pid);
-  spawnMock.mockResolvedValue(stub.child);
+  spawnMock.mockResolvedValue({
+    child: stub.child,
+    usedFallback: false,
+  });
   const adapter = await createAdapter({
     argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
     env: params?.env,
@@ -74,7 +77,7 @@ export async function createChildAdapterHarness(
   return { ...stub, adapter };
 }
 
-type SpawnAndWaitParams = {
+type SpawnWithFallbackParams = {
   argv?: string[];
   options?: {
     detached?: boolean;
@@ -83,16 +86,17 @@ type SpawnAndWaitParams = {
     windowsHide?: boolean;
     windowsVerbatimArguments?: boolean;
   };
+  fallbacks?: Array<{ detached?: boolean }>;
 };
 
-export function firstSpawnAndWaitParams(mock: Mock): SpawnAndWaitParams {
+export function firstSpawnWithFallbackParams(mock: Mock): SpawnWithFallbackParams {
   const [call] = mock.mock.calls;
   if (!call) {
-    throw new Error("expected spawnAndWait call");
+    throw new Error("expected spawnWithFallback call");
   }
   const [params] = call;
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("expected spawnAndWait params to be an object");
+    throw new Error("expected spawnWithFallback params to be an object");
   }
   return params;
 }

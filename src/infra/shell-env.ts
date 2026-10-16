@@ -307,24 +307,29 @@ function probeLoginShellEnv(
   }
 }
 
+type ShellEnvFallbackResult =
+  | { ok: true; applied: string[]; skippedReason?: never }
+  | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
+  | { ok: false; error: string; applied: [] };
+
 type ShellEnvFallbackOptions = Parameters<typeof getShellPathFromLoginShell>[0] & {
   enabled: boolean;
   expectedKeys: string[];
   logger?: Pick<typeof console, "warn">;
 };
 
-export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): string[] {
+export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
   if (!opts.enabled) {
     lastAppliedKeys = [];
-    return [];
+    return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
   const missingExpectedKeys = opts.expectedKeys.filter((key) => !Object.hasOwn(opts.env, key));
   if (missingExpectedKeys.length === 0) {
     lastAppliedKeys = [];
-    return [];
+    return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
 
   const probe = probeLoginShellEnv({
@@ -337,7 +342,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): string[] {
   if (!probe.ok) {
     logger.warn(`[openclaw] shell env fallback failed: ${probe.error}`);
     lastAppliedKeys = [];
-    return [];
+    return { ok: false, error: probe.error, applied: [] };
   }
 
   const applied: string[] = [];
@@ -351,7 +356,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): string[] {
   }
 
   lastAppliedKeys = applied;
-  return applied;
+  return { ok: true, applied };
 }
 
 export function shouldEnableShellEnvFallback(env: NodeJS.ProcessEnv): boolean {

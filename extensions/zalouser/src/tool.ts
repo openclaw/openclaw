@@ -137,6 +137,10 @@ async function executeZalouserTool(
           ...(params.action !== "send" ? { caption: params.message } : {}),
           isGroup: target.isGroup,
         });
+        if (!result.ok) {
+          const kind = params.action === "send" ? "message" : params.action;
+          throw new Error(result.error || `Failed to send ${kind}`);
+        }
         return json({ success: true, messageId: result.messageId });
       }
 
@@ -172,7 +176,7 @@ async function executeZalouserTool(
     }
   } catch (err) {
     return json({
-      error: formatErrorMessage(err) || (params.action === "link" ? "Failed to send link" : ""),
+      error: formatErrorMessage(err),
       ...(isChannelPartialDeliveryError(err)
         ? {
             ok: false,

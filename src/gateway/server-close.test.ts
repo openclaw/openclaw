@@ -135,8 +135,7 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-const serverClose = await import("./server-close.js");
-const closeGateway = createGatewayCloseTestHandlerFactory(serverClose);
+const closeGateway = createGatewayCloseTestHandlerFactory(await import("./server-close.js"));
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const { finishGatewayRestartTrace, formatGatewayPendingCloseSteps, startGatewayRestartTrace } =
   await import("./restart-trace.js");
@@ -224,18 +223,6 @@ describe("createGatewayCloseHandler", () => {
   });
 
   registerGatewayResourceRetirementTests(createGatewayCloseHandler);
-
-  it("reports MCP close failures without aborting the close prelude", async () => {
-    await expect(
-      serverClose.runGatewayClosePrelude({
-        disposeNodeReapproval: () => {},
-        closeMcpServer: async () => {
-          throw new Error("synthetic MCP close failure");
-        },
-      }),
-    ).resolves.toBeUndefined();
-    expect(mocks.logWarn).toHaveBeenCalledWith("mcp-server: synthetic MCP close failure");
-  });
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",

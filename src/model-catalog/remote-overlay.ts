@@ -116,7 +116,12 @@ export async function prepareRemoteModelCatalogStartupSnapshot(
   if (inherited !== undefined) {
     return inherited.catalog;
   }
-  const bundledGeneratedAt = bundledCatalogGeneratedAt();
+  let bundledGeneratedAt: number | undefined;
+  try {
+    bundledGeneratedAt = bundledCatalogGeneratedAt();
+  } catch {
+    return publishRemoteModelCatalogStartupSnapshot(null);
+  }
   if (bundledGeneratedAt === undefined) {
     return publishRemoteModelCatalogStartupSnapshot(null);
   }

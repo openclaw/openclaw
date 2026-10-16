@@ -135,22 +135,23 @@ export async function installPluginFromNpmPackArchive(
       packageName,
       prepareDependencySpec: async ({ npmRoot }) => {
         try {
-          return await stageNpmPackArchiveInManagedRoot({
-            archivePath: metadataResult.archivePath,
-            npmRoot,
-            packageName,
-            version: metadataResult.metadata.version,
-            integrity: metadataResult.metadata.integrity,
-            shasum: metadataResult.metadata.shasum,
-            tarballName: metadataResult.tarballName,
-          });
+          return {
+            ok: true,
+            dependencySpec: await stageNpmPackArchiveInManagedRoot({
+              archivePath: metadataResult.archivePath,
+              npmRoot,
+              packageName,
+              version: metadataResult.metadata.version,
+              integrity: metadataResult.metadata.integrity,
+              shasum: metadataResult.metadata.shasum,
+              tarballName: metadataResult.tarballName,
+            }),
+          };
         } catch (error) {
-          throw new Error(
-            `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
-            {
-              cause: error,
-            },
-          );
+          return {
+            ok: false,
+            error: `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
+          };
         }
       },
       displaySpec: metadataResult.archivePath,

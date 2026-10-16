@@ -8,6 +8,7 @@ const {
   builtInboundContextPayload,
   createChannelInboundEnvelopeBuilderMock,
   formatInboundMediaUnavailableTextMock,
+  sleepWithAbortMock,
   saveRemoteMediaMock,
   sseClientMock,
   ingressMock,
@@ -20,6 +21,7 @@ const {
   builtInboundContextPayload: { kind: "tlon-inbound-context" },
   createChannelInboundEnvelopeBuilderMock: vi.fn(),
   formatInboundMediaUnavailableTextMock: vi.fn(),
+  sleepWithAbortMock: vi.fn(),
   saveRemoteMediaMock: vi.fn(),
   sseClientMock: {
     scry: vi.fn().mockResolvedValue({}),
@@ -75,6 +77,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderMock,
   formatInboundMediaUnavailableText: formatInboundMediaUnavailableTextMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  sleepWithAbort: sleepWithAbortMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
@@ -193,6 +199,7 @@ export function useTlonMonitorFixture() {
     buildChannelInboundEnvelopeMock,
     builtInboundContextPayload,
     formatInboundMediaUnavailableTextMock,
+    sleepWithAbortMock,
     saveRemoteMediaMock,
     sseClientMock,
     ingressMock,

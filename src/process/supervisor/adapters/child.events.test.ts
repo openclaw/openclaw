@@ -3,17 +3,14 @@ import { createChildAdapter } from "./child.js";
 import { createStubChild, readyChildAdapter } from "./child.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock("../../spawn-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
-  spawnAndWait: spawnMock,
-}));
+vi.mock("../../spawn-utils.js", () => ({ spawnWithFallback: spawnMock }));
 const start = readyChildAdapter(createChildAdapter);
 afterEach(() => vi.unstubAllEnvs());
 
 it("reports actual root exit synchronously while output remains open", async () => {
   vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
   const stub = createStubChild();
-  spawnMock.mockResolvedValue(stub.child);
+  spawnMock.mockResolvedValue({ child: stub.child, usedFallback: false });
   const adapter = await start({ argv: ["synthetic-child"], stdinMode: "pipe-open" });
   const onExit = vi.fn();
   adapter.onExit(onExit);

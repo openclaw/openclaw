@@ -547,6 +547,40 @@ describe("openclaw-mcp-servers-card", () => {
       ...(replacePaths.length ? { replacePaths } : {}),
     });
   });
+  it.each(["load", "patch rejection", "patch refusal", "refresh"] as const)(
+    "shows a %s mutation failure and releases the controls for retry",
+    async (stage) => {
+      const { card, harness } = await mountCard({
+        config: configWith({ local: { command: "node" } }),
+      });
+      const failure = new Error("synthetic mutation failure");
+      if (stage === "load") {
+        harness.ensureLoaded.mockRejectedValueOnce(failure);
+      } else if (stage === "patch rejection") {
+        harness.patch.mockRejectedValueOnce(failure);
+      } else if (stage === "patch refusal") {
+        harness.runtimeConfig.state.lastError = failure.message;
+        harness.patch.mockResolvedValueOnce(false);
+      } else {
+        harness.refresh.mockRejectedValueOnce(failure);
+      }
+
+      actionButton(card, "Disable").click();
+
+      await waitForFast(() =>
+        expect(card.querySelector('[role="alert"]')?.textContent).toBe(failure.message),
+      );
+      expect(actionButton(card, "Disable").disabled).toBe(false);
+
+      actionButton(card, "Disable").click();
+      await waitForFast(() =>
+        expect(card.querySelector('[role="status"]')?.textContent).toBe(
+          "Disabled MCP server local.",
+        ),
+      );
+    },
+  );
+
   it("builds removal intent from the snapshot after queued writes settle", async () => {
     const retained = { command: "node", args: ["retained.mjs"], opaque: null };
     let config: Record<string, unknown> = {
@@ -608,7 +642,7 @@ describe("openclaw-mcp-servers-card", () => {
       await waitForFast(() => expect(patches).toHaveLength(1));
       gate.resolve();
       await expect(priorWrite).resolves.toBe(true);
-      await expect(removal).resolves.toEqual({ ok: true });
+      await expect(removal).resolves.toBeUndefined();
       expect(patches).toHaveLength(2);
       expect(patches[1]).toMatchObject({
         baseHash: "queued-write",

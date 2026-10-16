@@ -135,11 +135,6 @@ own its lifetime. An unavailable source keeps retrying with backoff capped at
 five minutes while its automation remains enabled; pausing or removing the
 automation cancels that recovery work.
 
-Local subscription-state write failures are reported rather than given a separate
-recovery timer. After fixing the storage problem, save the automation or
-restart the Gateway to resume subscription maintenance. Callback revocation takes
-effect immediately even when recording the retirement fails.
-
 Pausing, removing, or replacing a source prevents new event runs from the retired
 source generation. Late requests cannot reactivate it. Remote unsubscribe uses
 the original event name, arguments, and callback URL. If cleanup cannot establish

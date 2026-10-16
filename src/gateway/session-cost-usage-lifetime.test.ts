@@ -152,9 +152,29 @@ it("coalesces usage, flushes exact reads, and recovers deferred appends after re
       });
       expect(refresh).toHaveBeenCalledTimes(2);
 
+      // Native worker completion can enqueue another zero-delay batch while a read waits.
+      vi.useRealTimers();
+      refresh.mockRejectedValueOnce(new Error("synthetic usage refresh failure"));
+      await append("assistant", 10);
+      await expect(overview()).rejects.toThrow(
+        "Usage refresh ended before the requested session was refreshed",
+      );
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(refresh).toHaveBeenCalledTimes(3);
+      // A later committed publication starts a new owner and uses the native refresh again.
+      vi.useRealTimers();
+      await append("assistant", 20);
+      expect(await overview()).toMatchObject({
+        totals: { totalTokens: 130 },
+        cacheStatus: { status: "fresh" },
+      });
+      expect(refresh).toHaveBeenCalledTimes(4);
+
+      vi.useFakeTimers();
       await append("assistant", 50);
       await lifetime.stop();
-      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refresh).toHaveBeenCalledTimes(4);
       vi.useRealTimers();
       // Lose the dirty queue and worker caches as on process exit, keeping only
       // the committed transcript and the older durable rollup.
@@ -171,7 +191,7 @@ it("coalesces usage, flushes exact reads, and recovers deferred appends after re
         await withinTest(recovered.promise, signal);
         await refresh.mock.results.at(-1)?.value;
         expect(await overview()).toMatchObject({
-          totals: { totalTokens: 150 },
+          totals: { totalTokens: 180 },
           cacheStatus: { status: "fresh" },
         });
       } finally {

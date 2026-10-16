@@ -710,11 +710,13 @@ describe("zalouser credential persistence", () => {
       name: "link",
       send: () => sendZaloLink("thread-1", "https://example.com", { profile: "missing-session" }),
     },
-  ])("rejects with a missing-session error for $name", async ({ send }) => {
+  ])("returns a missing-session error for $name", async ({ send }) => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(send()).rejects.toThrow("No saved Zalo session");
+        const result = await send();
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("No saved Zalo session");
       });
     } finally {
       await removeCredentialStateDir(stateDir);

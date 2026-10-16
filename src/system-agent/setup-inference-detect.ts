@@ -36,7 +36,6 @@ import {
   type DetectSetupInferenceDeps,
   type SetupInferenceCandidate,
   type SetupInferenceDetection,
-  SetupInferenceActivationUnavailableError,
   invalidSetupConfigError,
   setupInferenceLog,
   resolveCandidatePresentation,
@@ -75,18 +74,13 @@ async function listSavedSetupInferenceCandidates(params: {
     const choice = findSetupCredentialChoice(params.choices, credential);
     let modelRef = saved?.modelRef;
     if (!modelRef && choice) {
-      try {
-        modelRef = await withSetupProviderAuthMethod(
-          { ...params, choice },
-          ({ method }) => method.starterModel,
-        );
-      } catch (error) {
-        if (!(error instanceof SetupInferenceActivationUnavailableError)) {
-          throw error;
-        }
-        // An unavailable provider cannot offer this saved sign-in; keep the other candidates.
-      }
+      const loaded = await withSetupProviderAuthMethod({ ...params, choice }, ({ method }) => ({
+        modelRef: method.starterModel,
+      }));
       params.signal.throwIfAborted();
+      if (!("error" in loaded)) {
+        modelRef = loaded.modelRef;
+      }
     }
     if (!modelRef) {
       continue;

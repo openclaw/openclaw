@@ -410,9 +410,7 @@ export class McpEventsService {
     const pending = run();
     binding.pending = pending;
     this.track(pending).catch(() =>
-      this.deps.logger.warn(
-        "mcp-events: subscription state unavailable; repair storage, then save the automation or restart the Gateway",
-      ),
+      this.deps.logger.warn("mcp-events: subscription state unavailable; retry remains pending"),
     );
     void pending
       .finally(() => {
@@ -423,6 +421,7 @@ export class McpEventsService {
   }
 
   private async refresh(binding: LiveBinding) {
+    let retryAt: number | undefined;
     try {
       await this.authority.refresh(binding);
       const source = binding.source!;
@@ -493,6 +492,7 @@ export class McpEventsService {
       };
       const nextAttemptAt =
         this.now + Math.min(300_000, 1_000 * 2 ** Math.min(binding.facts.failures, 8));
+      retryAt = nextAttemptAt;
       await this.mutate(
         binding,
         (facts) => ({
@@ -504,8 +504,12 @@ export class McpEventsService {
         }),
         assertBindingCurrent,
       );
+    } finally {
+      // A failed bookkeeping write must not consume the only recovery wakeup.
+      if (binding.live) {
+        this.armRefresh(binding, retryAt);
+      }
     }
-    this.armRefresh(binding);
   }
 
   private async revoke(binding: LiveBinding, reason?: SubscriptionBinding["lastError"]) {
@@ -516,23 +520,31 @@ export class McpEventsService {
     // Invalidate local authority before persistence, remote cleanup, or any other await.
     binding.live = false;
     this.cancelScheduled("refresh:" + binding.facts.bindingId);
-    await this.mutate(
-      binding,
-      (facts) => ({
-        ...facts,
-        status: "revoked",
-        cleanupPending: true,
-        retiredAt: this.now,
-        failures: 0,
-        lastError: reason,
-        nextAttemptAt: this.now,
-        updatedAt: this.now,
-      }),
-      this.assertService,
-    );
-    this.armCleanup(binding);
-    if (reason === "source_unavailable") {
-      this.requestReconcile();
+    let retryAt = this.now;
+    try {
+      await this.mutate(
+        binding,
+        (facts) => ({
+          ...facts,
+          status: "revoked",
+          cleanupPending: true,
+          retiredAt: this.now,
+          failures: 0,
+          lastError: reason,
+          nextAttemptAt: this.now,
+          updatedAt: this.now,
+        }),
+        this.assertService,
+      );
+    } catch (error) {
+      retryAt = this.now + 1_000;
+      throw error;
+    } finally {
+      // The local retirement owns recovery even when its durable write fails.
+      this.armCleanup(binding, retryAt);
+      if (reason === "source_unavailable") {
+        this.requestReconcile();
+      }
     }
   }
 
@@ -594,7 +606,6 @@ export class McpEventsService {
           if (!binding.facts.cleanupPending || this.now >= this.cleanupExpiry(binding)) {
             await this.forgetBinding(binding);
           }
-          this.armCleanup(binding);
           return;
         }
         if (!binding.source) {
@@ -627,8 +638,10 @@ export class McpEventsService {
           }),
           this.assertService,
         );
+      } finally {
+        // Neither failed bookkeeping nor deletion may consume the last cleanup wake.
+        this.armCleanup(binding, retryAt);
       }
-      this.armCleanup(binding, retryAt);
     });
   }
 

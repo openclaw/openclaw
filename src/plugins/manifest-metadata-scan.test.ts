@@ -368,26 +368,6 @@ describe("listOpenClawPluginManifestMetadata", () => {
     expect(warningMessagesForPath(manifestPath)).toEqual([]);
   });
 
-  it("warns when a present plugin root cannot be scanned", () => {
-    const { pluginDir, manifestPath, env } = createGlobalPluginFixture("unreadable-root");
-    writeJson(manifestPath, { id: "unreadable-root" });
-    const pluginRoot = path.dirname(pluginDir);
-    const readdirSync = fs.readdirSync;
-    vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
-      if (args[0] === pluginRoot) {
-        throw Object.assign(new Error("access denied"), { code: "EACCES" });
-      }
-      return Reflect.apply(readdirSync, fs, args);
-    });
-
-    const records = listOpenClawPluginManifestMetadata(env);
-
-    expect(records.find((record) => record.pluginDir === pluginDir)).toBeUndefined();
-    expect(warningMessagesForPath(pluginRoot)).toEqual([
-      `Ignoring unreadable plugin directory at ${pluginRoot}: access denied`,
-    ]);
-  });
-
   it("accepts JSON5 manifests without warning when strict JSON parsing fails", () => {
     const { pluginDir, manifestPath, env } = createGlobalPluginFixture("json5-plugin");
     const contents = "{ id: 'json5-plugin', }";

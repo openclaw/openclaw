@@ -387,6 +387,9 @@ export async function applyNonInteractivePluginProviderChoice(
               ? splitTrailingAuthProfile(selected).model
               : method.starterModel,
         });
+        if (typeof modelRef !== "string") {
+          throw new Error(modelRef.error);
+        }
         const profile = selectSetupCredential(profiles, modelRef, prepared.config);
         if (!profile) {
           throw new Error(

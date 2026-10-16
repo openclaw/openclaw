@@ -523,6 +523,7 @@ export type StagedCandidate = {
   config: OpenClawConfig;
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 };
+export type StageFailure = { error: string };
 export type SaveSetupCredentialParams = {
   profile: ProviderAuthResult["profiles"][number];
   config: OpenClawConfig;
@@ -540,14 +541,15 @@ export type SaveSetupCredentialParams = {
 export function validateSetupModelTarget(
   expected: "utility" | undefined,
   requested: "utility" | undefined,
-): void {
-  if (expected !== requested) {
-    throw new SetupInferenceActivationUnavailableError(
-      expected === "utility"
-        ? "This model is for setup and utility tasks. Update this client and select utility setup; it cannot be activated as a regular agent model."
-        : "The requested setup model role does not match this provider choice. Refresh setup and choose again.",
-    );
-  }
+): StageFailure | undefined {
+  return expected === requested
+    ? undefined
+    : {
+        error:
+          expected === "utility"
+            ? "This model is for setup and utility tasks. Update this client and select utility setup; it cannot be activated as a regular agent model."
+            : "The requested setup model role does not match this provider choice. Refresh setup and choose again.",
+      };
 }
 export type StageContext = {
   params: ActivateSetupInferenceParams;
@@ -566,21 +568,17 @@ export function resolveSetupModel(params: {
   providerId: string;
   defaultModel?: string;
   modelRef?: string;
-}): string {
+}): string | StageFailure {
   const selected = params.modelRef?.trim() || params.defaultModel;
   const modelRef = selected ? normalizeAgentModelRefForConfig(selected) : "";
   if (!modelRef || !parseInferenceRef(modelRef).model) {
-    throw new SetupInferenceActivationUnavailableError(
-      `${params.label} does not expose a starter model for app-guided setup.`,
-    );
+    return { error: `${params.label} does not expose a starter model for app-guided setup.` };
   }
   const provider = params.defaultModel
     ? parseInferenceRef(normalizeAgentModelRefForConfig(params.defaultModel)).provider
     : params.providerId;
   if (normalizeProviderId(parseInferenceRef(modelRef).provider) !== normalizeProviderId(provider)) {
-    throw new SetupInferenceActivationUnavailableError(
-      `${modelRef} is not compatible with the ${params.label} inference route.`,
-    );
+    return { error: `${modelRef} is not compatible with the ${params.label} inference route.` };
   }
   return modelRef;
 }
