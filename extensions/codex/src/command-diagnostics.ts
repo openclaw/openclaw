@@ -8,6 +8,7 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { isJsonObject } from "./app-server/protocol.js";
 import {
@@ -36,8 +37,9 @@ import {
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
+import { safeCodexControlRequest } from "./command-rpc.js";
 
 const NO_DIAGNOSTICS_THREAD = [
   "No Codex thread is attached to this OpenClaw session yet.",
@@ -293,7 +295,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       });
       continue;
     }
-    const response = await deps.safeCodexControlRequest(
+    const response = await safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.feedback,
       {

@@ -90,6 +90,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
       snapshot.synchronize();
       owner.prepareRender();
+      owner.pinnedSessions.synchronize();
       return owner;
     },
     { equals: false },

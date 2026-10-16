@@ -5973,10 +5973,11 @@ uses the memory actor.
 Session-scoped command and skill discovery uses those same current sharing facts.
 It captures the session and physical source before membership readiness yields,
 refuses dirty membership, and rechecks caller, role, session, and source authority
-after discovery. Exact row preparation carries pinned skill selections separately
-from compact sharing facts; response publication compares the current selections
-in the same synchronous consuming frame. Personal skill-library storage, exec-policy
-eligibility, and incognito memory state remain with their respective owners.
+after discovery. Exact row preparation carries selected display metadata separately
+from compact sharing facts. Discovery returns the selections captured for that request;
+a concurrent selection change appears on the next request without reloading the row
+before the response. Personal skill-library storage, exec-policy eligibility, and
+incognito memory state remain with their respective owners.
 This changes no SDK, RPC schema, stored data, permission, or update contract.
 
 For writes, shared-state domain operations load on demand through
@@ -6420,6 +6421,14 @@ lease; database close joins the callback and its retained worker cleanup. Cleanu
 refuses a replacement physical database and cannot delete a successor's lease.
 Upload formats, expiry limits, installation permissions, and update behavior are
 unchanged.
+
+Gateway lifecycle-event admission keeps each run's accepted events in FIFO order.
+Durable restart-recovery suppression reads the logical session once, after earlier
+accepted events settle. It does not speculate and then reread, or independently
+recheck the database file identity after the worker owner has admitted the read.
+The suppression snapshot supplies internal lifecycle bookkeeping, not disclosure
+or execution authority. The current run claim and event route still gate event
+publication; incognito events retain their captured live memory owner.
 
 Reply recovery reads file-backed logical session entries through the existing
 agent database executor. The worker preserves standard initialization and schema

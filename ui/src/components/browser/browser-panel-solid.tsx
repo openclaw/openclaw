@@ -1,5 +1,5 @@
 import { untrack } from "@solidjs/signals";
-import { onSettled } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { usePanelController } from "../solid-panel-controller.ts";
@@ -11,6 +11,8 @@ export function BrowserPanelContent(props: { controller: BrowserPanelPresentatio
   // Seed retained native tabs before the connected panel restores its open view.
   onSettled(() => controller.browserPanelController.native.mount());
   usePanelController(controller);
+  // Cleanup runs before the adapter disconnects and settles its DOM-completion fence.
+  onCleanup(() => controller.browserPanelController.suspendView());
   const panel = () => controller.read();
   return (
     <>

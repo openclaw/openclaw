@@ -43,14 +43,14 @@ async function fixture() {
       actor: { type: "human", id: row.key.endsWith(":mine") ? "self" : "other" },
     };
   }
-  const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+  const { sidebar, context, provider } = await mountSidebar(gateway.gateway, sessions.sessions);
   sidebar.connected = true;
   sidebar.sidebarEntries = [];
   sidebar.onUpdateSidebarEntries = (entries) => {
     sidebar.sidebarEntries = entries;
   };
   await sidebar.updateComplete;
-  return { sidebar, sessions, gateway, result };
+  return { sidebar, sessions, gateway, result, context, provider };
 }
 
 function drag(target: Element, type: string, transfer: ReturnType<typeof createDataTransferStub>) {
@@ -658,6 +658,32 @@ describe("personal navigation rail", () => {
         .querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`)
         ?.getAttribute("aria-label"),
     ).toBe("Current title");
+  });
+
+  it("retires cached pin descriptors when the source changes without reading pins", async () => {
+    const { sidebar, sessions, gateway, result, context, provider } = await fixture();
+    const key = "agent:other:unloaded";
+    const read = vi
+      .spyOn(sessions.sessions, "describe")
+      .mockResolvedValueOnce({ session: { ...result.sessions[1]!, key, label: "Old source" } })
+      .mockResolvedValueOnce({ session: { ...result.sessions[1]!, key, label: "Fresh source" } });
+    sidebar.sidebarEntries = [`session:${key}`];
+    await settleLitElement(sidebar);
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Old source"]')).not.toBeNull();
+
+    sidebar.sidebarEntries = [];
+    await sidebar.updateComplete;
+    const otherSessions = createSessionsHarness("main", ["agent:main:main"]);
+    provider.setContext(createContext(gateway.gateway, otherSessions.sessions));
+    await sidebar.updateComplete;
+    provider.setContext(context);
+    await sidebar.updateComplete;
+    sidebar.sidebarEntries = [`session:${key}`];
+    await settleLitElement(sidebar);
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Fresh source"]')).not.toBeNull();
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Old source"]')).toBeNull();
   });
 
   it("retains a lookup across a synchronous host move within the same connection", async () => {

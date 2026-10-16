@@ -210,17 +210,35 @@ function runConfig(params: Omit<Parameters<typeof runDoctorConfigWithInput>[0], 
   return runDoctorConfigWithInput({ ...params, run: loadAndMaybeMigrateDoctorConfig });
 }
 
+async function inspectConfig(params: Parameters<typeof runConfig>[0]) {
+  await (await runConfig(params))[Symbol.asyncDispose]();
+}
+
+function repairResult(state: unknown, overrides: Record<string, unknown> = {}) {
+  return { state, changeNotes: [], warningNotes: [], authProfilesRepaired: false, ...overrides };
+}
+
+function noteText(title?: string) {
+  return terminalNoteMock.mock.calls
+    .filter(([, heading]) => title === undefined || heading === title)
+    .map(([message]) => message)
+    .join("\n");
+}
+
+function expectNote(title: string, ...parts: string[]) {
+  expect(
+    terminalNoteMock.mock.calls.some(
+      ([message, heading]) => heading === title && parts.every((part) => message.includes(part)),
+    ),
+  ).toBe(true);
+}
+
 async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
   terminalNoteMock.mockClear();
-  const noteSpy = terminalNoteMock;
-  await (await runConfig({ config }))[Symbol.asyncDispose]();
-  const warnings: string[] = [];
-  for (const [message, title] of noteSpy.mock.calls) {
-    if (title === "Doctor warnings") {
-      warnings.push(message);
-    }
-  }
-  return warnings;
+  await inspectConfig({ config });
+  return terminalNoteMock.mock.calls
+    .filter(([, title]) => title === "Doctor warnings")
+    .map(([message]) => message);
 }
 
 describe("doctor config flow", () => {
@@ -337,15 +355,13 @@ describe("doctor config flow", () => {
       agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
     };
 
-    await (
-      await runConfig({
-        config: legacy,
-        parsedConfig: legacy,
-        sourceConfigBeforeMigrations: legacy,
-        preflightMode: "issues",
-      })
-    )[Symbol.asyncDispose]();
-    const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    await inspectConfig({
+      config: legacy,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      preflightMode: "issues",
+    });
+    const previewText = noteText();
     expect(terminalNoteMock.mock.calls.map(([, title]) => title)).toContain(
       "Doctor changes preview",
     );
@@ -371,7 +387,7 @@ describe("doctor config flow", () => {
     expect(repaired.pendingChangePanels?.join("\n")).toContain(
       "Removed models.providers.openai.contextWindow after baking it into explicit model entries.",
     );
-    expect(terminalNoteMock.mock.calls.map(([message]) => message).join("\n")).toContain(
+    expect(noteText()).toContain(
       "agents.entries.ops.contextTokens cannot be represented per model",
     );
   });
@@ -394,13 +410,12 @@ describe("doctor config flow", () => {
       plugins: [],
       index: { installRecords: {} },
     } as unknown as PluginMetadataSnapshot;
-    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
-      state: params.state,
-      changeNotes: ['Removed stale managed install record for bundled plugin "google-meet".'],
-      warningNotes: [],
-      authProfilesRepaired: false,
-      pluginMetadataSnapshot: refreshedSnapshot,
-    }));
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) =>
+      repairResult(params.state, {
+        changeNotes: ['Removed stale managed install record for bundled plugin "google-meet".'],
+        pluginMetadataSnapshot: refreshedSnapshot,
+      }),
+    );
 
     await using result = await runConfig({ config: {}, repair: true });
 
@@ -464,12 +479,7 @@ describe("doctor config flow", () => {
           params.onCapabilityConsent,
           "doctor capability handler",
         )(review);
-        return {
-          state: params.state,
-          changeNotes: [],
-          warningNotes: [],
-          authProfilesRepaired: false,
-        };
+        return repairResult(params.state);
       },
     );
     const prompter = createDoctorPrompter({
@@ -496,14 +506,12 @@ describe("doctor config flow", () => {
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
-    await (
-      await runConfig({
-        config: {
-          plugins: { allow: ["existing-plugin"], entries: { browser: { config: {} } } },
-          tools: { alsoAllow: ["browser"] },
-        },
-      })
-    )[Symbol.asyncDispose]();
+    await inspectConfig({
+      config: {
+        plugins: { allow: ["existing-plugin"], entries: { browser: { config: {} } } },
+        tools: { alsoAllow: ["browser"] },
+      },
+    });
 
     expect(collectDoctorPreviewNotesParamsMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -523,12 +531,12 @@ describe("doctor config flow", () => {
         state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
       }) => {
         const repaired = { ...params.state.candidate, auth: { order: {} } };
-        return {
-          state: { ...params.state, cfg: repaired, candidate: repaired, pendingChanges: true },
-          changeNotes: ["Removed a stale configured auth order."],
-          warningNotes: [],
-          authProfilesRepaired: false,
-        };
+        return repairResult(
+          { ...params.state, cfg: repaired, candidate: repaired, pendingChanges: true },
+          {
+            changeNotes: ["Removed a stale configured auth order."],
+          },
+        );
       },
     );
 
@@ -559,12 +567,12 @@ describe("doctor config flow", () => {
 
   it("keeps doctor repair silent when gateway secrets reload fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
-    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
-      state: params.state,
-      changeNotes: ["Removed stale OAuth auth profile shadow openai-codex."],
-      warningNotes: [],
-      authProfilesRepaired: true,
-    }));
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) =>
+      repairResult(params.state, {
+        changeNotes: ["Removed stale OAuth auth profile shadow openai-codex."],
+        authProfilesRepaired: true,
+      }),
+    );
 
     await using result = await runConfig({ config: {}, repair: true });
     expect(result).toBeTruthy();
@@ -591,12 +599,9 @@ describe("doctor config flow", () => {
         warnings: ["- matrix stale cleanup warning"],
       },
     ]);
-    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
-      state: params.state,
-      changeNotes: [],
-      warningNotes: [],
-      authProfilesRepaired: false,
-    }));
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) =>
+      repairResult(params.state),
+    );
 
     await using result = await runConfig({ config: input, repair: true });
 
@@ -613,26 +618,12 @@ describe("doctor config flow", () => {
       gateway: { auth: { mode: "token", token: "shared-gateway-token-1234567890" } },
       hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
     };
-    const previewNotes = terminalNoteMock;
     await using preview = await runConfig({ config });
 
     expect(preview.shouldWriteConfig).toBe(false);
     expect(preview.cfg.hooks?.token).toBe("shared-gateway-token-1234567890");
-    expect(
-      previewNotes.mock.calls.some(
-        ([message, title]) =>
-          title === "Doctor changes preview" &&
-          message.includes("Rotated hooks.token because it reused active Gateway"),
-      ),
-    ).toBe(true);
-    expect(
-      previewNotes.mock.calls.some(
-        ([message, title]) =>
-          title === "Doctor" &&
-          message.includes("openclaw doctor --fix") &&
-          message.includes("rotate hooks.token"),
-      ),
-    ).toBe(true);
+    expectNote("Doctor changes preview", "Rotated hooks.token because it reused active Gateway");
+    expectNote("Doctor", "openclaw doctor --fix", "rotate hooks.token");
 
     await using repair = await runConfig({ config, repair: true });
 
@@ -655,10 +646,7 @@ describe("doctor config flow", () => {
     const config: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { models } } };
     config.agents = { entries: { main: {} } };
     await using result = await runConfig({ config, repair: true });
-    const warnings = terminalNoteMock.mock.calls
-      .filter(([, title]) => title === "Doctor warnings")
-      .map(([message]) => message)
-      .join("\n");
+    const warnings = noteText("Doctor warnings");
     expect(warnings).toContain("tools.media.models[1].command");
     expect(warnings).toContain("tools.media.models[2].args");
     expect(warnings).toContain("{{AttachmentPath}}");

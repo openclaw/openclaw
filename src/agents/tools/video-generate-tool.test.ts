@@ -394,7 +394,7 @@ describe("createVideoGenerateTool", () => {
         prompt: "friendly lobster surfing",
         image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
       }),
-    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit (");
     expect(generateSpy).not.toHaveBeenCalled();
   });
 

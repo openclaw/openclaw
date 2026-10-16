@@ -44,14 +44,6 @@ export function opaqueEntry(manager: SessionManager) {
   return entry;
 }
 
-export function observeJsonParse(observe: (text: string) => void) {
-  const parse = JSON.parse;
-  return vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    observe(text);
-    return parse(text, reviver);
-  });
-}
-
 export function afterModelRead(after: () => void | Promise<void>, restoreBeforeRead = false) {
   const read = contextWorker.readSessionTranscriptModelContextInWorker;
   const spy = vi

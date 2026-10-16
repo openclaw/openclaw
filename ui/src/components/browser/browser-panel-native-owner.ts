@@ -15,7 +15,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
-import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
   browserPanelNormalizedPoint,
@@ -39,7 +39,7 @@ type BrowserPanelNativeState = {
 
 interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   readonly host: Pick<
-    BrowserPanelControllerHost,
+    BrowserPanelHost,
     | "isConnected"
     | "browserPanelIsOpen"
     | "renderRoot"

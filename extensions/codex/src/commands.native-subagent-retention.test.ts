@@ -26,6 +26,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import { createCodexCommand } from "./commands.js";
 import {
   createContext,
@@ -268,7 +269,10 @@ describe("codex command", () => {
         const completionCursor = notifications.length;
         harness.send(closeCompletion);
         await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
-        const command = createCodexCommand({ pluginConfig, deps: { bindingStore } });
+        const command = createCodexCommand({
+          pluginConfig,
+          deps: createCodexCommandHost({ bindingStore }),
+        });
         const reply = await command.handler(
           createContext(`resume ${threadId}`, undefined, context),
         );

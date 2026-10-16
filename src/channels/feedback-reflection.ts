@@ -40,7 +40,6 @@ export async function recordChannelFeedbackEvent(params: {
         sessionKey: params.sessionKey,
         storePath: owner.scope?.storePath ?? storePath,
       });
-      owner.assertCurrent();
       await appendPreparedTranscriptEvent(
         { ...target, env: owner.scope?.env },
         params.event,
