@@ -33,6 +33,7 @@ import * as preparation from "../session-sharing-preparation.js";
 import * as artifactReads from "../session-transcript-readers.js";
 import { artifactsHandlers } from "./artifacts.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { fetchSessionFileDownload } from "./sessions-files.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -68,6 +69,10 @@ it("admits session-only artifact readers with current session visibility and pre
     const context = await createHistoryReadContext();
     let client = identifiedClient("viewer");
     client.connect.scopes = ["operator.sessions.read"];
+    const controller = new AbortController();
+    client.connId = "session-artifact-reader";
+    client.connectionSignal = controller.signal;
+    using _ = { [Symbol.dispose]: () => controller.abort() };
     const request = async (
       method: "artifacts.list" | "artifacts.get" | "artifacts.download",
       params: Record<string, unknown> = {},
@@ -100,6 +105,13 @@ it("admits session-only artifact readers with current session visibility and pre
     expect(payload.artifacts).toHaveLength(1);
     expect(payload.artifacts[0]?.sizeBytes).toBe(912);
     const artifactId = payload.artifacts[0]!.id;
+    const granted = await request("artifacts.download", { artifactId, transport: "http" });
+    expect(granted[0]).toBe(true);
+    const download = granted[1] as { url: string };
+    expect(download.url).toMatch(/^\/api\/artifacts\/download\//);
+    const fetched = await fetchSessionFileDownload(client, download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(fetched.body).toEqual(new Uint8Array(Buffer.from(data, "base64")));
     for (const method of ["artifacts.get", "artifacts.download"] as const) {
       const missing = await request(method, { artifactId: "artifact_missing" });
       expect(missing[0]).toBe(false);
@@ -171,6 +183,9 @@ it("admits session-only artifact readers with current session visibility and pre
     const revoked = await request("artifacts.download", { artifactId });
     expect(revoked[0]).toBe(false);
     expect(revoked[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    const revokedDownload = await fetchSessionFileDownload(client, download.url);
+    expect(revokedDownload.response.statusCode).toBe(404);
+    expect(revokedDownload.body).toEqual(new Uint8Array(Buffer.from("Not Found")));
     for (const method of ["artifacts.list", "artifacts.get", "artifacts.download"] as const) {
       const result = await request(method, method === "artifacts.list" ? {} : { artifactId });
       expect(result[0]).toBe(false);
