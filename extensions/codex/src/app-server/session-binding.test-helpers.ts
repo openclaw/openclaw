@@ -3,20 +3,20 @@ export * from "./session-binding.js";
 import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions as supervisionOptions } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint as connectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   bindingStoreKey,
-  createCodexAppServerBindingStore,
-  type CodexAppServerBindingStore,
-  type CodexAppServerThreadBinding,
+  createCodexAppServerBindingStore as createBindingStore,
+  type CodexAppServerBindingStore as BindingStore,
+  type CodexAppServerThreadBinding as ThreadBinding,
   type CodexBindingStateStore,
-  type StoredCodexAppServerBinding,
+  type StoredCodexAppServerBinding as StoredBinding,
 } from "./session-binding.js";
 
 export function createCodexTestBindingStateStore(
-  values = new Map<string, StoredCodexAppServerBinding>(),
-): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> & CodexBindingStateStore {
+  values = new Map<string, StoredBinding>(),
+): PluginStateSyncKeyedStore<StoredBinding> & CodexBindingStateStore {
   const observe = (key: string) => ({
     value: structuredClone(values.get(key)),
     comparison: JSON.stringify([key, values.get(key)]),
@@ -85,15 +85,15 @@ export function createCodexTestBindingStateStore(
   };
 }
 
-export function createCodexTestBindingStore(): CodexAppServerBindingStore {
-  return createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+export function createCodexTestBindingStore(): BindingStore {
+  return createBindingStore(createCodexTestBindingStateStore());
 }
 
 export function buildCodexSupervisionTestConnectionFingerprint(
   pluginConfig: unknown = { supervision: { enabled: true } },
 ): string {
-  return buildCodexAppServerConnectionFingerprint(
-    resolveCodexSupervisionAppServerRuntimeOptions({
+  return connectionFingerprint(
+    supervisionOptions({
       pluginConfig,
       env: {},
       requirementsToml: null,
@@ -102,7 +102,7 @@ export function buildCodexSupervisionTestConnectionFingerprint(
 }
 
 const sharedStateStore = createCodexTestBindingStateStore();
-export const testCodexAppServerBindingStore = createCodexAppServerBindingStore(sharedStateStore);
+export const testCodexAppServerBindingStore = createBindingStore(sharedStateStore);
 const testSessionIdentities = new Map<
   string,
   { agentId: string; sessionId: string; sessionKey?: string }
@@ -135,7 +135,7 @@ export function registerCodexTestSessionIdentity(
   }
 }
 
-export function seedCodexTestBinding(locator: string, binding: CodexAppServerThreadBinding): void {
+export function seedCodexTestBinding(locator: string, binding: ThreadBinding): void {
   sharedStateStore.register(bindingStoreKey(testIdentity(locator)), {
     version: 1,
     state: "active",
@@ -144,25 +144,22 @@ export function seedCodexTestBinding(locator: string, binding: CodexAppServerThr
 }
 
 function testIdentity(locator: string) {
-  const identity = testSessionIdentities.get(locator);
   return {
     kind: "session" as const,
-    agentId: identity?.agentId ?? "main",
-    sessionId: identity?.sessionId ?? locator,
-    ...(identity?.sessionKey ? { sessionKey: identity.sessionKey } : {}),
+    ...(testSessionIdentities.get(locator) ?? { agentId: "main", sessionId: locator }),
   };
 }
 
 export async function readCodexAppServerBinding(
   sessionId: string,
   _lookup?: unknown,
-): Promise<CodexAppServerThreadBinding | undefined> {
+): Promise<ThreadBinding | undefined> {
   return testCodexAppServerBindingStore.read(testIdentity(sessionId));
 }
 
 export async function writeCodexAppServerBinding(
   sessionId: string,
-  binding: CodexAppServerThreadBinding,
+  binding: ThreadBinding,
   _lookup?: unknown,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testIdentity(sessionId), { kind: "set", binding });
@@ -201,7 +198,7 @@ export function testConversationIdentity(sessionFile: string) {
 
 export async function writeTestConversationBinding(
   sessionFile: string,
-  binding: CodexAppServerThreadBinding,
+  binding: ThreadBinding,
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
     kind: "set",

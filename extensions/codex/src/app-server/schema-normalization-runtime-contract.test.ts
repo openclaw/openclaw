@@ -7,7 +7,7 @@ import {
   createPermissiveTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThreadStartParams } from "./protocol.js";
@@ -79,47 +79,37 @@ function createRun(result = () => threadStartResult()) {
   return { request, start, workspaceDir };
 }
 
-describe("Codex app-server dynamic tool schema boundary contract", () => {
-  beforeEach(async () => {
-    bindingStore = createCodexTestBindingStore();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
-  });
+beforeEach(async () => {
+  bindingStore = createCodexTestBindingStore();
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
+});
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
+afterEach(async () => {
+  await fs.rm(tempDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
 
-  it("passes prepared executable dynamic tool schemas through canonical thread start specs", async () => {
-    const { request, start, workspaceDir } = createRun();
-    const parameterFreeTool = createParameterFreeTool("message");
-    const dynamicTool = {
-      type: "function" as const,
-      name: parameterFreeTool.name,
-      description: parameterFreeTool.description,
-      inputSchema: normalizedParameterFreeSchema(),
-    };
-    await start([dynamicTool]);
+it.each([null, "priority"])(
+  "passes canonical thread start specs with service tier %s",
+  async (serviceTier) => {
+    const { request, start, workspaceDir } = createRun(() =>
+      threadStartResult(serviceTier ? "thread-priority" : "thread-1", serviceTier),
+    );
+    const { name, description } = createParameterFreeTool("message");
+    const inputSchema = normalizedParameterFreeSchema();
+    const dynamicTool = { type: "function" as const, name, description, inputSchema };
+    const binding = await start(serviceTier ? [] : [dynamicTool]);
+    expect(binding.threadId).toBe(serviceTier ? "thread-priority" : "thread-1");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
     ]);
-    const [startMethod, payload] =
-      request.mock.calls.find(([method]) => method === "thread/start") ?? [];
-    if (startMethod !== "thread/start") {
-      throw new Error(`expected thread/start request, got ${startMethod}`);
-    }
-    const startPayload = payload as CodexThreadStartParams | undefined;
-    expect(startPayload?.dynamicTools).toStrictEqual([
-      {
-        type: "function",
-        name: dynamicTool.name,
-        description: dynamicTool.description,
-        inputSchema: dynamicTool.inputSchema,
-      },
-    ]);
+    const startPayload = request.mock.calls[2]?.[1] as CodexThreadStartParams | undefined;
+    expect(startPayload?.dynamicTools).toStrictEqual(
+      serviceTier ? [] : [{ type: "function", name, description, inputSchema }],
+    );
     expect(startPayload).toMatchObject({
       cwd: workspaceDir,
       model: "gpt-5.4",
@@ -130,46 +120,38 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       experimentalRawEvents: true,
     });
     expect(startPayload?.modelProvider).toBeUndefined();
-    expect(typeof startPayload?.developerInstructions).toBe("string");
-    expect(startPayload?.developerInstructions).toContain("OpenClaw");
-  });
+    expect(startPayload?.developerInstructions).toEqual(expect.stringContaining("OpenClaw"));
+  },
+);
 
-  it("accepts Codex app-server priority service tier responses", async () => {
-    const { start } = createRun(() => threadStartResult("thread-priority", "priority"));
-    const binding = await start([]);
+it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {
+  let nextThreadId = 1;
+  const { request, start } = createRun(() => threadStartResult(`thread-${nextThreadId++}`));
 
-    expect(binding.threadId).toBe("thread-priority");
-  });
+  await start([
+    {
+      type: "function",
+      name: "message",
+      description: "Permissive test tool",
+      inputSchema: { type: "object" },
+    },
+  ]);
+  const permissiveTool = createPermissiveTool("message");
+  await start([
+    {
+      type: "function",
+      name: permissiveTool.name,
+      description: permissiveTool.description,
+      inputSchema: permissiveTool.parameters,
+    },
+  ]);
 
-  it("treats dynamic tool schema changes as thread-fingerprint changes", async () => {
-    let nextThreadId = 1;
-    const { request, start } = createRun(() => threadStartResult(`thread-${nextThreadId++}`));
-
-    await start([
-      {
-        type: "function",
-        name: "message",
-        description: "Permissive test tool",
-        inputSchema: { type: "object" },
-      },
-    ]);
-    const permissiveTool = createPermissiveTool("message");
-    await start([
-      {
-        type: "function",
-        name: permissiveTool.name,
-        description: permissiveTool.description,
-        inputSchema: permissiveTool.parameters,
-      },
-    ]);
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
-  });
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "config/read",
+    "configRequirements/read",
+    "thread/start",
+    "config/read",
+    "configRequirements/read",
+    "thread/start",
+  ]);
 });

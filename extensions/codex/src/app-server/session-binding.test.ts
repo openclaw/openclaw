@@ -12,30 +12,47 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
-  bindingStoreKey,
+  bindingStoreKey as storeKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-  createCodexAppServerBindingStore,
-  createStoredCodexAppServerBinding,
-  hashCodexAppServerBindingFingerprint,
-  readCodexAppServerThreadBinding,
-  reclaimCurrentCodexSessionGeneration,
-  resolveCodexSessionBinding,
-  type StoredCodexAppServerBinding,
-  type CodexAppServerBindingStore,
-  type CodexAppServerThreadBinding,
+  createCodexAppServerBindingStore as createBindingStore,
+  createStoredCodexAppServerBinding as importStoredBinding,
+  hashCodexAppServerBindingFingerprint as hashFingerprint,
+  readCodexAppServerThreadBinding as decodeBinding,
+  reclaimCurrentCodexSessionGeneration as reclaimGeneration,
+  resolveCodexSessionBinding as resolveBinding,
+  type StoredCodexAppServerBinding as StoredBinding,
+  type CodexAppServerBindingStore as BindingStore,
+  type CodexAppServerThreadBinding as ThreadBinding,
 } from "./session-binding.js";
-import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
-import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
+import { createCodexSqliteTestBindingStateStore as createSqliteState } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexTestBindingStateStore as createMemoryState } from "./session-binding.test-helpers.js";
 
-function createStateStore() {
-  const values = new Map<string, StoredCodexAppServerBinding>();
-  const state = createCodexTestBindingStateStore(values);
-  return { state, values };
-}
+type Identity = Parameters<BindingStore["mutate"]>[0];
+type Mutation = Parameters<BindingStore["mutate"]>[1];
 
 function createBindingFixture() {
-  const fixture = createStateStore();
-  return { ...fixture, store: createCodexAppServerBindingStore(fixture.state) };
+  const values = new Map<string, StoredBinding>();
+  const state = createMemoryState(values);
+  return { state, values, store: createBindingStore(state) };
+}
+
+const stateDirs: string[] = [];
+const sessionFixtures: Awaited<ReturnType<typeof createOpenClawTestState>>[] = [];
+async function createSessionFixture(prefix: string) {
+  const fixture = await createOpenClawTestState({ prefix, layout: "state-only", applyEnv: false });
+  sessionFixtures.push(fixture);
+  return { root: fixture.stateDir, storePath: path.join(fixture.stateDir, "sessions.json") };
+}
+function createSqliteFixture(namespace: string, rejectNew = false) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
+  stateDirs.push(stateDir);
+  const state = createSqliteState({
+    namespace,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+    ...(rejectNew ? { overflowPolicy: "reject-new" as const } : {}),
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  return { state, store: createBindingStore(state) };
 }
 
 function makeSessionIdentity(sessionId: string) {
@@ -46,32 +63,82 @@ function makeStableSessionIdentity(sessionId: string, sessionKey: string) {
   return { ...makeSessionIdentity(sessionId), sessionKey };
 }
 
-function setBinding(
-  store: CodexAppServerBindingStore,
-  identity: Parameters<CodexAppServerBindingStore["mutate"]>[0],
-  binding: CodexAppServerThreadBinding,
-) {
+function setBinding(store: BindingStore, identity: Identity, binding: ThreadBinding) {
   return store.mutate(identity, { kind: "set", binding });
 }
 
+async function createGenerationFixture(threadId = "thread-old", cwd = "/old") {
+  const fixture = createBindingFixture();
+  const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
+  await setBinding(fixture.store, previous, { threadId, cwd });
+  return { ...fixture, previous, current: { ...previous, sessionId: "session-2" } };
+}
+
 async function expectMutation(
-  store: CodexAppServerBindingStore,
-  identity: Parameters<CodexAppServerBindingStore["mutate"]>[0],
+  store: BindingStore,
+  identity: Identity,
   expected: boolean,
-  mutation: Parameters<CodexAppServerBindingStore["mutate"]>[1],
+  mutation: Mutation,
 ) {
   await expect(store.mutate(identity, mutation)).resolves.toBe(expected);
+}
+
+function expectSet(
+  store: BindingStore,
+  identity: Identity,
+  expected: boolean,
+  threadId: string,
+  cwd: string,
+  ifAbsent = false,
+) {
+  return expectMutation(store, identity, expected, {
+    kind: "set",
+    binding: { threadId, cwd },
+    ...(ifAbsent ? { if: { kind: "absent" as const } } : {}),
+  });
+}
+
+function expectReclaim(
+  store: BindingStore,
+  identity: Identity,
+  expected: boolean,
+  previousId: string,
+) {
+  return expectMutation(store, identity, expected, {
+    kind: "reclaim-generation",
+    expectedPreviousSessionId: previousId,
+  });
+}
+
+async function expectPolicyRoundTrip(
+  policy: NonNullable<ThreadBinding["pluginAppPolicyContext"]>,
+  cwd: string,
+  updatedAt?: string,
+) {
+  const { store } = createBindingFixture();
+  const identity = makeSessionIdentity("session-policy");
+  const binding = { threadId: "thread-policy", cwd, pluginAppPolicyContext: policy };
+  await setBinding(store, identity, binding);
+  expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext: policy });
+  const imported = await importStoredBinding({ schemaVersion: 2, ...binding, updatedAt });
+  expect(imported?.binding.pluginAppPolicyContext).toEqual(policy);
 }
 
 afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
+  for (const stateDir of stateDirs.splice(0)) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+  for (const fixture of sessionFixtures.splice(0)) {
+    await fixture.cleanup();
+  }
 });
 
 describe("Codex app-server binding store", () => {
   it("rechecks resume authority after the lazy store resolves and before writing", async () => {
-    const { state } = createStateStore();
+    const state = createMemoryState();
     const store = createLazyCodexAppServerBindingStore(state);
     const identity = { kind: "conversation" as const, bindingId: "pending-resume" };
     const binding = {
@@ -180,7 +247,7 @@ describe("Codex app-server binding store", () => {
   ])("treats $name under the same stable key as another owner", async ({ storedSessionId }) => {
     const { values, store } = createBindingFixture();
     const currentIdentity = makeStableSessionIdentity("session-current", "agent:main:stable");
-    values.set(bindingStoreKey(currentIdentity), {
+    values.set(storeKey(currentIdentity), {
       version: 1,
       state: "active",
       binding: { threadId: "thread-stale-generation", cwd: "/repo" },
@@ -220,36 +287,31 @@ describe("Codex app-server binding store", () => {
   });
 
   it("fails closed on malformed pending supervision state", async () => {
-    expect(
-      readCodexAppServerThreadBinding({
-        threadId: "thread-source",
-        cwd: "/repo",
+    const base = { threadId: "thread-source", cwd: "/repo" };
+    const pending = { sourceThreadId: "thread-source" };
+    for (const binding of [
+      {
+        ...base,
         preserveNativeModel: true,
         pendingSupervisionBranch: {
-          sourceThreadId: "thread-source",
+          ...pending,
           cleanupThreadIds: ["thread-probe", "thread-probe"],
         },
-      }),
-    ).toBeUndefined();
-    expect(
-      readCodexAppServerThreadBinding({
+      },
+      {
+        ...base,
         threadId: "thread-other",
-        cwd: "/repo",
         preserveNativeModel: true,
-        pendingSupervisionBranch: { sourceThreadId: "thread-source" },
-      }),
-    ).toBeUndefined();
-    expect(
-      readCodexAppServerThreadBinding({
-        threadId: "thread-source",
-        cwd: "/repo",
-        pendingSupervisionBranch: { sourceThreadId: "thread-source", unknown: true },
-      }),
-    ).toBeUndefined();
+        pendingSupervisionBranch: pending,
+      },
+      { ...base, pendingSupervisionBranch: { ...pending, unknown: true } },
+    ]) {
+      expect(decodeBinding(binding)).toBeUndefined();
+    }
 
     const { state, store } = createBindingFixture();
     const identity = makeSessionIdentity("session-corrupt");
-    state.register(bindingStoreKey(identity), {
+    state.register(storeKey(identity), {
       version: 1,
       state: "active",
       binding: {
@@ -277,11 +339,9 @@ describe("Codex app-server binding store", () => {
       pendingSupervisionBranch: { sourceThreadId: "thread-source" },
     };
 
-    expect(readCodexAppServerThreadBinding({ ...valid, connectionScope: "user" })).toBeUndefined();
-    expect(readCodexAppServerThreadBinding({ ...valid, connectionScope: {} })).toBeUndefined();
-    expect(
-      readCodexAppServerThreadBinding({ ...valid, supervisionSourceThreadId: undefined }),
-    ).toBeUndefined();
+    expect(decodeBinding({ ...valid, connectionScope: "user" })).toBeUndefined();
+    expect(decodeBinding({ ...valid, connectionScope: {} })).toBeUndefined();
+    expect(decodeBinding({ ...valid, supervisionSourceThreadId: undefined })).toBeUndefined();
   });
 
   it("commits a pending supervision branch only from its exact cleanup snapshot", async () => {
@@ -306,33 +366,28 @@ describe("Codex app-server binding store", () => {
       },
     });
     const tracked = { ...initial, cleanupThreadIds: ["thread-probe"] };
-    await expectMutation(store, identity, false, {
-      kind: "patch-pending-supervision-branch",
-      expected: { ...initial, connectionFingerprint: "connection-two" },
-      pending: tracked,
-    });
-    await expectMutation(store, identity, false, {
-      kind: "patch-pending-supervision-branch",
-      expected: { ...initial, lastTurnId: "turn-other" },
-      pending: tracked,
-    });
-    await expectMutation(store, identity, true, {
-      kind: "patch-pending-supervision-branch",
-      expected: initial,
-      pending: tracked,
-    });
-    await expectMutation(store, identity, false, {
-      kind: "commit-pending-supervision-branch",
-      expected: initial,
-      threadId: "thread-final",
-      patch: { model: "native-model", modelProvider: "native-provider" },
-    });
-    await expectMutation(store, identity, true, {
-      kind: "commit-pending-supervision-branch",
-      expected: tracked,
-      threadId: "thread-final",
-      patch: { model: "native-model", modelProvider: "native-provider" },
-    });
+    for (const [expected, applied] of [
+      [{ ...initial, connectionFingerprint: "connection-two" }, false],
+      [{ ...initial, lastTurnId: "turn-other" }, false],
+      [initial, true],
+    ] as const) {
+      await expectMutation(store, identity, applied, {
+        kind: "patch-pending-supervision-branch",
+        expected,
+        pending: tracked,
+      });
+    }
+    for (const [expected, applied] of [
+      [initial, false],
+      [tracked, true],
+    ] as const) {
+      await expectMutation(store, identity, applied, {
+        kind: "commit-pending-supervision-branch",
+        expected,
+        threadId: "thread-final",
+        patch: { model: "native-model", modelProvider: "native-provider" },
+      });
+    }
     expect(store.read(identity)).toEqual({
       threadId: "thread-final",
       cwd: "/repo",
@@ -346,8 +401,6 @@ describe("Codex app-server binding store", () => {
   });
 
   it("round-trips account app policy context", async () => {
-    const { store } = createBindingFixture();
-    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-account" };
     const pluginAppPolicyContext = {
       fingerprint: "account-policy-1",
       apps: {
@@ -363,26 +416,10 @@ describe("Codex app-server binding store", () => {
       pluginAppIds: {},
     };
 
-    await setBinding(store, identity, {
-      threadId: "thread-account",
-      cwd: "/repo",
-      pluginAppPolicyContext,
-    });
-    expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
-
-    const imported = await createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-account",
-      cwd: "/repo",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      pluginAppPolicyContext,
-    });
-    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+    await expectPolicyRoundTrip(pluginAppPolicyContext, "/repo", "2026-01-01T00:00:00.000Z");
   });
 
   it("round-trips repository marketplace app ownership through stored and imported bindings", async () => {
-    const { store } = createBindingFixture();
-    const identity = makeSessionIdentity("session-security-review");
     const pluginAppPolicyContext = {
       fingerprint: "repository-plugin-policy",
       apps: {
@@ -398,50 +435,25 @@ describe("Codex app-server binding store", () => {
       pluginAppIds: { "security-review@company-tools": ["github"] },
     };
 
-    await setBinding(store, identity, {
-      threadId: "thread-security-review",
-      cwd: "/repo/company",
-      pluginAppPolicyContext,
-    });
-    expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
-
-    const imported = await createStoredCodexAppServerBinding({
-      schemaVersion: 2,
-      threadId: "thread-security-review",
-      cwd: "/repo/company",
-      pluginAppPolicyContext,
-    });
-    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+    await expectPolicyRoundTrip(pluginAppPolicyContext, "/repo/company");
   });
 
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
-    try {
-      const state = createCodexSqliteTestBindingStateStore({
-        namespace: "app-server-thread-bindings-clear-test",
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    const { state, store } = createSqliteFixture("app-server-thread-bindings-clear-test");
+    const normal = { kind: "conversation" as const, bindingId: "normal" };
+    const legacy = { kind: "conversation" as const, bindingId: "legacy-source" };
+    for (const identity of [normal, legacy]) {
+      await setBinding(store, identity, {
+        threadId: `thread-${identity.bindingId}`,
+        cwd: "/repo",
       });
-      const store = createCodexAppServerBindingStore(state);
-      const normal = { kind: "conversation" as const, bindingId: "normal" };
-      const legacy = { kind: "conversation" as const, bindingId: "legacy-source" };
-      for (const identity of [normal, legacy]) {
-        await setBinding(store, identity, {
-          threadId: `thread-${identity.bindingId}`,
-          cwd: "/repo",
-        });
-        await store.mutate(identity, { kind: "clear" });
-      }
-
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(Date.now() + 10);
-      expect(state.lookup(bindingStoreKey(normal))).toBeUndefined();
-      expect(state.lookup(bindingStoreKey(legacy))).toEqual({ version: 1, state: "cleared" });
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      fs.rmSync(stateDir, { recursive: true, force: true });
+      await store.mutate(identity, { kind: "clear" });
     }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10);
+    expect(state.lookup(storeKey(normal))).toBeUndefined();
+    expect(state.lookup(storeKey(legacy))).toEqual({ version: 1, state: "cleared" });
   });
 
   it("isolates identical session ids owned by different agents", async () => {
@@ -454,7 +466,7 @@ describe("Codex app-server binding store", () => {
 
     expect(store.read(first)).toMatchObject({ threadId: "thread-first" });
     expect(store.read(second)).toMatchObject({ threadId: "thread-second" });
-    expect(bindingStoreKey({ kind: "session", agentId: " First ", sessionId: "shared" })).toBe(
+    expect(storeKey({ kind: "session", agentId: " First ", sessionId: "shared" })).toBe(
       "session:first:shared",
     );
   });
@@ -462,19 +474,20 @@ describe("Codex app-server binding store", () => {
   it.each([false, true])(
     "keeps one binding across session rotations (expired lease=%s)",
     async (expiredLease) => {
-      const { values, store } = createBindingFixture();
-      const first = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-      const second = { ...first, sessionId: "session-2" };
-
-      await setBinding(store, first, { threadId: "thread-1", cwd: "/repo" });
+      const {
+        values,
+        store,
+        previous: first,
+        current: second,
+      } = await createGenerationFixture("thread-1", "/repo");
       expect(store.read(second)).toBeUndefined();
       await store.withLease(second, async () => undefined);
 
-      expect(bindingStoreKey(first)).toBe(bindingStoreKey(second));
+      expect(storeKey(first)).toBe(storeKey(second));
       expect(values.size).toBe(1);
-      expect(values.get(bindingStoreKey(second))).toMatchObject({ sessionId: "session-1" });
+      expect(values.get(storeKey(second))).toMatchObject({ sessionId: "session-1" });
       if (expiredLease) {
-        const key = bindingStoreKey(first);
+        const key = storeKey(first);
         const predecessor = values.get(key)!;
         values.set(key, {
           ...predecessor,
@@ -482,7 +495,7 @@ describe("Codex app-server binding store", () => {
         });
       }
       await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
-      expect(values.get(bindingStoreKey(second))).toMatchObject({
+      expect(values.get(storeKey(second))).toMatchObject({
         state: "active",
         sessionId: "session-2",
         binding: { threadId: "thread-1" },
@@ -499,11 +512,12 @@ describe("Codex app-server binding store", () => {
   );
 
   it("rejects a delayed adoption after a newer session generation wins", async () => {
-    const { store } = createBindingFixture();
-    const first = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    const second = { ...first, sessionId: "session-2" };
+    const {
+      store,
+      previous: first,
+      current: second,
+    } = await createGenerationFixture("thread-1", "/repo");
     const third = { ...first, sessionId: "session-3" };
-    await setBinding(store, first, { threadId: "thread-1", cwd: "/repo" });
 
     await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
     await expect(store.adoptSessionGeneration(third, second.sessionId)).resolves.toBe("adopted");
@@ -518,13 +532,7 @@ describe("Codex app-server binding store", () => {
   it.each(["ordinary", "supervision"] as const)(
     "adopts the committed predecessor after reopening a %s binding without a compaction hook",
     async (ownership) => {
-      const fixture = await createOpenClawTestState({
-        prefix: "codex-predecessor-reopen-",
-        layout: "state-only",
-        applyEnv: false,
-      });
-      const root = fixture.stateDir;
-      const storePath = path.join(root, "sessions.json");
+      const { root, storePath } = await createSessionFixture("codex-predecessor-reopen-");
       const previous = makeStableSessionIdentity(
         "session-before-compaction",
         "agent:main:compaction",
@@ -536,7 +544,7 @@ describe("Codex app-server binding store", () => {
         cwd: "/repo",
         model: "gpt-5.6-luna",
         modelProvider: "openai",
-        dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint("native-tools"),
+        dynamicToolsFingerprint: hashFingerprint("native-tools"),
         ...(ownership === "supervision"
           ? {
               connectionScope: "supervision" as const,
@@ -547,7 +555,7 @@ describe("Codex app-server binding store", () => {
           : {}),
       };
       const openStore = () => {
-        const state = createCodexSqliteTestBindingStateStore({
+        const state = createSqliteState({
           namespace: "predecessor-reopen",
           maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
           overflowPolicy: "reject-new",
@@ -555,47 +563,42 @@ describe("Codex app-server binding store", () => {
         });
         return { state, store: createLazyCodexAppServerBindingStore(state) };
       };
-      try {
-        await upsertSessionEntry({
-          ...sessionScope,
-          entry: { sessionId: previous.sessionId, updatedAt: 1 },
-        });
-        await openStore().store.mutate(previous, { kind: "set", binding });
-        await patchSessionEntry({
-          ...sessionScope,
-          update: () => ({ sessionId: current.sessionId }),
-        });
-        expect(getSessionEntry(sessionScope)).toMatchObject({
-          sessionId: current.sessionId,
-          previousSessionId: previous.sessionId,
-        });
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
-        const { state, store } = openStore();
-        expect(store.read(current)).toBeUndefined();
 
-        for (let attempt = 0; attempt < 2; attempt++) {
-          await expect(
-            reclaimCurrentCodexSessionGeneration({
-              bindingStore: store,
-              identity: current,
-              storePath,
-            }),
-          ).resolves.toBe(true);
-          expect(store.read(current)).toEqual(binding);
-        }
-        expect(state.lookup(bindingStoreKey(current))).toEqual({
-          version: 1,
-          state: "active",
-          sessionId: current.sessionId,
-          binding,
-        });
-        await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
-        await fixture.cleanup();
+      await upsertSessionEntry({
+        ...sessionScope,
+        entry: { sessionId: previous.sessionId, updatedAt: 1 },
+      });
+      await openStore().store.mutate(previous, { kind: "set", binding });
+      await patchSessionEntry({
+        ...sessionScope,
+        update: () => ({ sessionId: current.sessionId }),
+      });
+      expect(getSessionEntry(sessionScope)).toMatchObject({
+        sessionId: current.sessionId,
+        previousSessionId: previous.sessionId,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const { state, store } = openStore();
+      expect(store.read(current)).toBeUndefined();
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(
+          reclaimGeneration({
+            bindingStore: store,
+            identity: current,
+            storePath,
+          }),
+        ).resolves.toBe(true);
+        expect(store.read(current)).toEqual(binding);
       }
+      expect(state.lookup(storeKey(current))).toEqual({
+        version: 1,
+        state: "active",
+        sessionId: current.sessionId,
+        binding,
+      });
+      await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
     },
   );
 
@@ -606,13 +609,7 @@ describe("Codex app-server binding store", () => {
   )(
     "does not adopt a binding owned by $mismatch (supervision=$supervision)",
     async ({ mismatch, supervision }) => {
-      const fixture = await createOpenClawTestState({
-        prefix: "codex-predecessor-mismatch-",
-        layout: "state-only",
-        applyEnv: false,
-      });
-      const root = fixture.stateDir;
-      const storePath = path.join(root, "sessions.json");
+      const { storePath } = await createSessionFixture("codex-predecessor-mismatch-");
       const { store } = createBindingFixture();
       const current = makeStableSessionIdentity("session-current", "agent:main:compaction");
       const previous = {
@@ -635,50 +632,47 @@ describe("Codex app-server binding store", () => {
             }
           : {}),
       };
-      try {
-        await upsertSessionEntry({
-          agentId: current.agentId,
-          sessionKey: current.sessionKey,
-          storePath,
-          entry: {
-            sessionId: current.sessionId,
-            previousSessionId: "session-previous",
-            updatedAt: 1,
-          },
-        });
-        await store.mutate(previous, { kind: "set", binding });
 
-        const resolved = await resolveCodexSessionBinding({
+      await upsertSessionEntry({
+        agentId: current.agentId,
+        sessionKey: current.sessionKey,
+        storePath,
+        entry: {
+          sessionId: current.sessionId,
+          previousSessionId: "session-previous",
+          updatedAt: 1,
+        },
+      });
+      await store.mutate(previous, { kind: "set", binding });
+
+      const resolved = await resolveBinding({
+        bindingStore: store,
+        identity: current,
+        storePath,
+      });
+      using _ = { [Symbol.dispose]: resolved.release };
+      expect(resolved.binding).toBeUndefined();
+      expect(store.read(previous)).toEqual(binding);
+      await expect(
+        reclaimGeneration({
           bindingStore: store,
           identity: current,
           storePath,
-        });
-        using _ = { [Symbol.dispose]: resolved.release };
-        expect(resolved.binding).toBeUndefined();
-        expect(store.read(previous)).toEqual(binding);
-        await expect(
-          reclaimCurrentCodexSessionGeneration({
-            bindingStore: store,
-            identity: current,
-            storePath,
-          }),
-        ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
-        expect(store.read(current)).toBeUndefined();
-        expect(store.read(previous)).toEqual(
-          mismatch === "two generations behind" && !supervision ? undefined : binding,
-        );
-      } finally {
-        await fixture.cleanup();
-      }
+        }),
+      ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
+      expect(store.read(current)).toBeUndefined();
+      expect(store.read(previous)).toEqual(
+        mismatch === "two generations behind" && !supervision ? undefined : binding,
+      );
     },
   );
 
   it("rechecks predecessor adoption authority after the lazy store resolves", async () => {
-    const { state } = createStateStore();
+    const state = createMemoryState();
     const previous = makeStableSessionIdentity("session-previous", "agent:main:compaction");
     const current = { ...previous, sessionId: "session-current" };
     const binding = { threadId: "native-thread", cwd: "/repo" };
-    await createCodexAppServerBindingStore(state).mutate(previous, { kind: "set", binding });
+    await createBindingStore(state).mutate(previous, { kind: "set", binding });
     const store = createLazyCodexAppServerBindingStore(state);
     let active = true;
     const adopting = store.adoptSessionGeneration(current, previous.sessionId, () => {
@@ -694,11 +688,12 @@ describe("Codex app-server binding store", () => {
   });
 
   it("rejects reclaim when another session generation wins after verification", async () => {
-    const { store } = createBindingFixture();
-    const first = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    const second = { ...first, sessionId: "session-2" };
+    const {
+      store,
+      previous: first,
+      current: second,
+    } = await createGenerationFixture("thread-1", "/repo");
     const third = { ...first, sessionId: "session-3" };
-    await setBinding(store, first, { threadId: "thread-1", cwd: "/repo" });
 
     const plan = await store.prepareSessionGenerationReclaim(second);
     expect(plan).toEqual({ kind: "verify", expectedPreviousSessionId: first.sessionId });
@@ -706,10 +701,7 @@ describe("Codex app-server binding store", () => {
     if (plan.kind !== "verify") {
       throw new Error("expected stale session generation");
     }
-    await expectMutation(store, second, false, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: plan.expectedPreviousSessionId,
-    });
+    await expectReclaim(store, second, false, plan.expectedPreviousSessionId);
     expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
   });
 
@@ -717,7 +709,7 @@ describe("Codex app-server binding store", () => {
     const first = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
     const second = { ...first, sessionId: "session-2" };
 
-    expect(bindingStoreKey(first)).not.toBe(bindingStoreKey(second));
+    expect(storeKey(first)).not.toBe(storeKey(second));
   });
 
   it("does not create a retirement tombstone for a session without a Codex binding", async () => {
@@ -729,135 +721,81 @@ describe("Codex app-server binding store", () => {
   });
 
   it("expires physical-session retirement fences but retains stable-key fences", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
-    try {
-      const state = createCodexSqliteTestBindingStateStore({
-        namespace: "app-server-thread-bindings-retirement-test",
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    const { state, store } = createSqliteFixture(
+      "app-server-thread-bindings-retirement-test",
+      true,
+    );
+    const physical = makeSessionIdentity("physical-session");
+    const stable = {
+      ...physical,
+      sessionId: "stable-session",
+      sessionKey: "agent:main:telegram:chat-1",
+    };
+    for (const identity of [physical, stable]) {
+      await setBinding(store, identity, {
+        threadId: `thread-${identity.sessionId}`,
+        cwd: "/repo",
       });
-      const store = createCodexAppServerBindingStore(state);
-      const physical = makeSessionIdentity("physical-session");
-      const stable = {
-        ...physical,
-        sessionId: "stable-session",
-        sessionKey: "agent:main:telegram:chat-1",
-      };
-      for (const identity of [physical, stable]) {
-        await setBinding(store, identity, {
-          threadId: `thread-${identity.sessionId}`,
-          cwd: "/repo",
-        });
-        await expect(store.retireSessionGeneration(identity)).resolves.toBe("applied");
-      }
-
-      expect(state.lookup(bindingStoreKey(physical))).toMatchObject({
-        state: "cleared",
-        retired: true,
-      });
-      expect(state.lookup(bindingStoreKey(stable))).toMatchObject({
-        state: "cleared",
-        retired: true,
-      });
-
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(Date.now() + 2 * 60_000);
-
-      expect(state.lookup(bindingStoreKey(physical))).toBeUndefined();
-      expect(state.lookup(bindingStoreKey(stable))).toMatchObject({
-        state: "cleared",
-        retired: true,
-      });
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      fs.rmSync(stateDir, { recursive: true, force: true });
+      await expect(store.retireSessionGeneration(identity)).resolves.toBe("applied");
     }
+
+    expect(state.lookup(storeKey(physical))).toMatchObject({
+      state: "cleared",
+      retired: true,
+    });
+    expect(state.lookup(storeKey(stable))).toMatchObject({
+      state: "cleared",
+      retired: true,
+    });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2 * 60_000);
+
+    expect(state.lookup(storeKey(physical))).toBeUndefined();
+    expect(state.lookup(storeKey(stable))).toMatchObject({
+      state: "cleared",
+      retired: true,
+    });
   });
 
   it("claims a cleared binding once without allowing the retired generation back in", async () => {
-    const { values, store } = createBindingFixture();
-    const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    const current = { ...previous, sessionId: "session-2" };
-    await setBinding(store, previous, { threadId: "thread-old", cwd: "/old" });
-    await expectMutation(store, current, false, {
-      kind: "set",
-      binding: { threadId: "thread-premature", cwd: "/new" },
-      if: { kind: "absent" },
-    });
+    const { values, store, previous, current } = await createGenerationFixture();
+    await expectSet(store, current, false, "thread-premature", "/new", true);
     await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(true);
 
-    await expectMutation(store, current, false, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/new" },
-      if: { kind: "absent" },
-    });
-    await expectMutation(store, current, true, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: previous.sessionId,
-    });
-    await expectMutation(store, current, true, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/new" },
-      if: { kind: "absent" },
-    });
+    await expectSet(store, current, false, "thread-new", "/new", true);
+    await expectReclaim(store, current, true, previous.sessionId);
+    await expectSet(store, current, true, "thread-new", "/new", true);
 
     expect(store.read(previous)).toBeUndefined();
     expect(store.read(current)).toMatchObject({
       threadId: "thread-new",
       cwd: "/new",
     });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-stale", cwd: "/stale" },
-      if: { kind: "absent" },
-    });
+    await expectSet(store, previous, false, "thread-stale", "/stale", true);
     await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(false);
     expect(values.size).toBe(1);
   });
 
   it("reclaims a stale stable generation only for the current OpenClaw session", async () => {
-    const { values, store } = createBindingFixture();
-    const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    const current = { ...previous, sessionId: "session-2" };
-    await setBinding(store, previous, { threadId: "thread-old", cwd: "/old" });
-    await expectMutation(store, current, false, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: "other-session",
-    });
-    expect(values.get(bindingStoreKey(previous))).toMatchObject({
+    const { values, store, previous, current } = await createGenerationFixture();
+    await expectReclaim(store, current, false, "other-session");
+    expect(values.get(storeKey(previous))).toMatchObject({
       state: "active",
       sessionId: "session-1",
     });
 
-    await expectMutation(store, current, true, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: previous.sessionId,
-    });
-    expect(values.get(bindingStoreKey(current))).toEqual({
+    await expectReclaim(store, current, true, previous.sessionId);
+    expect(values.get(storeKey(current))).toEqual({
       version: 1,
       state: "cleared",
       sessionId: "session-2",
     });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-delayed-before-commit", cwd: "/stale" },
-    });
-    await expectMutation(store, current, true, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/new" },
-      if: { kind: "absent" },
-    });
+    await expectSet(store, previous, false, "thread-delayed-before-commit", "/stale");
+    await expectSet(store, current, true, "thread-new", "/new", true);
 
-    await expectMutation(store, previous, false, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: previous.sessionId,
-    });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-delayed", cwd: "/stale" },
-    });
+    await expectReclaim(store, previous, false, previous.sessionId);
+    await expectSet(store, previous, false, "thread-delayed", "/stale");
     expect(store.read(current)).toMatchObject({ threadId: "thread-new" });
   });
 
@@ -875,17 +813,11 @@ describe("Codex app-server binding store", () => {
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-replacement", cwd: "/other" },
-    });
+    await expectSet(store, previous, false, "thread-replacement", "/other");
     await expectMutation(store, previous, false, { kind: "clear", threadId: "thread-supervised" });
 
-    await expectMutation(store, current, false, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: previous.sessionId,
-    });
-    expect(values.get(bindingStoreKey(previous))).toMatchObject({
+    await expectReclaim(store, current, false, previous.sessionId);
+    expect(values.get(storeKey(previous))).toMatchObject({
       state: "active",
       sessionId: previous.sessionId,
       binding: { threadId: "thread-supervised", connectionScope: "supervision" },
@@ -898,114 +830,73 @@ describe("Codex app-server binding store", () => {
   });
 
   it("fences a retired physical generation until its successor claims the stable key", async () => {
-    const { values, store } = createBindingFixture();
-    const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    const current = { ...previous, sessionId: "session-2" };
-    await setBinding(store, previous, { threadId: "thread-old", cwd: "/old" });
+    const { values, store, previous, current } = await createGenerationFixture();
+    const retired = { version: 1, state: "cleared", retired: true, sessionId: "session-1" };
 
     await expect(store.retireSessionGeneration(previous)).resolves.toBe("applied");
     await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(true);
-    expect(values.get(bindingStoreKey(previous))).toEqual({
-      version: 1,
-      state: "cleared",
-      retired: true,
-      sessionId: "session-1",
-    });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-stale", cwd: "/stale" },
-    });
+    expect(values.get(storeKey(previous))).toEqual(retired);
+    await expectSet(store, previous, false, "thread-stale", "/stale");
     await expect(store.withLease(previous, async () => undefined)).rejects.toThrow(
       "generation was retired",
     );
 
     await store.withLease(current, async () => undefined);
-    expect(values.get(bindingStoreKey(previous))).toEqual({
-      version: 1,
-      state: "cleared",
-      retired: true,
-      sessionId: "session-1",
-    });
-    await expectMutation(store, previous, false, {
-      kind: "set",
-      binding: { threadId: "thread-delayed", cwd: "/stale" },
-    });
+    expect(values.get(storeKey(previous))).toEqual(retired);
+    await expectSet(store, previous, false, "thread-delayed", "/stale");
 
-    await expectMutation(store, current, true, {
-      kind: "reclaim-generation",
-      expectedPreviousSessionId: previous.sessionId,
-    });
-    await expectMutation(store, current, true, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/new" },
-    });
+    await expectReclaim(store, current, true, previous.sessionId);
+    await expectSet(store, current, true, "thread-new", "/new");
     expect(store.read(current)).toMatchObject({ threadId: "thread-new" });
   });
 
   it("keeps a retired in-place generation fenced until it is verified", async () => {
-    const { values, store } = createBindingFixture();
-    const identity = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
-    await setBinding(store, identity, { threadId: "thread-old", cwd: "/old" });
+    const { values, store, previous: identity } = await createGenerationFixture();
     await store.retireSessionGeneration(identity);
 
     await expect(store.resetSessionGeneration(identity)).resolves.toBe("conflict");
-    expect(values.get(bindingStoreKey(identity))).toEqual({
+    expect(values.get(storeKey(identity))).toEqual({
       version: 1,
       state: "cleared",
       retired: true,
       sessionId: identity.sessionId,
     });
-    await expectMutation(store, identity, false, {
-      kind: "set",
-      binding: { threadId: "thread-unverified", cwd: "/new" },
-    });
+    await expectSet(store, identity, false, "thread-unverified", "/new");
   });
 
   it("recovers a retired in-place generation through the authoritative session store", async () => {
-    const fixture = await createOpenClawTestState({
-      prefix: "openclaw-codex-reset-reclaim-",
-      layout: "state-only",
-      applyEnv: false,
-    });
-    const root = fixture.stateDir;
-    const storePath = path.join(root, "sessions.json");
+    const { storePath } = await createSessionFixture("openclaw-codex-reset-reclaim-");
     const { store } = createBindingFixture();
     const identity = makeStableSessionIdentity("session-current", "agent:main:telegram:direct:123");
-    try {
-      await upsertSessionEntry({
-        agentId: identity.agentId,
-        sessionKey: identity.sessionKey,
-        storePath,
-        entry: { sessionId: identity.sessionId, updatedAt: 1 },
-      });
-      await setBinding(store, identity, { threadId: "thread-before-reset", cwd: "/repo" });
-      await store.retireSessionGeneration(identity);
 
-      await expect(
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: store,
-          identity,
-          config: { session: { store: storePath } },
-        }),
-      ).resolves.toBe(true);
-      await expectMutation(store, identity, true, {
-        kind: "set",
-        binding: { threadId: "thread-after-reset", cwd: "/repo" },
-      });
-    } finally {
-      await fixture.cleanup();
-    }
+    await upsertSessionEntry({
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      storePath,
+      entry: { sessionId: identity.sessionId, updatedAt: 1 },
+    });
+    await setBinding(store, identity, { threadId: "thread-before-reset", cwd: "/repo" });
+    await store.retireSessionGeneration(identity);
+
+    await expect(
+      reclaimGeneration({
+        bindingStore: store,
+        identity,
+        config: { session: { store: storePath } },
+      }),
+    ).resolves.toBe(true);
+    await expectSet(store, identity, true, "thread-after-reset", "/repo");
   });
 
   it("hashes stable session keys and keeps agent ownership distinct", () => {
     const sessionKey = "agent:main:telegram:private-peer@example.com";
-    const first = bindingStoreKey({
+    const first = storeKey({
       kind: "session",
       agentId: "first",
       sessionId: "session-1",
       sessionKey,
     });
-    const second = bindingStoreKey({
+    const second = storeKey({
       kind: "session",
       agentId: "second",
       sessionId: "session-2",
@@ -1042,11 +933,11 @@ describe("Codex app-server binding store", () => {
   });
 
   it("rejects empty storage identities", () => {
-    expect(() => bindingStoreKey({ kind: "session", agentId: "main", sessionId: " " })).toThrow(
+    expect(() => storeKey({ kind: "session", agentId: "main", sessionId: " " })).toThrow(
       "requires a session id",
     );
-    expect(() =>
-      bindingStoreKey({ kind: "session", agentId: " ", sessionId: "session-1" }),
-    ).toThrow("requires an agent id");
+    expect(() => storeKey({ kind: "session", agentId: " ", sessionId: "session-1" })).toThrow(
+      "requires an agent id",
+    );
   });
 });

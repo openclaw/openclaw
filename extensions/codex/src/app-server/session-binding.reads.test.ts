@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -10,18 +8,40 @@ import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-  createStoredCodexAppServerBinding,
-  hashCodexAppServerBindingFingerprint,
-  readCodexAppServerThreadBinding,
-  createCodexAppServerBindingStore,
-  resolveCodexSessionBinding,
+  createStoredCodexAppServerBinding as importStoredBinding,
+  hashCodexAppServerBindingFingerprint as hashFingerprint,
+  readCodexAppServerThreadBinding as decodeBinding,
+  createCodexAppServerBindingStore as createBindingStore,
+  resolveCodexSessionBinding as resolveBinding,
 } from "./session-binding.js";
-import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
-import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
+import { createCodexSqliteTestBindingStateStore as createSqliteState } from "./session-binding.sqlite.test-helpers.js";
+import { createCodexTestBindingStateStore as createStateStore } from "./session-binding.test-helpers.js";
 
-afterEach(() => {
+const fixtures: Awaited<ReturnType<typeof createOpenClawTestState>>[] = [];
+async function createStateFixture(prefix: string) {
+  const fixture = await createOpenClawTestState({ prefix, layout: "state-only", applyEnv: false });
+  fixtures.push(fixture);
+  return fixture;
+}
+
+async function createAuthorityFixture(prefix: string, sessionKey: string) {
+  const fixture = await createStateFixture(prefix);
+  const storePath = path.join(fixture.stateDir, "sessions.json");
+  const store = createBindingStore(createStateStore());
+  const identity = { kind: "session" as const, agentId: "main", sessionId: "current", sessionKey };
+  const scope = { agentId: identity.agentId, sessionKey, storePath };
+  const resolve = (overrides: Partial<Parameters<typeof resolveBinding>[0]> = {}) =>
+    resolveBinding({ bindingStore: store, identity, storePath, ...overrides });
+  return { storePath, store, identity, scope, resolve };
+}
+
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
+  for (const fixture of fixtures.splice(0)) {
+    await fixture.cleanup();
+  }
 });
 
 async function collect<T>(values: AsyncIterable<T>): Promise<T[]> {
@@ -40,8 +60,8 @@ describe("Codex app-server binding reads", () => {
   ] as const)(
     "keeps a replacement %s when stale mutations complete later",
     async (_, threadId, clientId, initialClientId) => {
-      const state = createCodexTestBindingStateStore();
-      const store = createCodexAppServerBindingStore(state);
+      const state = createStateStore();
+      const store = createBindingStore(state);
       const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
       const original = {
         threadId: "thread-old",
@@ -85,19 +105,15 @@ describe("Codex app-server binding reads", () => {
   );
 
   it("rechecks physical ownership after a worker comparison loses to a same-thread successor", async () => {
-    const fixture = await createOpenClawTestState({
-      prefix: "codex-client-cas-",
-      layout: "state-only",
-      applyEnv: false,
-    });
+    const fixture = await createStateFixture("codex-client-cas-");
     const options = {
       namespace: "physical-owner-cas",
       maxEntries: 10,
       env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
     };
-    const state = createCodexSqliteTestBindingStateStore(options);
-    const store = createCodexAppServerBindingStore(state);
-    const peer = createCodexAppServerBindingStore(createCodexSqliteTestBindingStateStore(options));
+    const state = createSqliteState(options);
+    const store = createBindingStore(state);
+    const peer = createBindingStore(createSqliteState(options));
     const identity = {
       kind: "session" as const,
       agentId: "main",
@@ -106,50 +122,44 @@ describe("Codex app-server binding reads", () => {
     };
     const original = { threadId: "same-thread", clientId: "client-a", cwd: "/repo" };
     const successor = { ...original, clientId: "client-b" };
-    try {
-      await store.mutate(identity, { kind: "set", binding: original });
-      const withCurrent = state.withCurrent.bind(state);
-      let replaced = false;
-      const outcomes: string[] = [];
-      state.withCurrent = (authority) => {
-        const view = withCurrent(authority);
-        return {
-          ...view,
-          async compareAndApply(...args) {
-            if (!replaced) {
-              replaced = true;
-              await peer.mutate(identity, { kind: "set", binding: successor });
-            }
-            const outcome = await view.compareAndApply(...args);
-            outcomes.push(outcome.status);
-            return outcome;
-          },
-        };
+    await store.mutate(identity, { kind: "set", binding: original });
+    const withCurrent = state.withCurrent.bind(state);
+    let replaced = false;
+    const outcomes: string[] = [];
+    state.withCurrent = (authority) => {
+      const view = withCurrent(authority);
+      return {
+        ...view,
+        async compareAndApply(...args) {
+          if (!replaced) {
+            replaced = true;
+            await peer.mutate(identity, { kind: "set", binding: successor });
+          }
+          const outcome = await view.compareAndApply(...args);
+          outcomes.push(outcome.status);
+          return outcome;
+        },
       };
-      const staleClear = {
-        kind: "clear" as const,
-        threadId: original.threadId,
-        clientId: original.clientId,
-      };
-      await expect(store.mutate(identity, staleClear)).resolves.toBe(false);
-      expect(outcomes).toContain("conflict");
-      expect(await collect(peer.readMany([identity]))).toEqual([successor]);
-      const currentClear = {
-        kind: "clear" as const,
-        threadId: successor.threadId,
-        clientId: successor.clientId,
-      };
-      await expect(peer.mutate(identity, currentClear)).resolves.toBe(true);
-      expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      await fixture.cleanup();
-    }
+    };
+    const staleClear = {
+      kind: "clear" as const,
+      threadId: original.threadId,
+      clientId: original.clientId,
+    };
+    await expect(store.mutate(identity, staleClear)).resolves.toBe(false);
+    expect(outcomes).toContain("conflict");
+    expect(await collect(peer.readMany([identity]))).toEqual([successor]);
+    const currentClear = {
+      kind: "clear" as const,
+      threadId: successor.threadId,
+      clientId: successor.clientId,
+    };
+    await expect(peer.mutate(identity, currentClear)).resolves.toBe(true);
+    expect(await collect(peer.readMany([identity]))).toEqual([undefined]);
   });
 
   it("keeps ordered failures without synchronous reads or retrying failed bulk acquisition", async () => {
-    const state = createCodexTestBindingStateStore();
+    const state = createStateStore();
     const readValue = state.lookup.bind(state);
     const syncLookup = vi.spyOn(state, "lookup");
     const lookup = vi.spyOn(state.asyncReads, "lookup");
@@ -189,7 +199,7 @@ describe("Codex app-server binding reads", () => {
   });
 
   it("keeps async fallback and oversized cohorts readable without synchronous acquisition", async () => {
-    const state = createCodexTestBindingStateStore();
+    const state = createStateStore();
     const readValue = state.lookup.bind(state);
     const syncLookup = vi.spyOn(state, "lookup");
     const first = { kind: "conversation" as const, bindingId: "first" };
@@ -220,150 +230,100 @@ describe("Codex app-server binding reads", () => {
     expect(syncLookup).not.toHaveBeenCalled();
   });
   it("keeps borrowed settlement authority through cancellation while observing parent revocation", async () => {
-    const fixture = await createOpenClawTestState({
-      prefix: "codex-settlement-authority-",
-      layout: "state-only",
-      applyEnv: false,
-    });
-    const storePath = path.join(fixture.stateDir, "sessions.json");
-    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "current",
-      sessionKey: "agent:main:settlement",
-    };
-    const scope = { agentId: identity.agentId, sessionKey: identity.sessionKey, storePath };
+    const { store, identity, scope, resolve } = await createAuthorityFixture(
+      "codex-settlement-authority-",
+      "agent:main:settlement",
+    );
     const abort = new AbortController();
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: identity.sessionId, updatedAt: 1 },
+    });
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "native-thread", cwd: "/repo" },
+    });
+    const retained = await resolve({ signal: abort.signal });
+    const settlement = retained.authority.withLiveness(() => {});
     try {
-      await upsertSessionEntry({
+      const child = await resolve({ authority: retained.authority });
+      child.release();
+      expect(() => child.authority.assertLegacyCurrent()).toThrow();
+      expect(() => retained.authority.assertLegacyCurrent()).not.toThrow();
+      abort.abort(new Error("foreground canceled"));
+      expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground canceled");
+      expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+      await patchSessionEntry({ ...scope, update: () => ({ updatedAt: 2 }) });
+      expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+      await patchSessionEntry({
         ...scope,
-        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+        update: () => ({ previousSessionId: "replacement-predecessor" }),
       });
-      await store.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "native-thread", cwd: "/repo" },
-      });
-      const retained = await resolveCodexSessionBinding({
-        bindingStore: store,
-        identity,
-        storePath,
-        signal: abort.signal,
-      });
-      const settlement = retained.authority.withLiveness(() => {});
-      try {
-        const child = await resolveCodexSessionBinding({
-          bindingStore: store,
-          identity,
-          storePath,
-          authority: retained.authority,
-        });
-        child.release();
-        expect(() => child.authority.assertLegacyCurrent()).toThrow();
-        expect(() => retained.authority.assertLegacyCurrent()).not.toThrow();
-        abort.abort(new Error("foreground canceled"));
-        expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground canceled");
-        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
-        await patchSessionEntry({ ...scope, update: () => ({ updatedAt: 2 }) });
-        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
-        await patchSessionEntry({
-          ...scope,
-          update: () => ({ previousSessionId: "replacement-predecessor" }),
-        });
-        expect(() => settlement.assertLegacyCurrent()).toThrow(
-          "Codex session generation is no longer current",
-        );
-      } finally {
-        retained.release();
-      }
+      expect(() => settlement.assertLegacyCurrent()).toThrow(
+        "Codex session generation is no longer current",
+      );
     } finally {
-      await fixture.cleanup();
+      retained.release();
     }
   });
 
   it("combines lease and mutation lineage and refuses a same-id predecessor change", async () => {
-    const fixture = await createOpenClawTestState({
-      prefix: "codex-combined-authority-",
-      layout: "state-only",
-      applyEnv: false,
-    });
-    const storePath = path.join(fixture.stateDir, "sessions.json");
-    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
-    const identity = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionId: "current",
-      sessionKey: "agent:main:lease",
-    };
+    const { storePath, store, identity, resolve } = await createAuthorityFixture(
+      "codex-combined-authority-",
+      "agent:main:lease",
+    );
     const source = { ...identity, sessionKey: "agent:main:mutation" };
     const binding = { threadId: "native-thread", cwd: "/repo" };
-    try {
-      for (const target of [identity, source]) {
-        await upsertSessionEntry({
-          agentId: target.agentId,
-          sessionKey: target.sessionKey,
-          storePath,
-          entry: { sessionId: target.sessionId, previousSessionId: "previous", updatedAt: 1 },
-        });
-      }
-      await store.mutate(identity, { kind: "set", binding });
-      using captures = new DisposableStack();
-      const lease = await resolveCodexSessionBinding({ bindingStore: store, identity, storePath });
-      captures.defer(() => lease.release());
-      const mutation = await resolveCodexSessionBinding({
-        bindingStore: store,
-        identity: source,
+    for (const target of [identity, source]) {
+      await upsertSessionEntry({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
         storePath,
+        entry: { sessionId: target.sessionId, previousSessionId: "previous", updatedAt: 1 },
       });
-      captures.defer(() => mutation.release());
-      await store.withLease(
-        identity,
-        async () => {
-          await expect(
-            store.mutate(
-              identity,
-              {
-                kind: "patch",
-                threadId: binding.threadId,
-                patch: { model: "first" },
-              },
-              mutation.authority.assertCurrent,
-              mutation.authority,
-            ),
-          ).resolves.toBe(true);
-          await patchSessionEntry({
-            agentId: source.agentId,
-            sessionKey: source.sessionKey,
-            storePath,
-            update: () => ({ previousSessionId: "changed-without-new-session-id" }),
-          });
-          expect(() => mutation.authority.assertCurrent()).toThrow(
-            "Codex session generation is no longer current",
-          );
-          await expect(
-            store.mutate(
-              identity,
-              {
-                kind: "patch",
-                threadId: binding.threadId,
-                patch: { model: "must-not-publish" },
-              },
-              mutation.authority.assertCurrent,
-              mutation.authority,
-            ),
-          ).rejects.toThrow("Codex session generation is no longer current");
-          expect(store.read(identity)?.model).toBe("first");
-        },
-        { authority: lease.authority, assertCurrent: lease.authority.assertCurrent },
-      );
-    } finally {
-      await fixture.cleanup();
     }
+    await store.mutate(identity, { kind: "set", binding });
+    using captures = new DisposableStack();
+    const lease = await resolve();
+    captures.defer(() => lease.release());
+    const mutation = await resolve({ identity: source });
+    captures.defer(() => mutation.release());
+    const publishModel = (model: string) =>
+      store.mutate(
+        identity,
+        {
+          kind: "patch",
+          threadId: binding.threadId,
+          patch: { model },
+        },
+        mutation.authority.assertCurrent,
+        mutation.authority,
+      );
+    await store.withLease(
+      identity,
+      async () => {
+        await expect(publishModel("first")).resolves.toBe(true);
+        await patchSessionEntry({
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
+          storePath,
+          update: () => ({ previousSessionId: "changed-without-new-session-id" }),
+        });
+        expect(() => mutation.authority.assertCurrent()).toThrow(
+          "Codex session generation is no longer current",
+        );
+        await expect(publishModel("must-not-publish")).rejects.toThrow(
+          "Codex session generation is no longer current",
+        );
+        expect(store.read(identity)?.model).toBe("first");
+      },
+      { authority: lease.authority, assertCurrent: lease.authority.assertCurrent },
+    );
   });
 });
 
 async function importBinding(fields: Record<string, unknown>) {
-  return await createStoredCodexAppServerBinding({
+  return await importStoredBinding({
     schemaVersion: 2,
     threadId: "thread-1",
     cwd: "/repo",
@@ -395,7 +355,7 @@ async function importPolicy(fields: Record<string, unknown>) {
 describe("Codex app-server binding codec", () => {
   it("migrates the retired on-failure approval policy", () => {
     expect(
-      readCodexAppServerThreadBinding({
+      decodeBinding({
         threadId: "thread-policy",
         cwd: "/repo",
         approvalPolicy: "on-failure",
@@ -426,9 +386,9 @@ describe("Codex app-server binding codec", () => {
       userMcpServersFingerprint: rawUserMcpServersFingerprint,
     });
     expect(imported?.binding).toMatchObject({
-      dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      dynamicToolsFingerprint: hashFingerprint(rawDynamicToolsFingerprint),
       nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
+      userMcpServersFingerprint: hashFingerprint(rawUserMcpServersFingerprint),
     });
 
     const existingHash = `sha256:${"a".repeat(64)}`;
@@ -444,86 +404,80 @@ describe("Codex app-server binding codec", () => {
   });
 
   it("canonicalizes undefined fields and preserves empty instruction snapshots in JSON-only plugin state", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
-    try {
-      const state = createCodexSqliteTestBindingStateStore({
-        namespace: "app-server-thread-bindings-json-test",
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-      const store = createCodexAppServerBindingStore(state);
-      const identity = { kind: "conversation" as const, bindingId: "binding-json" };
-      const contextEngine = {
-        schemaVersion: 1 as const,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-      };
+    const { stateDir } = await createStateFixture("openclaw-codex-binding-state-");
+    const state = createSqliteState({
+      namespace: "app-server-thread-bindings-json-test",
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const store = createBindingStore(state);
+    const identity = { kind: "conversation" as const, bindingId: "binding-json" };
+    const contextEngine = {
+      schemaVersion: 1 as const,
+      engineId: "lossless-claw",
+      policyFingerprint: "policy-1",
+    };
 
-      await expect(
-        store.mutate(identity, {
-          kind: "set",
-          binding: {
-            threadId: "thread-json",
-            cwd: "/repo",
-            model: undefined,
-            contextEngine: { ...contextEngine, projection: undefined },
-          },
-        }),
-      ).resolves.toBe(true);
-      expect(state.lookup(bindingStoreKey(identity))).toEqual({
-        version: 1,
-        state: "active",
+    await expect(
+      store.mutate(identity, {
+        kind: "set",
         binding: {
           threadId: "thread-json",
           cwd: "/repo",
-          contextEngine,
+          model: undefined,
+          contextEngine: { ...contextEngine, projection: undefined },
         },
-      });
-
-      await expect(
-        store.mutate(identity, {
-          kind: "patch",
-          threadId: "thread-json",
-          patch: { contextEngine: undefined },
-        }),
-      ).resolves.toBe(true);
-      expect(store.read(identity)).toEqual({
+      }),
+    ).resolves.toBe(true);
+    expect(state.lookup(bindingStoreKey(identity))).toEqual({
+      version: 1,
+      state: "active",
+      binding: {
         threadId: "thread-json",
         cwd: "/repo",
+        contextEngine,
+      },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "patch",
+        threadId: "thread-json",
+        patch: { contextEngine: undefined },
+      }),
+    ).resolves.toBe(true);
+    expect(store.read(identity)).toEqual({
+      threadId: "thread-json",
+      cwd: "/repo",
+    });
+    expect(state.lookup(bindingStoreKey(identity))).not.toHaveProperty("lease");
+
+    for (const snapshot of [undefined, "", "Follow the saved workspace instructions."]) {
+      const binding = {
+        threadId: "thread-json",
+        cwd: "/repo",
+        ...(snapshot !== undefined ? { agentWorkspaceDeveloperInstructions: snapshot } : {}),
+      };
+      await store.mutate(identity, { kind: "set", binding });
+      expect(store.read(identity)).toEqual(binding);
+      expect(state.lookup(bindingStoreKey(identity))).toEqual({
+        version: 1,
+        state: "active",
+        binding,
       });
-      expect(state.lookup(bindingStoreKey(identity))).not.toHaveProperty("lease");
-
-      for (const snapshot of [undefined, "", "Follow the saved workspace instructions."]) {
-        const binding = {
-          threadId: "thread-json",
-          cwd: "/repo",
-          ...(snapshot !== undefined ? { agentWorkspaceDeveloperInstructions: snapshot } : {}),
-        };
-        await store.mutate(identity, { kind: "set", binding });
-        expect(store.read(identity)).toEqual(binding);
-        expect(state.lookup(bindingStoreKey(identity))).toEqual({
-          version: 1,
-          state: "active",
-          binding,
-        });
-        const imported = await importBinding({
-          ...binding,
-          createdAt: "2025-12-31T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        });
-        expect(imported?.binding).toEqual({
-          ...binding,
-          historyCoveredThrough: "2026-01-01T00:00:00.000Z",
-        });
-      }
-
-      await expect(store.mutate(identity, { kind: "clear" })).resolves.toBe(true);
-      expect(store.read(identity)).toBeUndefined();
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      fs.rmSync(stateDir, { recursive: true, force: true });
+      const imported = await importBinding({
+        ...binding,
+        createdAt: "2025-12-31T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(imported?.binding).toEqual({
+        ...binding,
+        historyCoveredThrough: "2026-01-01T00:00:00.000Z",
+      });
     }
+
+    await expect(store.mutate(identity, { kind: "clear" })).resolves.toBe(true);
+    expect(store.read(identity)).toBeUndefined();
   });
 
   it.each([
