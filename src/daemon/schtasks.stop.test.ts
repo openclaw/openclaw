@@ -72,17 +72,39 @@ function expectNoTermination() {
   expect(taskkillPids()).toEqual([]);
   expect(killProcessTreeMock).not.toHaveBeenCalled();
 }
+function expectForcedTermination() {
+  expect(taskkillCalls()).toEqual([
+    ["/T", "/PID", "4242"],
+    ["/F", "/T", "/PID", "4242"],
+  ]);
+}
+function expectTasklistProbe() {
+  expect(spawnSync.mock.calls).toContainEqual([
+    expect.stringMatching(/tasklist\.exe$/i),
+    ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
+    expect.objectContaining({ timeout: 1_500 }),
+  ]);
+}
 
 function mockGatewayProcess(
   alive: () => boolean,
   onKill: (forced: boolean) => void,
   snapshot = () => [...(alive() ? [installedGateway] : []), powershellProcess],
+  options: { taskProbe?: boolean; closedEnv?: boolean; failGraceful?: boolean } = {},
 ) {
-  spawnSync.mockImplementation((command, args) => {
+  spawnSync.mockImplementation((command, args, spawnOptions) => {
+    if (options.closedEnv) {
+      expect(spawnOptions?.env).toBeDefined();
+      expect(spawnOptions?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
+    }
+    if (options.taskProbe && args?.includes("-EncodedCommand")) {
+      return scheduledTaskProbeResult();
+    }
     const executable = command.toLowerCase();
     if (executable.endsWith("taskkill.exe")) {
-      onKill(args?.includes("/F") ?? false);
-      return spawnSyncResult("");
+      const forced = args?.includes("/F") ?? false;
+      onKill(forced);
+      return spawnSyncResult("", options.failGraceful && !forced ? 1 : 0);
     }
     if (executable.endsWith("tasklist.exe")) {
       return tasklistResult(alive());
@@ -365,10 +387,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       expect(readWindowsProcessStartTimeSync).toHaveBeenCalledWith(4242, 5_000, env);
 
-      expect(taskkillCalls()).toEqual([
-        ["/T", "/PID", "4242"],
-        ["/F", "/T", "/PID", "4242"],
-      ]);
+      expectForcedTermination();
       expect(taskkillCalls().flat()).not.toContain("9999");
       expect(killProcessTreeMock).not.toHaveBeenCalled();
     },
@@ -427,11 +446,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
 
     expect(taskkillCalls()).toEqual([["/T", "/PID", "4242"]]);
-    expect(spawnSync.mock.calls).toContainEqual([
-      expect.stringMatching(/tasklist\.exe$/i),
-      ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
-      expect.objectContaining({ timeout: 1_500 }),
-    ]);
+    expectTasklistProbe();
   });
 
   taskTest("waits beyond five seconds for forced termination", async ({ env }) => {
@@ -464,24 +479,14 @@ describe("Scheduled Task stop/restart cleanup", () => {
     pushSuccessfulSchtasksResponses(3);
     inspectPortUsageMock.mockResolvedValue(freePortUsage());
     let forced = false;
-    spawnSync.mockImplementation((command, args, options) => {
-      expect(options?.env).toBeDefined();
-      expect(options?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
-      if (args?.includes("-EncodedCommand")) {
-        return scheduledTaskProbeResult();
-      }
-      const executable = command.toLowerCase();
-      if (executable.endsWith("taskkill.exe")) {
-        if (args?.includes("/F")) {
+    mockGatewayProcess(
+      () => !forced,
+      (force) => {
+        if (force) {
           forced = true;
-          return spawnSyncResult("");
         }
-        return spawnSyncResult("", 1);
-      }
-      if (executable.endsWith("tasklist.exe")) {
-        return tasklistResult(!forced);
-      }
-      const processes = [
+      },
+      () => [
         {
           ProcessId: 3131,
           CommandLine:
@@ -490,27 +495,20 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ...(!forced
           ? [
               {
-                ProcessId: 4242,
+                ...installedGateway,
                 CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} --task-supervisor`,
               },
             ]
           : []),
         powershellProcess,
-      ];
-      return snapshotResult(processes);
-    });
+      ],
+      { taskProbe: true, closedEnv: true, failGraceful: true },
+    );
 
     await stopScheduledTask({ env, stdout });
 
-    expect(taskkillCalls()).toEqual([
-      ["/T", "/PID", "4242"],
-      ["/F", "/T", "/PID", "4242"],
-    ]);
-    expect(spawnSync.mock.calls).toContainEqual([
-      expect.stringMatching(/tasklist\.exe$/i),
-      ["/FI", "PID eq 4242", "/FO", "CSV", "/NH"],
-      expect.objectContaining({ timeout: 1_500 }),
-    ]);
+    expectForcedTermination();
+    expectTasklistProbe();
     expect(taskkillCalls().flat()).not.toContain("3131");
     expect(taskkillCalls().flat()).not.toContain("4141");
     expect(killProcessTreeMock).not.toHaveBeenCalled();

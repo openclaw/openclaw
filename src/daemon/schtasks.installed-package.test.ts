@@ -79,12 +79,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["stdout"] as const)("sanitizes colored %s before clipping diagnostics", async (stream) => {
-  const fixture = commandFixture({ FIXTURE_OUTPUT_STREAM: stream });
+it("sanitizes colored stdout before clipping diagnostics", async () => {
+  const fixture = commandFixture();
   const failure = await fixture
     .run(`
-    const output = process.env.FIXTURE_OUTPUT_STREAM === "stderr" ? process.stderr : process.stdout;
-    output.write("\\x1b[31m" + JSON.stringify({
+    process.stdout.write("\\x1b[31m" + JSON.stringify({
       padding: "x".repeat(4000), action: "install", ok: false, token: process.env.FIXTURE_SECRET,
       error: "Synthetic install refusal; inspect the registered task."
     }) + "\\x1b[0m\\n\\x1b[31mtoken\\x1b[0m=" + process.env.FIXTURE_SECRET);
@@ -96,9 +95,9 @@ it.each(["stdout"] as const)("sanitizes colored %s before clipping diagnostics",
   expectOnlyCommand(fixture.records, {
     code: 7,
     ...settledCommand,
-    failureOutput: { [stream === "stdout" ? "stderr" : "stdout"]: "", captureTruncated: false },
+    failureOutput: { stderr: "", captureTruncated: false },
   });
-  const output = fixture.records[0]?.failureOutput?.[stream];
+  const output = fixture.records[0]?.failureOutput?.stdout;
   expectRedacted(output, ['"action":"install"', "Synthetic install refusal"], ["\x1b"]);
   expect(output?.length).toBeLessThanOrEqual(2002);
 });

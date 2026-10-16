@@ -57,6 +57,26 @@ function mockRegisteredTask(
 function effectiveCommand(env: Parameters<typeof readScheduledTaskCommand>[0]) {
   return readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true });
 }
+function mockLauncherFiles(files: Map<string, string | Buffer>, fallback?: string) {
+  return vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+    if (typeof pathname !== "string") {
+      throw new TypeError("Test launcher paths must be strings");
+    }
+    const content = files.get(pathname) ?? fallback;
+    if (content === undefined) {
+      throw Object.assign(new Error("Missing test launcher"), { code: "ENOENT" });
+    }
+    return Buffer.from(content);
+  });
+}
+const backupArguments = [
+  "C:\\Node\\node.exe",
+  "C:\\OtherInstall\\openclaw.mjs",
+  "gateway",
+  "--port",
+  "19789",
+];
+const backupCommand = '"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789';
 
 describe("readScheduledTaskCommand", () => {
   it("reads a direct registered executable without inventing a launcher", async () => {
@@ -116,13 +136,6 @@ describe("readScheduledTaskCommand", () => {
           : kind === "cmd executable"
             ? "C:\\Windows\\System32\\cmd.exe"
             : "C:\\Services\\Backup\\gateway.vbs";
-      const programArguments = [
-        "C:\\Node\\node.exe",
-        "C:\\OtherInstall\\openclaw.mjs",
-        "gateway",
-        "--port",
-        "19789",
-      ];
       mockRegisteredTask(
         [
           taskAction(
@@ -138,29 +151,34 @@ describe("readScheduledTaskCommand", () => {
         taskName,
         3,
       );
-      const readFile = vi
-        .spyOn(fs, "readFile")
-        .mockImplementation(async (pathname) =>
-          Buffer.from(
-            pathname === launcherPath && kind !== "cmd"
-              ? kind === "current vbs"
-                ? buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })
-                : kind === "published vbs"
-                  ? `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)\r\n`
-                  : `CreateObject("WScript.Shell").Run """${scriptPath}""", 0, False\r\n`
-              : pathname === scriptPath
-                ? [
-                    "@echo off",
-                    'set "OPENCLAW_PROFILE=default"',
-                    'set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Gateway Backup"',
-                    'set "OPENCLAW_STATE_DIR=C:\\Services\\Backup"',
-                    'set "OPENCLAW_CONFIG_PATH=C:\\Services\\Backup\\openclaw.json"',
-                    'cd /d "C:\\Services\\Backup"',
-                    '"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789 < NUL',
-                  ].join("\r\n")
-                : '@echo off\r\n"C:\\Node\\node.exe" "C:\\DefaultInstall\\openclaw.mjs" gateway --port 18789\r\n',
-          ),
+      const files = new Map<string, string>([
+        [
+          scriptPath,
+          [
+            "@echo off",
+            'set "OPENCLAW_PROFILE=default"',
+            'set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Gateway Backup"',
+            'set "OPENCLAW_STATE_DIR=C:\\Services\\Backup"',
+            'set "OPENCLAW_CONFIG_PATH=C:\\Services\\Backup\\openclaw.json"',
+            'cd /d "C:\\Services\\Backup"',
+            `${backupCommand} < NUL`,
+          ].join("\r\n"),
+        ],
+      ]);
+      if (kind !== "cmd") {
+        files.set(
+          launcherPath,
+          kind === "current vbs"
+            ? buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })
+            : kind === "published vbs"
+              ? `WScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath}""", 0, True)\r\n`
+              : `CreateObject("WScript.Shell").Run """${scriptPath}""", 0, False\r\n`,
         );
+      }
+      const readFile = mockLauncherFiles(
+        files,
+        '@echo off\r\n"C:\\Node\\node.exe" "C:\\DefaultInstall\\openclaw.mjs" gateway --port 18789\r\n',
+      );
       const captured: string[] = [];
       await expect(
         readScheduledTaskCommand(
@@ -172,7 +190,7 @@ describe("readScheduledTaskCommand", () => {
           },
         ),
       ).resolves.toMatchObject({
-        programArguments,
+        programArguments: backupArguments,
         workingDirectory: "C:\\Services\\Backup",
         sourcePath: scriptPath,
         environment: {
@@ -188,56 +206,47 @@ describe("readScheduledTaskCommand", () => {
   );
 
   it.each([
-    { label: "canonical inherited cwd", nativeCwd: "C:\\Services\\Gateway", overridden: false },
-    { label: "canonical cwd spelling", nativeCwd: "c:/services/gateway", overridden: false },
-    {
-      label: "authored script cd",
-      nativeCwd: "C:\\Services\\Gateway",
-      scriptCwd: "D:\\Agent Workspace",
-      overridden: false,
-    },
-    { label: "operator inherited cwd", nativeCwd: "D:\\Operator", overridden: true },
-    {
-      label: "legacy action with native cwd",
-      nativeCwd: "C:\\Services\\Gateway",
-      directScript: true,
-      overridden: true,
-    },
-  ])("keeps runtime pins bound to the script with $label", async (scenario) => {
-    const scriptPath = "C:\\Services\\Gateway\\gateway.cmd";
-    const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
-    const action = taskAction(
-      scenario.directScript ? scriptPath : "C:\\Windows\\System32\\cmd.exe",
-      scenario.directScript ? "" : `/d /s /c ""${scriptPath}""`,
-      scenario.nativeCwd,
-    );
-    mockRegisteredTask([action]);
-    let script = [
-      "@echo off",
-      ...(scenario.scriptCwd ? [`cd /d "${scenario.scriptCwd}"`] : []),
-      '"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" gateway --port 18789 < NUL',
-    ].join("\r\n");
-    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-      if (pathname !== scriptPath) {
-        throw new Error("Unexpected launcher read");
+    ["canonical inherited cwd", "C:\\Services\\Gateway", false],
+    ["canonical cwd spelling", "c:/services/gateway", false],
+    ["authored script cd", "C:\\Services\\Gateway", false, "D:\\Agent Workspace"],
+    ["operator inherited cwd", "D:\\Operator", true],
+    ["legacy action with native cwd", "C:\\Services\\Gateway", true, undefined, true],
+  ] satisfies [string, string, boolean, string?, boolean?][])(
+    "keeps runtime pins bound to the script with %s",
+    async (_label, nativeCwd, overridden, scriptCwd, directScript) => {
+      const scriptPath = "C:\\Services\\Gateway\\gateway.cmd";
+      const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
+      const action = taskAction(
+        directScript ? scriptPath : "C:\\Windows\\System32\\cmd.exe",
+        directScript ? "" : `/d /s /c ""${scriptPath}""`,
+        nativeCwd,
+      );
+      mockRegisteredTask([action]);
+      const script = [
+        "@echo off",
+        ...(scriptCwd ? [`cd /d "${scriptCwd}"`] : []),
+        '"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" gateway --port 18789 < NUL',
+      ].join("\r\n");
+      const files = new Map([[scriptPath, script]]);
+      mockLauncherFiles(files);
+      const authored = await readScheduledTaskCommand(env, { requireEffective: true });
+      expect(authored).not.toBeNull();
+      if (!authored) {
+        throw new Error("Missing authored task command");
       }
-      return Buffer.from(script);
-    });
-    const authored = await readScheduledTaskCommand(env, { requireEffective: true });
-    expect(authored).not.toBeNull();
-    if (!authored) {
-      throw new Error("Missing authored task command");
-    }
-    const effective = await effectiveCommand(env);
-    expect(effective?.workingDirectory).toBe(scenario.scriptCwd ?? scenario.nativeCwd);
-    expect(() => assertDaemonRuntimePinDefinition(authored, effective)).not.toThrow();
-    expect(hasGatewayServiceLauncherOverride(effective)).toBe(scenario.overridden);
-    if (scenario.scriptCwd) {
-      script = script.replace(scenario.scriptCwd, "D:\\Changed Workspace");
-      const changed = await effectiveCommand(env);
-      expect(() => assertDaemonRuntimePinDefinition(authored, changed)).toThrow("readback differs");
-    }
-  });
+      const effective = await effectiveCommand(env);
+      expect(effective?.workingDirectory).toBe(scriptCwd ?? nativeCwd);
+      expect(() => assertDaemonRuntimePinDefinition(authored, effective)).not.toThrow();
+      expect(hasGatewayServiceLauncherOverride(effective)).toBe(overridden);
+      if (scriptCwd) {
+        files.set(scriptPath, script.replace(scriptCwd, "D:\\Changed Workspace"));
+        const changed = await effectiveCommand(env);
+        expect(() => assertDaemonRuntimePinDefinition(authored, changed)).toThrow(
+          "readback differs",
+        );
+      }
+    },
+  );
 
   async function writeScheduledTaskScript(lines: string[], encoding: "utf8" | "gbk" = "utf8") {
     const tmpDir = temporary.make("openclaw-schtasks-test-");
@@ -290,16 +299,7 @@ describe("readScheduledTaskCommand", () => {
     const files = new Map<string, string | Buffer>([
       [resolveTaskScriptPath(env), "@echo off\r\nnode gateway.js\r\n"],
     ]);
-    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-      if (typeof pathname !== "string") {
-        throw new TypeError("Test launcher paths must be strings");
-      }
-      const content = files.get(pathname);
-      if (content === undefined) {
-        throw Object.assign(new Error("Missing test launcher"), { code: "ENOENT" });
-      }
-      return Buffer.from(content);
-    });
+    mockLauncherFiles(files);
     return { env, files };
   }
 
@@ -353,10 +353,7 @@ describe("readScheduledTaskCommand", () => {
       writeLauncher("vbs", kind === "conflicting wrappers" ? otherPath : scriptPath);
       spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
       for (const pathname of [scriptPath, otherPath]) {
-        files.set(
-          pathname,
-          '@echo off\r\n"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789\r\n',
-        );
+        files.set(pathname, `@echo off\r\n${backupCommand}\r\n`);
       }
       const result = effectiveCommand(env);
       if (kind === "conflicting wrappers") {
@@ -364,13 +361,7 @@ describe("readScheduledTaskCommand", () => {
       } else {
         await expect(result).resolves.toMatchObject({
           sourcePath: scriptPath,
-          programArguments: [
-            "C:\\Node\\node.exe",
-            "C:\\OtherInstall\\openclaw.mjs",
-            "gateway",
-            "--port",
-            "19789",
-          ],
+          programArguments: backupArguments,
         });
       }
     },
@@ -428,30 +419,28 @@ describe("readScheduledTaskCommand", () => {
     expect(result?.programArguments).toEqual(["node", "gateway.js"]);
   });
 
-  it.each(["%OPENCLAW_TEST_LOG_PATH%"])(
-    "preserves unquoted redirect expansion boundaries: %s",
-    async (target) => {
-      const env = await writeScheduledTaskScript([
-        'set "OPENCLAW_TEST_LOG_PATH=C:\\Logs\\gateway output.log"',
-        `node gateway.js --port 18789 < NUL >> ${target} 2>&1`,
-      ]);
-      const result = await readScheduledTaskCommand(env);
-      expect(result?.programArguments).toEqual([
-        "node",
-        "gateway.js",
-        "--port",
-        "18789",
-        "<",
-        "NUL",
-        ">>",
-        target,
-        "2>&1",
-      ]);
-      await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-        inspectionError,
-      );
-    },
-  );
+  it("preserves unquoted redirect expansion boundaries", async () => {
+    const target = "%OPENCLAW_TEST_LOG_PATH%";
+    const env = await writeScheduledTaskScript([
+      'set "OPENCLAW_TEST_LOG_PATH=C:\\Logs\\gateway output.log"',
+      `node gateway.js --port 18789 < NUL >> ${target} 2>&1`,
+    ]);
+    const result = await readScheduledTaskCommand(env);
+    expect(result?.programArguments).toEqual([
+      "node",
+      "gateway.js",
+      "--port",
+      "18789",
+      "<",
+      "NUL",
+      ">>",
+      target,
+      "2>&1",
+    ]);
+    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+      inspectionError,
+    );
+  });
 
   it.each([
     [">out 2>&", [">out", "2>&"]],
@@ -470,10 +459,10 @@ describe("readScheduledTaskCommand", () => {
   });
 });
 
-it.each(["false"])("refuses to infer enable policy from a stopped task (%s)", async (enabled) => {
+it("refuses to infer enable policy from a stopped task", async () => {
   spawnSync.mockReturnValue({
     status: 0,
-    stdout: JSON.stringify({ state: 3, enabled }),
+    stdout: JSON.stringify({ state: 3, enabled: "false" }),
     stderr: "",
   });
   await expect(isScheduledTaskEnabled({ env: {} })).rejects.toThrow("enable policy");
