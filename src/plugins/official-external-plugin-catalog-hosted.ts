@@ -1,5 +1,5 @@
 // Loads hosted official catalogs while preserving feed authority and snapshot freshness.
-import { sha256Hex as hashSha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -58,7 +58,7 @@ class HostedCatalogSnapshotWriteError extends Error {
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 function sha256Hex(value: string): string {
-  return `sha256:${hashSha256Hex(value)}`;
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): void {

@@ -1,4 +1,3 @@
-import { collapseWhitespace as normalizeTranscriptText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
@@ -9,6 +8,10 @@ export function limitPartialUserTranscript(text: string): string {
   }
   const tail = sliceUtf16Safe(text, -MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
   return tail.replace(/^\S+\s+/, "").trimStart() || tail.trimStart();
+}
+
+function normalizeTranscriptText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function findTextOverlap(base: string, next: string): number {

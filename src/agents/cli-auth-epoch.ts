@@ -2,7 +2,7 @@
  * Builds auth-state epochs for CLI-backed runtimes so reusable sessions reset
  * when the owning local credential identity changes.
  */
-import { sha256Hex as hashCliAuthEpochPart } from "@openclaw/normalization-core/node-crypto";
+import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -33,6 +33,13 @@ import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export const CLI_AUTH_EPOCH_VERSION = 7;
 
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+
+function hashCliAuthEpochPart(value: string): string {
+  // Epoch hashes detect local auth-state changes; they are not password
+  // storage or credential verification.
+  // codeql[js/insufficient-password-hash]
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
 
 function encodeUnknown(value: unknown): string {
   return JSON.stringify(value ?? null);

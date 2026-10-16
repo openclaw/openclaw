@@ -1,7 +1,4 @@
-import {
-  asIntegerInRange,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -38,6 +35,10 @@ const getFireAndForgetHookState = () =>
       queue: [],
     }),
   );
+
+function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
 
 /** Format hook errors as bounded single-line log messages with secrets redacted upstream. */
 export function formatHookErrorForLog(err: unknown): string {
@@ -105,13 +106,16 @@ export function fireAndForgetBoundedHook(
   options: FireAndForgetBoundedHookOptions = {},
 ): void {
   const state = getFireAndForgetHookState();
-  const maxConcurrency =
-    asIntegerInRange(options.maxConcurrency, { min: 1 }) ??
-    DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS;
-  const maxQueue =
-    asIntegerInRange(options.maxQueue, { min: 1 }) ?? DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS;
+  const maxConcurrency = positiveIntegerOrDefault(
+    options.maxConcurrency,
+    DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS,
+  );
+  const maxQueue = positiveIntegerOrDefault(
+    options.maxQueue,
+    DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS,
+  );
   const timeoutMs = resolveTimerTimeoutMs(
-    asIntegerInRange(options.timeoutMs, { min: 1 }) ?? DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
+    positiveIntegerOrDefault(options.timeoutMs, DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS),
     DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
   );
 

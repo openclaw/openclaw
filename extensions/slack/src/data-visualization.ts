@@ -5,7 +5,6 @@ import {
   type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
@@ -152,7 +151,7 @@ function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
   }
   const axisConfig = asOptionalRecord(chart.axis_config);
   const categories = axisConfig?.categories;
-  if (!isStringArray(categories)) {
+  if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
     return undefined;
   }
   if (!Array.isArray(chart.series)) {

@@ -1,4 +1,3 @@
-import { floorPositiveFiniteNumber as normalizePositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
@@ -33,6 +32,13 @@ export function buildBatchHeaders(
     delete headers["content-type"];
   }
   return headers;
+}
+
+function normalizePositiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 export function splitBatchRequestsByLimits<T>(

@@ -1,6 +1,5 @@
+import { createHash } from "node:crypto";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-
-export { sha256Hex as hashCliImageTurnEntryId } from "@openclaw/normalization-core/node-crypto";
 
 const CLI_IMAGE_TURN_LABEL = "Image turn:";
 const CLI_IMAGE_TURN_HEADER = markInboundContextLabel(CLI_IMAGE_TURN_LABEL);
@@ -10,6 +9,10 @@ const CLI_IMAGE_TURN_BLOCK_PATTERN = new RegExp(
   `${CLI_IMAGE_TURN_HEADER}\\n\`\`\`json\\n\\{"turnKey":"([a-f0-9]{64})"\\}\\n\`\`\``,
   "g",
 );
+
+export function hashCliImageTurnEntryId(entryId: string): string {
+  return createHash("sha256").update(entryId).digest("hex");
+}
 
 export function formatCliImageTurnContext(turnKey: string): string {
   return `${CLI_IMAGE_TURN_HEADER}\n\`\`\`json\n${JSON.stringify({ turnKey })}\n\`\`\``;

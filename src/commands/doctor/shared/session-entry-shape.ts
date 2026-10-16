@@ -13,11 +13,14 @@ import {
   normalizePendingFinalDelivery,
   normalizeFallbackNotice,
   normalizeMemoryFlush,
-  normalizeOptionalTimestamp,
   projectCanonicalSessionEntryShape,
 } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+
+function normalizeOptionalTimestamp(value: unknown): number | undefined {
+  return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
+}
 
 function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
@@ -31,7 +31,8 @@ function projectCatalog(value: unknown) {
     if (
       !isRecord(event) ||
       !boundedString(event.name, 256) ||
-      !isStringArray(event.delivery) ||
+      !Array.isArray(event.delivery) ||
+      !event.delivery.every((mode: unknown) => typeof mode === "string") ||
       !(isRecord(event.inputSchema) || typeof event.inputSchema === "boolean") ||
       !(isRecord(event.payloadSchema) || typeof event.payloadSchema === "boolean")
     ) {

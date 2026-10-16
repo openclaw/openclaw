@@ -70,8 +70,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
-      "collapseWhitespace",
-      "collapseWhitespaceLower",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -102,7 +100,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asDateTimestampMs",
       "asFiniteNumber",
       "asFiniteNumberInRange",
-      "asIntegerInRange",
       "asNonNegativeFiniteNumber",
       "asPositiveFiniteNumber",
       "asPositiveSafeInteger",
@@ -110,7 +107,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
-      "floorPositiveFiniteNumber",
       "isFutureDateTimestampMs",
       "nonNegativeSecondsToSafeMilliseconds",
       "parseDateFirstTimestampMs",
@@ -154,7 +150,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "filterStringRecord",
       "isRecord",
       "isStringRecord",
-      "normalizeOptionalTrimmedStringRecord",
       "readStringField",
     ],
   },
@@ -221,23 +216,6 @@ export const CANONICAL_COERCION_MODULES = [
 const MIXED_CANONICAL_COERCION_MODULES = ["scripts/lib/arg-utils.runtime.mjs"] as const;
 
 export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
-  {
-    file: "packages/normalization-core/src/record-coerce.ts",
-    name: "ensureRecord",
-    reason:
-      "Mutating record-field initialization is not primitive coercion; domain writers share this name.",
-  },
-  {
-    file: "packages/normalization-core/src/record-coerce.ts",
-    name: "hasOnlyKeys",
-    reason: "Record-key validation is not primitive coercion; domain validators share this name.",
-  },
-  {
-    file: "packages/normalization-core/src/record-coerce.ts",
-    name: "isStringArray",
-    reason:
-      "Array validation is not primitive coercion; bounded and nonblank array guards share this name.",
-  },
   {
     file: "packages/normalization-core/src/error-coercion.ts",
     name: "extractErrorCode",

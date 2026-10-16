@@ -1,4 +1,3 @@
-import { collapseWhitespaceLower as normalizeTranscriptText } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { RealtimeTalkTranscript } from "./shared.ts";
 
@@ -363,6 +362,10 @@ function looksLikeTranscriptReplacement(existing: string, incoming: string): boo
 
 function transcriptWords(value: string): string[] {
   return [...value.toLowerCase().matchAll(/[\p{L}\p{N}]+/gu)].map((match) => match[0]);
+}
+
+function normalizeTranscriptText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function commonPrefixLength(left: string, right: string): number {

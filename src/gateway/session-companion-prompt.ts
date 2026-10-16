@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { escapeHtmlText as escapeReferenceText } from "../shared/html-escape.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionThread,
@@ -17,6 +16,10 @@ export type SessionCompanionPromptMessage = {
 
 const PRIVATE_REFERENCE_BEGIN = "<private-session-reference>";
 const PRIVATE_REFERENCE_END = "</private-session-reference>";
+
+function escapeReferenceText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
 
 export function formatObserverDigest(snapshot: SessionObserverCompanionSnapshot): string {
   const digest = snapshot.digest;

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createConfigIO } from "../config/io.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -85,7 +85,7 @@ export function closeMigrationPlanTail(
 }
 
 function digest(value: unknown): string {
-  return `sha256:${sha256Hex(stableStringify(value))}`;
+  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
 
 export async function captureLegacyStateSnapshotIdentity(
@@ -110,7 +110,8 @@ export async function captureLegacyStateSnapshotIdentity(
           const parsed: unknown = JSON.parse(stdout);
           if (
             !isRecord(parsed) ||
-            !isStringArray(parsed.warnings) ||
+            !Array.isArray(parsed.warnings) ||
+            !parsed.warnings.every((warning) => typeof warning === "string") ||
             (parsed.configDigest !== undefined && typeof parsed.configDigest !== "string") ||
             (parsed.stateDigest !== undefined && typeof parsed.stateDigest !== "string")
           ) {

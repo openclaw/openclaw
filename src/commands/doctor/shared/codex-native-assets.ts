@@ -6,7 +6,6 @@ import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerc
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { canAccess, directoryExists } from "../../../infra/path-guards.js";
 
 type CodexNativeAssetHit = {
   /** Native Codex asset category discovered under Codex or personal agent homes. */
@@ -40,11 +39,28 @@ function resolvePersonalAgentSkillsDir(env: NodeJS.ProcessEnv): string {
   return path.join(resolveUserHome(env), ".agents", "skills");
 }
 
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function discoverDirectoryAssets(
   root: string,
   kind: "skill" | "plugin",
 ): Promise<CodexNativeAssetHit[]> {
-  if (!(await directoryExists(root))) {
+  if (!(await isDirectory(root))) {
     return [];
   }
   const hits: CodexNativeAssetHit[] = [];
@@ -60,7 +76,7 @@ async function discoverDirectoryAssets(
       kind === "skill"
         ? path.join(dir, "SKILL.md")
         : path.join(dir, ".codex-plugin", "plugin.json");
-    if (await canAccess(marker)) {
+    if (await exists(marker)) {
       hits.push({ kind, path: dir });
       return;
     }
@@ -117,7 +133,7 @@ async function scanCodexNativeAssets(params: {
     ["hooks", path.join("hooks", "hooks.json")],
   ] as const) {
     const assetPath = path.join(codexHome, relativePath);
-    if (await canAccess(assetPath)) {
+    if (await exists(assetPath)) {
       record({ kind, path: assetPath });
     }
   }

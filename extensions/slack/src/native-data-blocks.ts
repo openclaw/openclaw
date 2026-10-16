@@ -1,6 +1,5 @@
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespace as comparableText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { renderSlackDataTableCompactPlainTextFallback } from "./data-table.js";
 import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
@@ -80,6 +79,10 @@ export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
   }
   const record = asOptionalRecord(error);
   return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
+}
+
+function comparableText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 function countComparableOccurrences(value: string, candidate: string): number {

@@ -1,4 +1,3 @@
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type {
@@ -94,7 +93,12 @@ function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | un
   }
   const mapped = JSON.parse(row.extension_mapped_json!) as unknown;
   const unavailable = JSON.parse(row.extension_unavailable_json!) as unknown;
-  if (!isStringArray(mapped) || !isStringArray(unavailable)) {
+  if (
+    !Array.isArray(mapped) ||
+    !mapped.every((value) => typeof value === "string") ||
+    !Array.isArray(unavailable) ||
+    !unavailable.every((value) => typeof value === "string")
+  ) {
     throw new Error(
       `Claw package reference ${row.package_kind}:${row.package_ref} has invalid extension inventory provenance.`,
     );

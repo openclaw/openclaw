@@ -1,4 +1,4 @@
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
@@ -26,6 +26,10 @@ export type BundledExplicitWebProviderParams = {
   env?: NodeJS.ProcessEnv;
   manifestRecords?: readonly PluginManifestRecord[];
 };
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
 
 function isWebProviderPlugin(
   value: unknown,

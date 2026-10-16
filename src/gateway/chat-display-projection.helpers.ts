@@ -7,7 +7,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
-import { isAssistantTextContentBlockType as isAssistantTextContentType } from "../shared/chat-message-content.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export type RoleContentMessage = {
@@ -150,7 +149,9 @@ export function extractAssistantTextForSilentCheck(message: unknown): string | u
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
-export { isAssistantTextContentType };
+export function isAssistantTextContentType(type: unknown): boolean {
+  return type === "text" || type === "input_text" || type === "output_text";
+}
 
 export function isAssistantInternalReasoningContentType(type: unknown): boolean {
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";

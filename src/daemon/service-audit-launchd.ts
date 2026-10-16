@@ -1,4 +1,3 @@
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
@@ -26,7 +25,7 @@ import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit
 import type { GatewayServiceEnv } from "./service-types.js";
 
 function isRetiredLaunchAgentCommand(value: unknown, env: GatewayServiceEnv): boolean {
-  if (!isStringArray(value)) {
+  if (!Array.isArray(value) || !value.every((arg): arg is string => typeof arg === "string")) {
     return false;
   }
   const label = resolveLaunchAgentLabel(env);

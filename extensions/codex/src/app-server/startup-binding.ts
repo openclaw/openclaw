@@ -10,7 +10,6 @@ import {
   readFileWindowFully,
   root as openSafeFilesystemRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { resolveProjectionPromptBudgetTokens } from "./context-engine-projection.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -41,8 +40,11 @@ type CodexAppServerRolloutFile = {
 };
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
   if (typeof value !== "string") {
-    return floorPositiveFiniteNumber(value);
+    return undefined;
   }
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
   if (!match) {
@@ -259,12 +261,7 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   reserveTokens: number;
   projectedTurnTokens?: number;
 }): number {
-  const projectedTurnTokens =
-    typeof params.projectedTurnTokens === "number" &&
-    Number.isFinite(params.projectedTurnTokens) &&
-    params.projectedTurnTokens > 0
-      ? Math.floor(params.projectedTurnTokens)
-      : 0;
+  const projectedTurnTokens = params.projectedTurnTokens ?? 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
   const promptBudget = resolveProjectionPromptBudgetTokens({

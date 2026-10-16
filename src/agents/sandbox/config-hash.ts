@@ -1,4 +1,4 @@
-import { sha256Hex as hashTextSha256 } from "@openclaw/normalization-core/node-crypto";
+import { hashTextSha256 } from "./hash.js";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 /**

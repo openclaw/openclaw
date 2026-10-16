@@ -1,6 +1,6 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
-import { isRecord, isStringArray } from "../../packages/normalization-core/src/record-coerce.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   MigrationItem,
@@ -260,7 +260,10 @@ export function readMigrationConfigPatchDetails(
   item: MigrationItem,
 ): MigrationConfigPatchDetails | undefined {
   const path = item.details?.path;
-  if (!isStringArray(path)) {
+  if (
+    !Array.isArray(path) ||
+    !path.every((segment): segment is string => typeof segment === "string")
+  ) {
     return undefined;
   }
   return { path, value: item.details?.value };

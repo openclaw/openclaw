@@ -12,7 +12,6 @@ import {
   readJsonBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-import { sendJson } from "openclaw/plugin-sdk/webhook-targets";
 import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
@@ -92,6 +91,12 @@ function restoreProfileUpdateUrlInputs(profile: NostrProfile, value: unknown): N
     ...(typeof value.banner === "string" ? { banner: value.banner } : {}),
     ...(typeof value.website === "string" ? { website: value.website } : {}),
   };
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {

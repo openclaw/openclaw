@@ -1,5 +1,5 @@
 // Repairs tool policy scopes that set both allow and alsoAllow, which config validation rejects.
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { hasAgentRosterProperty } from "../../../agents/agent-roster.js";
 import {
@@ -94,10 +94,10 @@ function readGrantList(
   key: "allow" | "alsoAllow",
 ): string[] | null {
   const list = scope[key];
-  if (!isStringArray(list) || list.length === 0) {
+  if (!Array.isArray(list) || list.length === 0) {
     return null;
   }
-  return list;
+  return list.every((entry) => typeof entry === "string") ? list : null;
 }
 
 function visitConflictingToolPolicies(value: unknown, path: string[], conflicts: Conflict[]): void {

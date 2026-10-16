@@ -1,4 +1,3 @@
-import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { QuestionResourcePreview, QuestionResourceInput } from "./schema/questions.js";
 
 /** Images are rendered by clients, never fetched by the Gateway. */
@@ -58,6 +57,10 @@ export function readQuestionResourcePreview(value: unknown): QuestionResourcePre
     ...(typeof value.description === "string" ? { description: value.description } : {}),
     ...(typeof value.mimeType === "string" ? { mimeType: value.mimeType } : {}),
   };
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function readQuestionResourceInput(value: unknown): QuestionResourceInput | undefined {

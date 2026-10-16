@@ -1,4 +1,4 @@
-import { clampPositiveTimerTimeoutMs as resolveMediaProviderDefaultTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveCapabilityModelRefForProviders,
@@ -133,6 +133,12 @@ export function resolveReferenceImageCapabilityError(params: {
   const maxInputImages = params.edit.maxInputImages ?? 10;
   return params.inputImageCount > maxInputImages
     ? `${params.candidateRef} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${params.inputImageCount} requested`
+    : undefined;
+}
+
+function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? clampTimerTimeoutMs(timeoutMs)
     : undefined;
 }
 

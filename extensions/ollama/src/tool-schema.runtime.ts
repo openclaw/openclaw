@@ -1,6 +1,5 @@
 // Normalizes JSON Schema tool parameters into the shape the native Ollama chat API expects.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
   if (schema.properties && isRecord(schema.properties)) {
@@ -11,7 +10,7 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
   }
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
     const values = schema.enum.filter((value) => value !== null);
-    if (values.length > 0 && isStringArray(values)) {
+    if (values.length > 0 && values.every((value) => typeof value === "string")) {
       return "string";
     }
     if (values.length > 0 && values.every((value) => typeof value === "number")) {

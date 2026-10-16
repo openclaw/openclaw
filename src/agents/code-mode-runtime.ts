@@ -1,4 +1,3 @@
-import { asIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -103,7 +102,7 @@ function readExecutor(value: unknown): CodeModeConfig["executor"] {
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
-  return asIntegerInRange(value, { min: 1 }) ?? fallback;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 export function resolveCodeModeConfig(

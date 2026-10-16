@@ -1,5 +1,4 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -104,6 +103,7 @@ import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-be
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
@@ -421,9 +421,12 @@ async function prepareCliRunContextWithinReadFence(
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
-    throw new Error(
+    const refusal = new Error(
       "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
     );
+    // Another model would only bypass the operator's account choice.
+    recordModelFallbackStop(refusal);
+    throw refusal;
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -1023,7 +1026,10 @@ async function prepareCliRunContextWithinReadFence(
                       if (!activeCapture || !activeCapture.captureNativeToolAuthority(null)) {
                         throw new Error("Native tool authority capture is no longer active.");
                       }
-                      if (!isStringArray(tools)) {
+                      if (
+                        !Array.isArray(tools) ||
+                        !tools.every((name): name is string => typeof name === "string")
+                      ) {
                         throw new Error(
                           "Native runtime reported an invalid tool list; start a fresh session.",
                         );

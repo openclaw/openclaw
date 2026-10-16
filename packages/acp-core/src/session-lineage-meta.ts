@@ -1,4 +1,3 @@
-import { asIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;
@@ -36,6 +35,13 @@ export type AcpSessionLineageRow = {
   spawnedCwd?: string;
 };
 
+function readInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function readEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   const normalized = normalizeOptionalString(value);
   return allowed.find((candidate) => candidate === normalized);
@@ -51,7 +57,7 @@ export function toAcpSessionLineageMeta(row: AcpSessionLineageRow): AcpSessionLi
   const parentSessionId =
     normalizeOptionalString(row.parentSessionKey) ?? normalizeOptionalString(row.spawnedBy);
   const spawnedBy = normalizeOptionalString(row.spawnedBy);
-  const spawnDepth = asIntegerInRange(row.spawnDepth, { min: 0 });
+  const spawnDepth = readInteger(row.spawnDepth);
   const subagentRole = readEnum(row.subagentRole, SUBAGENT_ROLES);
   const subagentControlScope = readEnum(row.subagentControlScope, SUBAGENT_CONTROL_SCOPES);
   const spawnedWorkspaceDir = normalizeOptionalString(row.spawnedWorkspaceDir);

@@ -114,14 +114,3 @@ export function hashFileDescriptorSync(
   const { digest, bytes } = sha256FileSync(fd, { maxBytes });
   return { sha256: digest, sizeBytes: bytes };
 }
-
-/** Flush an owned writable descriptor before hashing its file, then close it. */
-export function flushAndHashFileSync(filePath: string): { sha256: string; sizeBytes: number } {
-  const descriptor = fs.openSync(filePath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-    return hashFileDescriptorSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}

@@ -1,18 +1,6 @@
 // Safe local-file helpers for plugin runtime media and bridge code.
 import { removePathWithinRoot as removePathWithinRootCore } from "../infra/fs-safe-remove.js";
 import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
-export {
-  canAccess,
-  canAccessSync,
-  directoryExists,
-  directoryExistsSync,
-  executableFileExists,
-  executableFileExistsSync,
-  pathEntryExists,
-  readDirectoryEntriesSync,
-  regularFileExists,
-  regularFileExistsSync,
-} from "../infra/path-guards.js";
 
 /** Return whether a path resolves to a regular file, treating filesystem errors as missing. */
 export function fileExists(filePath: string): boolean {
@@ -25,7 +13,6 @@ export function fileExists(filePath: string): boolean {
 
 export {
   canonicalPathFromExistingAncestor,
-  lstatIfExists,
   readFileWithinRoot,
   readLocalFileFromRoots,
   readRegularFile,
@@ -62,7 +49,6 @@ export const removePathWithinRoot: (params: {
 }) => Promise<void> = removePathWithinRootCore;
 export { basenameFromMediaSource, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 export { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
-export { hasNodeErrorCode, isNotFoundPathError, safeStatSync } from "../infra/path-guards.js";
 export { getFileWatchCapacityCode } from "../infra/fs-watch-errors.js";
 export type { Root as ObservationRoot } from "@openclaw/fs-safe/root";
 export {

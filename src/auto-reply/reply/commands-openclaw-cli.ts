@@ -1,12 +1,10 @@
 import { resolveCurrentOpenClawCliInvocation } from "../../infra/openclaw-cli-invocation.js";
-import { shellEscapeBackslash } from "../../shared/shell-quote.js";
 
 const TEST_RUNNER_ENV_PREFIXES = ["VITEST_", "OPENCLAW_VITEST_"];
 
 function quoteShellArg(value: string): string {
-  return process.platform === "win32"
-    ? `'${value.replaceAll("'", "''")}'`
-    : shellEscapeBackslash(value);
+  const escapedQuote = process.platform === "win32" ? "''" : "'\\''";
+  return `'${value.replaceAll("'", escapedQuote)}'`;
 }
 
 /** Prepares one CLI command and its source context before exec approval or dispatch. */

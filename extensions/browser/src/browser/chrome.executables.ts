@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { executableFileExistsSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -89,6 +88,19 @@ const CHROMIUM_EXE_NAMES = new Set([
   ...CHROMIUM_LINUX_NAMES,
 ]);
 
+function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!fs.statSync(filePath).isFile()) {
+      return false;
+    }
+    // Windows has no POSIX execute bit; a visible regular file preserves its native contract.
+    fs.accessSync(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] {
   const id = normalizeLowercaseStringOrEmpty(identifier);
   for (const kind of ["brave", "edge", "chromium", "canary"] as const) {
@@ -135,7 +147,7 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
     return null;
   }
   const exePath = path.join(appPath, "Contents", "MacOS", exeName);
-  if (!executableFileExistsSync(exePath, "darwin")) {
+  if (!isExecutable(exePath, "darwin")) {
     return null;
   }
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
@@ -215,7 +227,7 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
     return null;
   }
   const resolved = resolveLinuxExecutablePath(command);
-  if (!resolved || !executableFileExistsSync(resolved, "linux")) {
+  if (!resolved || !isExecutable(resolved, "linux")) {
     return null;
   }
   const exeName = normalizeLowercaseStringOrEmpty(path.posix.basename(resolved));
@@ -237,7 +249,7 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exePath) {
     return null;
   }
-  if (!executableFileExistsSync(exePath, "win32")) {
+  if (!isExecutable(exePath, "win32")) {
     return null;
   }
   const directPath = resolveDirectWindowsBrowserExecutable(exePath);
@@ -413,14 +425,14 @@ function findFirstExecutable(
   candidates: Array<BrowserExecutable>,
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
-  return candidates.find((candidate) => executableFileExistsSync(candidate.path, platform)) ?? null;
+  return candidates.find((candidate) => isExecutable(candidate.path, platform)) ?? null;
 }
 
 function findFirstChromeExecutable(
   candidates: string[],
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
-  const candidate = candidates.find((filePath) => executableFileExistsSync(filePath, platform));
+  const candidate = candidates.find((filePath) => isExecutable(filePath, platform));
   if (!candidate) {
     return null;
   }

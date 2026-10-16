@@ -21,7 +21,6 @@ import {
 } from "acpx/runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString as normalizeAgentName } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespace as compactDiagnosticText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   AcpRuntimeError,
@@ -122,6 +121,10 @@ function safeDiagnosticFilePart(value: string): string {
 
 function codexWrapperStderrLogFileName(leaseId: string): string {
   return `${CODEX_WRAPPER_STDERR_LOG_PREFIX}.${safeDiagnosticFilePart(leaseId)}.log`;
+}
+
+function compactDiagnosticText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function isGenericInternalAcpErrorMessage(message: string): boolean {

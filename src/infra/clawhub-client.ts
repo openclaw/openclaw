@@ -1,3 +1,4 @@
+// Shared ClawHub URL, authentication, and bounded HTTP client.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,8 +6,6 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-// Shared ClawHub URL, authentication, and bounded HTTP client.
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -459,7 +458,7 @@ export function readRequiredClawHubStringArrayField(
   context: string,
 ): string[] {
   const value = source[field];
-  if (isStringArray(value)) {
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
     return value;
   }
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);

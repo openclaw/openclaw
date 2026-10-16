@@ -1,6 +1,6 @@
 /** Classify captured service commands without treating display names as execution evidence. */
 import path from "node:path";
-import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getCommandPositionalsWithRootOptions,
@@ -115,7 +115,7 @@ export function hasGatewayServiceMarker(value: unknown): boolean {
 
 export function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknown>): Marker | null {
   const args = plist.ProgramArguments;
-  if (!isStringArray(args)) {
+  if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
     return null;
   }
   if (plist.Program !== undefined && typeof plist.Program !== "string") {

@@ -1,4 +1,3 @@
-import { asIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -19,20 +18,24 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
+function readInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const raw = readToolSearchConfig(config);
   const mode: ToolSearchMode = raw.mode === "directory" ? "directory" : "tools";
   const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.min(
     MAX_TOOL_SEARCH_RESULTS,
-    asIntegerInRange(raw.maxSearchLimit, { min: 1 }) ?? DEFAULT_MAX_SEARCH_LIMIT,
+    readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
   );
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : configured,
     mode,
     searchDefaultLimit: Math.min(
       maxSearchLimit,
-      asIntegerInRange(raw.searchDefaultLimit, { min: 1 }) ?? DEFAULT_SEARCH_LIMIT,
+      readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
     ),
     maxSearchLimit,
   };

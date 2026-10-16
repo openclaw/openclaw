@@ -3,7 +3,7 @@ import {
   asSafeIntegerInRange,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
   QuestionAnswers,
@@ -77,7 +77,10 @@ function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
   }
   const answers: QuestionAnswers["answers"] = {};
   for (const [questionId, answerValue] of Object.entries(value.answers)) {
-    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !isStringArray(answerValue)) {
+    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !Array.isArray(answerValue)) {
+      return null;
+    }
+    if (!answerValue.every((answer) => typeof answer === "string")) {
       return null;
     }
     answers[questionId] = [...answerValue];

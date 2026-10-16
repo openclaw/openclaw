@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { z } from "zod";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
@@ -50,7 +50,8 @@ export function refuse(ctx: Context, observed: string, required: string): never 
     `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
   );
 }
-export const digest = (value: unknown) => sha256Hex(stableStringify(value));
+export const digest = (value: unknown) =>
+  createHash("sha256").update(stableStringify(value)).digest("hex");
 export function manifest(ctx: Context) {
   return ctx.manifest!;
 }

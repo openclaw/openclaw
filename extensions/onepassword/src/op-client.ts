@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { canAccess, canAccessSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -25,9 +24,18 @@ type OpClientOptions = {
   warn?: (message: string) => void;
 };
 
+function isExecutable(filePath: string): boolean {
+  try {
+    fsSync.accessSync(filePath, fsSync.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveOpBinary(configuredPath: string | undefined): string | undefined {
   if (configuredPath) {
-    return canAccessSync(configuredPath, fsSync.constants.X_OK) ? configuredPath : undefined;
+    return isExecutable(configuredPath) ? configuredPath : undefined;
   }
   const executable = process.platform === "win32" ? "op.exe" : "op";
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -35,7 +43,7 @@ function resolveOpBinary(configuredPath: string | undefined): string | undefined
       continue;
     }
     const candidate = path.resolve(directory, executable);
-    if (canAccessSync(candidate, fsSync.constants.X_OK)) {
+    if (isExecutable(candidate)) {
       return candidate;
     }
   }
@@ -131,7 +139,12 @@ export class OpClient {
   }
 
   async tokenFilePresent(): Promise<boolean> {
-    return canAccess(this.tokenFile, fsSync.constants.R_OK);
+    try {
+      await fs.access(this.tokenFile, fsSync.constants.R_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async readToken(): Promise<string> {

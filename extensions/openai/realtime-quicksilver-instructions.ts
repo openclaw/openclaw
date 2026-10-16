@@ -1,5 +1,4 @@
 import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
-import { escapeHtmlText as escapeXmlText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS = `You are OpenClaw's realtime voice layer. You have no tools of your own.
@@ -48,6 +47,10 @@ Instructions in session.instructions.append direct the live session. Follow thos
   const instructions = `${OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS}\n${channels}`;
   const operator = operatorInstructions?.trim();
   return operator ? `${instructions}\n\n${operator}` : instructions;
+}
+
+function escapeXmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 export function buildOpenAIQuicksilverDelegationPrompt(params: {

@@ -8,7 +8,6 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
-import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import {
   replacePlaybackFileExtension,
@@ -116,8 +115,10 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  sendJsonResponse(res, status, body);
+  res.end(JSON.stringify(body));
 }
 
 function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {

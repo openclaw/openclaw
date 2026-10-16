@@ -1,4 +1,4 @@
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { createHash } from "node:crypto";
 import { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type {
@@ -25,7 +25,7 @@ export function validatePluginStateComparison(
 }
 
 function digest(value: readonly unknown[]): string {
-  return sha256Hex(JSON.stringify(value));
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 export function pluginStateComparisonScope(

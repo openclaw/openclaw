@@ -1,4 +1,3 @@
-import { collapseWhitespace } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
@@ -84,7 +83,7 @@ function percent(value: number): string {
  * element descriptor as page-reported data.
  */
 function sanitizePageText(value: string, maxLength: number): string {
-  return truncateUtf16Safe(collapseWhitespace(value), maxLength);
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxLength);
 }
 
 const ANNOTATION_TITLE_MAX_LENGTH = 80;

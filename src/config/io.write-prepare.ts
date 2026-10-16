@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined, isStringArray } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import {
   hasAgentRosterProperty,
@@ -77,7 +77,10 @@ function hasOwnValidIncludeDirective(value: unknown): value is Record<string, un
     return false;
   }
   const includeValue = value.$include;
-  return typeof includeValue === "string" || isStringArray(includeValue);
+  return (
+    typeof includeValue === "string" ||
+    (Array.isArray(includeValue) && includeValue.every((entry) => typeof entry === "string"))
+  );
 }
 
 function collectConfigPaths(

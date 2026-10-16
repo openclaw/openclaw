@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { canAccess } from "openclaw/plugin-sdk/file-access-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
@@ -310,13 +309,13 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     .filter((value): value is string => Boolean(value));
 
   for (const candidate of envCandidates) {
-    if (await canAccess(candidate, fsConstants.X_OK)) {
+    if (await isExecutable(candidate)) {
       return candidate;
     }
   }
 
   for (const candidate of await collectExecutableCandidates()) {
-    if (await canAccess(candidate, fsConstants.X_OK)) {
+    if (await isExecutable(candidate)) {
       return candidate;
     }
   }
@@ -493,7 +492,7 @@ async function findExecutableInPath(command: string): Promise<string | undefined
       continue;
     }
     const candidate = path.join(directory, command);
-    if (await canAccess(candidate, fsConstants.X_OK)) {
+    if (await isExecutable(candidate)) {
       return candidate;
     }
   }
@@ -502,7 +501,16 @@ async function findExecutableInPath(command: string): Promise<string | undefined
 }
 
 async function assertExecutable(candidate: string, label: string): Promise<void> {
-  if (!(await canAccess(candidate, fsConstants.X_OK))) {
+  if (!(await isExecutable(candidate))) {
     throw new Error(`${label} not found or not executable: ${candidate}`);
+  }
+}
+
+async function isExecutable(candidate: string): Promise<boolean> {
+  try {
+    await fs.access(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }

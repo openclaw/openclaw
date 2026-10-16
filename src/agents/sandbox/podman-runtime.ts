@@ -1,7 +1,6 @@
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { sha256Hex as hashTextSha256 } from "@openclaw/normalization-core/node-crypto";
 import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import {
@@ -10,6 +9,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
+import { hashTextSha256 } from "./hash.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import type { ReadOnlyWorkspaceSkillMount } from "./workspace-mounts.js";

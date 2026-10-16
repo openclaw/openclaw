@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  floorPositiveFiniteNumber,
-  resolveIntegerOption,
-  timestampMsToIsoString,
-} from "openclaw/plugin-sdk/number-runtime";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -19,9 +15,8 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateWithMarker as truncateText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -642,12 +637,22 @@ async function readFileMtimeIso(file: string): Promise<string | undefined> {
 }
 
 function normalizeLimit(value: unknown): number {
-  return resolveIntegerOption(value, DEFAULT_SESSION_LIMIT, { min: 1, max: MAX_SESSION_LIMIT });
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(MAX_SESSION_LIMIT, Math.max(1, Math.floor(value)))
+    : DEFAULT_SESSION_LIMIT;
 }
 
 function normalizeTimeoutMs(value: unknown): number {
-  const timeoutMs = floorPositiveFiniteNumber(value);
-  return timeoutMs === undefined ? DEFAULT_RESUME_TIMEOUT_MS : Math.min(60 * 60_000, timeoutMs);
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(60 * 60_000, Math.floor(value))
+    : DEFAULT_RESUME_TIMEOUT_MS;
+}
+
+function truncateText(value: string, max: number): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

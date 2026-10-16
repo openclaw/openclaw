@@ -8,7 +8,6 @@ import {
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { sendJson } from "openclaw/plugin-sdk/webhook-targets";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -89,7 +88,9 @@ const SECRET_LOG_KEYS = new Set([
 ]);
 
 export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
-  sendJson(res, status, { response_type: "ephemeral", text });
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify({ response_type: "ephemeral", text }));
 }
 
 export async function readSlashCommandBody(

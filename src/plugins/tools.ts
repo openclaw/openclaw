@@ -1,5 +1,5 @@
 /** Builds agent tools registered by plugins, preserving plugin scope around callbacks and descriptors. */
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -92,7 +92,9 @@ function inspectPluginTool(
       return { error: "tool must be an object" };
     }
     const requiredClientCaps = tool.requiredClientCaps;
-    const validCaps = isStringArray(requiredClientCaps);
+    const validCaps =
+      Array.isArray(requiredClientCaps) &&
+      requiredClientCaps.every((requiredCap) => typeof requiredCap === "string");
     if (validCaps && requiredClientCaps.some((requiredCap) => !clientCaps.has(requiredCap))) {
       return null;
     }

@@ -1,4 +1,4 @@
-import { sha256Hex as digestText } from "openclaw/plugin-sdk/crypto-runtime";
+import { createHash } from "node:crypto";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -41,6 +41,10 @@ function normalizeText(text: string | undefined): string | null {
 
 function isUsableTimestamp(createdAt: number | undefined): createdAt is number {
   return typeof createdAt === "number" && Number.isFinite(createdAt);
+}
+
+function digestText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 function buildScope(parts: SelfChatCacheKeyParts): string {

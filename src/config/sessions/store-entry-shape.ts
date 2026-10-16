@@ -22,7 +22,7 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-export function normalizeOptionalTimestamp(value: unknown): number | undefined {
+function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 

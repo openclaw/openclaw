@@ -6,7 +6,6 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
 const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
@@ -16,6 +15,10 @@ type SourceFormat = OutputFormat | "ogg" | "m4a";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
+
+function asStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
+}
 
 function normalizeOutputFormat(value: unknown): OutputFormat {
   if (typeof value !== "string") {
@@ -37,7 +40,7 @@ function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOU
   }
   return {
     command,
-    args: isStringArray(cfg.args) ? cfg.args : [],
+    args: asStringArray(cfg.args) ?? [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,

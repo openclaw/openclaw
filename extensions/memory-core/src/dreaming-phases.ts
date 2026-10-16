@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespaceLower as normalizeDiaryCoverageText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
@@ -909,6 +908,10 @@ function dedupeEntries(
     deduped.push({ ...entry, sourceEntryKeys: [entry.key] });
   }
   return deduped;
+}
+
+function normalizeDiaryCoverageText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function isEntryCoveredByRecentDiary(

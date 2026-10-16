@@ -7,13 +7,14 @@ import {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { sendJson as sendJsonResponse } from "openclaw/plugin-sdk/webhook-targets";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
+  res.statusCode = status;
   res.setHeader("Cache-Control", "no-store");
-  sendJsonResponse(res, status, value);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(value));
 }
 
 type BeamRequestClient = {

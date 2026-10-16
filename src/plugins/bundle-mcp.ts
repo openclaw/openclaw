@@ -1,9 +1,5 @@
 import path from "node:path";
-import {
-  hasOnlyKeys,
-  isStringArray,
-  isStringRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import {
@@ -199,6 +195,10 @@ function absolutizeBundleMcpServer(params: {
   return next;
 }
 
+function hasOnlyKeys(raw: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(raw).every((key) => allowed.has(key));
+}
+
 function isValidAgentCommand(command: unknown, rootDir: string): command is string {
   if (typeof command !== "string" || command.length === 0) {
     return false;
@@ -249,7 +249,11 @@ function validateAgentMcpServer(params: {
     if (!isValidAgentCommand(params.raw.command, params.rootDir)) {
       return { ok: false, error: "stdio command must be a bare name or ./-relative path" };
     }
-    if (params.raw.args !== undefined && !isStringArray(params.raw.args)) {
+    if (
+      params.raw.args !== undefined &&
+      (!Array.isArray(params.raw.args) ||
+        !params.raw.args.every((entry) => typeof entry === "string"))
+    ) {
       return { ok: false, error: "stdio args must be an array of strings" };
     }
     if (params.raw.env !== undefined && !isStringRecord(params.raw.env)) {

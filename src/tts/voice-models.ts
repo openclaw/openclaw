@@ -1,5 +1,4 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { floorPositiveFiniteNumber as normalizeTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString as normalizeLowercaseString,
@@ -25,6 +24,12 @@ export type VoiceProviderCandidate = {
   provider: string;
   voiceModel?: VoiceModelRef;
 };
+
+function normalizeTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
 
 function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
   const parsed = typeof value === "string" ? parseModelCatalogRef(value) : null;

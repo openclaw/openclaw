@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { canAccessSync } from "openclaw/plugin-sdk/file-access-runtime";
 
 const cache = new Map<string, string | null>();
 
@@ -20,7 +19,15 @@ export function resolveExecutable(
     .filter(Boolean)
     .map((dir) => path.join(dir, command));
   const candidates = path.isAbsolute(command) ? [command] : [...pathCandidates, ...extraCandidates];
-  const found = candidates.find((candidate) => canAccessSync(candidate, fs.constants.X_OK)) ?? null;
+  const found =
+    candidates.find((candidate) => {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    }) ?? null;
   cache.set(key, found);
   return found;
 }

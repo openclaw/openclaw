@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { lstatIfExists } from "../../infra/fs-safe.js";
 import {
   estimateCheckoutObjectBytes,
   estimateCheckoutTransitionBytes,
@@ -19,7 +18,7 @@ import type {
   GitWorktreeOperationResult,
   GitWorktreeOperations,
 } from "./git-worktree-operations.js";
-import { requireGitBuffer, worktreePathExists } from "./git.js";
+import { lstatIfExists, requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
@@ -73,7 +72,7 @@ async function inspectProvisioning(
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
     }
-    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized), "ENOENT");
+    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized));
     if (stat?.isFile()) {
       estimatedBytes += Math.max(4096, stat.size);
     }

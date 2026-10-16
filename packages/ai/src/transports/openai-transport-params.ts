@@ -1,5 +1,5 @@
 import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
 import type { CodeModeToolSurfaceObservation } from "../provider-options.js";
@@ -231,7 +231,7 @@ export function assertCodeModeResponsesToolSurface(
     .toSorted((left, right) => left.localeCompare(right));
   if (
     names.length >= 2 &&
-    isStringArray(identities) &&
+    identities.every((identity): identity is string => typeof identity === "string") &&
     new Set(identities).size === identities.length &&
     names.includes("exec") &&
     names.includes("wait")

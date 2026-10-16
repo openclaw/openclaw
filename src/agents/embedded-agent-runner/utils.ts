@@ -8,7 +8,11 @@ import type { ThinkingLevel } from "../runtime/index.js";
 
 export type ProviderThinkLevel = Exclude<ThinkLevel, "ultra">;
 
-export { floorPositiveFiniteNumber as normalizeContextTokenBudget } from "@openclaw/normalization-core/number-coercion";
+export function normalizeContextTokenBudget(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
 
 /** Converts logical product modes into provider-facing effort values. */
 export function mapThinkingLevelForProvider(

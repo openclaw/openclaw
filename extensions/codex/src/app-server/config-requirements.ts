@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
@@ -72,11 +71,8 @@ function parseMatchingRemoteSandboxModesFromCodexRequirements(
   }
   for (const section of remoteConfigs) {
     const config = readRecord(section);
-    const patterns = config?.hostname_patterns;
-    if (
-      !isStringArray(patterns) ||
-      !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)
-    ) {
+    const patterns = readRequirementsStringArray(config?.hostname_patterns);
+    if (!patterns || !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)) {
       continue;
     }
     return parseRequirementsValues(config?.allowed_sandbox_modes, normalizeRequirementsSandboxMode);
@@ -88,10 +84,11 @@ function parseRequirementsValues<T>(
   value: unknown,
   normalize: (value: string) => T | undefined,
 ): Set<T> | undefined {
-  if (!isStringArray(value)) {
+  const values = readRequirementsStringArray(value);
+  if (values === undefined) {
     return undefined;
   }
-  const normalized = value.map(normalize).filter((entry): entry is T => entry !== undefined);
+  const normalized = values.map(normalize).filter((entry): entry is T => entry !== undefined);
   return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
@@ -101,6 +98,12 @@ function parseCodexRequirements(content: string): TomlTable | undefined {
   } catch {
     return undefined;
   }
+}
+
+function readRequirementsStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? value
+    : undefined;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexSandboxMode | undefined {

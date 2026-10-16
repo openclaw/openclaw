@@ -12,7 +12,6 @@ import {
 import {
   addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
-  floorPositiveFiniteNumber as readPositiveFiniteTimeoutMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -542,6 +541,12 @@ function readDynamicToolTimeoutSecondsAsMs(value: unknown): number | undefined {
     return undefined;
   }
   return value * 1000;
+}
+
+function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function clampDynamicToolTimeoutMs(

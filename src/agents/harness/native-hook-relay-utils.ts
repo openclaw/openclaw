@@ -1,12 +1,9 @@
-import { floorPositiveFiniteNumber as normalizeOptionalPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { shellEscapeBackslash } from "../../shared/shell-quote.js";
+import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
   NativeHookRelayEvent,
   NativeHookRelayProvider,
 } from "./native-hook-relay-types.js";
-export { truncateWithMarker as truncateRelayText } from "@openclaw/normalization-core/utf16-slice";
 export { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
@@ -22,7 +19,11 @@ export function normalizePositiveInteger(value: number | undefined, fallback: nu
   return normalizeOptionalPositiveInteger(value) ?? fallback;
 }
 
-export { normalizeOptionalPositiveInteger };
+export function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
 
 export function shellQuoteArgs(args: readonly string[]): string {
   return args.map((arg) => shellQuoteArg(arg, process.platform)).join(" ");
@@ -35,7 +36,7 @@ function shellQuoteArg(value: string, platform: NodeJS.Platform): string {
   if (platform === "win32") {
     return `"${value.replaceAll('"', '\\"')}"`;
   }
-  return shellEscapeBackslash(value);
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 export function readNativeHookRelayProvider(value: unknown): NativeHookRelayProvider {
@@ -204,4 +205,8 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   // Charge the retained prefix; a safe boundary may back up one code unit.
   state.remainingStringLength -= prefix.length;
   return `${prefix}...[truncated]`;
+}
+
+export function truncateRelayText(value: string, maxLength: number): string {
+  return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

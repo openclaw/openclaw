@@ -1,8 +1,7 @@
 // Covers trusted system binary resolution across platform install roots.
-import * as fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveSystemBin = typeof import("./resolve-system-bin.js").resolveSystemBin;
 
@@ -50,8 +49,6 @@ vi.mock("node:fs", async () => {
   );
 });
 
-const actualFs = (await vi.importActual<{ default: typeof fs }>("node:fs")).default;
-
 function addExecutables(...paths: string[]): void {
   for (const candidate of paths) {
     executables.add(candidate);
@@ -60,17 +57,12 @@ function addExecutables(...paths: string[]): void {
 
 beforeEach(async () => {
   executables = new Set<string>();
-  vi.spyOn(actualFs, "accessSync").mockImplementation(fs.accessSync);
   windowsRoots.systemRoot = "C:\\Windows";
   windowsRoots.programFilesRoots = ["C:\\Program Files", "C:\\Program Files (x86)"];
   ({ resolveSystemBin } = await importFreshModule<typeof import("./resolve-system-bin.js")>(
     import.meta.url,
     `./resolve-system-bin.js?test=${freshResolveSystemBinId++}`,
   ));
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
 });
 
 describe("resolveSystemBin", () => {

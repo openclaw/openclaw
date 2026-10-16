@@ -23,7 +23,6 @@ import {
   registerPluginHttpRoute,
   registerWebhookTarget,
   resolveSingleWebhookTarget,
-  sendJson,
 } from "openclaw/plugin-sdk/webhook-targets";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
@@ -518,7 +517,9 @@ async function handleFeishuWebhook(
       encryptKey,
     });
     if (isChallenge) {
-      sendJson(res, 200, challenge);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify(challenge));
       return;
     }
 
@@ -535,7 +536,9 @@ async function handleFeishuWebhook(
         // non-durable event types ack without claiming durable acceptance.
         res.setHeader(FEISHU_WEBHOOK_ACCEPTED_HEADER, FEISHU_WEBHOOK_ACCEPTED_VALUE);
       }
-      sendJson(res, 200, invocation.value);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify(invocation.value));
     }
   } catch (err) {
     reportError("webhook handler error", err);

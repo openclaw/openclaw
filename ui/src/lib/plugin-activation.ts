@@ -1,7 +1,6 @@
 import {
   asNullableObjectRecord,
   asNullableRecord,
-  isStringArray,
 } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigSnapshot } from "../api/types.ts";
 
@@ -25,12 +24,18 @@ export function isPluginEnabledInConfigSnapshot(
     return false;
   }
 
-  const deny = isStringArray(plugins?.deny) ? plugins.deny : [];
+  const deny =
+    Array.isArray(plugins?.deny) && plugins.deny.every((entry) => typeof entry === "string")
+      ? plugins.deny
+      : [];
   if (deny.includes(pluginId)) {
     return false;
   }
 
-  const allow = isStringArray(plugins?.allow) ? plugins.allow : [];
+  const allow =
+    Array.isArray(plugins?.allow) && plugins.allow.every((entry) => typeof entry === "string")
+      ? plugins.allow
+      : [];
   if (allow.length > 0 && !allow.includes(pluginId)) {
     return false;
   }

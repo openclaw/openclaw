@@ -1,10 +1,10 @@
-import { sha256Hex as hashTextSha256 } from "@openclaw/normalization-core/node-crypto";
 import { describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { hashTextSha256 } from "./hash.js";
 import { resolveSandboxRuntimeStatusAsync } from "./runtime-status.js";
 import {
   buildSandboxContainerName,

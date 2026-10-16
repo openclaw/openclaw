@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
-  lstatIfExists,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createMigrationItem,
@@ -18,7 +17,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode, pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -59,6 +58,18 @@ function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
       ? { allow_destructive_actions: entry.allowDestructiveActions }
       : {}),
   };
+}
+
+async function lstatIfExists(filePath: string) {
+  try {
+    return await fs.lstat(filePath);
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function buildCodexMemoryItems(params: {

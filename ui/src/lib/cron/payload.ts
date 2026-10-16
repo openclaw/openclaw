@@ -1,4 +1,4 @@
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,7 +16,7 @@ function isCronPayload(value: unknown): value is CronPayload {
     return typeof value.message === "string";
   }
   if (value.kind === "command") {
-    return isStringArray(value.argv);
+    return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
   }
   if (value.kind === "script") {
     return typeof value.script === "string";

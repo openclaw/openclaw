@@ -1,24 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { collapseWhitespace } from "@openclaw/normalization-core/string-normalization";
-
-/** Concatenates plain text blocks without changing their whitespace or separators. */
-export function extractPlainTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let text = "";
-  for (const block of content) {
-    const candidate = asOptionalObjectRecord(block);
-    if (candidate?.type === "text" && typeof candidate.text === "string") {
-      text += candidate.text;
-    }
-  }
-  return text;
-}
-
 /** Coerces arbitrary provider content values into displayable text without throwing. */
 export function coerceChatContentText(value: unknown): string {
   if (typeof value === "string") {
@@ -54,7 +33,7 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalize = opts?.normalizeText ?? collapseWhitespace;
+  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
   const sanitize = (text: unknown): string => {
     const raw = coerceChatContentText(text);
@@ -73,12 +52,15 @@ export function extractTextFromChatContent(
 
   const chunks: string[] = [];
   for (const block of content) {
-    const candidate = asOptionalObjectRecord(block);
-    // Non-text blocks can contain media or tool payloads; callers here need visible text only.
-    if (candidate?.type !== "text") {
+    if (!block || typeof block !== "object") {
       continue;
     }
-    const value = sanitize(candidate.text);
+    // Non-text blocks can contain media or tool payloads; callers here need visible text only.
+    if ((block as { type?: unknown }).type !== "text") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    const value = sanitize(text);
     if (value.trim()) {
       chunks.push(value);
     }

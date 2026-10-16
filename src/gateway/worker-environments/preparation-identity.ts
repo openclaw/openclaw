@@ -1,4 +1,4 @@
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
@@ -66,7 +66,8 @@ export function createWorkerPreparationIdentity(params: {
     project: params.project ? { key: params.project.key } : { source: "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
-  const digest = (value: unknown) => sha256Hex(stableStringify(value));
+  const digest = (value: unknown) =>
+    createHash("sha256").update(stableStringify(value)).digest("hex");
   // Ready workers still bind exact runtime, profile and commit facts; reusable
   // disks only need compatible setup and boot inputs.
   return {

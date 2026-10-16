@@ -13,7 +13,6 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { escapeHtmlText } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
@@ -44,6 +43,10 @@ type ResolvedAttachmentDelivery = {
   forceDocumentMime?: string;
   threadId?: string | number;
 };
+
+function escapeHtmlText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function normalizeOptionalThreadId(value: unknown): string | number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {

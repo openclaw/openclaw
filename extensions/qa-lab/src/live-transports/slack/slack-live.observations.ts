@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespace as normalizeSlackAccessibleText } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
   SLACK_QA_NATIVE_CHART,
@@ -232,6 +231,12 @@ export function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthI
   );
 }
 
+// Slack history can flatten top-level accessibility newlines on readback.
+// Normalize only whitespace; the native chart structure stays byte-for-byte strict below.
+function normalizeSlackAccessibleText(value: string) {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
 const SLACK_QA_TEXT_DIAGNOSTIC_MAX_CHARS = 500;
 
 function describeSlackObservedText(value: string) {
@@ -246,7 +251,6 @@ export function isExpectedSlackNativeDataMessage(
   expectedAccessibleText: string,
   kind: "chart" | "table",
 ) {
-  // Slack history flattens accessibility whitespace; native chart structure stays strict below.
   if (
     normalizeSlackAccessibleText(message.text ?? "") !==
     normalizeSlackAccessibleText(expectedAccessibleText)

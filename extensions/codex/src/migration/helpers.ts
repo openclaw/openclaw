@@ -1,9 +1,19 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { tryReadJson } from "@openclaw/fs-safe/json";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export { directoryExists as isDirectory } from "openclaw/plugin-sdk/file-access-runtime";
+export async function isDirectory(filePath: string | undefined): Promise<boolean> {
+  if (!filePath) {
+    return false;
+  }
+  try {
+    return (await fs.stat(filePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 export function resolveUserHomeDir(): string {
   return process.env.HOME?.trim() || os.homedir();

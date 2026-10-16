@@ -1,8 +1,8 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveUserPath } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { regularFileExists } from "openclaw/plugin-sdk/file-access-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -49,7 +49,13 @@ export const collectLegacyReefStateBackupResources: NonNullable<
   { path: resolveLegacyReefStateDir(params), kind: "directory" },
 ];
 
-export { regularFileExists as legacyReefFileExists };
+export async function legacyReefFileExists(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
 
 export async function listLegacyReefFiles(
   stateDir: string,
@@ -58,7 +64,7 @@ export async function listLegacyReefFiles(
   const entries = await Promise.all(
     filenames.map(async (filename) => ({
       filename,
-      exists: await regularFileExists(path.join(stateDir, filename)),
+      exists: await legacyReefFileExists(path.join(stateDir, filename)),
     })),
   );
   return entries.filter((entry) => entry.exists).map((entry) => entry.filename);

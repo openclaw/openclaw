@@ -5,7 +5,6 @@ import {
   type IncomingMessage,
 } from "node:http";
 import { duplexPair, Writable } from "node:stream";
-import { toStringifiedError as asError } from "@openclaw/normalization-core/error-coercion";
 import { WebSocket, createWebSocketStream } from "../../packages/gateway-client/src/websocket.js";
 import {
   GatewayControlUiIngressError,
@@ -21,6 +20,10 @@ import type { RemoteControlUiIngressContext } from "./server/client-identity-typ
 
 const MAX_BODY_BYTES = 100 * 1024 * 1024;
 const WS_OPEN_TIMEOUT_MS = 10_000;
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 function limitError(message: string): GatewayControlUiIngressError {
   return new GatewayControlUiIngressError("limit-exceeded", message);

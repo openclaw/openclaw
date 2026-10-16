@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 // Preserve shipped Gateway opt-outs while moving desktop access to pairing approval.
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -44,7 +43,7 @@ export function preserveLegacyDesktopStreamOptOut(
     return false;
   }
   if (
-    !isStringArray(surface.commands) ||
+    !surface.commands.every((command) => typeof command === "string") ||
     !Number.isSafeInteger(surface.createdAtMs) ||
     !Number.isSafeInteger(surface.approvedAtMs) ||
     !Number.isSafeInteger(surface.approvedAtMs + 1)

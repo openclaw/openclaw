@@ -3,7 +3,6 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { escapeHtmlText as escapeFeishuCardMarkdownText } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 export type FeishuNativeCard = Record<string, unknown> & {
   body: { elements: Record<string, unknown>[] };
@@ -33,7 +32,9 @@ export function resolveFeishuCardTemplate(template?: string): string | undefined
   return normalized;
 }
 
-export { escapeFeishuCardMarkdownText };
+export function escapeFeishuCardMarkdownText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
 
 export function escapeFeishuCardPlainText(text: string): string {
   return escapeFeishuCardMarkdownText(text).replace(/([\\`*_{}[\]()#+\-!|>~])/g, "\\$1");

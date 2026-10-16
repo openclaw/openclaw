@@ -1,10 +1,10 @@
 import path from "node:path";
-import { sha256Hex as hashTextSha256 } from "@openclaw/normalization-core/node-crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserPath } from "../../infra/home-dir.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace-default.js";
 import { SANDBOX_STATE_DIR } from "./constants.js";
+import { hashTextSha256 } from "./hash.js";
 import type { SandboxConfig, SandboxIsolationSubject } from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 

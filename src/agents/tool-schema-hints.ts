@@ -1,5 +1,5 @@
 /** Bounded TypeScript-style hints for model-visible tool input and output schemas. */
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const MAX_TOOL_SCHEMA_DECLARATION_CHARS = 32_768;
 
@@ -91,7 +91,7 @@ function normalizeNullableSchemaForHint(
   const types =
     typeof schema.type === "string"
       ? [schema.type]
-      : isStringArray(schema.type)
+      : Array.isArray(schema.type) && schema.type.every((value) => typeof value === "string")
         ? schema.type
         : undefined;
   if (!types) {
@@ -394,7 +394,11 @@ function compactSchemaType(
 
   const type = schema.type;
   if (Array.isArray(type)) {
-    if (type.length === 0 || type.length > MAX_COMPACT_UNION_TYPES || !isStringArray(type)) {
+    if (
+      type.length === 0 ||
+      type.length > MAX_COMPACT_UNION_TYPES ||
+      !type.every((value): value is string => typeof value === "string")
+    ) {
       return UNKNOWN_HINT;
     }
     const rendered = type.map((value) =>

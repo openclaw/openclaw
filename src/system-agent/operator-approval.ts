@@ -1,6 +1,6 @@
 // Host-owned authorization for exact delegated OpenClaw changes.
+import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
@@ -20,7 +20,7 @@ export const SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES = {
 
 /** Canonical operation fingerprint used to bind approval to one exact mutation. */
 export function hashSystemAgentOperation(operation: SystemAgentOperation): string {
-  return sha256Hex(stableStringify(operation));
+  return createHash("sha256").update(stableStringify(operation)).digest("hex");
 }
 
 export type SystemAgentApprovalIntent = "approve" | "decline" | "other";

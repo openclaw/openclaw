@@ -1,9 +1,12 @@
 // Slack-private authored text placement after block compilation.
 import type { LegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespace as normalizeComparableSlackText } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 export type SlackAuthoredTextPlacement = "none" | "blocks" | "outside-blocks";
+
+function normalizeComparableSlackText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
 
 function isSlackAuthoredTextRepresentedInFragments(
   text: string,

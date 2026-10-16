@@ -1,5 +1,4 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { stripImessageLengthPrefixedUtf8Text } from "./strip-imsg-length-prefixed-text.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -16,7 +15,11 @@ function isOptionalBoolean(value: unknown): value is boolean | null | undefined 
 }
 
 function isOptionalStringArray(value: unknown): value is string[] | null | undefined {
-  return value === undefined || value === null || isStringArray(value);
+  return (
+    value === undefined ||
+    value === null ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
 }
 
 function isOptionalAttachments(value: unknown): value is IMessagePayload["attachments"] {

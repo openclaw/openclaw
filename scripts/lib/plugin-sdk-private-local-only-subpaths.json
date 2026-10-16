@@ -49,7 +49,6 @@
   "context-visibility-runtime",
   "conversation-binding-runtime",
   "cron-store-runtime",
-  "crypto-runtime",
   "dangerous-name-runtime",
   "delivery-queue-runtime",
   "direct-dm-guard-policy",

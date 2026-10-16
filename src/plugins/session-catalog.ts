@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { collapseWhitespace as normalizeUserText } from "@openclaw/normalization-core/string-normalization";
 import type {
   SessionCatalogHost,
   SessionCatalogShareRoute,
@@ -18,8 +17,6 @@ import type {
   SessionUpstreamJsonValue,
   SessionUpstreamKind,
 } from "./session-catalog-upstream.types.js";
-
-export { normalizeUserText };
 
 export type {
   SessionUpstreamJsonValue,
@@ -143,6 +140,10 @@ export type SessionUpstreamProbe = {
   marker: SessionUpstreamJsonValue | null;
   ownRecentUserTexts: string[];
 };
+
+export function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
 
 export function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
   const normalized = text === undefined ? "" : normalizeUserText(text);

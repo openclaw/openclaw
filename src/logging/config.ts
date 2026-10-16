@@ -1,8 +1,5 @@
 import fs from "node:fs";
-import {
-  isRecord as isObjectRecord,
-  isStringArray,
-} from "@openclaw/normalization-core/record-coerce";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "../config/includes.js";
 import { resolveConfigPath, resolveIncludeRoots } from "../config/paths.js";
@@ -68,7 +65,11 @@ function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig 
   if (Array.isArray(logging.redactPatterns)) {
     try {
       const resolved = resolveConfigEnvVars({ redactPatterns: logging.redactPatterns });
-      if (isObjectRecord(resolved) && isStringArray(resolved.redactPatterns)) {
+      if (
+        isObjectRecord(resolved) &&
+        Array.isArray(resolved.redactPatterns) &&
+        resolved.redactPatterns.every((entry) => typeof entry === "string")
+      ) {
         partial.redactPatterns = resolved.redactPatterns;
       }
     } catch {

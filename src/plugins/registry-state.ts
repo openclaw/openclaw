@@ -1,5 +1,4 @@
 import type { UnifiedModelCatalogSource } from "@openclaw/model-catalog-core/model-catalog-types";
-import { floorPositiveFiniteNumber as normalizeHookTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -59,6 +58,13 @@ export function resolvePluginRegistrationCapabilities(
     setupRuntimeHandlers: mode === "setup-runtime",
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
   };
+}
+
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 export function resolveTypedHookTimeoutMs(params: {

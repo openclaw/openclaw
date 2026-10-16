@@ -1,5 +1,4 @@
 /** Lightweight direct loader for bundled provider policy public artifacts. */
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -42,7 +41,10 @@ export function extractProviderPolicySurface(
   mod: Record<string, unknown>,
 ): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
-  if (isStringArray(mod.deprecatedProfileIds)) {
+  if (
+    Array.isArray(mod.deprecatedProfileIds) &&
+    mod.deprecatedProfileIds.every((value) => typeof value === "string")
+  ) {
     surface.deprecatedProfileIds = mod.deprecatedProfileIds;
   }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {

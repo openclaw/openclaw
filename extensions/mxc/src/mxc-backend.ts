@@ -2,11 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import {
-  isNotFoundPathError as isMissingPathError,
-  isPathInside,
-  resolvePathPrefixSync,
-} from "openclaw/plugin-sdk/file-access-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -15,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendManager,
+  SandboxContext,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
@@ -30,7 +28,6 @@ import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.
 import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
 import { createWindowsCommandBridge } from "./windows-command.js";
 import { buildLauncherEnv } from "./windows-env.js";
-import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
 
 type MxcExecFinalizeToken = {
   payloadDir: string;
@@ -101,6 +98,14 @@ function realpathForExistingPath(value: string, label: string): string {
   }
 }
 
+// ENOTDIR means a parent component is a file, so the path can never resolve to a
+// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
+// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
+function isMissingPathError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 function createMxcLauncherPayload(
   config: MxcConfig,
   payload: ContainerConfig,
@@ -134,7 +139,7 @@ export function createMxcSandboxBackendHandle(params: {
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: MxcWorkspaceAccess;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 

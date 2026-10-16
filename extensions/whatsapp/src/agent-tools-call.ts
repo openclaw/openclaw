@@ -12,7 +12,6 @@ import type {
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { shellEscape as quotePosixShellArg } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
@@ -61,6 +60,10 @@ async function isRegularFile(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function quotePowerShellArg(value: string): string {

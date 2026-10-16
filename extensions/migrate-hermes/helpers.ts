@@ -23,7 +23,10 @@ export function resolveHomePath(input: string): string {
 
 export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
-export { directoryExists as isDirectory } from "openclaw/plugin-sdk/file-access-runtime";
+export async function isDirectory(dirPath: string): Promise<boolean> {
+  const stat = await fs.stat(dirPath).catch(() => undefined);
+  return stat?.isDirectory() === true;
+}
 
 export function sanitizeName(name: string): string {
   const normalized = name.trim().toLowerCase().replaceAll(UNSAFE_NAME_CHARS_RE, "-");

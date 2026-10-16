@@ -4,7 +4,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { sha256Hex as hashToken } from "openclaw/plugin-sdk/crypto-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -98,7 +97,7 @@ export class DiffArtifactStore {
     };
     const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return viewerEntryToMeta(entry, token);
+    return viewerEntryToMeta(entry, token, metadata);
   }
 
   async readAuthorizedViewer(id: string, token: string) {
@@ -125,7 +124,7 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
     return {
-      artifact: viewerEntryToMeta(entry, token),
+      artifact: viewerEntryToMeta(entry, token, entry.metadata),
       html,
     };
   }
@@ -309,20 +308,18 @@ export class DiffArtifactStore {
 function viewerEntryToMeta(
   entry: PluginBlobEntry<DiffArtifactBlobMetadata>,
   token: string,
+  metadata: DiffViewerArtifactMetadata,
 ): DiffArtifactMeta {
-  if (!isViewerMetadata(entry.metadata)) {
-    throw new Error(`Diff artifact ${entry.key} is not a viewer.`);
-  }
   return {
     id: entry.key,
     token,
     createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
     expiresAt: resolveEntryExpiresAt(entry),
-    title: entry.metadata.title,
-    inputKind: entry.metadata.inputKind,
-    fileCount: entry.metadata.fileCount,
+    title: metadata.title,
+    inputKind: metadata.inputKind,
+    fileCount: metadata.fileCount,
     viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    ...(entry.metadata.context ? { context: entry.metadata.context } : {}),
+    ...(metadata.context ? { context: metadata.context } : {}),
   };
 }
 
@@ -332,6 +329,10 @@ function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {
     timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
     "1970-01-01T00:00:00.000Z"
   );
+}
+
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 function normalizeTtlMs(value?: number): number {

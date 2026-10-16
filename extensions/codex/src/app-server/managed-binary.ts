@@ -4,12 +4,11 @@
  * app-server handshake, otherwise the package shipped beside the Codex plugin.
  */
 import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { access, open, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { canAccess } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
@@ -605,5 +604,10 @@ export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string
 }
 
 async function commandPathExists(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
-  return canAccess(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+  try {
+    await access(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

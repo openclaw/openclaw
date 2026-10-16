@@ -1,6 +1,5 @@
 import {
   asFiniteNumber as normalizeFiniteNumber,
-  asIntegerInRange,
   asNonNegativeFiniteNumber as normalizeNonNegativeNumber,
   asPositiveFiniteNumber as normalizePositiveNumber,
 } from "@openclaw/normalization-core/number-coercion";
@@ -98,6 +97,10 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
     MODEL_CATALOG_INPUTS.has(input),
   );
   return inputs.length > 0 ? inputs : undefined;
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost[] | undefined {
@@ -380,7 +383,7 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
   }
   const normalizedImage: ModelCatalogImageInputConfig = {};
   for (const field of ["maxBytes", "maxPixels", "maxSidePx", "preferredSidePx"] as const) {
-    const normalized = asIntegerInRange(value.image[field], { min: 1 });
+    const normalized = normalizePositiveInteger(value.image[field]);
     if (normalized !== undefined) {
       normalizedImage[field] = normalized;
     }
@@ -408,7 +411,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
   const contextWindow = normalizePositiveNumber(value.contextWindow);
   const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
-  const contextTokens = asIntegerInRange(value.contextTokens, { min: 1 });
+  const contextTokens = normalizePositiveInteger(value.contextTokens);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);

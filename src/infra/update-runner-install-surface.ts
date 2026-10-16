@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isContainerEnvironment } from "./container-environment.js";
 import { readPackageName } from "./package-json.js";
-import { canAccess } from "./path-guards.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
@@ -14,7 +13,12 @@ export function resolveUnmanagedUpdateInstallReason() {
 }
 
 export async function looksLikeGitCheckout(root: string): Promise<boolean> {
-  return canAccess(path.join(root, ".git"));
+  try {
+    await fs.access(path.join(root, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Evidence for an unresolved owner, not permission to mutate an arbitrary directory. */

@@ -1,21 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { extractPlainTextContent, extractTextFromChatContent } from "./chat-content.js";
+import { extractTextFromChatContent } from "./chat-content.js";
 
 describe("shared/chat-content", () => {
-  it("preserves plain text whitespace and concatenates only text blocks without separators", () => {
-    expect(extractPlainTextContent("  hello\nworld  ")).toBe("  hello\nworld  ");
-    expect(
-      extractPlainTextContent([
-        { type: "text", text: " hello\n" },
-        { type: "image", text: "ignored" },
-        { type: "text", text: 3 },
-        { type: "text", text: "world " },
-        null,
-      ]),
-    ).toBe(" hello\nworld ");
-    expect(extractPlainTextContent({ text: "not a content array" })).toBe("");
-  });
-
   it("normalizes plain string content", () => {
     expect(extractTextFromChatContent("  hello\nworld  ")).toBe("hello world");
   });

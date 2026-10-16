@@ -51,15 +51,6 @@ describe("truncateUtf16Safe", () => {
 });
 
 describe("truncateWithMarker", () => {
-  it.each([
-    ["short", 5, "short"],
-    ["hello world", 8, "hello..."],
-    ["ab🚀tail", 6, "ab..."],
-    ["hello", 0, "..."],
-  ] as const)("uses the literal untrimmed default marker for %j at %i", (text, max, expected) => {
-    expect(truncateWithMarker(text, max)).toBe(expected);
-  });
-
   it.each<[string, number, string, number, boolean, string]>([
     ["hello", 5, "...", 3, false, "hello"],
     ["hello world", 8, "...", 3, false, "hello..."],

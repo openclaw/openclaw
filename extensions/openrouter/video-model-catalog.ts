@@ -16,7 +16,6 @@ import {
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeOptionalTrimmedStringRecord as normalizeStringRecord } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationProviderCapabilities,
@@ -53,6 +52,20 @@ function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_f
   return normalizeUniqueTrimmedStringList(value).filter(
     (entry) => entry === "first_frame" || entry === "last_frame",
   );
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const normalized = normalizeOptionalString(raw);
+    if (normalized) {
+      record[key] = normalized;
+    }
+  }
+  return Object.keys(record).length > 0 ? record : undefined;
 }
 
 function buildOpenRouterVideoModeCapabilities(params: {

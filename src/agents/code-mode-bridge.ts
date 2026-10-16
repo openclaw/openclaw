@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
@@ -392,7 +392,7 @@ export async function runBridgeRequest(params: {
         if (typeof namespaceId !== "string") {
           throw new ToolInputError("namespace id must be a string.");
         }
-        if (!isStringArray(pathLocal)) {
+        if (!Array.isArray(pathLocal) || !pathLocal.every((entry) => typeof entry === "string")) {
           throw new ToolInputError("namespace path must be an array of strings.");
         }
         value = await params.namespaceRuntime.invoke(

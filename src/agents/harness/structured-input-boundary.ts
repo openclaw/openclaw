@@ -1,4 +1,4 @@
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 type StructuredInputScalar = string | number | boolean | null;
@@ -235,7 +235,7 @@ export function hasUnsafeVisibleCharacters(value: string): boolean {
 }
 
 export function boundStructuredInputText(value: string, maximum: number): string {
-  return truncateWithMarker(value, maximum, { marker: "…", reserve: 1, trimEnd: false });
+  return value.length <= maximum ? value : `${truncateUtf16Safe(value, maximum - 1)}…`;
 }
 
 export function quoteStructuredInputValue(value: unknown): string {

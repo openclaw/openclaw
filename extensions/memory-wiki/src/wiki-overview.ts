@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { collapseWhitespace } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
@@ -27,7 +26,7 @@ const EMPTY_OVERVIEW_PAGE_COUNTS: MemoryWikiOverviewPageCounts = {
 };
 
 function capOverviewText(value: string, maxChars = 240): string {
-  return truncateUtf16Safe(collapseWhitespace(value), maxChars);
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 function capOverviewItem(item: MemoryWikiOverviewItem): MemoryWikiOverviewItem {

@@ -1,5 +1,3 @@
-import { floorPositiveFiniteNumber as positiveInteger } from "@openclaw/normalization-core/number-coercion";
-
 /** Resolved pair-loop guard settings in milliseconds for runtime checks. */
 export type PairLoopGuardSettings = {
   /** Whether protection is active after config and channel capability gates. */
@@ -115,6 +113,12 @@ export function mergePairLoopGuardConfig(
     }
   }
   return hasValue ? merged : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 /** Resolves runtime loop guard settings from config/defaults and the channel default-enabled gate. */

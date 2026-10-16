@@ -11,7 +11,6 @@ import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-m
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
-import { shellEscapeBackslash as quotePosixShellArg } from "../shared/shell-quote.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -517,6 +516,10 @@ export function buildFailoverRemediationHint(err: unknown): string | undefined {
   }
   const command = buildProviderReauthCommand(provider);
   return command ? `Re-authenticate with: ${command}` : undefined;
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /** Build the operator command for reauthenticating one provider. */

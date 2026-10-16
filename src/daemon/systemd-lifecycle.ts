@@ -1,7 +1,6 @@
 /** systemd start, stop, restart, and obsolete-unit removal. */
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
-import { canAccess } from "../infra/path-guards.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -148,8 +147,14 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
-    const exists = await canAccess(unitPath);
-    const backupExists = await canAccess(`${unitPath}.bak`);
+    const exists = await fs.access(unitPath).then(
+      () => true,
+      () => false,
+    );
+    const backupExists = await fs.access(`${unitPath}.bak`).then(
+      () => true,
+      () => false,
+    );
     let enabled = false;
     if (systemctlAvailable) {
       const res = await execSystemctlUser(env, ["is-enabled", `${name}.service`]);

@@ -8,7 +8,6 @@ import {
   createAsyncLock,
   readDurableJsonFile,
   readJsonFile,
-  tryReadJsonObjectSync,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -23,26 +22,6 @@ afterEach(() => {
 });
 
 describe("json file helpers", () => {
-  it("reads object roots and returns null for other roots or invalid files", async () => {
-    await withTestDir({ prefix: "openclaw-json-object-" }, async (base) => {
-      const filePath = path.join(base, "input.json");
-      const fixtures = [
-        { text: '{"ok":true}', expected: { ok: true } },
-        { text: "{}", expected: {} },
-        { text: "[]", expected: null },
-        { text: '"value"', expected: null },
-        { text: "1", expected: null },
-        { text: "null", expected: null },
-        { text: "{invalid", expected: null },
-      ];
-      for (const fixture of fixtures) {
-        await fsPromises.writeFile(filePath, fixture.text, "utf8");
-        expect(tryReadJsonObjectSync(filePath)).toEqual(fixture.expected);
-      }
-      expect(tryReadJsonObjectSync(path.join(base, "missing.json"))).toBeNull();
-    });
-  });
-
   it.each([
     {
       name: "reads valid json",

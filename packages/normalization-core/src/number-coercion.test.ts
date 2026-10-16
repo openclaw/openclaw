@@ -1,10 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   asFiniteNumberInRange,
-  asIntegerInRange,
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
-  floorPositiveFiniteNumber,
   asSafeIntegerInRange,
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
@@ -33,28 +31,6 @@ import {
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
-  test.each([
-    { value: 0.5, expected: 0 },
-    { value: 1.9, expected: 1 },
-    { value: 0, expected: undefined },
-    { value: -1, expected: undefined },
-    { value: Number.POSITIVE_INFINITY, expected: undefined },
-    { value: "1", expected: undefined },
-  ])("floors only positive finite numeric inputs", ({ value, expected }) => {
-    expect(floorPositiveFiniteNumber(value)).toBe(expected);
-  });
-
-  test("integer ranges retain ordinary integers without imposing safe-integer bounds", () => {
-    expect(asIntegerInRange(0, { min: 0 })).toBe(0);
-    expect(asIntegerInRange(2, { min: 1, max: 2 })).toBe(2);
-    expect(asIntegerInRange(0, { min: 1 })).toBeUndefined();
-    expect(asIntegerInRange(3, { max: 2 })).toBeUndefined();
-    expect(asIntegerInRange(0.5)).toBeUndefined();
-    expect(asIntegerInRange("1")).toBeUndefined();
-    expect(asIntegerInRange(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(asIntegerInRange(Number.MAX_SAFE_INTEGER + 1)).toBe(Number.MAX_SAFE_INTEGER + 1);
-  });
-
   test("signed finite helpers preserve finite fractional values", () => {
     expect(asPositiveFiniteNumber(0.5)).toBe(0.5);
     expect(asPositiveFiniteNumber(0)).toBeUndefined();

@@ -3,8 +3,8 @@
  * Redacts payload content before writing and stores digests for correlation
  * without persisting raw secret-bearing request bodies.
  */
+import crypto from "node:crypto";
 import path from "node:path";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -53,7 +53,7 @@ function digest(value: unknown): string | undefined {
   if (!serialized) {
     return undefined;
   }
-  return sha256Hex(serialized);
+  return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
 function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {

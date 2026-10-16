@@ -3,7 +3,6 @@ import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { escapeHtmlText as escapeXmlText } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 export const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
 export const DEFAULT_AZURE_SPEECH_LANG = "en-US";
@@ -46,6 +45,10 @@ function azureSpeechUrl(params: {
     throw new Error("Azure Speech region or endpoint missing");
   }
   return `${baseUrl}${params.path}`;
+}
+
+function escapeXmlText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeXmlAttr(value: string): string {

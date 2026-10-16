@@ -1,11 +1,10 @@
 import {
   asNullableRecord as getRecord,
-  ensureRecord,
-  isStringArray,
+  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
-export { ensureRecord, getRecord };
+export { getRecord };
 export type LegacyConfigRule = {
   path: string[];
   message: string;
@@ -44,13 +43,32 @@ export type LegacyConfigMigrationSpec = {
   ) => void;
 };
 
+export const ensureRecord = (
+  root: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> => {
+  const existing = root[key];
+  if (isRecord(existing)) {
+    return existing;
+  }
+  const next: Record<string, unknown> = {};
+  root[key] = next;
+  return next;
+};
+
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
   const transcriber = getRecord(value);
-  const command = transcriber?.command;
-  if (!isStringArray(command) || command.length === 0) {
+  const command = Array.isArray(transcriber?.command) ? transcriber?.command : null;
+  if (!command || command.length === 0) {
     return null;
   }
-  const rawExecutable = command[0]?.trim() ?? "";
+  if (typeof command[0] !== "string") {
+    return null;
+  }
+  if (!command.every((part) => typeof part === "string")) {
+    return null;
+  }
+  const rawExecutable = command[0].trim();
   if (!isSafeExecutableValue(rawExecutable)) {
     return null;
   }

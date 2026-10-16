@@ -9,7 +9,7 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalTrimmedStringRecord as sanitizeLmstudioStringHeaders } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -44,6 +44,20 @@ export function buildLmstudioAuthHeaders(
     headers["Content-Type"] = "application/json";
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function sanitizeLmstudioStringHeaders(headers: unknown): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    const normalized = normalizeOptionalString(headerValue);
+    if (normalized) {
+      next[headerName] = normalized;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(
@@ -116,11 +130,12 @@ export async function resolveLmstudioProviderHeaders(params: {
   path?: string;
 }): Promise<Record<string, string> | undefined> {
   const headerInputs = params.headers;
-  if (!params.config) {
-    return sanitizeLmstudioStringHeaders(headerInputs);
-  }
   if (!headerInputs || typeof headerInputs !== "object" || Array.isArray(headerInputs)) {
     return undefined;
+  }
+
+  if (!params.config) {
+    return sanitizeLmstudioStringHeaders(headerInputs);
   }
 
   const pathPrefix = params.path ?? "models.providers.lmstudio.headers";

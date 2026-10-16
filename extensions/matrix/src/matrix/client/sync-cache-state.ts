@@ -1,9 +1,8 @@
 // Shared Matrix sync-cache persistence; no live SDK runtime is needed to migrate state.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ISyncData, IRooms, IStoredClientOpts } from "matrix-js-sdk/lib/matrix.js";
-import { sha256Hex as digestText } from "openclaw/plugin-sdk/crypto-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -165,6 +164,10 @@ function chunkKey(generation: string, index: number): string {
 
 function resolveLegacySyncCachePath(storageRootDir: string): string {
   return path.join(storageRootDir, "bot-storage.json");
+}
+
+function digestText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function isSyncCacheMeta(value: unknown): value is MatrixSyncCacheMeta {

@@ -1,8 +1,6 @@
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../runtime/index.js";
 
-export { extractPlainTextContent as extractTextContent } from "../../shared/chat-content.js";
-
 export function unwrapCoreResult<T>(
   result: { ok: true; value: T } | { ok: false; error: Error },
 ): T {
@@ -14,6 +12,26 @@ export function unwrapCoreResult<T>(
 
 export function hasPersistedAssistantContent(content: unknown): boolean {
   return (typeof content === "string" || Array.isArray(content)) && content.length > 0;
+}
+
+export function extractTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  let text = "";
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const candidate = block as { type?: unknown; text?: unknown };
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      text += candidate.text;
+    }
+  }
+  return text;
 }
 
 export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {

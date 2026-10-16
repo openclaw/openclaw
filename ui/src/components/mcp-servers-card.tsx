@@ -1,5 +1,4 @@
 import { createMemo, createRenderEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
@@ -39,7 +38,7 @@ type McpServersCardProps = { pluginsHref: string; docsUrl: string };
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
 function quoteShellArg(value: string): string {
-  return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : shellEscapeBackslash(value);
+  return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function tlsLabel(tls: McpServerSummary["tls"]): string | null {

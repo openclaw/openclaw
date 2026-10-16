@@ -3,7 +3,6 @@ import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { hasOnlyKeys } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 export const BEAM_HOST_ID = "gateway";
 export const BEAM_SESSION_SHARE_ROUTE = {
@@ -66,6 +65,10 @@ const TOP_LEVEL_KEYS = new Set([
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
 const SOURCE_MODEL_KEYS = new Set(["provider", "model"]);
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
 
 function isIsoTimestamp(value: string): boolean {
   const match =

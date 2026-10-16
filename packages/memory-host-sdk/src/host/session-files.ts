@@ -3,7 +3,6 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { collapseWhitespace as normalizeSessionText } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -412,6 +411,10 @@ export function parseCanonicalSessionSyncTargetFromPath(
     return null;
   }
   return { agentId, sessionId };
+}
+
+function normalizeSessionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;

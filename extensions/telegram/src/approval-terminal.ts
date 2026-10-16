@@ -7,7 +7,7 @@ import {
   buildSystemAgentApprovalResolvedText,
   formatApprovalDecisionLabel,
 } from "openclaw/plugin-sdk/approval-runtime";
-import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const TELEGRAM_APPROVAL_DETAIL_MAX_CHARS = 2_800;
 const TELEGRAM_APPROVAL_ID_MAX_CHARS = 512;
@@ -25,11 +25,11 @@ function formatCanonicalResult(approval: ApprovalResolveResult["approval"]): str
 }
 
 function truncateApprovalText(value: string, maxChars: number, preserveWhitespace = false): string {
-  return truncateWithMarker(value, maxChars, {
-    marker: "…",
-    reserve: 1,
-    trimEnd: !preserveWhitespace,
-  });
+  if (value.length <= maxChars) {
+    return value;
+  }
+  const prefix = truncateUtf16Safe(value, maxChars - 1);
+  return `${preserveWhitespace ? prefix : prefix.trimEnd()}…`;
 }
 
 function truncateDetail(value: string): string {

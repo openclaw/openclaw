@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -384,8 +384,9 @@ function runSession(): void {
       typeof message.id !== "number" ||
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
-      !isStringArray(message.args) ||
-      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0]))
+      !Array.isArray(message.args) ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
+      !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       stop(true);
       return;

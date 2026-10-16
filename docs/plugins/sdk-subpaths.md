@@ -461,7 +461,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; browser-safe record and string normalization, ASCII control-character detection, marker truncation, plain text-block extraction, chat-display escaping, HTML text-node escaping, and POSIX literal argument quoting; `isStringArray` checks string arrays without coercion, `ensureRecord` retains or creates a nested non-array record, and `hasOnlyKeys` checks own keys against an allowed set |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization and ASCII control-character detection helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
@@ -499,8 +499,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, directory-durability, and borrowed-handle I/O: `readFileHandleBounded` reads through EOF under a byte cap; `readFileWindowFully` fills a positional buffer through short reads; `writeFileWindowFully` completes short writes without truncation, synchronization, or rollback; `sha256File` streams a bounded SHA-256 digest from a path or borrowed handle. Borrowed handles stay open. `tempFile` creates an owned temporary child directory for staging; its default cleanup checks directory identity before removal. `resolvePathPrefixSync` observes an existing prefix with symlinks resolved and raw missing suffix, following physical symlink traversal without authorizing later access. |
     | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
-    | `plugin-sdk/number-runtime` | Private-local after July 2026; numeric coercion, including `floorPositiveFiniteNumber` for positive finite inputs (fractions below one floor to zero) |
-    | `plugin-sdk/crypto-runtime` | Private-local scalar SHA-256 hashing; no filesystem or host runtime |
+    | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
     | `plugin-sdk/secure-random-runtime` | Private-local after July 2026; Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | Focused system event enqueue, snapshot inspection, and consumption helpers; preserve each snapshot's opaque event ID when consuming selected entries |
     | `plugin-sdk/transport-ready-runtime` | Private-local after July 2026; Transport readiness wait helper |
@@ -570,7 +569,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |
     | `plugin-sdk/video-generation` | Private-local after July 2026; Video generation provider/request/result types |
     | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcript source provider types, registry helpers, meeting-provider bridge factory, session descriptors, and utterance metadata |
-    | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry, route-install helpers, and `sendJson` for UTF-8 JSON responses |
+    | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry and route-install helpers |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
     | `plugin-sdk/agent-runtime-test-contracts` | Repo-local native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |

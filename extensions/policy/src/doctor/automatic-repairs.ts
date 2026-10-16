@@ -7,7 +7,6 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRecord } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 import { workspaceRepairsEnabled } from "./policy-runtime.js";
@@ -250,7 +249,7 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
     return false;
   }
   const deny = existing ?? [];
-  if (deny.some((value) => typeof value === "string" && value === entry)) {
+  if (deny.includes(entry)) {
     return false;
   }
   current.deny = [...deny, entry];
@@ -395,4 +394,14 @@ function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean
     hasScopedPolicyRequirement([finding]) &&
     finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
   );
+}
+
+function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
+  const current = parent[key];
+  if (isRecord(current)) {
+    return current;
+  }
+  const next: ConfigRecord = {};
+  parent[key] = next;
+  return next;
 }

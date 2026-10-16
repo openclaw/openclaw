@@ -6,7 +6,6 @@ export {
   asDateTimestampMs,
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
-  floorPositiveFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   isFutureDateTimestampMs,

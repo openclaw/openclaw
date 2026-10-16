@@ -1,5 +1,4 @@
 // Shared name/value/host validation for the team secret store.
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
@@ -83,7 +82,9 @@ export function parseSecretAllowedHosts(raw: string | null | undefined): string[
   }
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return isStringArray(parsed) ? normalizeSecretAllowedHosts(parsed) : [];
+    return Array.isArray(parsed) && parsed.every((host) => typeof host === "string")
+      ? normalizeSecretAllowedHosts(parsed)
+      : [];
   } catch {
     // Corrupt policy is never interpreted permissively: an empty list fails closed.
     return [];

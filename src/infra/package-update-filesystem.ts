@@ -15,7 +15,6 @@ import {
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
-import { pathEntryExists as packagePathEntryExists } from "./path-guards.js";
 import { retryAsync } from "./retry.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
@@ -60,7 +59,17 @@ export function createPackagePathAssertion(
   };
 }
 
-export { packagePathEntryExists };
+export async function packagePathEntryExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.lstat(targetPath);
+    return true;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 export async function packagePathEntriesMatch(left: string, right: string): Promise<boolean> {
   const [leftStat, rightStat] = await Promise.all([

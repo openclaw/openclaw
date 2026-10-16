@@ -3,7 +3,7 @@ import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
@@ -170,7 +170,7 @@ export function summarizeProviderTransportError(error: unknown): string {
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
 export function truncateErrorDetail(detail: string, limit = 220): string {
-  return truncateWithMarker(detail, limit, { marker: "…", reserve: 1, trimEnd: false });
+  return detail.length <= limit ? detail : `${truncateUtf16Safe(detail, limit - 1)}…`;
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */

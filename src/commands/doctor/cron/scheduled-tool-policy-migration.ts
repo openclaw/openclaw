@@ -1,7 +1,4 @@
-import {
-  asOptionalRecord as readRecord,
-  isStringArray,
-} from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createAccountCronScheduledToolPolicy,
@@ -28,7 +25,11 @@ export function migrateScheduledToolPolicy(
     // Retained account restrictions are dormant until the job uses tools again.
     return { mutated: false, status: "not-applicable" };
   }
-  const toolsAllow = isStringArray(payload?.toolsAllow) ? payload.toolsAllow : undefined;
+  const toolsAllow =
+    Array.isArray(payload?.toolsAllow) &&
+    payload.toolsAllow.every((value): value is string => typeof value === "string")
+      ? payload.toolsAllow
+      : undefined;
   const owner = readRecord(raw.owner);
   const ownerSessionKey = normalizeOptionalString(owner?.sessionKey);
   const ownerAccountId = normalizeOptionalAccountId(

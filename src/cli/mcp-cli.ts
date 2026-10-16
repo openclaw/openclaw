@@ -1,3 +1,5 @@
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -27,7 +29,6 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { directoryExists, executableFileExists, regularFileExists } from "../infra/path-guards.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
@@ -311,6 +312,24 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   return path.resolve(base, filePath);
 }
 
+async function pathHasType(filePath: string, type: "isFile" | "isDirectory"): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath))[type]();
+  } catch {
+    return false;
+  }
+}
+
+async function isExecutable(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
+    return (await fs.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function executableCandidates(command: string): string[] {
   if (process.platform !== "win32") {
     return [command];
@@ -333,7 +352,7 @@ async function commandExists(
   const hasPathSeparator =
     path.isAbsolute(command) || command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
-    return executableFileExists(resolveConfiguredPath(command, cwd));
+    return isExecutable(resolveConfiguredPath(command, cwd));
   }
   const configuredPath =
     process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
@@ -345,7 +364,7 @@ async function commandExists(
       ? pathEntry
       : resolveConfiguredPath(pathEntry, cwd);
     for (const candidate of executableCandidates(command)) {
-      if (await executableFileExists(path.join(resolvedPathEntry, candidate))) {
+      if (await isExecutable(path.join(resolvedPathEntry, candidate))) {
         return true;
       }
     }
@@ -377,7 +396,7 @@ async function collectMcpDoctorIssues(params: {
           issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
       }
-      if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
+      if (resolved.cwd && !(await pathHasType(resolved.cwd, "isDirectory"))) {
         issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
       }
     }
@@ -414,7 +433,7 @@ async function collectMcpDoctorIssues(params: {
         [resolved.clientCert, "client certificate"],
         [resolved.clientKey, "client key"],
       ]) {
-        if (filePath && !(await regularFileExists(resolveConfiguredPath(filePath, "")))) {
+        if (filePath && !(await pathHasType(resolveConfiguredPath(filePath, ""), "isFile"))) {
           issues.push(issue("error", `${label} file does not exist: ${filePath}`));
         }
       }

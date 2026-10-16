@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { lstatIfExists } from "../../infra/fs-safe.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   createGitCommandError,
   enqueueGitRefMutation,
@@ -390,9 +390,20 @@ export async function resolveGitRepositoryPaths(
 }
 
 export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {
-  return (await lstatIfExists(path.join(checkoutRoot, ".git"), "ENOENT"))?.isDirectory() ?? false;
+  return (await lstatIfExists(path.join(checkoutRoot, ".git")))?.isDirectory() ?? false;
 }
 
 export async function worktreePathExists(target: string): Promise<boolean> {
-  return (await lstatIfExists(target, "ENOENT")) !== undefined;
+  return (await lstatIfExists(target)) !== undefined;
+}
+
+export async function lstatIfExists(target: string) {
+  try {
+    return await fs.lstat(target);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
 }

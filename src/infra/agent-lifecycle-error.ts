@@ -10,7 +10,7 @@ export function createAgentRunStaleLifecycleError(): Error {
   });
 }
 
-export function hasAgentRunErrorCode(value: unknown, code: string): boolean {
+function hasLifecycleErrorCode(value: unknown, code: string): boolean {
   try {
     return value instanceof Error && "code" in value && value.code === code;
   } catch {
@@ -19,7 +19,7 @@ export function hasAgentRunErrorCode(value: unknown, code: string): boolean {
 }
 
 export function isAgentRunStaleLifecycleError(value: unknown): boolean {
-  return hasAgentRunErrorCode(value, AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE);
+  return hasLifecycleErrorCode(value, AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE);
 }
 
 export function createRestartRecoveryClaimChangedError(): Error {
@@ -30,5 +30,5 @@ export function createRestartRecoveryClaimChangedError(): Error {
 }
 
 export function isRestartRecoveryClaimChangedError(value: unknown): boolean {
-  return hasAgentRunErrorCode(value, RESTART_RECOVERY_CLAIM_CHANGED_ERROR_CODE);
+  return hasLifecycleErrorCode(value, RESTART_RECOVERY_CLAIM_CHANGED_ERROR_CODE);
 }

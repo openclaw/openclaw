@@ -6,7 +6,6 @@ import {
   withConfiguredModelEgress,
   type ConfiguredModelEgress,
 } from "openclaw/plugin-sdk/secret-egress-runtime";
-import { shellEscape } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 
@@ -29,7 +28,7 @@ function shellQuote(value: string): string {
   if (value.includes("\0")) {
     throw new Error("Crabbox model command cannot contain NUL bytes");
   }
-  return shellEscape(value);
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function remoteCommandScript(egress: ConfiguredModelEgress): string {

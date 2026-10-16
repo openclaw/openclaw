@@ -1,4 +1,4 @@
-import { clampPositiveTimerTimeoutMs as resolvePositiveTimeoutMs } from "../../packages/normalization-core/src/number-coercion.js";
+import { clampTimerTimeoutMs } from "../../packages/normalization-core/src/number-coercion.js";
 import { asNonArrayRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -55,6 +55,12 @@ function resolveProviderRuntimeConfig(
   registry: TtsProviderRegistry,
 ): OpenClawConfig {
   return registry.runtimeConfig ?? resolveTtsRuntimeConfig(cfg);
+}
+
+function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? clampTimerTimeoutMs(timeoutMs)
+    : undefined;
 }
 
 export function resolveSpeechProviderTimeoutMs(params: {

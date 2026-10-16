@@ -1,8 +1,8 @@
+// Sandbox workspace skill synchronization is deferred behind the sandbox runtime boundary.
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe/root";
-// Sandbox workspace skill synchronization is deferred behind the sandbox runtime boundary.
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,7 +66,8 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !isStringArray(value.entryKeys)
+    !Array.isArray(value.entryKeys) ||
+    !value.entryKeys.every((entry) => typeof entry === "string")
   ) {
     return null;
   }
@@ -220,6 +221,8 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
+    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    assertCurrent?.();
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
     const sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
@@ -328,7 +331,7 @@ export async function syncWorkspaceSkills(params: {
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
     for (const child of children) {
-      if (!preservedDestinations.has(child)) {
+      if (child !== ".gitignore" && !preservedDestinations.has(child)) {
         const stat = await fsp.lstat(path.join(targetSkillsDir, child));
         assertCurrent?.();
         if (stat.isDirectory()) {

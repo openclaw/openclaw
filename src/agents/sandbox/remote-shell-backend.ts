@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sha256Hex as hashTextSha256 } from "@openclaw/normalization-core/node-crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
+import { hashTextSha256 } from "./hash.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,

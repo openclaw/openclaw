@@ -2,8 +2,9 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeFileWindowFully } from "../../infra/file-descriptor.js";
-import { root as fsRoot, FsSafeError, lstatIfExists, type Root } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { lstatIfExists } from "./git.js";
 import {
   captureParentDirectoryIdentities,
   hasSafeParentDirectories,
@@ -35,7 +36,7 @@ async function copyProvisionedFile(params: {
   if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
     return false;
   }
-  if (await lstatIfExists(destination, "ENOENT")) {
+  if (await lstatIfExists(destination)) {
     return false;
   }
   try {
@@ -118,7 +119,7 @@ export async function restoreProvisionedFiles(
     }
     const target = resolveGitPath(worktreePath, normalized);
     if (state.mode === null) {
-      if (await lstatIfExists(target, "ENOENT")) {
+      if (await lstatIfExists(target)) {
         throw new Error(`snapshot expected provisioned path to be absent: ${state.path}`);
       }
       continue;

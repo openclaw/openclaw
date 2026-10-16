@@ -3,51 +3,11 @@ import {
   asNonArrayRecord,
   asNullableRecord,
   asOptionalRecord,
-  ensureRecord,
   filterStringRecord,
-  hasOnlyKeys,
-  isStringArray,
   isStringRecord,
-  normalizeOptionalTrimmedStringRecord,
 } from "./record-coerce.js";
 
 describe("record-coerce", () => {
-  it("checks only present own enumerable keys against the allowed set", () => {
-    const allowed = new Set(["allowed", "optional"]);
-    expect(hasOnlyKeys({}, allowed)).toBe(true);
-    expect(hasOnlyKeys({ allowed: true }, allowed)).toBe(true);
-    expect(hasOnlyKeys({ unexpected: true }, allowed)).toBe(false);
-    const inherited = Object.assign(Object.create({ unexpected: true }), { allowed: true });
-    expect(hasOnlyKeys(inherited, allowed)).toBe(true);
-  });
-
-  it("retains an existing nested record and installs a fresh record for other values", () => {
-    const existing = { enabled: true };
-    const parent: Record<string, unknown> = { existing, array: ["value"], scalar: 1 };
-    expect(ensureRecord(parent, "existing")).toBe(existing);
-    const arrayReplacement = ensureRecord(parent, "array");
-    const scalarReplacement = ensureRecord(parent, "scalar");
-    const missingReplacement = ensureRecord(parent, "missing");
-    expect(parent).toEqual({ existing, array: {}, scalar: {}, missing: {} });
-    expect(parent.array).toBe(arrayReplacement);
-    expect(parent.scalar).toBe(scalarReplacement);
-    expect(parent.missing).toBe(missingReplacement);
-    expect(arrayReplacement).not.toBe(scalarReplacement);
-    expect(scalarReplacement).not.toBe(missingReplacement);
-    expect(Object.getPrototypeOf(missingReplacement)).toBe(Object.prototype);
-  });
-
-  it.each([
-    { value: [], expected: true },
-    { value: ["", " ", "value"], expected: true },
-    { value: ["value", 1], expected: false },
-    { value: "value", expected: false },
-    { value: { 0: "value", length: 1 }, expected: false },
-    { value: null, expected: false },
-  ])("checks string arrays without normalizing entries", ({ value, expected }) => {
-    expect(isStringArray(value)).toBe(expected);
-  });
-
   it("keeps record coercion behavior for optional and nullable variants", () => {
     expect(asOptionalRecord({ ok: true })).toEqual({ ok: true });
     expect(asOptionalRecord(null)).toBeUndefined();
@@ -92,44 +52,6 @@ describe("record-coerce", () => {
     { value: null, expected: false },
   ])("validates all-or-nothing string records", ({ value, expected }) => {
     expect(isStringRecord(value)).toBe(expected);
-  });
-
-  it.each([null, undefined, [], "value", 1, {}, { count: 1, blank: "  " }])(
-    "omits invalid or empty trimmed string records from %j",
-    (value) => {
-      expect(normalizeOptionalTrimmedStringRecord(value)).toBeUndefined();
-    },
-  );
-
-  it("trims string values without changing keys or mutating the input record", () => {
-    const input: Record<string, unknown> = Object.assign(Object.create({ inherited: "skip" }), {
-      " key ": " value ",
-      blank: " \t ",
-      count: 2,
-      second: " two ",
-    });
-    Object.defineProperty(input, "hidden", { value: "skip", enumerable: false });
-
-    const result = normalizeOptionalTrimmedStringRecord(input);
-
-    expect(result).toEqual({ " key ": "value", second: "two" });
-    expect(Object.keys(result ?? {})).toEqual([" key ", "second"]);
-    expect(input[" key "]).toBe(" value ");
-    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-  });
-
-  it("preserves ordinary assignment semantics for reserved record keys", () => {
-    const input: unknown = JSON.parse(
-      '{"__proto__":" ignored ","constructor":" ctor ","prototype":" proto "}',
-    );
-    const result = normalizeOptionalTrimmedStringRecord(input);
-
-    expect(result).toEqual({ constructor: "ctor", prototype: "proto" });
-    expect(Object.hasOwn(result ?? {}, "__proto__")).toBe(false);
-    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-    expect(
-      normalizeOptionalTrimmedStringRecord(JSON.parse('{"__proto__":" ignored "}')),
-    ).toBeUndefined();
   });
 
   const inheritedAndHidden = Object.create({ inherited: "skip" }) as Record<string, unknown>;

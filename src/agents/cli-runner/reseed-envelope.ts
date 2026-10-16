@@ -1,4 +1,4 @@
-export { sha256Hex as hashCliReseedPrompt } from "@openclaw/normalization-core/node-crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 
 const RESEED_HEADER = [
   "Continue this conversation using the OpenClaw transcript below as prior session history.",
@@ -14,6 +14,10 @@ type ParsedCliReseedPrompt =
   | { kind: "none" }
   | { kind: "legacy"; userMessage: string }
   | { kind: "invalid" };
+
+export function hashCliReseedPrompt(text: string): string {
+  return sha256Hex(text);
+}
 
 export function parseCliReseedPrompt(text: string): ParsedCliReseedPrompt {
   if (!text.startsWith(RESEED_PREFIX)) {

@@ -1,14 +1,12 @@
 import type { ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { sha256Hex as sha256 } from "openclaw/plugin-sdk/crypto-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
@@ -84,6 +82,10 @@ type QaGatewayProcessBoundaryEvidenceLaunch = {
   terminalState?: "failed-before-ready" | "ready-exited";
 };
 
+function sha256(value: Buffer | string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function compareStrings(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -151,7 +153,8 @@ function parseQaGatewayProcessSandboxProof(value: unknown) {
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
     value.status !== "pass" ||
-    !isStringArray(value.envKeys)
+    !Array.isArray(value.envKeys) ||
+    !value.envKeys.every((key) => typeof key === "string")
   ) {
     throw new Error("invalid process-boundary sandbox proof");
   }

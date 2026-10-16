@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -107,7 +106,10 @@ export async function readAgentDeletionJournalStatusInWorker(
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
-  if (isStringArray(parsed)) {
+  if (
+    Array.isArray(parsed) &&
+    parsed.every((entry): entry is string => typeof entry === "string")
+  ) {
     return parsed;
   }
   throw new Error("Invalid agent deletion database path journal.");

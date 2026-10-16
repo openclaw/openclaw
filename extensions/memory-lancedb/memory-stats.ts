@@ -4,7 +4,6 @@ import {
   runUtf8CommandWithTimeout,
 } from "openclaw/plugin-sdk/process-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isStringArray } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   hasAgentScopeColumn,
   legacyMemorySchemaError,
@@ -82,7 +81,8 @@ export async function readMemoryStats(source: MemoryStatsSource, agentId: string
   const reply = asOptionalRecord(JSON.parse(result.stdout));
   const columns = reply?.columns;
   if (
-    isStringArray(columns) &&
+    Array.isArray(columns) &&
+    columns.every((column): column is string => typeof column === "string") &&
     !hasAgentScopeColumn({ fields: columns.map((name) => ({ name })) })
   ) {
     throw legacyMemorySchemaError();

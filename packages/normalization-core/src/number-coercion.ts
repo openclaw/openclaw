@@ -9,12 +9,6 @@ export function asPositiveFiniteNumber(value: unknown): number | undefined {
   return number && number > 0 ? number : undefined;
 }
 
-/** Floors positive finite input; fractions below one become zero. */
-export function floorPositiveFiniteNumber(value: unknown): number | undefined {
-  const number = asPositiveFiniteNumber(value);
-  return number === undefined ? undefined : Math.floor(number);
-}
-
 export function asNonNegativeFiniteNumber(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
   return number && number < 0 ? undefined : number;
@@ -45,15 +39,6 @@ export function asFiniteNumberInRange(
     }
   }
   return number;
-}
-
-/** Returns an integer only when it satisfies the supplied inclusive bounds. */
-export function asIntegerInRange(
-  value: unknown,
-  range: { min?: number; max?: number } = {},
-): number | undefined {
-  const number = asFiniteNumberInRange(value, range);
-  return number !== undefined && Number.isInteger(number) ? number : undefined;
 }
 
 /** Returns a safe integer only when it satisfies the supplied inclusive bounds. */

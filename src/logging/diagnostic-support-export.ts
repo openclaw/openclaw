@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
-import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { INCLUDE_KEY } from "../config/includes.js";
@@ -125,7 +124,10 @@ type SupportSnapshotStatus = Awaited<ReturnType<typeof collectSupportSnapshot>>[
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
-  return floorPositiveFiniteNumber(parsed) || fallback;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.floor(parsed);
 }
 
 function safeScalar(value: unknown): unknown {

@@ -9,7 +9,6 @@ import {
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { extractPlainTextContent as extractTextContent } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { normalizeOllamaToolCallName } from "./tool-name-aliases.js";
 
 export interface OllamaChatMessage {
@@ -33,6 +32,22 @@ export interface OllamaToolCall {
 export type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        isRecord(part) && part.type === "text" && typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("");
+}
 
 function extractOllamaImages(content: unknown): string[] {
   if (!Array.isArray(content)) {

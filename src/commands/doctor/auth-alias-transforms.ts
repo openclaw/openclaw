@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseLegacyCredentialEntry } from "../../agents/auth-profiles/legacy-flat-credential.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { resolveLegacyRuntimeModelProviderAlias } from "./shared/legacy-runtime-model-providers.js";
@@ -78,7 +78,10 @@ export function isReadableAuthAliasState(raw: unknown): boolean {
   const readableEntries = (value: unknown, accepts: (entry: unknown) => boolean) =>
     value === undefined || (isRecord(value) && Object.values(value).every(accepts));
   return (
-    readableEntries(raw.order, isStringArray) &&
+    readableEntries(
+      raw.order,
+      (ids) => Array.isArray(ids) && ids.every((id) => typeof id === "string"),
+    ) &&
     readableEntries(raw.lastGood, (id) => typeof id === "string") &&
     readableEntries(raw.usageStats, isRecord)
   );

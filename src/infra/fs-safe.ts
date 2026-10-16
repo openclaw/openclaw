@@ -6,9 +6,8 @@ import {
   findExistingAncestor,
   readLocalFileFromRoots as readFsSafeLocalFileFromRoots,
 } from "@openclaw/fs-safe/advanced";
-import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import "@openclaw/fs-safe/errors";
-import { hasNodeErrorCode, isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
 import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
 
@@ -59,23 +58,6 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
-
-/** Inspect a path itself, retaining dangling links and surfacing non-missing I/O errors. */
-export async function lstatIfExists(
-  filePath: string,
-  missingErrors: "ENOENT" | "ENOENT_OR_ENOTDIR" = "ENOENT_OR_ENOTDIR",
-) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    if (
-      missingErrors === "ENOENT" ? hasNodeErrorCode(error, "ENOENT") : isNotFoundPathError(error)
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 // Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
 export type Root = Omit<CompatibleFsSafeRoot, "walk">;

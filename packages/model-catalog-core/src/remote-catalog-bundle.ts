@@ -1,4 +1,4 @@
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   MODEL_CATALOG_APIS,
@@ -107,7 +107,11 @@ function parseCatalogRows<T extends { id: string }>(
     const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
     let value = raw;
     let droppedInput = false;
-    if (isRecord(raw) && isStringArray(raw.input)) {
+    if (
+      isRecord(raw) &&
+      Array.isArray(raw.input) &&
+      raw.input.every((v) => typeof v === "string")
+    ) {
       const input = raw.input.filter((v) =>
         inputModalitySchema.options.some((known) => known === v),
       );

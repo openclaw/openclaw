@@ -1,4 +1,4 @@
-import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
 import { waitForChatAbortControllerRemoval } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
@@ -232,7 +232,8 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
   const result = asNullableRecord(response);
   return (
     typeof result?.aborted === "boolean" &&
-    isStringArray(result.runIds) &&
+    Array.isArray(result.runIds) &&
+    result.runIds.every((runId) => typeof runId === "string") &&
     !result.runIds.includes(gatewayRunId)
   );
 }

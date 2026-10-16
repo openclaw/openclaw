@@ -1,9 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  hasNodeErrorCode,
-  pathEntryExists as pathExists,
-} from "openclaw/plugin-sdk/file-access-runtime";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
 import {
   MantisCommandCleanupError,
@@ -63,9 +59,25 @@ function rethrowMantisCleanupBoundaryError(error: unknown): void {
   }
 }
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {
   const relative = path.relative(parentPath, childPath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.lstat(filePath);
+    return true;
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function verifyMantisDirectoryOwnership(params: {
@@ -86,7 +98,7 @@ async function verifyMantisDirectoryOwnership(params: {
     try {
       stat = await fs.lstat(directory, { bigint: true });
     } catch (error) {
-      if (hasNodeErrorCode(error, "ENOENT")) {
+      if (isNotFoundError(error)) {
         return false;
       }
       throw error;
@@ -104,7 +116,7 @@ async function normalizeWorktreePath(filePath: string, repoRoot: string): Promis
   try {
     return await fs.realpath(resolvedPath);
   } catch (error) {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
+    if (!isNotFoundError(error)) {
       throw error;
     }
   }

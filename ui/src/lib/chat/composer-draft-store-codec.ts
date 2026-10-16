@@ -1,4 +1,3 @@
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type {
   DurableComposerDraft,
   DurableComposerDraftAttachment,
@@ -51,7 +50,8 @@ function isQuestionDraft(value: unknown): value is DurableQuestionDraft {
         answer &&
         typeof answer === "object" &&
         typeof answer.freeText === "string" &&
-        isStringArray(answer.selected),
+        Array.isArray(answer.selected) &&
+        answer.selected.every((option) => typeof option === "string"),
     )
   );
 }

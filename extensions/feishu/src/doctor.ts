@@ -1,18 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  directoryExistsSync as existsDir,
-  isPathStrictlyInside,
-  readDirectoryEntriesSync as safeReadDir,
-  regularFileExistsSync as existsFile,
-  safeStatSync,
-} from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
@@ -99,8 +94,24 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function existsDir(dir: string): boolean {
+  return safeStatSync(dir)?.isDirectory() ?? false;
+}
+
+function existsFile(filePath: string): boolean {
+  return safeStatSync(filePath)?.isFile() ?? false;
+}
+
 function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
+}
+
+function safeReadDir(dir: string): fs.Dirent[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
 }
 
 function formatDisplayPath(filePath: string): string {
