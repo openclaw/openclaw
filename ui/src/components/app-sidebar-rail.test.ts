@@ -15,9 +15,9 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
-import { domProbe } from "../test-helpers/dom-probe.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import "../test-helpers/app-sidebar-suite.ts";
+import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
