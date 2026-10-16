@@ -8,11 +8,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
-import { databaseSearchCapabilities } from "../infra/database-engine/search-capabilities.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -257,10 +257,18 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expect(
       hydrated.snapshot.events.filter((event) => isRecord(event) && event.type === "message"),
     ).toHaveLength(7);
-    expect(databaseSearchCapabilities.postgres).toEqual({
+    expect(
+      admitStoreSearch(
+        {
+          databasePath: target.storePath,
+          input: { connection: connection!, schemaPrefix: prefix },
+        },
+        {},
+      ),
+    ).toMatchObject({
       fullText: null,
       vector: null,
-      diagnostic: expect.stringContaining("PostgreSQL search is unavailable"),
+      diagnostics: [expect.stringContaining("PostgreSQL search capabilities are unavailable")],
     });
     const search = { ...target, query: "first", env: process.env };
     await expect(owners.searchSessionTranscripts(search)).rejects.toMatchObject({

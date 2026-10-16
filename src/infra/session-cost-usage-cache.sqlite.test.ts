@@ -80,9 +80,7 @@ function writeRollup(
 function countRegisteredAgentDatabases(): number {
   const row = openOpenClawStateDatabase()
     .db.prepare("SELECT count(*) AS count FROM agent_databases")
-    .get() as {
-    count: number;
-  };
+    .get() as { count: number };
   return row.count;
 }
 
@@ -401,7 +399,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const previousValueJson = JSON.stringify({ history: "雪".repeat(400_000) });
       expect(
         writeRollup(agentId, {
@@ -410,8 +408,7 @@ describe("session cost usage SQLite cache", () => {
           updatedAt: 1,
         }),
       ).toBe(true);
-      const native = requireNativeSqliteDatabase(db);
-      const executions = trackSqliteStatementExecutions(native, ["cache"], (sql) =>
+      const executions = trackSqliteStatementExecutions(db, ["cache"], (sql) =>
         /\bcache_entries\b/i.test(sql) ? "cache" : null,
       );
       try {
@@ -616,7 +613,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-prune-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const scope = "session-cost-usage-rollup-v3";
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
@@ -643,10 +640,8 @@ describe("session cost usage SQLite cache", () => {
         "stale-49",
       );
       const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
-      const executions = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["delete"],
-        (sql) => (/^delete from "cache_entries"/i.test(sql) ? "delete" : null),
+      const executions = trackSqliteStatementExecutions(db, ["delete"], (sql) =>
+        /^delete from "cache_entries"/i.test(sql) ? "delete" : null,
       );
 
       await pruneUsageCostRollupsForTest({

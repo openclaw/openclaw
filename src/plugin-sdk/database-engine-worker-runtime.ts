@@ -1,4 +1,5 @@
 /** Worker/admission-only physical store opening and transaction capabilities. */
+export { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 export { openEngineStore } from "../infra/database-engine/open.js";
 export { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 export {
@@ -13,6 +14,7 @@ export type {
 export type { DatabaseEngineInput } from "../infra/database-engine/config.js";
 export { jsonPathValue } from "../infra/database-engine/json-values.js";
 export { admitStoreSearch } from "../infra/database-engine/adapters.js";
+export { DatabaseSearchCapabilityUnavailableError } from "../infra/database-engine/search-capabilities.js";
 export type {
   SearchSchema,
   SearchStore,
