@@ -12,7 +12,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -52,6 +51,15 @@ function failedResult(
 ): SessionGitHubPublicationResult {
   return { requestId, status: "failed", code: "push_rejected", message, nextAction };
 }
+
+const publishedResult = {
+  requestId: "publication-success",
+  status: "published",
+  repository: "example/repository",
+  branch: "publication",
+  url: "https://github.com/example/repository/pull/1",
+  headCommit: "a".repeat(40),
+} satisfies SessionGitHubPublicationResult;
 
 function report(
   identity: Awaited<ReturnType<typeof createSession>>,
@@ -108,11 +116,11 @@ function tailScenario(
   return { label, tail, count, beforeTail };
 }
 const reset = [{ type: "reset", id: "reset", parentId: null, reason: "reset" }];
+const danglingLabel = { type: "label", id: "tail", targetId: "absent", label: "Unknown" };
 
 describe("GitHub publication transcript reporting", () => {
   it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const authority = { assertCurrent() {}, authorize() {} };
       const session = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-publication-transcript",
@@ -122,29 +130,14 @@ describe("GitHub publication transcript reporting", () => {
         agentId: session.agentId,
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: session.agentId, env: state.env }),
       };
-      const owner = memorySessionActorOwners.get(location);
-      const actor = await owner.acquire(
-        { database: owner.identity, sessionKey: session.sessionKey },
-        { assertCurrent() {}, assertReadable() {} },
+      await upsertSessionEntryCore(
+        { ...session, env: state.env },
+        {
+          sessionId: session.sessionId,
+          updatedAt: Date.now(),
+        },
       );
-      readSessionActorStorageResult(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: session.sessionId, updatedAt: Date.now() } },
-          },
-          authority,
-        ),
-      );
-      await actor.release();
-      const result = {
-        requestId: "private-result",
-        status: "published" as const,
-        repository: "example/repository",
-        url: "https://github.com/example/repository/pull/1",
-        branch: "private-result",
-        headCommit: "a".repeat(40),
-      };
+      const result = { ...publishedResult, requestId: "private-result" };
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
       });
@@ -168,7 +161,9 @@ describe("GitHub publication transcript reporting", () => {
         });
         const reports = reportMessages(events, result.requestId);
         expect(reports).toHaveLength(1);
-        expect(JSON.stringify(reports[0])).toContain(result.url);
+        expect(JSON.stringify(reports[0])).toContain(
+          "https://github.com/example/repository/pull/1",
+        );
         expect(markReportedAsync).toHaveBeenCalledTimes(2);
         expect(loadRuntime).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
@@ -182,19 +177,9 @@ describe("GitHub publication transcript reporting", () => {
   it.each(
     [
       tailScenario("unreadable message", messageTail("assistant", null, { parentId: null })),
-      tailScenario(
-        "missing parent",
-        messageTail("user", "A separate branch", { parentId: "absent" }),
-        2,
-      ),
+      tailScenario("missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2),
       tailScenario("parentless row", messageTail("user", "Continued")),
-      tailScenario("unattached label", {
-        type: "label",
-        id: "tail",
-        parentId: null,
-        targetId: "absent",
-        label: "Unknown",
-      }),
+      tailScenario("unattached label", { ...danglingLabel, parentId: null }),
       tailScenario("invalid leaf control", {
         type: "leaf",
         id: "tail",
@@ -206,17 +191,7 @@ describe("GitHub publication transcript reporting", () => {
         messageTail("user", "Side", { parentId: null, appendMode: "side" }),
       ),
       tailScenario("parentless row after reset", messageTail("user", "Continued"), 2, reset),
-      tailScenario(
-        "parentless dangling label after reset",
-        {
-          type: "label",
-          id: "tail",
-          targetId: "absent",
-          label: "Unknown",
-        },
-        2,
-        reset,
-      ),
+      tailScenario("parentless dangling label after reset", danglingLabel, 2, reset),
       tailScenario(
         "parentless side append after reset",
         messageTail("user", "Side", { appendMode: "side" }),
@@ -360,15 +335,8 @@ describe("GitHub publication transcript reporting", () => {
   it.each([
     {
       label: "published",
-      result: {
-        requestId: "publication-success",
-        status: "published",
-        url: "https://github.com/openclaw/openclaw/pull/1",
-        repository: "openclaw/openclaw",
-        branch: "openclaw/task",
-        headCommit: "a".repeat(40),
-      } satisfies SessionGitHubPublicationResult,
-      visibleText: "https://github.com/openclaw/openclaw/pull/1",
+      result: publishedResult,
+      visibleText: "https://github.com/example/repository/pull/1",
     },
     {
       label: "failed",

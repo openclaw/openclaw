@@ -22,6 +22,8 @@ const baseEnv = {
   GIT_COMMITTER_NAME: "Snapshot Fixture",
   GIT_COMMITTER_EMAIL: "snapshot@example.test",
 };
+const runGit = (cwd: string, env: NodeJS.ProcessEnv, args: string[], input?: Buffer) =>
+  execFileSync("git", args, { cwd, env, input, encoding: "utf8" }).trim();
 
 async function fixture(linked: false | "linked" | "linked-config" = false) {
   const root = temporary.make("github-repository-snapshot-");
@@ -30,8 +32,9 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
   const gitConfig = path.join(root, "empty.gitconfig");
   await fs.writeFile(gitConfig, "");
   const env = { ...baseEnv, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_SYSTEM: gitConfig };
-  const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+  const git = (...args: string[]) => runGit(cwd, env, args);
+  const file = (name: string) => path.join(cwd, name);
+  const write = (name: string, content: string | Buffer) => fs.writeFile(file(name), content);
   git("init", "--quiet");
   await fs.writeFile(path.join(cwd, ".gitattributes"), "*.txt text eol=lf\n");
   await fs.writeFile(path.join(cwd, ".gitignore"), "ignored*.txt\n");
@@ -57,7 +60,9 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
       ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cwd, baseCommit, output],
       { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     ).trim();
-  return { cwd, root, git, base, output, capture, env };
+  const metadata = (digest: string) => readGitHubRepositoryPublicationMetadata(output, digest);
+  const blob = (sha: string) => readGitHubRepositoryPublicationBlob(output, sha);
+  return { cwd, root, git, base, output, capture, env, file, write, metadata, blob };
 }
 
 describe("repository publication checkpoint capture", () => {
@@ -65,16 +70,11 @@ describe("repository publication checkpoint capture", () => {
     const f = await fixture();
     const file = "gradlew.bat";
     const content = Buffer.from("@echo off\r\necho unchanged\r\n");
-    await fs.writeFile(path.join(f.cwd, file), content);
-    await fs.writeFile(path.join(f.cwd, ".gitattributes"), "* text=auto eol=lf\n");
+    await f.write(file, content);
+    await f.write(".gitattributes", "* text=auto eol=lf\n");
     f.git("add", ".gitattributes");
     // Model an existing CRLF blob: ordinary add would normalize a new file first.
-    const blob = execFileSync("git", ["hash-object", "-w", "--no-filters", "--stdin"], {
-      cwd: f.cwd,
-      env: f.env,
-      input: content,
-      encoding: "utf8",
-    }).trim();
+    const blob = runGit(f.cwd, f.env, ["hash-object", "-w", "--no-filters", "--stdin"], content);
     f.git("update-index", "--add", "--cacheinfo", `100644,${blob},${file}`);
     f.git("commit", "--quiet", "-m", "existing CRLF blob");
     const head = f.git("rev-parse", "HEAD");
@@ -84,29 +84,29 @@ describe("repository publication checkpoint capture", () => {
     const index = await fs.readFile(indexPath);
     for (const edited of [false, true]) {
       if (edited) {
-        await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\r\n");
+        await f.write("counter.txt", "changed\r\n");
         await fs.rm(f.output, { recursive: true });
       }
       const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
       const digest = f.capture(head);
-      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-      expect(local.sourceHeadCommit).toBe(head);
-      expect(local.sourceIndexTree).toBe(tree);
-      expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+      const { snapshot } = await f.metadata(digest);
+      expect(local).toMatchObject({
+        sourceHeadCommit: head,
+        sourceIndexTree: tree,
+        workspaceTree: snapshot.workspaceTree,
+      });
       expect(f.git("rev-parse", `${local.workspaceTree}:${file}`)).toBe(blob);
       if (edited) {
         expect(snapshot.entries).toEqual([
           { path: "counter.txt", mode: "100644", sha: expect.any(String) },
         ]);
-        expect(
-          await readGitHubRepositoryPublicationBlob(f.output, snapshot.entries[0]!.sha!),
-        ).toEqual(Buffer.from("changed\n"));
+        expect(await f.blob(snapshot.entries[0]!.sha!)).toEqual(Buffer.from("changed\n"));
       } else {
         expect(local.workspaceTree).toBe(tree);
         expect(snapshot.entries).toEqual([]);
       }
       expect(await fs.readFile(indexPath)).toEqual(index);
-      expect(await fs.readFile(path.join(f.cwd, file))).toEqual(content);
+      expect(await fs.readFile(f.file(file))).toEqual(content);
       expect(f.git("rev-parse", "HEAD")).toBe(head);
     }
   });
@@ -115,7 +115,7 @@ describe("repository publication checkpoint capture", () => {
     const f = await fixture("linked");
     f.git("config", "core.trustctime", "false");
     f.git("config", "core.checkStat", "minimal");
-    const file = path.join(f.cwd, "counter.txt");
+    const file = f.file("counter.txt");
     const timestamp = Math.floor(Date.now() / 1000) - 60;
     await fs.writeFile(file, "staged\n");
     await fs.utimes(file, timestamp, timestamp);
@@ -129,9 +129,11 @@ describe("repository publication checkpoint capture", () => {
     const index = await fs.readFile(indexPath);
     const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
     const digest = f.capture();
-    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-    expect(local.sourceIndexTree).toBe(stagedTree);
-    expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+    const { snapshot } = await f.metadata(digest);
+    expect(local).toMatchObject({
+      sourceIndexTree: stagedTree,
+      workspaceTree: snapshot.workspaceTree,
+    });
     expect(f.git("show", `${local.workspaceTree}:counter.txt`)).toBe("latest");
     expect(await fs.readFile(indexPath)).toEqual(index);
     expect(await fs.readFile(file, "utf8")).toBe("latest\n");
@@ -142,22 +144,22 @@ describe("repository publication checkpoint capture", () => {
     "preserves staged path inventory and index bytes while staging workspace changes (%s index)",
     async (format) => {
       const f = await fixture(format === "linked-config" ? format : false);
-      await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "staged\r\n");
+      await f.write("ignored-added.txt", "staged\r\n");
       f.git("add", "-f", "ignored-added.txt");
-      await fs.writeFile(path.join(f.cwd, "ignored-intent.txt"), "intent\r\n");
+      await f.write("ignored-intent.txt", "intent\r\n");
       f.git("add", "-N", "-f", "ignored-intent.txt");
       f.git("rm", "--cached", "ignored-removed.txt");
-      await fs.writeFile(path.join(f.cwd, "counter.txt"), "staged counter\r\n");
+      await f.write("counter.txt", "staged counter\r\n");
       f.git("add", "counter.txt");
-      await fs.writeFile(path.join(f.cwd, "counter.txt"), "latest counter\r\n");
-      await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "latest\r\n");
+      await f.write("counter.txt", "latest counter\r\n");
+      await f.write("ignored-added.txt", "latest\r\n");
       if (format === "split") {
         f.git("update-index", "--split-index");
       }
       const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
       const index = await fs.readFile(indexPath);
       const digest = f.capture();
-      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+      const { snapshot } = await f.metadata(digest);
       expect(await fs.readFile(indexPath)).toEqual(index);
       expect(snapshot.entries).toEqual(
         expect.arrayContaining([
@@ -176,11 +178,9 @@ describe("repository publication checkpoint capture", () => {
         ["counter.txt", "latest counter\n"],
       ] as const) {
         const entry = snapshot.entries.find((candidate) => candidate.path === name)!;
-        expect(await readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).toEqual(
-          Buffer.from(content),
-        );
+        expect(await f.blob(entry.sha!)).toEqual(Buffer.from(content));
       }
-      expect(await fs.readFile(path.join(f.cwd, "ignored-removed.txt"), "utf8")).toBe(
+      expect(await fs.readFile(f.file("ignored-removed.txt"), "utf8")).toBe(
         "private generated fixture\n",
       );
     },
@@ -189,12 +189,12 @@ describe("repository publication checkpoint capture", () => {
   it("restores accepted publication paths as unstaged without running hooks or filters", async () => {
     const f = await fixture();
     const base = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
-    await fs.writeFile(path.join(f.cwd, "ignored-[1].txt"), "publishable\n");
-    await fs.writeFile(path.join(f.cwd, "ignored-private.txt"), "recovery only\n");
-    await fs.writeFile(path.join(f.cwd, ".worktreeinclude"), "ignored-private.txt\n");
+    await f.write("ignored-[1].txt", "publishable\n");
+    await f.write("ignored-private.txt", "recovery only\n");
+    await f.write(".worktreeinclude", "ignored-private.txt\n");
     f.git("--literal-pathspecs", "add", "-f", "--", "ignored-[1].txt");
     if (process.platform !== "win32") {
-      await fs.symlink("counter.txt", path.join(f.cwd, "ignored-link.txt"));
+      await fs.symlink("counter.txt", f.file("ignored-link.txt"));
       f.git("add", "-f", "ignored-link.txt");
     }
     const current = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
@@ -210,19 +210,15 @@ describe("repository publication checkpoint capture", () => {
       current: current.manifest,
     });
     const git = (...args: string[]) =>
-      execFileSync(
-        "git",
-        [
-          "-C",
-          restored,
-          "-c",
-          `core.hooksPath=${path.join(f.root, "unused-hooks")}`,
-          "-c",
-          "core.fsmonitor=false",
-          ...args,
-        ],
-        { env: f.env, encoding: "utf8" },
-      ).trim();
+      runGit(restored, f.env, [
+        "-C",
+        restored,
+        "-c",
+        `core.hooksPath=${path.join(f.root, "unused-hooks")}`,
+        "-c",
+        "core.fsmonitor=false",
+        ...args,
+      ]);
     const hooks = path.join(restored, ".git", "test-hooks");
     const sentinel = path.join(f.root, "unexpected-hook-or-filter");
     await fs.mkdir(hooks);
@@ -278,32 +274,32 @@ describe("repository publication checkpoint capture", () => {
   it("rejects an unresolved index without changing conflict stages or working files", async () => {
     const f = await fixture();
     f.git("switch", "--quiet", "-c", "conflicting");
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "one\n");
+    await f.write("counter.txt", "one\n");
     f.git("commit", "--quiet", "-am", "one");
     f.git("switch", "--quiet", "--detach", f.base);
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "two\n");
+    await f.write("counter.txt", "two\n");
     f.git("commit", "--quiet", "-am", "two");
     expect(() => f.git("merge", "conflicting")).toThrow();
     const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
     const index = await fs.readFile(indexPath);
-    const conflict = await fs.readFile(path.join(f.cwd, "counter.txt"));
+    const conflict = await fs.readFile(f.file("counter.txt"));
     expect(f.capture).toThrow();
     await expect(captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd })).rejects.toThrow();
     expect(await fs.readFile(indexPath)).toEqual(index);
-    expect(await fs.readFile(path.join(f.cwd, "counter.txt"))).toEqual(conflict);
+    expect(await fs.readFile(f.file("counter.txt"))).toEqual(conflict);
   });
 
   it.each(["--local", "--worktree"] as const)(
     "rejects a configured clean command in %s before the snapshot can run it",
     async (scope) => {
       const f = await fixture();
-      await fs.writeFile(path.join(f.cwd, ".gitattributes"), "*.txt filter=synthetic\n");
+      await f.write(".gitattributes", "*.txt filter=synthetic\n");
       if (scope === "--worktree") {
         f.git("config", "extensions.worktreeConfig", "true");
       }
       f.git("config", scope, "filter.synthetic.clean", "touch ran-clean-filter");
       expect(f.capture).toThrow();
-      await expect(fs.stat(path.join(f.cwd, "ran-clean-filter"))).rejects.toMatchObject({
+      await expect(fs.stat(f.file("ran-clean-filter"))).rejects.toMatchObject({
         code: "ENOENT",
       });
     },
@@ -311,19 +307,15 @@ describe("repository publication checkpoint capture", () => {
 
   it("rejects substituted checkpoint bytes and paths outside the normalized payload", async () => {
     const f = await fixture();
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\n");
+    await f.write("counter.txt", "changed\n");
     const digest = f.capture();
-    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+    const { snapshot } = await f.metadata(digest);
     const entry = snapshot.entries[0]!;
     await fs.writeFile(path.join(f.output, "blobs", entry.sha!), "different\n");
-    await expect(readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).rejects.toThrow(
-      "changed",
-    );
+    await expect(f.blob(entry.sha!)).rejects.toThrow("changed");
     const unsafe = JSON.stringify({ ...snapshot, entries: [{ ...entry, path: "../escape" }] });
     await fs.writeFile(path.join(f.output, "snapshot.json"), unsafe);
-    await expect(readGitHubRepositoryPublicationMetadata(f.output, digest)).rejects.toThrow(
-      "digest",
-    );
+    await expect(f.metadata(digest)).rejects.toThrow("digest");
     await expect(
       readGitHubRepositoryPublicationMetadata(
         f.output,
@@ -332,8 +324,8 @@ describe("repository publication checkpoint capture", () => {
     ).rejects.toThrow("entry");
     if (process.platform !== "win32") {
       await fs.rm(path.join(f.output, "blobs", entry.sha!));
-      await fs.symlink(path.join(f.cwd, "counter.txt"), path.join(f.output, "blobs", entry.sha!));
-      await expect(readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).rejects.toThrow();
+      await fs.symlink(f.file("counter.txt"), path.join(f.output, "blobs", entry.sha!));
+      await expect(f.blob(entry.sha!)).rejects.toThrow();
     }
   });
 });

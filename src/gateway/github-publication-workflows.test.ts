@@ -44,11 +44,30 @@ const createRequesters = async () => {
   }
   return { ...f, local: f.local };
 };
+type Workspace = Awaited<ReturnType<typeof createRequesters>>["local"];
 
-function mockTargetHead(head: () => string) {
+async function writeWorkflow(workspace: Workspace, name = "example.yml", present = true) {
+  const file = path.join(workspace.cwd, ".github/workflows", name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  if (present) {
+    await fs.writeFile(file, workflow);
+  }
+  return file;
+}
+
+async function commitAll(workspace: Workspace, message: string) {
+  await workspace.git("add", "-A");
+  await workspace.git("commit", "-m", message);
+  return workspace.git("rev-parse", "HEAD");
+}
+
+function mockTargetHead(
+  head: () => string,
+  matches = (arg: string) => arg.includes("/git/ref/heads/"),
+) {
   const transport = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (args, options) => {
-    if (args[0] === "gh" && args.some((arg: string) => arg.includes("/git/ref/heads/"))) {
+    if (args[0] === "gh" && args.some(matches)) {
       return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: head() }));
     }
     return await transport(args, options);
@@ -87,24 +106,16 @@ describe("accepted GitHub workflow publication", () => {
     async ({ operation, allowed, actor, route }) => {
       const f = await createRequesters();
       const workspace = f.local;
-      const workflowPath = path.join(workspace.cwd, ".github/workflows/example.yml");
-      await fs.mkdir(path.dirname(workflowPath), { recursive: true });
-      if (["modify", "delete", "mode", "ordinary"].includes(operation)) {
-        await fs.writeFile(workflowPath, workflow);
-      }
-      await workspace.git("add", "-A");
-      await workspace.git("commit", "-m", "synthetic publication baseline");
-      const baseHead = await workspace.git("rev-parse", "HEAD");
-      const transport = mocks.runCommand.getMockImplementation()!;
-      mocks.runCommand.mockImplementation(async (argv, options) => {
-        if (
-          argv[0] === "gh" &&
-          argv.some((arg: string) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))
-        ) {
-          return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseHead }));
-        }
-        return await transport(argv, options);
-      });
+      const workflowPath = await writeWorkflow(
+        workspace,
+        "example.yml",
+        ["modify", "delete", "mode", "ordinary"].includes(operation),
+      );
+      const baseHead = await commitAll(workspace, "synthetic publication baseline");
+      mockTargetHead(
+        () => baseHead,
+        (arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"),
+      );
       if (operation === "mode") {
         await fs.chmod(workflowPath, 0o755);
         await workspace.git("update-index", "--chmod=+x", ".github/workflows/example.yml");
@@ -114,8 +125,7 @@ describe("accepted GitHub workflow publication", () => {
         await fs.writeFile(workflowPath, `${workflow}# accepted change\n`);
       }
       if (operation === "committed") {
-        await workspace.git("add", "-A");
-        await workspace.git("commit", "-m", "synthetic source commit");
+        await commitAll(workspace, "synthetic source commit");
       }
       await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "ordinary accepted work\n");
       const head = await workspace.git("rev-parse", "HEAD");
@@ -262,9 +272,7 @@ describe("accepted GitHub workflow publication", () => {
       for (const name of ["upstream.yml", "removed.yaml", "renamed.yml", "mode.yml"]) {
         await fs.writeFile(path.join(directory, name), workflow);
       }
-      await workspace.git("add", "-A");
-      await workspace.git("commit", "-m", "common workflow baseline");
-      let targetHead = await workspace.git("rev-parse", "HEAD");
+      let targetHead = await commitAll(workspace, "common workflow baseline");
       await workspace.git("update-ref", "refs/heads/main", targetHead);
       mockTargetHead(() => targetHead);
       if (kind !== "first") {
@@ -339,37 +347,23 @@ describe("accepted GitHub workflow publication", () => {
   it("rejects target inheritance with multiple best common ancestors", async () => {
     const f = await createRequesters();
     const workspace = f.local;
-    await workspace.git("add", "-A");
-    await workspace.git("commit", "-m", "source baseline");
-    const base = await workspace.git("rev-parse", "HEAD");
+    const base = await commitAll(workspace, "source baseline");
     const baseTree = await workspace.git("rev-parse", "HEAD^{tree}");
-    const file = path.join(workspace.cwd, ".github/workflows/example.yml");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
+    await writeWorkflow(workspace);
     await workspace.git("add", "-A");
     const workflowTree = await workspace.git("write-tree");
-    const left = await workspace.git("commit-tree", baseTree, "-p", base, "-m", "left");
-    const right = await workspace.git("commit-tree", workflowTree, "-p", base, "-m", "right");
-    const source = await workspace.git(
-      "commit-tree",
-      baseTree,
-      "-p",
-      left,
-      "-p",
-      right,
-      "-m",
-      "source merge",
-    );
-    const target = await workspace.git(
-      "commit-tree",
-      workflowTree,
-      "-p",
-      right,
-      "-p",
-      left,
-      "-m",
-      "target merge",
-    );
+    const commit = (tree: string, message: string, ...parents: string[]) =>
+      workspace.git(
+        "commit-tree",
+        tree,
+        ...parents.flatMap((parent) => ["-p", parent]),
+        "-m",
+        message,
+      );
+    const left = await commit(baseTree, "left", base);
+    const right = await commit(workflowTree, "right", base);
+    const source = await commit(baseTree, "source merge", left, right);
+    const target = await commit(workflowTree, "target merge", right, left);
     await workspace.git("reset", "--hard", source);
     let targetHead = base;
     mockTargetHead(() => targetHead);
@@ -382,20 +376,10 @@ describe("accepted GitHub workflow publication", () => {
     expect(
       (await workspace.git("merge-base", "--all", published, target)).split("\n"),
     ).toHaveLength(2);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
+    await writeWorkflow(workspace);
     await workspace.git("add", "-A");
     const acceptedTree = await workspace.git("write-tree");
-    const merged = await workspace.git(
-      "commit-tree",
-      acceptedTree,
-      "-p",
-      published,
-      "-p",
-      target,
-      "-m",
-      "accepted merge",
-    );
+    const merged = await commit(acceptedTree, "accepted merge", published, target);
     await workspace.git("reset", "--hard", merged);
     expect(await f.coordinator.requestForSessionV2(f.request("ambiguous", f.guest))).toMatchObject({
       status: "failed",
@@ -412,8 +396,7 @@ describe("accepted GitHub workflow publication", () => {
     const file = path.join(workspace.cwd, ".github/workflows/later.yml");
     const resolveRepository = mocks.resolveRepository.getMockImplementation()!;
     mocks.resolveRepository.mockImplementationOnce(async () => {
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, workflow);
+      await writeWorkflow(workspace, "later.yml");
       return await resolveRepository();
     });
     expect(
@@ -429,9 +412,7 @@ describe("accepted GitHub workflow publication", () => {
     async (boundary) => {
       const f = await createRequesters();
       const workspace = f.local;
-      const file = path.join(workspace.cwd, ".github/workflows/example.yml");
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, workflow);
+      const file = await writeWorkflow(workspace);
       const head = await workspace.git("rev-parse", "HEAD");
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (args, options) => {
@@ -473,9 +454,7 @@ describe("accepted GitHub workflow publication", () => {
 
   it("rechecks the publisher after workflow authorization at the push boundary", async () => {
     const f = await createRequesters();
-    const file = path.join(f.local.cwd, ".github/workflows/example.yml");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
+    await writeWorkflow(f.local);
     const execute = publicationExecutor.executeGitHubPublication;
     let pushRecorded = false;
     let publisherRevoked = false;
@@ -514,12 +493,8 @@ describe("accepted GitHub workflow publication", () => {
     const f = await createRequesters();
     const workspace = f.local;
     const original = await workspace.git("rev-parse", "HEAD");
-    const file = path.join(workspace.cwd, ".github/workflows/example.yml");
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, workflow);
-    await workspace.git("add", "-A");
-    await workspace.git("commit", "-m", "maintainer workflow");
-    const published = await workspace.git("rev-parse", "HEAD");
+    await writeWorkflow(workspace);
+    const published = await commitAll(workspace, "maintainer workflow");
     const remote = path.join(root, "race-remote.git");
     await workspace.git("init", "--bare", remote);
     await workspace.git("push", remote, `${published}:refs/heads/${BRANCH}`);

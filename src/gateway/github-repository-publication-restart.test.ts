@@ -1,6 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -72,45 +71,26 @@ describe("repository checkpoint GitHub publication", () => {
           account: personalPublicationAccount,
         },
       };
-      const firstReply = await callPersonalPublicationRpc(
-        person,
-        "sessions.github.publish",
-        request,
-      );
-      expect(firstReply[0], JSON.stringify(firstReply[2])).toBe(true);
-      const first = firstReply[1];
+      const reply = await callPersonalPublicationRpc(person, "sessions.github.publish", request);
+      expect(reply[0], JSON.stringify(reply[2])).toBe(true);
+      const first = reply[1];
+      const id = first.requestId;
       expect(first.status).toBe("needs_confirmation");
-      const original = readRepositoryGitHubPublication(first.requestId)!;
+      const original = readRepositoryGitHubPublication(id)!;
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
       const retiredCoordinator = person.coordinator;
       await restartPersonalPublicationFixture(person);
-      const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
+      const preparedStatus = await person.coordinator.preparePersonalStatus(id);
       using _ = { [Symbol.dispose]: () => preparedStatus?.release() };
       const status = (action = person.action) =>
-        person.coordinator.personalStatusAsync(
-          action,
-          person.action,
-          first.requestId,
-          preparedStatus,
-        );
-      const receipt = () => readRepositoryGitHubPublication(first.requestId);
+        person.coordinator.personalStatusAsync(action, person.action, id, preparedStatus);
+      const receipt = () => readRepositoryGitHubPublication(id);
       const pending = await status();
       expect(pending?.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
       await expect(status({ ...person.action, owner: person.otherOwner })).rejects.toThrow();
       if (boundary === "move") {
-        await patchSessionEntryCore(
-          {
-            agentId: "main",
-            sessionKey: SESSION_KEY,
-            storePath: mocks.loadSession(SESSION_KEY).storePath,
-          },
-          (current) => ({
-            ...current,
-            repositoryWorkspaceId: undefined,
-          }),
-          { replaceEntry: true },
-        );
+        await f.closeSession("move");
         expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
         expect(await status()).toMatchObject({
           result: { status: "failed", code: "session_changed" },
@@ -122,7 +102,7 @@ describe("repository checkpoint GitHub publication", () => {
         await f.closeSession("reset");
         const response = await callPersonalPublicationRpc(person, "sessions.github.status", {
           sessionKey: SESSION_KEY,
-          requestId: first.requestId,
+          requestId: id,
         });
         expect(response[1]).toMatchObject({
           result: { status: "failed", code: "session_changed" },
@@ -130,22 +110,15 @@ describe("repository checkpoint GitHub publication", () => {
         });
       }
       const database = openOpenClawStateDatabase();
-      const holder = { owner: "previous-publication-owner", epoch: Date.now() };
+      const now = Date.now();
+      const holder = { owner: "previous-publication-owner", epoch: now };
       let writer: DatabaseSync | undefined;
       if (boundary === "held") {
         database.db
           .prepare(
             "INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
           )
-          .run(
-            "session-workspace-action",
-            SESSION_ID,
-            holder.owner,
-            holder.epoch + 60000,
-            holder.epoch,
-            holder.epoch,
-            holder.epoch,
-          );
+          .run("session-workspace-action", SESSION_ID, holder.owner, now + 60000, now, now, now);
       } else if (boundary === "store-busy") {
         expect(
           database.db
@@ -159,11 +132,13 @@ describe("repository checkpoint GitHub publication", () => {
       }
       const confirmation = {
         sessionKey: SESSION_KEY,
-        requestId: first.requestId,
+        requestId: id,
         generation: person.generation,
         account: personalPublicationAccount,
         requestDigest: pending!.confirmation!.requestDigest,
       };
+      const confirm = () =>
+        callPersonalPublicationRpc(person, "sessions.github.confirm", confirmation);
       if (boundary === "retired-owner") {
         const aborted = await callPersonalPublicationRpc(
           { ...person, coordinator: retiredCoordinator },
@@ -171,55 +146,41 @@ describe("repository checkpoint GitHub publication", () => {
           confirmation,
         );
         expect(aborted[0]).toBe(false);
-        expect(aborted[2]).toMatchObject({
-          code: "UNAVAILABLE",
-          retryable: false,
-          details: {
-            leaseAcquisition: {
-              kind: "aborted",
-              reason: "caller-signal",
-              elapsedMs: expect.any(Number),
-            },
-          },
+        expect(aborted[2]).toMatchObject({ code: "UNAVAILABLE", retryable: false });
+        expect(aborted[2].details.leaseAcquisition).toMatchObject({
+          kind: "aborted",
+          reason: "caller-signal",
+          elapsedMs: expect.any(Number),
         });
         expect(aborted[2].details.leaseAcquisition.elapsedMs).toBeGreaterThanOrEqual(0);
         expect(f.runtime.effects).toEqual(["push"]);
         expect(receipt()?.checkpoint_ref).toBe(original.checkpoint_ref);
       }
-      let confirmed = await callPersonalPublicationRpc(
-        person,
-        "sessions.github.confirm",
-        confirmation,
-      ).finally(() => {
+      let confirmed = await confirm().finally(() => {
         writer?.exec("ROLLBACK");
         writer?.close();
       });
       if (boundary === "held" || boundary === "store-busy") {
+        const held = boundary === "held";
         expect(confirmed[0]).toBe(false);
-        expect(confirmed[2]).toMatchObject(
-          boundary === "held"
-            ? {
-                code: "FORBIDDEN",
-                retryable: false,
-                message: expect.stringContaining(`${holder.owner} (lease epoch ${holder.epoch})`),
-                details: { leaseAcquisition: { kind: "held", holder } },
-              }
-            : {
-                code: "UNAVAILABLE",
-                retryable: true,
-                details: { leaseAcquisition: { kind: "store-unavailable", reason: "sqlite-busy" } },
-              },
+        expect(confirmed[2]).toMatchObject({
+          code: held ? "FORBIDDEN" : "UNAVAILABLE",
+          retryable: !held,
+        });
+        expect(confirmed[2].details.leaseAcquisition).toMatchObject(
+          held ? { kind: "held", holder } : { kind: "store-unavailable", reason: "sqlite-busy" },
         );
+        if (held) {
+          expect(confirmed[2].message).toEqual(
+            expect.stringContaining(`${holder.owner} (lease epoch ${holder.epoch})`),
+          );
+        }
         expect(f.runtime.effects).toEqual(["push"]);
         expect(receipt()).toEqual(original);
-        if (boundary === "held") {
+        if (held) {
           return;
         }
-        confirmed = await callPersonalPublicationRpc(
-          person,
-          "sessions.github.confirm",
-          confirmation,
-        );
+        confirmed = await confirm();
       }
       if (boundary === "reset") {
         expect(confirmed[0]).toBe(false);
