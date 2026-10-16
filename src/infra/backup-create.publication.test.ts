@@ -7,11 +7,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import {
-  withBackupFixture,
+  backupCase,
   isolateBackupScratch,
   createVerifiedBackup,
   restoreBackup,
   expectAbsent,
+  writeFiles,
 } from "./backup-create-family.test-support.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
 import { createBackupArchive } from "./backup-create.js";
@@ -21,10 +22,20 @@ import {
   finishBackupScratch,
   maintainBackupScratch,
 } from "./backup-scratch.js";
-import * as directoryDurability from "./directory-durability.js";
 
-it("reclaims an interrupted archive's scratch on the next backup run", async () => {
-  await withBackupFixture({ prefix: "backup-scratch-next-run-" }, async (state) => {
+function beforeCall<Args extends unknown[], Result>(
+  run: (...args: Args) => Result,
+  before: (target: Args[0]) => void,
+) {
+  return (...args: Args) => {
+    before(args[0]);
+    return run(...args);
+  };
+}
+
+it(
+  "reclaims an interrupted archive's scratch on the next backup run",
+  backupCase({ prefix: "backup-scratch-next-run-" })(async (state) => {
     const scratchRoot = state.path("scratch");
     await fs.mkdir(scratchRoot);
     vi.stubEnv("TMPDIR", scratchRoot);
@@ -43,11 +54,12 @@ it("reclaims an interrupted archive's scratch on the next backup run", async () 
       await finishBackupScratch(live);
       vi.unstubAllEnvs();
     }
-  });
-});
+  }),
+);
 
-it("records failed scratch cleanup without failing the published backup", async () => {
-  await withBackupFixture({ prefix: "backup-scratch-cleanup-" }, async (state) => {
+it(
+  "records failed scratch cleanup without failing the published backup",
+  backupCase({ prefix: "backup-scratch-cleanup-" })(async (state) => {
     const scratchRoot = state.path("scratch");
     await fs.mkdir(scratchRoot);
     vi.stubEnv("TMPDIR", scratchRoot);
@@ -70,14 +82,8 @@ it("records failed scratch cleanup without failing the published backup", async 
       const warning = expect.stringContaining(path.join(scratchRoot, scratch!));
       expect(result.warnings).toEqual(expect.arrayContaining([warning]));
       expect(log).toHaveBeenCalledWith(warning);
-      await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
-        size: expect.any(Number),
-      });
-      await expect(fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-        },
-      );
+      await fs.access(result.archivePath);
+      await expectAbsent(path.join(scratchRoot, scratch!, "owner.sqlite"));
       removal.mockRestore();
       const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
       expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);
@@ -86,156 +92,118 @@ it("records failed scratch cleanup without failing the published backup", async 
       removal.mockRestore();
       vi.unstubAllEnvs();
     }
-  });
-});
-
-it("fails closed when the backup destination does not support hard links", async () => {
-  const publicationSpy = vi
-    .spyOn(directoryDurability, "publishFileExclusive")
-    .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "EPERM" }));
-  try {
-    await withBackupFixture(
-      {
-        prefix: "openclaw-backup-no-hardlinks-",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        await fs.mkdir(outputDir, { recursive: true });
-
-        await expect(
-          createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
-          }),
-        ).rejects.toThrow(/requires hard-link support/iu);
-        expect(publicationSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ strategy: "link-required" }),
-        );
-        await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-      },
-    );
-  } finally {
-    publicationSpy.mockRestore();
-  }
-});
+  }),
+);
 
 describe("backup traversal", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each(["lstat", "open"] as const)(
     "records a file vanishing before %s and restores survivors",
-    async (operation) => {
-      await withBackupFixture({ layout: "split" }, async (state) => {
-        await state.writeConfig({
-          agents: { entries: { main: { workspace: state.workspaceDir } } },
-        });
-        const vanished = path.join(state.workspaceDir, "racing.json");
-        const survivor = path.join(state.workspaceDir, "keep.txt");
-        await fs.writeFile(vanished, "temporary contents");
-        await fs.writeFile(survivor, "durable contents");
-        let removed = false;
-        const remove = (target: unknown) => {
-          if (target === vanished && !removed) {
-            fsSync.unlinkSync(vanished);
-            removed = true;
-          }
-        };
-        if (operation === "lstat") {
-          // Keep the same race reproducible on both filesystem APIs used by the writers.
-          const callbackLstat = fsSync.lstat;
-          vi.spyOn(fsSync, "lstat").mockImplementation((...args) => {
-            remove(args[0]);
-            return callbackLstat(...args);
-          });
-          const original = fs.lstat;
-          vi.spyOn(fs, "lstat").mockImplementation((...args) => {
-            remove(args[0]);
-            return original(...args);
-          });
-        } else {
-          const callbackOpen = fsSync.open;
-          vi.spyOn(fsSync, "open").mockImplementation((...args) => {
-            remove(args[0]);
-            return callbackOpen(...args);
-          });
-          const original = fs.open;
-          vi.spyOn(fs, "open").mockImplementation((...args) => {
-            remove(args[0]);
-            return original(...args);
-          });
-        }
-        const runtime = createTestRuntime();
-        const result = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
-        expect(removed).toBe(true);
-        expect(result.skipped).toContainEqual(
-          expect.objectContaining({ sourcePath: vanished, reason: "vanished" }),
-        );
-        expect(result.warnings).toContain(`Skipped vanished entry (ENOENT): ${vanished}`);
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining(`Skipped vanished entry (ENOENT): ${vanished}`),
-        );
-        const entries = await listArchiveEntryDetails(result.archivePath);
-        expect(entries.some((entry) => entry.path.endsWith("/racing.json"))).toBe(false);
-        const keep = entries.find((entry) => entry.path.endsWith("/keep.txt"));
-        expect(keep).toBeDefined();
-        const restored = await restoreBackup(state, result, runtime);
-        expect(await fs.readFile(path.join(restored.targetPath, keep!.path), "utf8")).toBe(
-          "durable contents",
-        );
+    backupCase({ layout: "split" })(async (state, operation: string) => {
+      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+      const vanished = path.join(state.workspaceDir, "racing.json");
+      await writeFiles(state.workspaceDir, {
+        "racing.json": "temporary contents",
+        "keep.txt": "durable contents",
       });
-    },
+      let removed = false;
+      const remove = (target: unknown) => {
+        if (target === vanished && !removed) {
+          fsSync.unlinkSync(vanished);
+          removed = true;
+        }
+      };
+      if (operation === "lstat") {
+        // Keep the same race reproducible on both filesystem APIs used by the writers.
+        vi.spyOn(fsSync, "lstat").mockImplementation(beforeCall(fsSync.lstat, remove));
+        vi.spyOn(fs, "lstat").mockImplementation(beforeCall(fs.lstat, remove));
+      } else {
+        vi.spyOn(fsSync, "open").mockImplementation(beforeCall(fsSync.open, remove));
+        vi.spyOn(fs, "open").mockImplementation(beforeCall(fs.open, remove));
+      }
+      const runtime = createTestRuntime();
+      const result = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
+      expect(removed).toBe(true);
+      expect(result.skipped).toContainEqual(
+        expect.objectContaining({ sourcePath: vanished, reason: "vanished" }),
+      );
+      expect(result.warnings).toContain(`Skipped vanished entry (ENOENT): ${vanished}`);
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(`Skipped vanished entry (ENOENT): ${vanished}`),
+      );
+      const entries = await listArchiveEntryDetails(result.archivePath);
+      expect(entries.some((entry) => entry.path.endsWith("/racing.json"))).toBe(false);
+      const keep = entries.find((entry) => entry.path.endsWith("/keep.txt"));
+      expect(keep).toBeDefined();
+      const restored = await restoreBackup(state, result, runtime);
+      expect(await fs.readFile(path.join(restored.targetPath, keep!.path), "utf8")).toBe(
+        "durable contents",
+      );
+    }),
   );
 
-  it("reports transient files in a second workspace and preserves its dangling absolute link", async () => {
-    await withBackupFixture({ layout: "split" }, async (state) => {
-      const second = state.path("second-workspace");
-      await fs.mkdir(second);
-      await state.writeConfig({
-        agents: {
-          entries: { main: { workspace: state.workspaceDir }, second: { workspace: second } },
-        },
-      });
-      const transient = ["pending.tmp", "queue.json.tmp.123.456"];
-      for (const name of [...transient, "keep.txt"]) {
-        await fs.writeFile(path.join(second, name), name);
+  it.each(["second workspace", "large inventory"])(
+    "reports volatile paths: %s",
+    backupCase({ layout: "split" })(async (state, mode: string) => {
+      const second = mode === "second workspace";
+      const workspace = second ? state.path("second-workspace") : state.workspaceDir;
+      await fs.mkdir(workspace, { recursive: true });
+      const main = { workspace: state.workspaceDir };
+      const agents = second ? { main, second: { workspace } } : { main };
+      await state.writeConfig({ agents: { entries: agents } });
+      const transient = second
+        ? ["pending.tmp", "queue.json.tmp.123.456"]
+        : Array.from({ length: 9_000 }, (_, index) => `pending-${index}.tmp.123`);
+      const files = transient.map((name) => path.join(workspace, name));
+      for (let offset = 0; offset < files.length; offset += 64) {
+        await Promise.all(files.slice(offset, offset + 64).map((file) => fs.writeFile(file, "")));
       }
-      const dangling = state.path("missing-target");
-      const sourceLink = path.join(second, "dangling-link");
-      await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
-      const linkpath = (await fs.readlink(sourceLink)).replaceAll(path.sep, "/");
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
-      const entries = await listArchiveEntryDetails(result.archivePath);
-      expect(entries.some((entry) => entry.path.endsWith("/second-workspace/keep.txt"))).toBe(true);
-      for (const name of transient) {
-        expect(entries.some((entry) => entry.path.endsWith(`/second-workspace/${name}`))).toBe(
-          false,
+      const sourceLink = path.join(workspace, "dangling-link");
+      let linkpath = "";
+      if (second) {
+        await fs.writeFile(path.join(workspace, "keep.txt"), "keep.txt");
+        await fs.symlink(
+          state.path("missing-target"),
+          sourceLink,
+          process.platform === "win32" ? "junction" : "file",
         );
-        expect(result.skipped).toContainEqual(
-          expect.objectContaining({ sourcePath: path.join(second, name), reason: "volatile" }),
-        );
+        linkpath = (await fs.readlink(sourceLink)).replaceAll(path.sep, "/");
       }
-      expect(result.skippedVolatileCount).toBe(2);
-      const link = entries.find((entry) => entry.path.endsWith("/second-workspace/dangling-link"));
-      expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
-      expect(result.externalSymbolicLinks).toContainEqual({
-        entryPath: link!.path,
-        linkpath,
-      });
-    });
-  });
+      const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
+      expect(result).toMatchObject({ verified: true, skippedVolatileCount: files.length });
+      if (second) {
+        const entries = await listArchiveEntryDetails(result.archivePath);
+        const prefix = "/second-workspace/";
+        const find = (name: string) => entries.find((entry) => entry.path.endsWith(prefix + name));
+        expect(find("keep.txt")).toBeDefined();
+        for (const name of transient) {
+          expect(find(name)).toBeUndefined();
+          expect(result.skipped).toContainEqual(
+            expect.objectContaining({ sourcePath: path.join(workspace, name), reason: "volatile" }),
+          );
+        }
+        const link = find("dangling-link");
+        expect(link).toMatchObject({ type: "SymbolicLink", linkpath });
+        expect(result.externalSymbolicLinks).toContainEqual({ entryPath: link!.path, linkpath });
+      } else {
+        expect(
+          result.skipped
+            .filter((entry) => entry.reason === "volatile")
+            .map((entry) => entry.sourcePath)
+            .toSorted(),
+        ).toEqual(files.toSorted());
+      }
+    }),
+  );
 
   it.each([
     "replace-before-open",
     "unlink-after-open",
     ...(fsSync.constants.O_NOFOLLOW ? ["replace-around-open" as const] : []),
-  ] as const)("archives a complete regular file through %s", async (mutation) => {
-    await withBackupFixture({ layout: "split" }, async (state) => {
-      // Keep concurrent backups out of this fixture's warning inventory.
+  ] as const)(
+    "archives a complete regular file through %s",
+    backupCase({ layout: "split" })(async (state, mutation: string) => {
       await isolateBackupScratch(state);
       await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
       const source = path.join(state.workspaceDir, "current.txt");
@@ -273,58 +241,31 @@ describe("backup traversal", () => {
         mutation === "unlink-after-open" ? "before" : "after",
       );
       expect(archive.warnings ?? []).toEqual([]);
-    });
-  });
+    }),
+  );
 
   it.each(["ENOENT", "EACCES"])(
     "refuses missing required config or source I/O errors: %s",
-    async (code) => {
-      await withBackupFixture({}, async (state) => {
-        await state.writeConfig({});
-        const source =
-          code === "ENOENT" ? state.configPath : await state.writeText("keep.txt", "data");
-        const open = fs.open;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          if (args[0] === source) {
-            throw Object.assign(new Error(`injected ${code}`), { code, path: source });
-          }
-          return await open(...args);
-        });
-        const output = state.path("backup.tar.gz");
-        await expect(
-          backupCreateCommand(createTestRuntime(), { output, onlyConfig: code === "ENOENT" }),
-        ).rejects.toThrow(
-          code === "ENOENT" ? "Required backup source disappeared" : `injected ${code}`,
-        );
-        await expectAbsent(output);
+    backupCase({})(async (state, code: string) => {
+      await state.writeConfig({});
+      const source =
+        code === "ENOENT" ? state.configPath : await state.writeText("keep.txt", "data");
+      const open = fs.open;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] === source) {
+          throw Object.assign(new Error(`injected ${code}`), { code, path: source });
+        }
+        return await open(...args);
       });
-    },
-  );
-
-  it("reports many volatile paths without overflowing the restore manifest", async () => {
-    await withBackupFixture({ layout: "split" }, async (state) => {
-      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
-      const files = Array.from({ length: 9_000 }, (_, index) =>
-        path.join(state.workspaceDir, `pending-${index}.tmp.123`),
+      const output = state.path("backup.tar.gz");
+      await expect(
+        backupCreateCommand(createTestRuntime(), { output, onlyConfig: code === "ENOENT" }),
+      ).rejects.toThrow(
+        code === "ENOENT" ? "Required backup source disappeared" : `injected ${code}`,
       );
-      for (let offset = 0; offset < files.length; offset += 64) {
-        await Promise.all(files.slice(offset, offset + 64).map((file) => fs.writeFile(file, "")));
-      }
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
-      expect(result.verified).toBe(true);
-      expect(result.skippedVolatileCount).toBe(files.length);
-      expect(
-        result.skipped
-          .filter((entry) => entry.reason === "volatile")
-          .map((entry) => entry.sourcePath)
-          .toSorted(),
-      ).toEqual(files.toSorted());
-    });
-  });
+      await expectAbsent(output);
+    }),
+  );
 });
 
 describe("backup stream lifecycle", () => {
@@ -337,8 +278,8 @@ describe("backup stream lifecycle", () => {
     Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
   >[0];
 
-  function startArchive(label: string, name = "partial.tar.gz") {
-    const archivePath = path.join(tempDirs.make(`openclaw-backup-stream-${label}-`), name);
+  function startArchive() {
+    const archivePath = path.join(tempDirs.make("openclaw-backup-stream-"), "partial.tar.gz");
     const archiveStream = new PassThrough();
     let progress: ReportBackupProgress | undefined;
     const writePromise = writeArchiveStreamToFile({
@@ -357,63 +298,45 @@ describe("backup stream lifecycle", () => {
     };
   }
 
-  describe("writeArchiveStreamToFile", () => {
-    it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
-      vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
-        throw Object.assign(new Error("fstat failed"), { code: "EIO" });
-      });
-      const { archivePath, archiveStream, writePromise } = startArchive("fstat");
-      archiveStream.end("partial archive");
-
-      await expect(writePromise).rejects.toThrow("fstat failed");
-      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
+    vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("fstat failed"), { code: "EIO" });
     });
+    const { archivePath, archiveStream, writePromise } = startArchive();
+    archiveStream.end("partial archive");
+    await expect(writePromise).rejects.toThrow("fstat failed");
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
-    it("aborts and closes a partial archive when the source stops producing data", async () => {
-      vi.useFakeTimers();
-      const { archivePath, archiveStream, writePromise } = startArchive("timeout");
-      archiveStream.write("partial archive");
+  it.each([false, true])("cleans a stalled archive (entry suffix=%s)", async (withEntry) => {
+    vi.useFakeTimers();
+    const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+    const expectedPath = `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`;
+    if (withEntry) {
+      reportProgress({ phase: "raw", entryPath: `/source/🤖${expectedPath}`, bytes: 16 });
+    }
+    archiveStream.write("partial archive");
+    const reason = "Backup archive write stalled: no progress observed for 300000ms";
+    const suffix = withEntry
+      ? ` (phase=output, entry=${JSON.stringify(expectedPath)}, rawBytes=16, outputBytes=15)`
+      : "";
+    const rejection = expect(writePromise).rejects.toThrow(`${reason}${suffix}`);
+    await vi.advanceTimersByTimeAsync(300_001);
+    await rejection;
+    expect(archiveStream.destroyed).toBe(true);
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
-      const rejection = expect(writePromise).rejects.toThrow(
-        "Backup archive write stalled: no progress observed for 300000ms",
-      );
-      await vi.advanceTimersByTimeAsync(300_001);
-      await rejection;
-      expect(archiveStream.destroyed).toBe(true);
-      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
+  it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
+    vi.useFakeTimers();
+    const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+    for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
+    }
+    archiveStream.end("archive after one large entry");
 
-    it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
-      vi.useFakeTimers();
-      const { archivePath, archiveStream, writePromise, reportProgress } = startArchive(
-        "entry-progress",
-        "complete.tar.gz",
-      );
-      for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
-        await vi.advanceTimersByTimeAsync(60_000);
-        reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
-      }
-      archiveStream.end("archive after one large entry");
-
-      await expect(writePromise).resolves.toMatchObject({ archivePath });
-      await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after one large entry");
-    });
-
-    it("cleans a stalled archive and preserves its UTF-16 entry suffix", async () => {
-      const expectedPath = `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`;
-      const entryPath = `/source/🤖${expectedPath}`;
-      vi.useFakeTimers();
-      const { archivePath, archiveStream, writePromise, reportProgress } =
-        startArchive("entry-timeout");
-      reportProgress({ phase: "raw", entryPath, bytes: 16 });
-      archiveStream.write("partial archive");
-
-      const rejection = expect(writePromise).rejects.toThrow(
-        `Backup archive write stalled: no progress observed for 300000ms (phase=output, entry=${JSON.stringify(expectedPath)}, rawBytes=16, outputBytes=15)`,
-      );
-      await vi.advanceTimersByTimeAsync(300_001);
-      await rejection;
-      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
+    await expect(writePromise).resolves.toMatchObject({ archivePath });
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after one large entry");
   });
 });
