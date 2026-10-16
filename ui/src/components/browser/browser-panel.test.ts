@@ -319,7 +319,7 @@ describe("normalizeBrowserUrlDraft", () => {
       panel.available = true;
       mountSolid(() => panel);
       await panel.updateComplete;
-      panel.browserPanelController.setState("view", createView());
+      panel.browserPanelController.setState("view", createView("target-1"));
       panel.browserPanelController.setMode("annotate");
       await panel.updateComplete;
       const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
