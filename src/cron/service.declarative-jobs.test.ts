@@ -47,6 +47,10 @@ async function setup() {
   return { cron, storePath };
 }
 
+async function storedJob(storePath: string, id?: string) {
+  return (await loadCronStore(storePath)).jobs.find((job) => !id || job.id === id)!;
+}
+
 function declaration(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   return {
     name: "daily report",
@@ -71,6 +75,10 @@ async function add(cron: CronService, input = declaration(), options?: CronAddOp
   return result;
 }
 
+function expectUpdate(result: Awaited<ReturnType<typeof add>>, id: string, job?: unknown) {
+  expect(result).toMatchObject({ created: false, updated: true, id, ...(job ? { job } : {}) });
+}
+
 const retiredTriggerState = {
   triggerState: { owner: "retired" },
   triggerEvalCount: 7,
@@ -81,24 +89,26 @@ const retiredTriggerState = {
 
 type TriggerStateOwner = "condition" | "script" | "none";
 
-function ownedDeclaration(params: {
-  declarationKey: string;
-  owner: TriggerStateOwner;
-  script?: string;
-  once?: boolean;
-  state?: CronJobCreate["state"];
-  sameOwnerEdit?: boolean;
-}): CronJobCreate {
+function ownedDeclaration(
+  owner: TriggerStateOwner,
+  params: {
+    declarationKey?: string;
+    script?: string;
+    once?: boolean;
+    state?: CronJobCreate["state"];
+    sameOwnerEdit?: boolean;
+  },
+): CronJobCreate {
   const script = params.script ?? 'return "original"';
   return declaration({
     declarationKey: params.declarationKey,
     delivery: { mode: "none" },
     trigger:
-      params.owner === "condition"
+      owner === "condition"
         ? { script, ...(params.once !== undefined ? { once: params.once } : {}) }
         : undefined,
     payload:
-      params.owner === "script"
+      owner === "script"
         ? { kind: "script", script, ...(params.sameOwnerEdit ? { timeoutSeconds: 45 } : {}) }
         : { kind: "agentTurn", message: "report" },
     ...(params.state ? { state: params.state } : {}),
@@ -141,11 +151,7 @@ describe("CronService declarative jobs", () => {
     });
 
     const identical = await add(cron, declaration(), { enabledExplicit: true });
-    expect(identical).toMatchObject({
-      created: false,
-      updated: false,
-      id: created.id,
-    });
+    expect(identical).toMatchObject({ created: false, updated: false, id: created.id });
 
     await cron.update(created.id, { state: { consecutiveErrors: 2 } });
     const alreadyEnabled = await add(cron, declaration(), { enabledExplicit: true });
@@ -167,8 +173,7 @@ describe("CronService declarative jobs", () => {
       delivery: { mode: "none" },
     } satisfies Partial<CronJobCreate>;
     const converged = await add(cron, declaration(summary), { enabledExplicit: false });
-    expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
-    expect(converged.job).toMatchObject({
+    expectUpdate(converged, created.id, {
       ...summary,
       id: created.id,
       enabled: false,
@@ -198,7 +203,7 @@ describe("CronService declarative jobs", () => {
       const writer = createCronService(storePath);
       const created = await add(writer, input);
       writer.stop();
-      const job = (await loadCronStore(storePath)).jobs[0]!;
+      const job = await storedJob(storePath);
       job.enabled = failure === "stream-exhausted";
       job.state.consecutiveErrors = 10;
       job.state.scheduleErrorCount = 3;
@@ -225,12 +230,16 @@ describe("CronService declarative jobs", () => {
         updated: true,
         job: { enabled: true, state: { consecutiveErrors: 0, scheduleErrorCount: 0 } },
       });
-      const persisted = (await loadCronStore(storePath)).jobs[0]!;
-      expect(persisted.state.autoDisabled).toBeUndefined();
-      expect(persisted.state.streamRestartExhausted).toBeUndefined();
+      const persisted = await storedJob(storePath);
+      expect([persisted.state.autoDisabled, persisted.state.streamRestartExhausted]).toEqual([
+        undefined,
+        undefined,
+      ]);
       if (failure === "stream-exhausted") {
-        expect(persisted.state.streamConsecutiveFailures).toBe(0);
-        expect(persisted.state.streamError).toBeUndefined();
+        expect([persisted.state.streamConsecutiveFailures, persisted.state.streamError]).toEqual([
+          0,
+          undefined,
+        ]);
       }
       expect((await add(cron, input, { enabledExplicit: true })).updated).toBe(false);
     },
@@ -251,46 +260,35 @@ describe("CronService declarative jobs", () => {
         ownerProfileId: "profile-ada",
       },
     ];
+    const provenance = { createdActor: { type: "human", id: "profile-ada" }, sourceConversation };
 
     const created = await add(writer, declaration(), {
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       sourceConversation,
       skillLibrarySelections: selections,
     });
-    expect(created.job).toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
-    });
+    expect(created.job).toMatchObject(provenance);
 
     const replayed = await add(writer, declaration(), {
       sourceConversation: { ...sourceConversation, lifecycleRevision: "generation-2" },
     });
-    expect(replayed).toMatchObject({
-      created: false,
-      updated: false,
-      job: { sourceConversation },
-    });
+    expect(replayed).toMatchObject({ created: false, updated: false, job: { sourceConversation } });
 
     const converged = await add(writer, declaration({ displayName: "Updated report" }), {
       createdActor: { type: "human", source: "profile", id: "profile-bob" },
       sourceConversation: { sessionKey: "agent:ops:other", sessionId: "other-session" },
       skillLibrarySelections: [],
     });
-    expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
-    expect(converged.job).toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
-    });
+    expectUpdate(converged, created.id, provenance);
     await writer.update(created.id, { sessionKey: "agent:ops:other" });
     writer.stop();
 
     const reader = createCronService(storePath, false);
     await expect(reader.readJob(created.id)).resolves.toMatchObject({
-      createdActor: { type: "human", id: "profile-ada" },
-      sourceConversation,
+      ...provenance,
       skillLibrarySelections: selections,
     });
-    const job = (await loadCronStore(storePath)).jobs.find((stored) => stored.id === created.id)!;
+    const job = await storedJob(storePath, created.id);
     expect(toPublicCronJob(job)).not.toHaveProperty("skillLibrarySelections");
     const session = {
       cfg: {},
@@ -343,38 +341,21 @@ describe("CronService declarative jobs", () => {
     "persists trigger-state ownership transitions and explicit replacements through %s",
     async (mutationPath) => {
       const { cron, storePath } = await setup();
-      type Transition = {
-        replaceScript?: boolean;
-        nextOnce?: boolean;
-        sameOwnerEdit?: boolean;
-        replacementState?: CronJobCreate["state"];
-      };
+      type Transition = Parameters<typeof ownedDeclaration>[1];
+      const script = 'return "replacement"';
+      const nullState = { triggerState: null, triggerEvalCount: 0 };
+      const timestamps = { lastTriggerEvalAtMs: 444, lastTriggerFireAtMs: 555 };
       const cases: Array<[string, TriggerStateOwner, TriggerStateOwner, Transition]> = [
         ["condition to script", "condition", "script", {}],
-        ["script replacement", "script", "script", { replaceScript: true }],
+        ["script replacement", "script", "script", { script }],
         ["script removal", "script", "none", {}],
         ["same condition", "condition", "condition", { sameOwnerEdit: true }],
         ["same script", "script", "script", { sameOwnerEdit: true }],
         ["same absent owner", "none", "none", { sameOwnerEdit: true }],
-        ["once made explicit false", "condition", "condition", { nextOnce: false }],
-        ["once enabled", "condition", "condition", { nextOnce: true }],
-        [
-          "explicit null state",
-          "condition",
-          "condition",
-          {
-            replaceScript: true,
-            replacementState: { triggerState: null, triggerEvalCount: 0 },
-          },
-        ],
-        [
-          "explicit timestamps",
-          "condition",
-          "script",
-          {
-            replacementState: { lastTriggerEvalAtMs: 444, lastTriggerFireAtMs: 555 },
-          },
-        ],
+        ["once made explicit false", "condition", "condition", { once: false }],
+        ["once enabled", "condition", "condition", { once: true }],
+        ["explicit null state", "condition", "condition", { script, state: nullState }],
+        ["explicit timestamps", "condition", "script", { state: timestamps }],
       ];
       const expectedJobs: Array<{ id: string; state: CronJob["state"]; name: string }> = [];
       const expectState = (
@@ -394,9 +375,8 @@ describe("CronService declarative jobs", () => {
       };
       for (const [index, [name, previous, next, changes]] of cases.entries()) {
         const declarationKey = `trigger-owner:${index}`;
-        const input = ownedDeclaration({
+        const input = ownedDeclaration(previous, {
           declarationKey,
-          owner: previous,
           state: retiredTriggerState,
         });
         if (mutationPath === "ordinary update") {
@@ -406,20 +386,13 @@ describe("CronService declarative jobs", () => {
         expect(created.state, `${name}: create preserves explicit state`).toMatchObject(
           retiredTriggerState,
         );
-        const replacement = ownedDeclaration({
-          declarationKey,
-          owner: next,
-          script: changes.replaceScript ? 'return "replacement"' : undefined,
-          once: changes.nextOnce,
-          state: changes.replacementState,
-          sameOwnerEdit: changes.sameOwnerEdit,
-        });
+        const replacement = ownedDeclaration(next, { declarationKey, ...changes });
         if (mutationPath === "ordinary update") {
           await cron.update(created.id, {
             trigger: replacement.trigger ?? null,
             payload: replacement.payload,
             displayName: replacement.displayName,
-            ...(changes.replacementState ? { state: changes.replacementState } : {}),
+            ...(changes.state ? { state: changes.state } : {}),
           });
         } else {
           await cron.add(replacement);
@@ -428,11 +401,9 @@ describe("CronService declarative jobs", () => {
           ? retiredTriggerState
           : {
               lastRunAtMs: retiredTriggerState.lastRunAtMs,
-              ...changes.replacementState,
+              ...changes.state,
             };
-        const persisted = (await loadCronStore(storePath)).jobs.find(
-          (entry) => entry.id === created.id,
-        );
+        const persisted = await storedJob(storePath, created.id);
         expectState(persisted?.state, expected, `${name}: durable state`);
         expectedJobs.push({ id: created.id, state: expected, name });
       }
@@ -452,30 +423,21 @@ describe("CronService declarative jobs", () => {
     const { cron: first, storePath } = await setup();
     const second = createCronService(storePath);
     await second.start();
-
-    const created = await add(
-      first,
-      ownedDeclaration({
-        declarationKey: "trigger-owner:concurrent",
-        owner: "condition",
-        state: retiredTriggerState,
-      }),
-    );
+    const input = (state: CronJobCreate["state"], script?: string) =>
+      ownedDeclaration("condition", { declarationKey: "trigger-owner:concurrent", state, script });
+    const guard = (revision: string) => (current: CronJob) => {
+      if (resolveCronJobConfigRevision(current) !== revision) {
+        throw new Error("revision conflict");
+      }
+    };
+    const created = await add(first, input(retiredTriggerState));
     await second.readJob(created.id);
     const staleRevision = resolveCronJobConfigRevision(created.job);
     const replacementState = { triggerState: { owner: "replacement" }, triggerEvalCount: 23 };
     const commitGuard = vi.fn();
 
     await expect(
-      first.add(
-        ownedDeclaration({
-          declarationKey: "trigger-owner:concurrent",
-          owner: "condition",
-          script: 'return "invalid"',
-          state: { lastTriggerEvalAtMs: -1 },
-        }),
-        { commitGuard },
-      ),
+      first.add(input({ lastTriggerEvalAtMs: -1 }, 'return "invalid"'), { commitGuard }),
     ).rejects.toThrow("cron state.lastTriggerEvalAtMs must be a non-negative Date-valid integer");
     expect(commitGuard).not.toHaveBeenCalled();
     expect((await second.readJob(created.id))?.state).toMatchObject(retiredTriggerState);
@@ -492,11 +454,7 @@ describe("CronService declarative jobs", () => {
           trigger: { script: 'return "obsolete"' },
           state: { triggerState: { owner: "obsolete" }, triggerEvalCount: 99 },
         },
-        (current) => {
-          if (resolveCronJobConfigRevision(current) !== staleRevision) {
-            throw new Error("revision conflict");
-          }
-        },
+        guard(staleRevision),
       ),
     ]);
 
@@ -504,17 +462,18 @@ describe("CronService declarative jobs", () => {
     expect(stale).toMatchObject({ status: "rejected", reason: new Error("revision conflict") });
     const persisted = await second.readJob(created.id);
     expect(persisted?.state).toMatchObject(replacementState);
-    expect(persisted?.state.lastTriggerEvalAtMs).toBeUndefined();
-    expect(persisted?.state.lastTriggerFireAtMs).toBeUndefined();
+    expect([persisted?.state.lastTriggerEvalAtMs, persisted?.state.lastTriggerFireAtMs]).toEqual([
+      undefined,
+      undefined,
+    ]);
     expect(persisted?.displayName).toBe("Daily report");
     expect(persisted?.trigger).toEqual({ script: 'return "replacement"' });
 
-    const currentRevision = resolveCronJobConfigRevision(persisted!);
-    await second.updateWithPrecondition(created.id, { displayName: "Current owner" }, (current) => {
-      if (resolveCronJobConfigRevision(current) !== currentRevision) {
-        throw new Error("revision conflict");
-      }
-    });
+    await second.updateWithPrecondition(
+      created.id,
+      { displayName: "Current owner" },
+      guard(resolveCronJobConfigRevision(persisted!)),
+    );
     expect((await first.readJob(created.id))?.state).toMatchObject(replacementState);
   });
 
@@ -523,23 +482,21 @@ describe("CronService declarative jobs", () => {
     const created = await add(writer, declaration({ id: "reserved-id" }), {
       enabledExplicit: true,
     });
-    await expect(writer.add(declaration({ declarationKey: undefined, id: "  " }))).rejects.toThrow(
-      "id must not be blank",
-    );
-    await expect(
-      writer.add(declaration({ declarationKey: undefined, id: created.id })),
-    ).rejects.toThrow("already exists");
-    await expect(writer.add(declaration({ displayName: "   " }))).rejects.toThrow(
-      "displayName must not be blank",
-    );
+    const invalid: Array<[Partial<CronJobCreate>, string]> = [
+      [{ declarationKey: undefined, id: "  " }, "id must not be blank"],
+      [{ declarationKey: undefined, id: created.id }, "already exists"],
+      [{ displayName: "   " }, "displayName must not be blank"],
+      ...["nested/job", "..\\job", "nul\0job"].map((id): [Partial<CronJobCreate>, string] => [
+        { declarationKey: undefined, id },
+        "invalid cron run job id",
+      ]),
+    ];
+    for (const [input, error] of invalid) {
+      await expect(writer.add(declaration(input))).rejects.toThrow(error);
+    }
     await expect(writer.update(created.id, { displayName: "   " })).rejects.toThrow(
       "displayName must not be blank",
     );
-    for (const id of ["nested/job", "..\\job", "nul\0job"]) {
-      await expect(writer.add(declaration({ declarationKey: undefined, id }))).rejects.toThrow(
-        "invalid cron run job id",
-      );
-    }
     writer.stop();
 
     const reader = createCronService(storePath, false);

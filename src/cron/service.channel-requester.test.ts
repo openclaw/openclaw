@@ -25,7 +25,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
-import type { CronJobCreate, CronJobPatch, CronToolsAllowProvenance } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronToolsAllowProvenance } from "./types.js";
 
 let cron: CronService;
 let storePath: string;
@@ -80,6 +80,19 @@ const nativeProvenance: CronToolsAllowProvenance = {
   source: "authenticated-requester",
   channelRequester,
 };
+const fullAuthority = {
+  scheduledToolPolicy: requesterPolicy,
+  toolsAllowProvenance: fullRequesterProvenance,
+};
+function expectCappedPolicy(job: CronJob) {
+  expect([job.scheduledToolPolicy, job.payload.toolsAllow]).toEqual([requesterPolicy, ["message"]]);
+}
+const nativeRequester = (
+  overrides: Partial<typeof channelRequester> = {},
+): CronToolsAllowProvenance => ({
+  ...nativeProvenance,
+  channelRequester: { ...channelRequester, ...overrides },
+});
 const localProvenance: CronToolsAllowProvenance = {
   version: 1,
   source: "authenticated-requester",
@@ -172,8 +185,7 @@ describe("CronService authenticated channel requester", () => {
         });
 
         expect(deactivateMcpLoopbackClientGrantCapture(capture)).toBe(true);
-        expect(creator.active).toBe(true);
-        expect(creator.signal.aborted).toBe(false);
+        expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegatedAuthority);
         await expect(
           cron.add(requesterDeclaration(), {
@@ -229,11 +241,7 @@ describe("CronService authenticated channel requester", () => {
       created.id,
       { name: "Updated executable instructions" },
       {
-        toolsAllowProvenance: {
-          version: 1,
-          source: "authenticated-requester",
-          channelRequester: nextRequester,
-        },
+        toolsAllowProvenance: nativeRequester(nextRequester),
       },
     );
     const rebound = (await readJob())!;
@@ -242,8 +250,7 @@ describe("CronService authenticated channel requester", () => {
       channelRequester: nextRequester,
     });
     expect(rebound.owner).toEqual(requesterOwner);
-    expect(rebound.scheduledToolPolicy).toEqual(requesterPolicy);
-    expect(rebound.payload.toolsAllow).toEqual(["message"]);
+    expectCappedPolicy(rebound);
     expect(rebound.createdActor?.id).toBe("original-session-creator");
 
     await cron.update(created.id, {
@@ -252,60 +259,32 @@ describe("CronService authenticated channel requester", () => {
     expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
   });
 
-  it.each<{
-    name: string;
-    patch: CronJobPatch;
-    preserves: boolean;
-    trigger?: CronJobCreate["trigger"];
-    freshRequester?: boolean;
-  }>([
-    {
-      name: "model selection",
-      patch: { payload: { kind: "agentTurn", model: "openai/test-model" } },
-      preserves: false,
-    },
-    {
-      name: "schedule",
-      patch: { schedule: { kind: "every", everyMs: 120_000 } },
-      preserves: false,
-    },
-    {
-      name: "delivery target",
-      patch: { delivery: { to: "channel:another", accountId: "work" } },
-      preserves: false,
-    },
-    {
-      name: "authored trigger input",
-      patch: { state: { triggerState: { destination: "another" } } },
-      preserves: false,
-      trigger: { script: "return { fire: true }" },
-    },
-    {
-      name: "display metadata and runtime progress",
-      patch: {
+  it.each<[string, CronJobPatch, CronJobCreate["trigger"]?, boolean?]>([
+    ["model selection", { payload: { kind: "agentTurn", model: "openai/test-model" } }],
+    ["schedule", { schedule: { kind: "every", everyMs: 120_000 } }],
+    ["delivery target", { delivery: { to: "channel:another", accountId: "work" } }],
+    [
+      "authored trigger input",
+      { state: { triggerState: { destination: "another" } } },
+      { script: "return { fire: true }" },
+    ],
+    [
+      "display metadata and runtime progress",
+      {
         description: "More context for the operator",
         displayName: "Daily summary",
         state: { lastRunAtMs: 1234, consecutiveErrors: 1 },
       },
-      preserves: true,
-      freshRequester: true,
-    },
-  ])("reconciles requester authority for $name", async (testCase) => {
-    const created = await cron.add(requesterDeclaration({ trigger: testCase.trigger }), {
-      scheduledToolPolicy: requesterPolicy,
-      toolsAllowProvenance: fullRequesterProvenance,
-    });
+      undefined,
+      true,
+    ],
+  ])("reconciles requester authority for %s", async (_name, patch, trigger, preserves = false) => {
+    const created = await cron.add(requesterDeclaration({ trigger }), fullAuthority);
     await cron.update(
       created.id,
-      testCase.patch,
-      testCase.freshRequester
-        ? {
-            toolsAllowProvenance: {
-              version: 1,
-              source: "authenticated-requester",
-              channelRequester: { ...channelRequester, senderId: "requester-b" },
-            },
-          }
+      patch,
+      preserves
+        ? { toolsAllowProvenance: nativeRequester({ senderId: "requester-b" }) }
         : undefined,
     );
     const stored = (await readJob())!;
@@ -313,10 +292,9 @@ describe("CronService authenticated channel requester", () => {
       version: 1,
       source: "final-executable-surface",
       callerOrigin: { kind: "unknown" },
-      ...(testCase.preserves ? { channelRequester } : {}),
+      ...(preserves ? { channelRequester } : {}),
     });
-    expect(stored.scheduledToolPolicy).toEqual(requesterPolicy);
-    expect(stored.payload.toolsAllow).toEqual(["message"]);
+    expectCappedPolicy(stored);
   });
 
   it.each(["update", "declaration"] as const)(
@@ -376,17 +354,8 @@ describe("CronService authenticated channel requester", () => {
 
   it("keeps native requester facts within the job account during update", async () => {
     const input = requesterDeclaration();
-    const created = await cron.add(input, {
-      scheduledToolPolicy: requesterPolicy,
-      toolsAllowProvenance: fullRequesterProvenance,
-    });
-    const options = {
-      toolsAllowProvenance: {
-        version: 1 as const,
-        source: "authenticated-requester" as const,
-        channelRequester: { ...channelRequester, accountId: "another-account" },
-      },
-    };
+    const created = await cron.add(input, fullAuthority);
+    const options = { toolsAllowProvenance: nativeRequester({ accountId: "another-account" }) };
     await cron.update(created.id, { name: "Updated report" }, options);
     const stored = (await readJob())!;
     expect(stored.toolsAllowProvenance?.channelRequester).toBeUndefined();
@@ -401,15 +370,7 @@ describe("CronService authenticated channel requester", () => {
     "preserves $mode policy across operator tool-runtime transitions through $mutation",
     async ({ mutation, mode }) => {
       const input = requesterDeclaration();
-      const created = await cron.add(
-        input,
-        mode === "account"
-          ? {
-              scheduledToolPolicy: requesterPolicy,
-              toolsAllowProvenance: fullRequesterProvenance,
-            }
-          : undefined,
-      );
+      const created = await cron.add(input, mode === "account" ? fullAuthority : undefined);
       const command: CronJobCreate["payload"] = {
         kind: "command",
         argv: ["true"],
