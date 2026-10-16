@@ -337,6 +337,7 @@ function embedded(pathname) {
   if (embeddedEntries.has(pathname)) return pathname;
   return entries[pathname] ?? entries[path.relative(root, pathname).split(path.sep).join("/")];
 }
+globalThis.__openclawStandaloneEmbeddedPath = embedded;
 ${artifacts.bootstrap}
 ${metadata.bootstrap}
 ${native.bootstrap}
