@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -103,6 +104,24 @@ function requestOptions(
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
     },
   } as unknown as GatewayRequestHandlerOptions;
+}
+
+type ApprovalFixture = Awaited<ReturnType<typeof createPreparedTestApprovalManager>>;
+
+function requestApproval(fixture: ApprovalFixture, opts: GatewayRequestHandlerOptions) {
+  const handler = expectDefined(
+    createExecApprovalHandlers(fixture.manager)["exec.approval.request"],
+    "exec approval request handler",
+  );
+  return waitForApprovalRequested(opts.context, "exec.approval.requested", () =>
+    fixture.track(Promise.resolve(handler(opts))),
+  );
+}
+
+async function pendingRecord(fixture: ApprovalFixture) {
+  const records = await fixture.manager.listPendingRecords();
+  expect(records).toHaveLength(1);
+  return expectDefined(records[0], "registered approval");
 }
 
 describe("exec approval signed agent runtime", () => {
@@ -215,21 +234,9 @@ describe("exec approval signed agent runtime", () => {
           }
           const options = requestOptions(runtimeIdentity, () => check(runtimeIdentity));
           Object.assign(options.params, { timeoutMs: 60_000 });
-          const handler = createExecApprovalHandlers(fixture.manager)["exec.approval.request"];
-          if (!handler) {
-            throw new Error("exec approval request handler is missing");
-          }
-          const { pending } = await waitForApprovalRequested(
-            options.context,
-            "exec.approval.requested",
-            () => fixture.track(Promise.resolve(handler(options))),
-          );
-          const records = await fixture.manager.listPendingRecords();
-          expect(records).toHaveLength(1);
-          const record = records[0];
-          if (!record) {
-            throw new Error("registered worker approval is missing");
-          }
+
+          const { pending } = await requestApproval(fixture, options);
+          const record = await pendingRecord(fixture);
           if (revoked) {
             await placements.releaseTurn(claim);
           }
@@ -301,7 +308,6 @@ describe("exec approval signed agent runtime", () => {
         });
         const { manager } = fixture;
         await fixture.run(async () => {
-          const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
           const opts = requestOptions({ ...identity(false), sessionKey: child });
           const approvalId = "approval-prepared-lineage";
           Object.assign(opts.params, {
@@ -310,7 +316,9 @@ describe("exec approval signed agent runtime", () => {
             requireDeliveryRoute: false,
             suppressDelivery: true,
           });
-          const pending = fixture.track(Promise.resolve(handler(opts)));
+          const pending = fixture.track(
+            Promise.resolve(createExecApprovalHandlers(manager)["exec.approval.request"]!(opts)),
+          );
           try {
             const approval = await Promise.race([
               registered.promise,
@@ -337,10 +345,9 @@ describe("exec approval signed agent runtime", () => {
     });
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false), () => false);
 
-      await handler(opts);
+      await createExecApprovalHandlers(manager)["exec.approval.request"]!(opts);
 
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
@@ -355,10 +362,6 @@ describe("exec approval signed agent runtime", () => {
     });
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
-      if (!handler) {
-        throw new Error("exec approval request handler is missing");
-      }
       const runtimeIdentity = identity(false);
       const options = requestOptions(runtimeIdentity);
       const command = ["/usr/bin/echo", "ok"];
@@ -382,15 +385,8 @@ describe("exec approval signed agent runtime", () => {
           },
         },
       });
-      const { pending } = await waitForApprovalRequested(
-        options.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(options))),
-      );
-      const record = (await manager.listPendingRecords())[0];
-      if (!record) {
-        throw new Error("registered node approval is missing");
-      }
+      const { pending } = await requestApproval(fixture, options);
+      const record = await pendingRecord(fixture);
       await manager.resolve(record.id, "allow-once");
       await pending;
 
@@ -432,26 +428,20 @@ describe("exec approval signed agent runtime", () => {
     });
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false));
       // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
-      (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
-      (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
+      Object.assign(opts.params, { cwd: "/tmp/safe‮evil", resolvedPath: "/usr/bin/echo​x" });
       // Free-form policy strings must not reach reviewer meta rows: security/ask
       // are closed enums (arbitrary values null out), host is escape-hardened.
-      (opts.params as Record<string, unknown>).security = "full‮looks-deny";
-      (opts.params as Record<string, unknown>).ask = "always​ish";
-      const { pending } = await waitForApprovalRequested(
-        opts.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(opts))),
-      );
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      const record = (await manager.listPendingRecords())[0]!;
-      expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
-      expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
-      expect(record.request.security).toBeNull();
-      expect(record.request.ask).toBeNull();
+      Object.assign(opts.params, { security: "full‮looks-deny", ask: "always​ish" });
+      const { pending } = await requestApproval(fixture, opts);
+      const record = await pendingRecord(fixture);
+      expect(record.request).toMatchObject({
+        cwd: "/tmp/safe\\u{202E}evil",
+        resolvedPath: "/usr/bin/echo\\u{200B}x",
+        security: null,
+        ask: null,
+      });
       await manager.resolve(record.id, "deny");
       await pending;
     });
@@ -464,15 +454,9 @@ describe("exec approval signed agent runtime", () => {
     });
     const { manager } = fixture;
     await fixture.run(async () => {
-      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const opts = requestOptions(identity(false), () => active);
-      const { pending } = await waitForApprovalRequested(
-        opts.context,
-        "exec.approval.requested",
-        () => fixture.track(Promise.resolve(handler(opts))),
-      );
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      const record = (await manager.listPendingRecords())[0]!;
+      const { pending } = await requestApproval(fixture, opts);
+      const record = await pendingRecord(fixture);
       active = false;
 
       await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
@@ -493,17 +477,9 @@ describe("exec approval signed agent runtime", () => {
       });
       const { manager, databaseOptions: options } = fixture;
       await fixture.run(async () => {
-        const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
-        if (!handler) {
-          throw new Error("exec approval request handler is unavailable");
-        }
         const opts = requestOptions(identity(enabled));
 
-        const { pending } = await waitForApprovalRequested(
-          opts.context,
-          "exec.approval.requested",
-          () => fixture.track(Promise.resolve(handler(opts))),
-        );
+        const { pending } = await requestApproval(fixture, opts);
         expect(opts.context.broadcast).toHaveBeenCalled();
         const approvalId = String(
           (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)

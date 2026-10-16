@@ -16,25 +16,24 @@ import {
 } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./types.js";
 
+function profile(profileId: string, displayName: string, updatedAt = 1) {
+  return { profileId, displayName, hasAvatar: false, updatedAt };
+}
+
 describe("gateway client identity", () => {
   it("sender provenance comes only from a live verified profile", () => {
-    const profile = {
-      profileId: "profile-id",
-      displayName: "Person",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    const person = profile("profile-id", "Person");
     expect(
       gatewayClientSenderFields({ authenticatedUserId: "profile-id" } as GatewayClient),
     ).toEqual({ sender: { id: "profile-id" } });
     expect(
-      gatewayClientSenderFields({ authenticatedUserProfile: profile } as GatewayClient),
+      gatewayClientSenderFields({ authenticatedUserProfile: person } as GatewayClient),
     ).toEqual({
       sender: { id: "profile-id", name: "Person", identity: { type: "profile", id: "profile-id" } },
     });
     expect(
       gatewayClientSenderFields({
-        authenticatedUserProfile: profile,
+        authenticatedUserProfile: person,
         internal: { syntheticClient: true },
       } as GatewayClient).sender,
     ).not.toHaveProperty("identity");
@@ -42,12 +41,7 @@ describe("gateway client identity", () => {
 
   it("overrides sender attribution without replacing the authorizing identity", () => {
     const client = {
-      authenticatedUserProfile: {
-        profileId: "owner",
-        displayName: "Owner",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: profile("owner", "Owner"),
       internal: {
         syntheticClient: true,
         senderAttribution: {
@@ -98,12 +92,7 @@ describe("chat send command authority", () => {
   function createClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
     return {
       authenticatedUserId: "ada@example.test",
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: profile("profile-ada", "Ada"),
       connect: {
         minProtocol: 1,
         maxProtocol: 1,
@@ -208,8 +197,8 @@ describe("chat send command authority", () => {
     },
   );
 
-  it.each([false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
-    const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
+  it("preserves shipped CLI allowlists without a profile", () => {
+    const client = createClient({ authenticatedUserProfile: undefined });
     client.connect.client = {
       id: "cli",
       version: "test",
@@ -229,38 +218,23 @@ describe("chat send command authority", () => {
     });
   });
 
-  it.each([
-    {
-      name: "invalidation",
-      retire: (client: GatewayClient, _lifetime: AbortController) => {
+  it.each(["invalidation", "closure", "profile replacement"])(
+    "rechecks retained context after %s",
+    (change) => {
+      const lifetime = new AbortController();
+      const client = createClient({ connectionSignal: lifetime.signal });
+      const context = resolveChatSendCallerContext(client);
+      expect(authorize(context).isAuthorizedSender).toBe(true);
+      if (change === "invalidation") {
         client.invalidated = true;
-      },
-    },
-    {
-      name: "closure",
-      retire: (_client: GatewayClient, lifetime: AbortController) => {
+      } else if (change === "closure") {
         lifetime.abort();
-      },
+      } else {
+        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
+      }
+      expect(authorize(context)).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
     },
-    {
-      name: "profile replacement",
-      retire: (client: GatewayClient, _lifetime: AbortController) => {
-        client.authenticatedUserProfile = {
-          profileId: "profile-other",
-          displayName: "Other",
-          hasAvatar: false,
-          updatedAt: 2,
-        };
-      },
-    },
-  ])("rechecks retained context after $name", ({ retire }) => {
-    const lifetime = new AbortController();
-    const client = createClient({ connectionSignal: lifetime.signal });
-    const context = resolveChatSendCallerContext(client);
-    expect(authorize(context).isAuthorizedSender).toBe(true);
-    retire(client, lifetime);
-    expect(authorize(context)).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
-  });
+  );
 
   it.each([
     "profile",
