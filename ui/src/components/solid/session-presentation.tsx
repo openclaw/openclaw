@@ -26,7 +26,7 @@ import {
   type SessionRowBadgesParams,
 } from "../session-row-badge-presentation.ts";
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
-import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility.ts";
+import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
 import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
