@@ -3,7 +3,7 @@ import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-tes
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 
 function mockFetch(response: Response) {
@@ -44,7 +44,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("includes raw non-JSON error detail while capping streamed body reads", async () => {
-    const streamed = createStreamingErrorResponse({
+    const streamed = createStreamingResponse({
       status: 503,
       chunkCount: 200,
       chunkSize: 1024,
