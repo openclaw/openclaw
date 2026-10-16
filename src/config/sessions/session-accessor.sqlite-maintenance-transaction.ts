@@ -71,16 +71,12 @@ export function prepareSessionMaintenanceInWorker(
     prepareWorkerAgeFact(database, plan);
     const prepared = runSqliteDeferredTransactionSync(
       database.db,
-      () => {
-        const planPreparation = prepareSessionEntryMaintenanceInDatabase(
+      () =>
+        prepareSessionEntryMaintenanceInDatabase(
           database,
           plan.input,
           () => plan.input.preservation,
-        );
-        return planPreparation.kind === "no-op"
-          ? planPreparation.apply
-          : planPreparation.captureMutation();
-      },
+        ),
       { databaseLabel: database.path, operationLabel: "session.maintenance.plan.read" },
     );
     return {

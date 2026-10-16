@@ -1,6 +1,7 @@
-/** Original-state update captures in user-invoked cleanup. Only the update run ledger attributes a capture. */
+/** Original-state update and standalone Doctor captures in user-invoked cleanup. */
 import fs from "node:fs";
 import path from "node:path";
+import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
@@ -111,6 +112,7 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
     return { artifacts, identities };
   }
   const history = readCompletedUpdateHistory(params.env);
+  const standalone = collectStandaloneDoctorCaptures(params).captures;
   const entries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER)
@@ -148,18 +150,21 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
       const run =
         history.runs.find((candidate) => candidate.runId === entry.name) ??
         getUpdateRun(entry.name, { env: params.env });
-      if (!run) {
+      const doctor = standalone.get(directory);
+      if (!run && !doctor) {
         continue;
       }
-      item.runs = [run.runId];
+      item.runs = [entry.name];
       Object.assign(
         item,
-        classifyCapture(directory, run, history.latestCompletedStartedAt, params.env),
+        doctor
+          ? { outcome: doctor.eligible ? "candidate" : "protected", reason: doctor.reason }
+          : classifyCapture(directory, run!, history.latestCompletedStartedAt, params.env),
       );
       if (item.outcome === "candidate") {
-        item.detail = `update ${run.status}`;
+        item.detail = doctor ? "standalone Doctor capture" : `update ${run!.status}`;
         item.consequence =
-          "Permanently deletes this update's original-state capture and any recovery generations inside it.";
+          "Permanently deletes this original-state capture and any recovery generations inside it.";
         const stat = fs.lstatSync(directory, { bigint: true });
         identities.set(directory, { dev: stat.dev, ino: stat.ino });
       }

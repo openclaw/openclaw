@@ -154,6 +154,11 @@ export function startGitHubPublicationDiscovery(params: {
     }
     const session = { agentId: row.agentId, sessionKey: row.key, sessionId: row.entry.sessionId };
     const key = keyOf(session);
+    if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
+      // Resident absence retires pending facts; explicit demand can still prepare an unknown target.
+      sessions.delete(key);
+      return;
+    }
     const binding = JSON.stringify([
       row.entry.lifecycleRevision,
       row.entry.worktree,

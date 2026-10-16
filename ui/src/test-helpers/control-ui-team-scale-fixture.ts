@@ -11,6 +11,7 @@ import type {
 } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
@@ -177,8 +178,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  const duplicateReads = options.duplicateBootReads
+    ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
+    : undefined;
+  if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
+  }
   pinnedRows[0]!.sharingRole = "admin";
   pinnedRows[0]!.visibility = "shared";
+  if (duplicateReads) {
+    pinnedRows[0]!.worktree = duplicateReads.worktree;
+  }
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
@@ -244,16 +254,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     __openclaw: { id, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
-      ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
-        ? Array.from({ length: 6 }, (_unused, alias) => ({
-            type: "image",
-            artifactId: "artifact_managed_image_team-scale",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(selectedSessionKey)}/team-scale/full?mediaTicket=historical-${alias}`,
-            alt: `Shared artifact ${alias + 1}`,
-            mimeType: "image/png",
-            width: 1,
-            height: 1,
-          }))
+      ...(duplicateReads && index === counts.transcriptMessages - 1
+        ? duplicateReads.attachments
         : []),
       {
         type: "text",
@@ -434,26 +436,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "board.get",
       "canvas.document.view",
       "progressCard.get",
-      ...(options.duplicateBootReads ? ["session.suggestions.list"] : []),
+      ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
       "question.list": { questions: [] },
-      ...(options.duplicateBootReads
-        ? {
-            "session.suggestions.list": { suggestions: [], role: "owner" },
-            "artifacts.download": {
-              artifact: {
-                id: "artifact_managed_image_team-scale",
-                title: "Shared artifact",
-                type: "image",
-                mimeType: "image/png",
-                download: { mode: "bytes" },
-              },
-              encoding: "base64",
-              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-            },
-          }
-        : {}),
+      ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({

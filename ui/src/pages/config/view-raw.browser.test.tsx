@@ -243,30 +243,6 @@ describe("config raw editing and redaction", () => {
     },
   );
 
-  it("forces Form mode and disables Raw mode when raw text is unavailable", () => {
-    const { container, props } = renderConfigView({
-      formMode: "raw",
-      rawAvailable: false,
-      schema: object({
-        gateway: object({
-          mode: { type: "string" },
-        }),
-      }),
-      formValue: { gateway: { mode: "local" } },
-    });
-
-    const formButton = findButtonByText(container, "Form");
-    const rawButton = findButtonByText(container, "Raw");
-    expect(formButton.getAttribute("aria-pressed")).toBe("true");
-    expect(rawButton.getAttribute("aria-pressed")).toBe("false");
-    expect(rawButton.disabled).toBe(true);
-    expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
-    expect(container.querySelector(".config-raw-field")).toBeNull();
-
-    rawButton.click();
-    expect(props.onFormModeChange).not.toHaveBeenCalled();
-  });
-
   it("keeps sensitive raw config hidden until reveal before editing", () => {
     const onRawChange = vi.fn();
     const { container } = renderConfigView({
@@ -504,6 +480,15 @@ describe("config raw editing and redaction", () => {
     expect(props.onFormPatch).not.toHaveBeenCalled();
 
     renderConfigInto({ ...props, rawAvailable: false, formMode: "raw" }, container);
+
+    expect(findButtonByText(container, "Form").getAttribute("aria-pressed")).toBe("true");
+    const rawButton = findButtonByText(container, "Raw");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("false");
+    expect(rawButton.disabled).toBe(true);
+    expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
+    expect(container.querySelector(".config-raw-field")).toBeNull();
+    rawButton.click();
+    expect(props.onFormModeChange).not.toHaveBeenCalled();
 
     const rawUnavailableInput = required(container, ".settings-input", HTMLInputElement);
     expect(rawUnavailableInput.placeholder).toBe(

@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
@@ -31,7 +30,6 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -53,7 +51,9 @@ import { loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import type { ExtensionContext } from "../sessions/extensions/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 const modes = [
@@ -71,24 +71,28 @@ const modes = [
 ] as const;
 type Mode = (typeof modes)[number];
 type Connection = { file: string; database: DatabaseSync; disposals: number };
-type Fixture = {
-  mode: Mode;
-  root: string;
+type Fixture = ReturnType<typeof createFixture> & {
   source?: Connection;
-  registrations: Connection[];
-  tools: Connection[];
-  entered: ReturnType<typeof createDeferredCore<void>>;
-  finish: ReturnType<typeof createDeferredCore<void>>;
-  pending: Promise<unknown>[];
-  eventBus: ReturnType<typeof createEventBus>;
   session?: AgentSession;
   context?: ExtensionContext;
-  disposals: number;
-  envRestored: boolean;
   admittedMetadata?: ReturnType<typeof resolvePluginMetadataSnapshot>;
-  releases: Array<() => Promise<void>>;
-  lateReads: number;
 };
+function createFixture(mode: Mode, root: string) {
+  return {
+    mode,
+    root,
+    registrations: new Array<Connection>(),
+    tools: new Array<Connection>(),
+    entered: createDeferredCore(),
+    finish: createDeferredCore(),
+    pending: new Array<Promise<unknown>>(),
+    eventBus: createEventBus(),
+    disposals: 0,
+    envRestored: false,
+    releases: new Array<() => Promise<void>>(),
+    lateReads: 0,
+  };
+}
 const active = vi.hoisted(() => ({ fixture: undefined as Fixture | undefined }));
 const providerId = "delegate-resource-provider";
 const summary = "The deployment checklist was reviewed. Compare the remaining rollout options.";
@@ -180,6 +184,11 @@ function remember(current: Fixture, pending: Promise<unknown>) {
   return pending;
 }
 
+function closeConnection(connection: Connection) {
+  connection.disposals++;
+  connection.database.close();
+}
+
 async function hold(current: Fixture, readTools = true) {
   current.entered.resolve();
   await current.finish.promise;
@@ -250,14 +259,7 @@ function assistant(model: Model, text: string): AssistantMessage {
     model: model.id,
     stopReason: "stop",
     timestamp: 1,
-    usage: {
-      input: 100,
-      output: 20,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 120,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...createZeroUsageFixture(), input: 100, output: 20, totalTokens: 120 },
   };
 }
 
@@ -340,8 +342,7 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
             dispose: async () => {
               current.finish.resolve();
               if (connection.database.isOpen) {
-                connection.disposals++;
-                connection.database.close();
+                closeConnection(connection);
               }
             },
           }),
@@ -363,8 +364,7 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
               track(() => hold(current, false)),
             );
           }
-          connection.disposals++;
-          connection.database.close();
+          closeConnection(connection);
         },
       };
     },
@@ -387,8 +387,7 @@ vi.mock("../agent-bundle-lsp-runtime.js", async (importOriginal) => ({
       tools: [],
       sessions: [],
       dispose: async () => {
-        connection.disposals++;
-        connection.database.close();
+        closeConnection(connection);
       },
     };
   },
@@ -447,20 +446,7 @@ describe("delegate compaction resource retirement", () => {
       runningCase = (async () => {
         const root = state.path(mode);
         fs.mkdirSync(root);
-        const current: Fixture = {
-          mode,
-          root,
-          registrations: [],
-          tools: [],
-          entered: createDeferredCore(),
-          finish: createDeferredCore(),
-          pending: [],
-          eventBus: createEventBus(),
-          disposals: 0,
-          envRestored: false,
-          releases: [],
-          lateReads: 0,
-        };
+        const current: Fixture = createFixture(mode, root);
         active.fixture = current;
         const controller = new AbortController();
         const cancel = () => {
@@ -471,13 +457,27 @@ describe("delegate compaction resource retirement", () => {
         signal.addEventListener("abort", cancel, { once: true });
         const pluginRoot = path.join(root, "plugin");
         const emptyBundled = path.join(root, "empty-bundled");
-        fs.mkdirSync(pluginRoot);
         fs.mkdirSync(emptyBundled);
-        const plugin = createColdPluginFixture({
-          rootDir: pluginRoot,
-          pluginId: providerId,
+        const { plugin, model, config } = createCompactionResourceProvider({
+          pluginRoot,
           providerId,
-          manifest: { channels: [], channelConfigs: {}, providerAuthChoices: [] },
+          workspaceDir: state.workspaceDir,
+          contextWindow: 128_000,
+          modelEndpoint: true,
+          compaction: {
+            mode: "default",
+            keepRecentTokens: 1,
+            postIndexSync: "off",
+            timeoutSeconds: 180,
+          },
+        });
+        Object.assign(config, {
+          session: { store: state.path("transcripts", "openclaw-agent.sqlite") },
+        });
+        Object.assign(config.agents, { ownership: "explicit", entries: { main: {} } });
+        Object.assign(config.models.providers[providerId]!, { agentRuntime: { id: "openclaw" } });
+        Object.assign(config.plugins.entries[providerId]!, {
+          hooks: { allowConversationAccess: true },
         });
         const key = `__delegate_resources_${path.basename(state.root)}`;
         const bridge = {
@@ -518,54 +518,6 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
 } };
 `,
         );
-        const configuredModel = {
-          id: "model",
-          name: "Fixture model",
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 1_024,
-        } satisfies ModelDefinitionConfig;
-        const model = { ...configuredModel, provider: providerId };
-        const config: OpenClawConfig = {
-          session: { store: state.path("transcripts", "openclaw-agent.sqlite") },
-          agents: {
-            ownership: "explicit",
-            entries: { main: {} },
-            defaults: {
-              workspace: state.workspaceDir,
-              model: { primary: `${providerId}/model` },
-              compaction: {
-                mode: "default",
-                keepRecentTokens: 1,
-                postIndexSync: "off",
-                timeoutSeconds: 180,
-              },
-            },
-          },
-          models: {
-            providers: {
-              [providerId]: {
-                api: "openai-completions",
-                apiKey: "fixture-key",
-                baseUrl: model.baseUrl,
-                agentRuntime: { id: "openclaw" },
-                models: [configuredModel],
-              },
-            },
-          },
-          plugins: {
-            allow: [providerId],
-            load: { paths: [pluginRoot] },
-            slots: { memory: "none" },
-            entries: {
-              [providerId]: { enabled: true, hooks: { allowConversationAccess: true } },
-            },
-          },
-        };
         const validation = validateConfigObjectRaw(config);
         expect(
           validation.ok,
@@ -589,19 +541,18 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
           manager.appendMessage({ role: "user", content: text, timestamp: 1 });
           manager.appendMessage(assistant(model, `Recorded: ${text}`));
         }
-        const toolCall = {
+        manager.appendMessage({
           ...assistant(model, ""),
           content: [
             {
-              type: "toolCall" as const,
+              type: "toolCall",
               id: "completed-tool",
               name: "exec",
               arguments: { command: "echo done" },
             },
           ],
-          stopReason: "toolUse" as const,
-        };
-        manager.appendMessage(toolCall);
+          stopReason: "toolUse",
+        });
         manager.appendMessage({
           role: "toolResult",
           toolCallId: "completed-tool",
@@ -651,16 +602,20 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
             let replacementCache: ReturnType<typeof createPluginCache> | undefined;
             try {
               if (mode.startsWith("reload")) {
-                const publication = { gatewayLifecycle: true, catalogMode: "static" as const };
-                const previousCache = createPluginCache();
-                const previousMetadata = withPluginCache(previousCache, () =>
-                  resolvePluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir }),
-                );
-                setGatewayPluginMetadataSnapshot(previousMetadata, {
-                  config,
-                  workspaceDir: state.workspaceDir,
-                });
-                await refreshPreparedModelRuntimeSnapshots(config, publication);
+                const publish = async (publishedConfig: OpenClawConfig) => {
+                  const context = { config: publishedConfig, workspaceDir: state.workspaceDir };
+                  const cache = createPluginCache();
+                  const metadata = withPluginCache(cache, () =>
+                    resolvePluginMetadataSnapshot(context),
+                  );
+                  setGatewayPluginMetadataSnapshot(metadata, context);
+                  await refreshPreparedModelRuntimeSnapshots(publishedConfig, {
+                    gatewayLifecycle: true,
+                    catalogMode: "static",
+                  });
+                  return { cache, metadata };
+                };
+                const { cache: previousCache, metadata: previousMetadata } = await publish(config);
                 previousLease = await acquireAgentRunPreparedModelRuntime({
                   config,
                   agentId: "main",
@@ -671,22 +626,10 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   previousLease.snapshot,
                   () => new ContextEngineFactoryResources([]),
                 );
-                const replacementConfig = {
+                ({ cache: replacementCache, metadata: replacementMetadata } = await publish({
                   ...config,
                   messages: { responsePrefix: "replacement" },
-                };
-                replacementCache = createPluginCache();
-                replacementMetadata = withPluginCache(replacementCache, () =>
-                  resolvePluginMetadataSnapshot({
-                    config: replacementConfig,
-                    workspaceDir: state.workspaceDir,
-                  }),
-                );
-                setGatewayPluginMetadataSnapshot(replacementMetadata, {
-                  config: replacementConfig,
-                  workspaceDir: state.workspaceDir,
-                });
-                await refreshPreparedModelRuntimeSnapshots(replacementConfig, publication);
+                }));
                 retirement = retirePluginCache(previousCache);
                 expect(() => retainPluginCache(previousCache)).toThrow(
                   "Plugin inventory has retired",

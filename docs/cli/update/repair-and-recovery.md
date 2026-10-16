@@ -159,10 +159,12 @@ so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
 succeeds, later starts of the same container skip the repeated full copy, keep
 that copy, and still retire other expired Doctor captures.
-Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
-retires older sealed Doctor captures and reports each removal; incomplete captures
-and update captures are never retired automatically, so take a verified backup
-when you need a long-term copy. Review and retire superseded update captures with
+Standalone Doctor keeps the newest three sealed captures and expires captures older
+than 30 days, always preserving the newest sealed capture. Each successful standalone
+`doctor --fix` capture retires older eligible copies and reports each removal.
+Incomplete captures, active recovery references, and real update captures stay protected;
+unreadable role or recovery records also prevent retirement. Take a verified backup
+when you need a long-term copy. Review and retire superseded captures with
 [`openclaw update cleanup`](#update-cleanup).
 
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
@@ -942,8 +944,8 @@ Original-state update captures in `<state-directory>.update-captures/` are liste
 as well, including captures retained beside the previous default state directory
 after migration. Each capture directory reports its logical bytes. The text
 summary adds an `Update captures:` line with their total, candidate, and protected
-bytes. Cleanup attributes a capture only through its run id in update history and
-never reads the captured payload:
+bytes. Cleanup attributes update captures through update history and standalone Doctor
+captures through their sealed manifests; it never reads the captured payload:
 
 - `candidate` / `superseded-update-capture`: a sealed capture from a finished
   update, when a later update succeeded.
@@ -957,10 +959,20 @@ never reads the captured payload:
 - `protected` / `unresolved-failed-update`: a sealed capture from a failed update
   that is neither restored nor repaired forward. It remains that update's manual
   recovery source.
-- `protected` / `unmanifested-update-capture`: a directory without the capture
-  marker or without a matching update run, such as a standalone Doctor capture,
-  and any other file in the capture directory. `unreadable-update-history` also
+- `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
+  capture outside the newest three or older than 30 days. The newest sealed copy
+  is always retained.
+- `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
+  retention rule. Active recovery references remain `pending-update-recovery`.
+- `protected` / `unmanifested-update-capture`: an incomplete or unreadable Doctor
+  capture, a directory without the capture marker or without a matching update run
+  or standalone manifest, and any other file in the capture directory. `unreadable-update-history` also
   keeps every capture protected.
+
+Older `doctor-*` directories classified as `candidate` are also safe to delete by
+hand while OpenClaw is stopped. Keep the newest retained copies and never manually
+delete incomplete, unreadable, or active-recovery-referenced captures. Prefer cleanup
+so the same protection checks run again under exclusive ownership.
 
 Retiring a capture deletes its whole directory, including any `candidate` and
 `prepared` recovery generations inside it, under the same exclusive ownership as

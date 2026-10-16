@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
   persistSessionTranscriptTurn,

@@ -499,7 +499,12 @@ export function useMenuMachine(
           if (!focusFromKeyboard) {
             overlay.trigger?.focus({ preventScroll: true });
           }
-          result.onClick?.(event);
+          if (parentBinding && !event.defaultPrevented) {
+            // Zag ignores TRIGGER_CLICK while its submenu hover delay is pending.
+            api.setOpen(true);
+          } else {
+            result.onClick?.(event);
+          }
         },
         onKeyDown: (e: KeyboardEvent) => {
           if (disabled || e.key === "Escape") {

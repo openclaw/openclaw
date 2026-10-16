@@ -391,6 +391,19 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const pendingMerge = await runPublicationCommand(
+    ["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+    { cwd: params.cwd, beforeRun: params.assertCurrent },
+  );
+  params.assertCurrent?.();
+  if (pendingMerge.code === 0) {
+    throw new Error(
+      "Workspace base integration is pending. Use github_publish refresh_base, resolve its reported conflicts, then repeat refresh_base with conflictsResolved and the returned baseCommit before tests, Auto Review, and publication.",
+    );
+  }
+  if (pendingMerge.code !== 1) {
+    throw new Error("Workspace base integration state could not be verified; retry refresh_base.");
+  }
   const context = captureOpenClawStateWorkerContext();
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
@@ -431,7 +444,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   });
 }
 
-async function captureSettledGitHubPublicationWorkspaceSnapshot(
+export async function captureSettledGitHubPublicationWorkspaceSnapshot(
   params: {
     cwd: string;
     assertCurrent?: () => void;

@@ -6,7 +6,6 @@ import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-co
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
-import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
@@ -878,7 +877,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           command.onExecutionStarted?.();
           resumed.resolve();
           await resumedRelease.promise;
-          const rawEvidence: AgentDeliveryEvidence =
+          const rawEvidence =
             reply === "visible final"
               ? finalResult()
               : {

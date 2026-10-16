@@ -131,6 +131,72 @@ afterEach(() => {
 });
 
 describe("board MCP App cell lifecycle", () => {
+  it("admits one action per tick and restores controls after it fails", async () => {
+    const removal = deferred();
+    const remove = vi.fn(() => removal.promise);
+    const cell = await mount(
+      { remove },
+      { widget: widget({ contentKind: "html", grantState: "pending" }) },
+    );
+
+    cell.selectMenuItem("remove");
+    cell.selectMenuItem("remove");
+    expect(remove).toHaveBeenCalledOnce();
+    await settle(cell);
+
+    const allow = cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
+    expect(allow.disabled).toBe(true);
+    removal.reject(new Error("Removal failed"));
+    await settle(cell);
+
+    expect(cell.querySelector('[data-test-id="board-widget-action-error"]')?.textContent).toContain(
+      "Removal failed",
+    );
+    expect(allow.disabled).toBe(false);
+  });
+
+  it("keeps failed frame retries visible and clears their presentation on recovery", async () => {
+    const cell = await mount({}, { widget: widget({ contentKind: "html" }) });
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).not.toBeNull();
+    expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+
+    await update(cell, {
+      widgetFrameUrl: () => {
+        throw new Error("Frame unavailable");
+      },
+    });
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
+      "Frame unavailable",
+    );
+    expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+
+    await update(cell, { widgetFrameUrl: () => "/recovered-frame" });
+    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+    expect(cell.querySelector(".board-widget__body--scrollable")).toBeNull();
+    expect(cell.querySelector("iframe")?.getAttribute("src")).toBe("/recovered-frame");
+  });
+
+  it("refreshes an in-place HTML widget when its board revision changes", async () => {
+    const current = widget({ contentKind: "html" });
+    const cell = await mount(
+      {},
+      {
+        widget: current,
+        widgetFrameUrl: (name, revision) => `/widget/${name}/${revision}`,
+      },
+    );
+    const frame = cell.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toBe("/widget/alpha/1");
+
+    current.revision = 2;
+    current.title = "Updated HTML widget";
+    await update(cell, { boardRevision: 1 });
+
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(frame.getAttribute("src")).toBe("/widget/alpha/2");
+    expect(frame.title).toBe("Updated HTML widget");
+  });
+
   it("waits to materialize an inactive cell until its board becomes active", async () => {
     const visibility = stubVisibility(() => true);
     const widgetAppView = vi.fn(async () => readyAppView("activated-view"));

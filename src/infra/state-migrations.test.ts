@@ -2390,49 +2390,6 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
-  it.each([
-    {
-      relativePath: "delivery-queue/failed/failed.json",
-      contents: { id: "retired", payloads: [{ text: "preserve this message" }] },
-    },
-    {
-      relativePath: "restart-sentinel.json.doctor-importing",
-      contents: {
-        version: 1,
-        payload: { kind: "update", status: "ok", ts: 123, message: "Update completed" },
-      },
-    },
-    {
-      relativePath: "plugin-binding-approvals.json",
-      contents: {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: "/synthetic/plugin",
-            pluginId: "fixture",
-            channel: "telegram",
-            accountId: "default",
-            approvedAt: 123,
-          },
-        ],
-      },
-    },
-  ])("refuses retired state files before any state writes: $relativePath", async (fixture) => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const sourcePath = path.join(stateDir, fixture.relativePath);
-    const original = `${JSON.stringify(fixture.contents, null, 2)}\n`;
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, original);
-    const params = { cfg: createConfig(), env, homedir: () => root };
-
-    for (const migrate of [detectLegacyStateMigrations, autoMigrateLegacyState]) {
-      await expect(migrate(params)).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
-      await expectMissingPath(`${sourcePath}.migrated`);
-      await expectMissingPath(resolveOpenClawStateSqlitePath(env));
-    }
-  });
-
   it("ignores a leftover update-check cache instead of refusing", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const sourcePath = path.join(stateDir, "update-check.json");
@@ -2611,7 +2568,7 @@ describe("state migrations", () => {
       config: cfg,
       env,
       onStepReceipt: (receipt) => {
-        if (receipt.id === "plugin-install-index") {
+        if (receipt.id === "retired-core-state") {
           openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
         }
       },

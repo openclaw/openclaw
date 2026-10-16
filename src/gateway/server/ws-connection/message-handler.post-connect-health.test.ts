@@ -44,6 +44,7 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import * as wsLog from "../../ws-log.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -155,8 +156,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
+// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
 vi.mock("../../github-user-identity.js", () => ({
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -243,6 +246,27 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
       },
     );
+  });
+
+  it("attributes ephemeral backend connections in the normal journal", async () => {
+    const mode = "backend";
+    const harness = attachGatewayHarness({
+      connId: `conn-${mode}`,
+      connectNonce: `nonce-${mode}`,
+    });
+    harness.sendConnect("connect", {
+      ...BACKEND_CONNECT_PARAMS,
+      client: { ...BACKEND_CONNECT_PARAMS.client, mode, displayName: "synthetic-poller" },
+    });
+    await harness.runWhenIdle();
+    expect(harness.frames).toContainEqual(expect.objectContaining({ id: "connect", ok: true }));
+    const connections = harness.logWsControl.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith("client connected "));
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toContain(`conn=conn-${mode}`);
+    expect(connections[0]).toContain("client=gateway-client name=synthetic-poller");
+    expect(connections[0]).toContain(`mode=${mode} role=operator`);
   });
 
   it("prewarms cold session history for an admitted operator without delaying hello", async () => {
@@ -667,17 +691,36 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("closes malformed JSON explicitly on an authenticated connection", async () => {
     const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const websocketLog = vi.spyOn(wsLog, "logWs");
+    onTestFinished(() => websocketLog.mockRestore());
     const harness = attachGatewayHarness({
       connId: "conn-malformed-json",
       connectNonce: "nonce-malformed-json",
       close,
+      setCloseCause,
     });
     harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
     await harness.runWhenIdle();
-    harness.sendMessage("{");
+    websocketLog.mockClear();
+    harness.logGateway.error.mockClear();
+    const marker = "PRIVATE_JSON_FRAME";
+    harness.sendMessage(marker);
     await harness.runWhenIdle();
     expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
-    expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
+    expect(harness.logGateway.error).toHaveBeenCalledWith("parse error: invalid JSON");
+    expect(setCloseCause).toHaveBeenCalledWith("parse-error", { error: "invalid JSON" });
+    expect(websocketLog).toHaveBeenCalledWith("out", "parse-error", {
+      connId: "conn-malformed-json",
+      error: "invalid JSON",
+    });
+    expect(
+      JSON.stringify([
+        harness.logGateway.error.mock.calls,
+        websocketLog.mock.calls,
+        setCloseCause.mock.calls,
+      ]),
+    ).not.toContain(marker);
   });
 
   it.each(["bytes", "count"] as const)(
@@ -987,9 +1030,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
       );
 
-      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
-        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
-      );
+      const connections = first.harness.logWsControl.info.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes(" connected "));
+      expect(connections).toHaveLength(1);
+      expect(connections[0]).toContain("client connected conn=conn-trusted-proxy-user-first");
+      expect(connections[0]).toContain("user=alice@example.com");
     });
   });
 

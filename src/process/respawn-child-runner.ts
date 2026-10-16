@@ -26,7 +26,7 @@ export function runRespawnChildWithSignalBridge(params: {
   const detachForProcessTree =
     params.detachForProcessTree === true && process.platform !== "win32" && !stdioIsTerminal;
   const child = runtime.spawn(command, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
     detached: detachForProcessTree,
     windowsHide: !stdioIsTerminal,

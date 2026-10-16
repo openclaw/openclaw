@@ -61,6 +61,7 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
+  sharedWriteReserved?: boolean;
   storePath: string;
   // Callback preparation precedes BEGIN; fixed operations evaluate the transaction's current rows.
   update: SessionEntryUpdater | SessionEntryPatchOperation;

@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
@@ -13,7 +14,16 @@ import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
 const disposers: Array<() => void> = [];
 function mountFrame(lifecycle: BoardWidgetFrameOwner, widget: BoardWidget, root: HTMLElement) {
   const [revision, setRevision] = createSignal(0);
-  disposers.push(mountSolid(() => lifecycle.render(widget, revision), { container: root }).unmount);
+  disposers.push(
+    mountSolid(
+      () =>
+        lifecycle.render(() => {
+          revision();
+          return widget;
+        }),
+      { container: root },
+    ).unmount,
+  );
   flush();
   return () => {
     setRevision((value) => value + 1);
@@ -32,7 +42,6 @@ function createTicketRefreshLifecycle(
     refreshFrame: () => refreshFrame,
     reportContentHeight: () => {},
     scrollBy: () => {},
-    requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
 
     widget: () => widget,
@@ -75,7 +84,6 @@ function terminalFailureError(params: {
     refreshFrame: () => async () => {},
     reportContentHeight: () => {},
     scrollBy: () => {},
-    requestUpdate: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
     widget: () => widget,
   });
@@ -143,7 +151,6 @@ describe("board widget frame scroll handoff", () => {
         refreshFrame: () => undefined,
         reportContentHeight: () => {},
         scrollBy,
-        requestUpdate: () => {},
         resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard?bt=ticket",
         widget: () => widget,
       });
@@ -210,7 +217,6 @@ describe("board widget frame scroll handoff", () => {
       refreshFrame: () => undefined,
       reportContentHeight: () => {},
       scrollBy,
-      requestUpdate: () => {},
       resolveFrameUrl: () => () => "",
       widget: () => widget,
     });
@@ -287,9 +293,7 @@ describe("board widget frame message confirmation", () => {
     const context = gatewayContext({ request });
     const root = document.createElement("div");
     document.body.append(root);
-    let confirmationRendered: ReturnType<typeof createDeferred<void>> | undefined;
     let active = true;
-    let updateView = () => {};
     const lifecycle = new BoardWidgetFrameOwner({
       active: () => active,
       connected: () => root.isConnected,
@@ -297,17 +301,11 @@ describe("board widget frame message confirmation", () => {
       refreshFrame: () => undefined,
       reportContentHeight: () => {},
       scrollBy: () => {},
-      requestUpdate: () => {
-        updateView();
-        if (root.querySelector('[role="alertdialog"]')) {
-          confirmationRendered?.resolve();
-        }
-      },
       resolveFrameUrl: () => () => "/__openclaw__/board/confirm-parts?bt=ticket",
       widget: () => widget,
     });
     lifecycle.connect();
-    updateView = mountFrame(lifecycle, widget, root);
+    mountFrame(lifecycle, widget, root);
     lifecycle.update();
     const frame = root.querySelector<HTMLIFrameElement>("iframe")!;
     frame.checkVisibility = () => true;
@@ -368,9 +366,11 @@ describe("board widget frame message confirmation", () => {
       notify({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
       await initialized.promise;
       frame.focus();
-      confirmationRendered = createDeferred();
       const cancelled = send("cancelled", "Compare these parts");
-      await Promise.race([confirmationRendered.promise, cancelled]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        cancelled,
+      ]);
       const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
       expect(dialog).not.toBeNull();
       expect(dialog!.textContent).toContain("Parts dashboard");
@@ -385,9 +385,11 @@ describe("board widget frame message confirmation", () => {
       expect(root.querySelector('[role="alertdialog"]')).toBeNull();
       expect(document.activeElement).toBe(frame);
 
-      confirmationRendered = createDeferred();
       const accepted = send("accepted", "Order the selected parts");
-      await Promise.race([confirmationRendered.promise, accepted]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        accepted,
+      ]);
       [...root.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
         .find((button) => button.textContent?.trim() === "Send")!
         .click();
@@ -397,9 +399,11 @@ describe("board widget frame message confirmation", () => {
       expect(nativeConfirm).not.toHaveBeenCalled();
       expect(root.querySelector('[role="alertdialog"]')).toBeNull();
 
-      confirmationRendered = createDeferred();
       const suspended = send("suspended", "This request loses its active widget");
-      await Promise.race([confirmationRendered.promise, suspended]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        suspended,
+      ]);
       const staleSend = [
         ...root.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'),
       ].find((button) => button.textContent?.trim() === "Send")!;
@@ -441,7 +445,6 @@ describe("board widget frame ticket refresh", () => {
       refreshFrame: () => refreshFrame,
       reportContentHeight: () => {},
       scrollBy: () => {},
-      requestUpdate: () => {},
       resolveFrameUrl: () => () => "/widget?bt=ticket",
       widget: () => widget,
     });

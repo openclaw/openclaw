@@ -81,8 +81,6 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
-export { shouldIgnoreBoundThreadWebhookMessage } from "./message-handler.preflight-helpers.js";
-
 const DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;

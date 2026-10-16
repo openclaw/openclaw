@@ -13,7 +13,6 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
@@ -239,7 +238,6 @@ describe("agent RPC real delegated-authority effects", () => {
             cfg: f.context.getRuntimeConfig(),
             request: { message: params.message, idempotencyKey: f.runId },
             runId: f.runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             agentDedupeKeys: [`agent:${f.runId}`],
             suppressVisibleSessionEffects: false,
             context: f.context,
@@ -453,7 +451,6 @@ describe("agent RPC real delegated-authority effects", () => {
             cfg: f.context.getRuntimeConfig(),
             request: { message: "/reset", idempotencyKey: f.runId },
             runId: f.runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             agentDedupeKeys: [`agent:${f.runId}`],
             suppressVisibleSessionEffects: false,
             context: f.context,
@@ -667,7 +664,6 @@ describe("agent RPC real delegated-authority effects", () => {
         cfg: f.context.getRuntimeConfig(),
         request: { message: "work", idempotencyKey: f.runId },
         runId: f.runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         agentDedupeKeys: keys,
         suppressVisibleSessionEffects: false,
         context: f.context,
@@ -677,7 +673,6 @@ describe("agent RPC real delegated-authority effects", () => {
       let admissionEntry: SessionEntry | undefined = { sessionId: f.sessionId, updatedAt: 1 };
       const admission = createAgentAdmissionController({
         runId: f.runId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
         agentDedupeKeys: keys,
         context: f.context,
         io,
@@ -706,7 +701,6 @@ describe("agent RPC real delegated-authority effects", () => {
             cfg: f.context.getRuntimeConfig(),
             request: { message: "other", idempotencyKey: runId },
             runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             agentDedupeKeys: ["agent:" + runId, alias],
             suppressVisibleSessionEffects: false,
             context: f.context,

@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
+import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
 import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
-import { ensureMemoryChunkFtsSchema, ensureMemoryPathFtsSchema } from "./sqlite-search-schema.js";
+import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -30,8 +31,7 @@ it("admits optional memory indexes but omits their rebuildable rows", async () =
   const descriptor = await loadAgentPortDescriptor();
   using db = openNodeSqliteDatabase(":memory:");
   db.exec(descriptor.sqlite);
-  ensureMemoryChunkFtsSchema({ db, ftsTable: "memory_index_chunks_fts", tokenizeClause: "" });
-  ensureMemoryPathFtsSchema({ db, tokenizeClause: "" });
+  admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
   const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
   expect(inspected.tables).not.toHaveProperty("memory_index_chunks_fts");
   expect(inspected.tables).not.toHaveProperty("memory_index_sources");

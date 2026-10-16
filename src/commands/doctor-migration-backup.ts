@@ -37,13 +37,14 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db-contract.js";
-import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import { isStatePostgres, stateEngineInput } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -86,16 +87,30 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  if (isStatePostgres()) {
+  const postgresPaths = new Map(
+    [
+      ...new Set([...pending, ...params.databasePaths, ...(isStatePostgres() ? [sharedPath] : [])]),
+    ].flatMap((pathname) => {
+      const input = pathname === sharedPath ? stateEngineInput() : agentEngineInput();
+      return input ? [[pathname, input] as const] : [];
+    }),
+  );
+  if (postgresPaths.size > 0) {
     const { backupDoctorPostgresMigration } = await import("./doctor-postgres-migration.js");
-    const changes = await backupDoctorPostgresMigration(params.env, maintenance);
-    const nativePaths = [...pending].filter((pathname) => pathname !== sharedPath);
+    const changes: string[] = [];
+    for (const [pathname, input] of postgresPaths) {
+      changes.push(...(await backupDoctorPostgresMigration(pathname, input, maintenance)));
+    }
+    const nativePaths = [...pending].filter((pathname) => !postgresPaths.has(pathname));
+    if (!postgresPaths.has(sharedPath) && existsSync(sharedPath)) {
+      nativePaths.push(sharedPath);
+    }
     const native = await backupDoctorSqliteDatabases({
       ...params,
       pendingDatabasePaths: nativePaths,
-      databasePaths: params.databasePaths.filter((pathname) => pathname !== sharedPath),
+      databasePaths: params.databasePaths.filter((pathname) => !postgresPaths.has(pathname)),
       authority: { assertCurrent: () => maintenance.assertAdmission() },
-      stateFamilyBackedUp: true,
+      stateFamilyBackedUp: postgresPaths.has(sharedPath) ? true : undefined,
     });
     return {
       ...native,

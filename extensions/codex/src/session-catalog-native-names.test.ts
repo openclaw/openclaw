@@ -2,7 +2,7 @@ import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,

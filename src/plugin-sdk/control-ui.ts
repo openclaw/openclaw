@@ -310,3 +310,11 @@ export type ControlUiPlugin = {
 export function defineControlUiPlugin(plugin: ControlUiPlugin): ControlUiPlugin {
   return plugin;
 }
+export type { DoctorMemoryStatusPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
+export type {
+  ControlUiSettingsPlacement,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsComponents,
+  ControlUiSettingsContext,
+  ControlUiSettingsView,
+} from "./control-ui-settings.js";

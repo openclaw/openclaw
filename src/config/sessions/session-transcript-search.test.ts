@@ -335,21 +335,6 @@ describe("searchSessionTranscripts", () => {
     expect(search("deploy \u{1F99E}").hits.map((hit) => hit.sessionId)).toEqual(["lobster"]);
   });
 
-  it("filters hits across 33,000 requested session keys", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
-    await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");
-
-    const all = search("keyword");
-    expect(all.hits).toHaveLength(2);
-
-    const sessionKeys = Array.from({ length: 32_999 }, (_, index) => `agent:main:missing-${index}`);
-    sessionKeys.push("agent:main:other");
-    const filtered = search("keyword", { sessionKeys });
-    expect(filtered.hits).toHaveLength(1);
-    expect(filtered.hits[0]?.sessionKey).toBe("agent:main:other");
-    expect(filtered.hits[0]?.sessionId).toBe("session-2");
-  });
-
   it("scopes content reads and bounds snippets while preserving ranked and recent results", async () => {
     const sessionKeys: [string, string] = ["agent:main:permitted", "agent:main:dirty"];
     for (const [id, key] of [

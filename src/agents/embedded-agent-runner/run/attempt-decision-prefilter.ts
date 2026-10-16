@@ -133,6 +133,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     {
       agentId: params.agentId,
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: params.signal,

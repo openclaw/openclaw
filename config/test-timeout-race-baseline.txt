@@ -58,7 +58,6 @@ src/gateway/server-methods/models-dispatch.catalog.integration.test.ts	2
 src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts	2
 src/gateway/server-methods/send.scheduled-reads.integration.test.ts	2
 src/gateway/server-reload-channel-restart.test.ts	3
-src/gateway/server-session-events.test.ts	5
 src/gateway/server.approval-forwarding.test.ts	1
 src/gateway/server.chat.canonical-publication.test.ts	2
 src/gateway/server.cli-watchdog.test.ts	4

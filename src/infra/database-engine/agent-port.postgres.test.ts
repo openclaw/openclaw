@@ -7,7 +7,10 @@ import { getEnvironmentData } from "node:worker_threads";
 import { zstdCompressSync } from "node:zlib";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+import {
+  memoryTextSearchSchema,
+  memoryStandingIntentSearchSchema,
+} from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionColdArchivePath } from "../../config/sessions/session-cold-storage-codec.js";
 import { prepareTranscriptPayload } from "../../config/sessions/transcript-payload.js";
@@ -91,6 +94,7 @@ describe.skipIf(!connection)("agent database port", () => {
       INSERT INTO transcript_rewrite_watermarks VALUES ('session', 'generation', 1);
       INSERT INTO context_engine_turn_outbox (enqueue_sequence, advancement_key, engine_id, session_id, payload_json, created_at)
         VALUES (7, 'first', 'engine', 'session', '{}', 9), (9, 'second', 'engine', 'session', '{}', 1);
+      INSERT INTO standing_intents (id, description, trigger_keywords, creator_sender, status, expires_at, max_fires, fire_count, cooldown_seconds, created_at) VALUES ('retained-intent', 'Remember turquoise', '["turquoise"]', 'synthetic-owner', 'armed', 9999999999999, 3, 0, 1, 1);
       INSERT INTO memory_entry_origins VALUES ('retained-memory', 'main', 'session', 'agent:main:main', 'owner', 1);
       INSERT INTO memory_session_tombstones VALUES ('forgotten-session', 'main', 'deleted', 1);
       INSERT INTO cache_entries VALUES ('retained', 'binary', NULL, X'00ff80', NULL, 1);`);
@@ -224,6 +228,9 @@ describe.skipIf(!connection)("agent database port", () => {
           }
           try {
             admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
+            admitStoreSearch(db, memoryStandingIntentSearchSchema, {
+              extension: "memory.standing-intents",
+            });
             db.runTransaction(() => {
               db.prepare(`INSERT INTO memory_index_chunks
             (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -272,6 +279,16 @@ describe.skipIf(!connection)("agent database port", () => {
           )
           .all(),
       ).toEqual([{ message_id: "message" }]);
+      expect(
+        roundtrip.prepare("SELECT id FROM standing_intents WHERE id = 'retained-intent'").get(),
+      ).toEqual({ id: "retained-intent" });
+      expect(
+        roundtrip
+          .prepare(
+            "SELECT rowid FROM standing_intents_fts WHERE standing_intents_fts MATCH 'turquoise'",
+          )
+          .all(),
+      ).toHaveLength(1);
       expect(
         roundtrip
           .prepare(`INSERT INTO context_engine_turn_outbox
@@ -435,6 +452,43 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ enqueue_sequence: "11" }]);
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
+    await client.query(
+      `SELECT setval('"${namespace}".context_engine_turn_outbox_enqueue_sequence_seq', 3, false)`,
+    );
+    const resetDirectory = path.join(directory, "reset-sequence");
+    const reset = await capturePostgresBackup({
+      sourcePath: anchorPath,
+      directory: resetDirectory,
+      profile: "exact",
+      config,
+      assertCurrent() {},
+    });
+    expect(reset.verification.allocations["context_engine_turn_outbox.enqueue_sequence"]).toEqual({
+      value: "3",
+      called: false,
+    });
+    const resetRestore = await preparePostgresRestore({
+      directory: resetDirectory,
+      anchorPath: path.join(directory, "reset-restored.sqlite"),
+      profile: "exact",
+      config,
+      assertCurrent() {},
+    });
+    namespaces.add(resetRestore.namespace);
+    expect(
+      (
+        await client.query(
+          `SELECT max(enqueue_sequence) AS retained FROM "${resetRestore.namespace}".context_engine_turn_outbox`,
+        )
+      ).rows,
+    ).toEqual([{ retained: "9" }]);
+    expect(
+      (
+        await client.query(
+          `SELECT nextval('"${resetRestore.namespace}".context_engine_turn_outbox_enqueue_sequence_seq')::text AS next`,
+        )
+      ).rows,
+    ).toEqual([{ next: "3" }]);
     const extensionMetadata = (
       await client.query<{ search_extensions: string }>(
         `SELECT search_extensions FROM "${namespace}".openclaw_schema_meta WHERE store = 'agent'`,

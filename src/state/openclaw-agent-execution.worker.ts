@@ -67,6 +67,7 @@ import {
   loadAgentEntryReadOperations,
   loadAgentEntryPatchOperations,
   loadAgentCompoundOperations,
+  loadAgentEntryDeletionOperations,
   loadAgentPurgeOperations,
   loadAgentMaintenanceFinalizationOperations,
   loadAgentNativeBindingOperations,
@@ -442,6 +443,7 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.lifecycle.delete": loadAgentEntryDeletionOperations,
     "session.agentPurge.prepare": loadAgentPurgeOperations,
     "session.agentPurge.commit": loadAgentPurgeOperations,
     "session.maintenance.finalize": loadAgentMaintenanceFinalizationOperations,
@@ -619,7 +621,8 @@ function openAgentDatabaseBackend(
             ? command.input.nativeBindings
             : command.type === "session.entries.replace" ||
                 command.type === "session.agentPurge.commit" ||
-                command.type === "session.maintenance.finalize"
+                command.type === "session.maintenance.finalize" ||
+                command.type === "session.lifecycle.delete"
               ? command.input.nativeBindings
               : undefined;
       if (nativeBindings) {

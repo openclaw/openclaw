@@ -250,7 +250,7 @@ describe("Codex node catalog sources", () => {
       };
     }
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
-      undefined,
+      {},
       "thread/list",
       expect.any(Object),
       expect.objectContaining({

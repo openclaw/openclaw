@@ -390,9 +390,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
       return write((db) => {
-        if (!hasWorkerWorkspacePendingResult(db, sessionId)) {
-          throw new Error(`Session ${sessionId} has no pending cloud workspace result`);
-        }
         if (!hasAcceptedWorkerWorkspacePendingResult(db, sessionId)) {
           throw new Error(`Session ${sessionId} cloud workspace result was not accepted`);
         }
@@ -521,7 +518,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Worker workspace journal owner is stale for session ${sessionId}`);
         }
-        const result = executeSqliteQuerySync(
+        const updatedRow = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_session_placements")
@@ -542,9 +539,10 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
                   },
                 ),
               ),
-            ),
-        );
-        if (result.numAffectedRows !== 1n) {
+            )
+            .returningAll(),
+        ).rows[0];
+        if (!updatedRow) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
         if (reconciliation) {
@@ -566,7 +564,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           }
           publishPlacementWorkspaceJournalState(db, sessionId, true);
         }
-        const updated = getRequired(db, sessionId);
+        const updated = fromRow(updatedRow);
         publishPlacementTurnClaimState(db, updated, current.state);
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return updated;

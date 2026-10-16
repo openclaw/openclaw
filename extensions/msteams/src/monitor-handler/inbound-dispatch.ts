@@ -185,7 +185,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
         : undefined,
       quote: quoteInfo
         ? {
-            id: quoteInfo.id ?? activity.replyToId ?? undefined,
+            id: quoteInfo.id ?? activity.replyToId,
             body: quoteBodyFull ?? quoteInfo.body,
             sender: quoteInfo.sender,
             senderAllowed: quoteSenderAllowed,
@@ -221,8 +221,8 @@ export async function dispatchMSTeamsInboundTurn(params: {
       originatingTo: `conversation:${conversationId}`,
       // Channel-only thread root (facts.threadId) so messaging-tool evidence matches
       // session/origin thread ids; keep replyToId as parent. Undefined for DM/group.
-      messageThreadId: facts.threadId ?? undefined,
-      replyToId: activity.replyToId ?? undefined,
+      messageThreadId: facts.threadId,
+      replyToId: activity.replyToId,
       nativeChannelId,
     },
     message: {

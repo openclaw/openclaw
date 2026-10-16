@@ -1951,6 +1951,7 @@ describe("Codex tool operator hints", () => {
       const hint = "workspace-contained by configuration";
       const message = `Path escapes sandbox root (${root}): ${outside}`;
       expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
+      expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
         contentItems: [{ type: "inputText", text: message }],
         success: false,

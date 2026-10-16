@@ -1,4 +1,3 @@
-// Integration proof for tools.effective global sessions scoped to non-default agents.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,66 +14,69 @@ describe("tools.effective global agent integration", () => {
   let workStorePath = "";
   let getRuntimeConfig: Awaited<ReturnType<typeof getGatewayConfigModule>>["getRuntimeConfig"];
 
-  async function seedSelectedGlobalStores() {
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required");
-    }
-    const dir = path.join(stateDir, "session-stores", `tools-effective-${Date.now()}`);
-    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-    testState.sessionStorePath = storeTemplate;
-    testState.sessionConfig = { scope: "global" };
-    testState.agentConfig = undefined;
-    testState.agentsConfig = { entries: { main: {}, work: {} } };
-    mainStorePath = storeTemplate.replace("{agentId}", "main");
-    workStorePath = storeTemplate.replace("{agentId}", "work");
+  async function reloadConfig() {
     const configModule = await getGatewayConfigModule();
     configModule.clearRuntimeConfigSnapshot();
     configModule.clearConfigCache();
     getRuntimeConfig = configModule.getRuntimeConfig;
   }
 
-  beforeEach(async () => {
-    testing.resetToolsEffectiveCacheForTest();
-    vi.clearAllMocks();
-    await seedSelectedGlobalStores();
-  });
-
-  it("resolves tools.effective for global session scoped to a non-default agent store", async () => {
-    await writeSessionStore({
-      storePath: mainStorePath,
-      entries: {
-        global: sessionStoreEntry("sess-main-global", {
-          modelProvider: "openai",
-          model: "main-model",
-        }),
-      },
-    });
-    await writeSessionStore({
-      storePath: workStorePath,
-      agentId: "work",
-      entries: {
-        global: sessionStoreEntry("sess-work-global", {
-          modelProvider: "openai",
-          model: "work-model",
-          providerOverride: "openai",
-          modelOverride: "work-model",
-        }),
-      },
-    });
-
+  async function requestTools(id: string, sessionKey = "global") {
     const respond = vi.fn();
     await expectDefined(
       toolsEffectiveHandlers["tools.effective"],
-      'toolsEffectiveHandlers["tools.effective"] test invariant',
+      "tools.effective handler",
     )({
-      params: { sessionKey: "global", agentId: "work" },
+      params: { sessionKey, agentId: "work" },
       respond: respond as never,
       context: { getRuntimeConfig } as never,
       client: null,
-      req: { type: "req", id: "req-tools-effective-global", method: "tools.effective" },
+      req: { type: "req", id, method: "tools.effective" },
       isWebchatConnect: () => false,
     });
+    return respond;
+  }
+
+  async function seedStores(global = true) {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is required");
+    }
+    const dir = path.join(stateDir, "session-stores", `tools-effective-${global}-${Date.now()}`);
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = global ? { scope: "global" } : undefined;
+    testState.agentConfig = undefined;
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
+    mainStorePath = storeTemplate.replace("{agentId}", "main");
+    workStorePath = storeTemplate.replace("{agentId}", "work");
+    await reloadConfig();
+  }
+
+  async function writeGlobalStore(agentId: "main" | "work", model: string, override = false) {
+    await writeSessionStore({
+      storePath: agentId === "main" ? mainStorePath : workStorePath,
+      ...(agentId === "work" ? { agentId } : {}),
+      entries: {
+        global: sessionStoreEntry(`sess-${agentId}-global`, {
+          modelProvider: "openai",
+          model,
+          ...(override ? { providerOverride: "openai", modelOverride: model } : {}),
+        }),
+      },
+    });
+  }
+
+  beforeEach(async () => {
+    testing.resetToolsEffectiveCacheForTest();
+    vi.clearAllMocks();
+    await seedStores();
+  });
+
+  it("resolves tools.effective for global session scoped to a non-default agent store", async () => {
+    await writeGlobalStore("main", "main-model");
+    await writeGlobalStore("work", "work-model", true);
+    const respond = await requestTools("req-tools-effective-global");
 
     const call = respond.mock.calls[0] as [boolean, { agentId?: string }?, unknown?] | undefined;
     expect(call?.[0]).toBe(true);
@@ -90,39 +92,12 @@ describe("tools.effective global agent integration", () => {
   });
 
   it("uses the hot-reloaded agent default instead of stale runtime identity", async () => {
-    const configModule = await getGatewayConfigModule();
     testState.agentConfig = { model: { primary: "openai/stale-model" } };
-    configModule.clearRuntimeConfigSnapshot();
-    configModule.clearConfigCache();
-    getRuntimeConfig = configModule.getRuntimeConfig;
-    await writeSessionStore({
-      storePath: workStorePath,
-      agentId: "work",
-      entries: {
-        global: sessionStoreEntry("sess-work-global", {
-          modelProvider: "openai",
-          model: "stale-model",
-        }),
-      },
-    });
+    await reloadConfig();
+    await writeGlobalStore("work", "stale-model");
 
-    const requestTools = async (id: string) => {
-      const respond = vi.fn();
-      await expectDefined(
-        toolsEffectiveHandlers["tools.effective"],
-        'toolsEffectiveHandlers["tools.effective"] test invariant',
-      )({
-        params: { sessionKey: "global", agentId: "work" },
-        respond: respond as never,
-        context: { getRuntimeConfig } as never,
-        client: null,
-        req: { type: "req", id, method: "tools.effective" },
-        isWebchatConnect: () => false,
-      });
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-    };
-
-    await requestTools("req-tools-effective-before-reload");
+    const before = await requestTools("req-tools-effective-before-reload");
+    expect(before.mock.calls[0]?.[0]).toBe(true);
     expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenLastCalledWith(
       expect.objectContaining({
         modelProvider: "openai",
@@ -131,9 +106,9 @@ describe("tools.effective global agent integration", () => {
     );
 
     testState.agentConfig = { model: { primary: "anthropic/current-model" } };
-    configModule.clearRuntimeConfigSnapshot();
-    configModule.clearConfigCache();
-    await requestTools("req-tools-effective-after-reload");
+    await reloadConfig();
+    const after = await requestTools("req-tools-effective-after-reload");
+    expect(after.mock.calls[0]?.[0]).toBe(true);
 
     expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -145,12 +120,9 @@ describe("tools.effective global agent integration", () => {
     );
   });
 
-  // Negative control on the real session-resolution path: a non-global key owned
-  // by `main` must keep rejecting a mismatched configured agent. Before the
-  // ownership-narrowing fix the requested agent overrode session-agent resolution
-  // here, so this request would have succeeded under `work`.
+  // The global agent override must not override ownership of a non-global key.
   it("rejects a mismatched configured agent for a non-global session key", async () => {
-    await seedNonGlobalMainStore();
+    await seedStores(false);
 
     await writeSessionStore({
       storePath: mainStorePath,
@@ -162,18 +134,7 @@ describe("tools.effective global agent integration", () => {
       },
     });
 
-    const respond = vi.fn();
-    await expectDefined(
-      toolsEffectiveHandlers["tools.effective"],
-      'toolsEffectiveHandlers["tools.effective"] test invariant',
-    )({
-      params: { sessionKey: "agent:main:abc", agentId: "work" },
-      respond: respond as never,
-      context: { getRuntimeConfig } as never,
-      client: null,
-      req: { type: "req", id: "req-tools-effective-mismatch", method: "tools.effective" },
-      isWebchatConnect: () => false,
-    });
+    const respond = await requestTools("req-tools-effective-mismatch", "agent:main:abc");
 
     const call = respond.mock.calls[0] as
       | [boolean, unknown?, { code: number; message: string }?]
@@ -182,21 +143,4 @@ describe("tools.effective global agent integration", () => {
     expect(call?.[2]?.message).toBe('agent "work" does not match session key agent "main"');
     expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
-
-  async function seedNonGlobalMainStore() {
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required");
-    }
-    const dir = path.join(stateDir, "session-stores", `tools-effective-nonglobal-${Date.now()}`);
-    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-    testState.sessionStorePath = storeTemplate;
-    testState.sessionConfig = undefined;
-    testState.agentsConfig = { entries: { main: {}, work: {} } };
-    mainStorePath = storeTemplate.replace("{agentId}", "main");
-    const configModule = await getGatewayConfigModule();
-    configModule.clearRuntimeConfigSnapshot();
-    configModule.clearConfigCache();
-    getRuntimeConfig = configModule.getRuntimeConfig;
-  }
 });

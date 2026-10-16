@@ -50,6 +50,13 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Gateway boot history uses one `gatewayBoot.begin` writer operation to inspect
+previous boots, prune expired history, and append the current boot. The breaker
+decision excludes that new open row; a failed append preserves a successfully
+read decision. Completion and recovery use the same worker owner, including
+in-process restarts. History remains best effort with a warning on failure;
+Doctor's explicit maintenance repair retains its synchronous exception.
+
 Retained session-entry cache hits reuse the admission owner's physical identity
 without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
@@ -342,6 +349,14 @@ bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
 
+The model-context reader retains the latest transcript's navigation and exact model
+byte costs on its admitted connection. Appends extend the canonical branch scanner
+from the committed sequence; same-generation metadata rewrites invalidate only the
+affected 512-row pages through writer receipts. Replacement and destructive rewrites
+discard the cached generation. Payloads remain in SQL until context selection, and
+the connection releases navigation on disposal. This trades retained navigation
+metadata for bounded warm reads without changing prompt bytes or window selection.
+
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
 command; prepared, explicit, and warm replica expectations remain fixed across
@@ -405,14 +420,23 @@ Generic callbacks retain their prepare-and-compare contract, and source and
 conversation authority still apply at the mutation boundary. These operations
 change no schemas, stored formats, retention, or update behavior.
 
+New subagent keys select their configured store without searching historical
+session rows. Custom store selectors still resolve physical ownership in the
+worker; a parent's historical store does not redirect its new child.
 Fresh isolated same-agent subagents commit first-admission metadata with their
-creation entry. The host-bound launch carries that postimage into first admission,
-avoiding a second load, generic reuse preparation, and metadata patch. The receipt
-is consumed once and grants no authority: the work lease still loads the current
+creation entry. The host-bound launch carries that postimage and admitted store
+through first admission and input staging, avoiding target rediscovery, generic
+reuse preparation, and metadata patch. The receipt is consumed once and grants
+no authority: the work lease still loads the current
 entry and rejects replacement or reset before execution. Current policy and
 metadata writes therefore survive admission. Forks, resumed children, incognito
 storage, collectors, thread binding, and cross-agent admission keep their existing
 paths.
+
+Command preparation persists only its refreshed skill snapshot and activity
+fields through one fixed-field operation. It does not restore unrelated fields
+from an earlier snapshot or recreate a deleted session. Fresh sessions still
+discover their own skill dependencies.
 
 Observer digests and activity recaps also use closed entry operations. Their writer
 checks the current lifecycle, digest revision, recap eligibility, and transcript
@@ -2627,7 +2651,11 @@ reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
 initializer is classified separately from its native event/head SQL.
 Creation, compaction, adoption, and child-spawn producers are non-notifying.
 Creation, compaction, adoption, child-spawn cursor seeding, reset/deletion cleanup,
-and periodic retention use the existing signal worker. Placement restart clearing
+and periodic retention use the existing signal worker. Child creation and spawn
+signals share one ordered transaction, preserving their dedupe keys and the
+parent's seeded cursor.
+These advisory signals fail together without replaying child creation; the Home
+notice remains independently best effort. Placement restart clearing
 uses the placement lifecycle worker before turns are admitted and while startup
 holds the state-directory lock. Its `UPDATE ... RETURNING` captures exact
 postimages, which the host publishes after success. An uncertain result fails
@@ -4943,6 +4971,9 @@ bound to the captured owner, and shutdown joins accepted work. The existing
 update behavior are unchanged. Drain inspection reads pending and claimed rows in
 one snapshot so a concurrent release cannot hide a lane head between reads.
 Shutdown joins deferred settlement even when it starts before dispatch returns.
+Accepted enqueues, claims, and resubmissions return the mutation's row directly;
+only duplicate enqueues read the retained row. Claims atomically update pending
+rows, and corrupt payloads are tombstoned in that same writer transaction.
 
 Inbound envelope timestamps use the existing session read worker. Bundled channels
 await preparation at their formatting boundary and carry the timestamp through
@@ -5942,15 +5973,17 @@ uses the memory actor.
 Session-scoped command and skill discovery uses those same current sharing facts.
 It captures the session and physical source before membership readiness yields,
 refuses dirty membership, and rechecks caller, role, session, and source authority
-after discovery. Exact row preparation carries pinned skill selections separately
-from compact sharing facts; response publication compares the current selections
-in the same synchronous consuming frame. Personal skill-library storage, exec-policy
-eligibility, and incognito memory state remain with their respective owners.
+after discovery. Exact row preparation carries selected display metadata separately
+from compact sharing facts. Discovery returns the selections captured for that request;
+a concurrent selection change appears on the next request without reloading the row
+before the response. Personal skill-library storage, exec-policy eligibility, and
+incognito memory state remain with their respective owners.
 This changes no SDK, RPC schema, stored data, permission, or update contract.
 
-For writes, shared-state domain operations registered by
-`src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
-through their original store/projection owner.
+For writes, shared-state domain operations load on demand through
+`src/state/openclaw-state-worker-registry.ts`, reuse the broker, and publish results
+through their original store/projection owner. Cron preparation and the retained
+update-run writer remain owned by the shared-state backend.
 
 Native subagent completion, recovery, and delivery settlement use the subagent
 registry and its retained run records, not a Task projection or detached-task SDK
@@ -6388,6 +6421,14 @@ lease; database close joins the callback and its retained worker cleanup. Cleanu
 refuses a replacement physical database and cannot delete a successor's lease.
 Upload formats, expiry limits, installation permissions, and update behavior are
 unchanged.
+
+Gateway lifecycle-event admission keeps each run's accepted events in FIFO order.
+Durable restart-recovery suppression reads the logical session once, after earlier
+accepted events settle. It does not speculate and then reread, or independently
+recheck the database file identity after the worker owner has admitted the read.
+The suppression snapshot supplies internal lifecycle bookkeeping, not disclosure
+or execution authority. The current run claim and event route still gate event
+publication; incognito events retain their captured live memory owner.
 
 Reply recovery reads file-backed logical session entries through the existing
 agent database executor. The worker preserves standard initialization and schema

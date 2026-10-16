@@ -115,7 +115,6 @@ export function createSessionRowProjectionArchive(params: {
               ...row.retainedDatabaseFacts,
               runtimeOwnership: undefined,
               runtimeOwnershipDependencies: undefined,
-              runtimeOwnershipRetryPending: undefined,
             },
           );
         }

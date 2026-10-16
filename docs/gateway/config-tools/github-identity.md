@@ -9,6 +9,37 @@ title: "Configuration — GitHub identity for agent tools"
 
 `tools.github` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
+## Session GitHub App reader
+
+A configured `tools.github` (or complete agent override) with
+`kind: "app-installation"` selects a GitHub App installation for explicitly
+admitted session reads. The `app` object specifies `appId`, `installationId`,
+`accountId`, exact `repositories` (`id` and `fullName`), `permissions`,
+`privateKey` (a SecretRef or resolved signing key), and `keyVersion`.
+The existing managed `profileId` identifies the selection.
+
+This reader verifies the configured issuer, App, installation, permissions, bot,
+and exact repository set before returning a short-lived token. The request owns
+revocation and must finish cleanup before returning private content. Existing
+publication, background, and shell execution paths do not acquire App tokens.
+Select a native or OAuth identity to run agent tools; App selections support
+foreground session reads only. OAuth and native GitHub selections retain their
+existing behavior.
+
+An individual repository read can select one configured repository by its full
+name. Admission and the installation token cover only that repository, even
+when the App configuration lists several. Changes to the complete configured
+App selection still invalidate the pending read. App signing-key SecretRefs
+from the system and every agent are excluded from agent execution, including
+when the executing agent selects OAuth or native credentials instead.
+
+In Factory GitHub mode, session reads additionally require the current person's
+verified account on the configured Enterprise host. A one-use, short-lived proof
+binds that account, profile, session lifetime, and item digest to the existing
+Factory repository-admission broker. Only an authenticated direct-local system
+administrator connection can redeem it. A request field cannot supply the
+person's identity, and admission never falls back to a human or native token.
+
 ## `tools.github`
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
@@ -77,7 +108,7 @@ For delegated work, the agent must explicitly select the child's `publishingSess
 
 Only a current full-write person's tool schema and instructions expose these PR actions. Guest turns retain the draft-publication schema, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and guest publication remains draft-only. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
 
-The Gateway prepares publication availability and the shared identity in the background at startup and when GitHub configuration, credentials, or a session workspace binding changes. Ordinary messages and internal continuations read the last published result synchronously; they never wait for GitHub discovery. Until the first result is ready, or if publication is unavailable, `github_identity_status` remains available to explain identity setup or reconnection needs, subject to the session's tool policy. Standalone local runs and runs with tools disabled do not expose these managed publication tools.
+The Gateway prepares publication availability and the shared identity in the background at startup and when GitHub configuration, credentials, or a session workspace binding changes. Automatic prewarming from resident session rows skips sessions without a repository workspace or managed worktree; adding a binding enables preparation, and removing it retires the previous discovery fact. Ordinary messages and internal continuations read the last published result synchronously; they never wait for GitHub discovery. Until the first result is ready, or if publication is unavailable, `github_identity_status` remains available to explain identity setup or reconnection needs, subject to the session's tool policy. Standalone local runs and runs with tools disabled do not expose these managed publication tools.
 
 A recent identity change may appear in the tool list on the next turn after background refresh completes. Native GitHub CLI login changes are picked up by periodic background refresh. Publication and process launches still validate their selected credentials at the effect point, so discovery does not authorize use of a revoked profile.
 

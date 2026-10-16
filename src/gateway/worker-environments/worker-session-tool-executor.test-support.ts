@@ -188,7 +188,7 @@ export const PARENT = {
 };
 export const CHILD = worker("spawned-child", 5);
 export const GRANDCHILD = worker("spawned-grandchild", 6);
-export const CLOUD_PROFILE = {
+const CLOUD_PROFILE = {
   providerId: "fake",
   profileId: "cloud-profile",
   profileSnapshot: { install: "bundle" as const, settings: { region: "source" } },

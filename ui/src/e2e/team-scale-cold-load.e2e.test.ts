@@ -117,6 +117,45 @@ suite.define(() => {
           .frameLocator("iframe")
           .getByText("Team metric 12", { exact: true })
           .waitFor();
+        await page
+          .locator("openclaw-message-reaction-picker")
+          .first()
+          .waitFor({ state: "attached" });
+        await page.locator(".chat-tool-card__widget-actions").first().waitFor();
+        await page.locator(".context-usage").waitFor();
+
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        await thread.hover();
+        const coverage = thread.evaluate(async (element) => {
+          const initialTop = element.scrollTop;
+          const padding = getComputedStyle(element);
+          const topPadding = Number.parseFloat(padding.paddingTop);
+          const bottomPadding = Number.parseFloat(padding.paddingBottom);
+          const frames: Array<{ scrollTop: number; covered: boolean }> = [];
+          for (let frame = 0; frame < 20; frame++) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            const viewport = element.getBoundingClientRect();
+            const rows = [...element.querySelectorAll(".chat-virtual-row")].map((row) =>
+              row.getBoundingClientRect(),
+            );
+            frames.push({
+              scrollTop: element.scrollTop,
+              covered:
+                Math.min(...rows.map((row) => row.top)) <= viewport.top + topPadding + 1 &&
+                Math.max(...rows.map((row) => row.bottom)) >= viewport.bottom - bottomPadding - 1,
+            });
+          }
+          return { initialTop, frames };
+        });
+        await page.mouse.wheel(0, -1800);
+        const sampled = await coverage;
+        expect(sampled.frames.some((frame) => frame.scrollTop < sampled.initialTop)).toBe(true);
+        expect(
+          sampled.frames.every((frame) => frame.covered),
+          JSON.stringify(sampled),
+        ).toBe(true);
 
         const rosterRequests = await gateway.getRequests("sessions.list");
         expect(rosterRequests.some((request) => asRecord(request.params)?.limit === 200)).toBe(

@@ -1,4 +1,4 @@
-import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -98,7 +98,7 @@ export type CodexSessionCatalogControl = {
   forkContext?: {
     client: import("./app-server/client.js").CodexAppServerClient;
     appServer: CodexAppServerRuntimeOptions;
-    pluginConfig: unknown;
+    pluginConfig: CodexPluginConfig;
     agentDir: string;
     localSessionsRoot?: string;
   };

@@ -9,8 +9,8 @@
     ],
     "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
     "schemaVersions": {
-      "state": 25,
-      "agent": 27
+      "state": 26,
+      "agent": 28
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -45,6 +45,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
@@ -1905,8 +1906,8 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import ./scripts/tsx.mjs scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-subpath-exports.mts",
-    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
-    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
+    "lint:no-chained-type-assertions": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-parent-lifetime.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
+    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src cli-invocation.mjs cli-parent-lifetime.mjs cli-root-options.mjs docker-entrypoint.mjs gateway-prewarm.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs node-compile-cache.mjs node-host-launcher.mjs node-runtime-env.mjs node-runtime-recovery.mjs node-runtime-update.mjs node-sqlite.mjs node-version.mjs openclaw.mjs worker-heap-flag.mjs scripts/openclaw-immutable-launcher.mjs scripts/freebsd-service-inspect.mjs",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",
     "lint:tmp:channel-agnostic-boundaries": "node --import ./scripts/tsx.mjs scripts/check-channel-agnostic-boundaries.mts",
@@ -2292,7 +2293,7 @@
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",
-    "@anthropic-ai/sdk": "0.132.1",
+    "@anthropic-ai/sdk": "0.133.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.7",
     "@babel/traverse": "8.0.7",
@@ -2320,11 +2321,11 @@
     "commander": "15.0.0",
     "croner": "10.0.1",
     "diff": "9.0.0",
-    "dotenv": "18.0.6",
+    "dotenv": "18.0.7",
     "entities": "8.1.0",
     "esbuild": "0.28.2",
     "execa": "10.1.0",
-    "express": "5.2.1",
+    "express": "5.3.0",
     "file-type": "22.1.1",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",
@@ -2341,7 +2342,7 @@
     "minimatch": "10.2.6",
     "node-edge-tts": "1.2.11",
     "npm": "12.2.0",
-    "openai": "7.30.1",
+    "openai": "7.31.0",
     "p-limit": "7.3.3",
     "p-map": "7.0.8",
     "partial-json": "0.1.7",
@@ -2390,7 +2391,7 @@
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",
-    "jscpd": "5.4.0",
+    "jscpd": "5.4.1",
     "jsdom": "30.1.2",
     "markdown-it": "15.0.2",
     "markdown-it-anchor": "10.0.0",
@@ -2425,5 +2426,5 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c"
+  "packageManager": "pnpm@12.11.1+sha512.5b0e3288239a7ea4155d2094f547066e122a1376b3cd785a680c9112e116913e64aaaecf20dd83cc34030fa67013f5c5511f9cf430dd8384188b4c60b8a2ad1e"
 }

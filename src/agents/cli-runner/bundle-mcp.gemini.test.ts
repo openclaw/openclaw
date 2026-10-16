@@ -164,9 +164,9 @@ describe("prepareCliBundleMcpConfig gemini", () => {
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
     });
+    prepared.env = { ...prepared.env, GOOGLE_CLOUD_PROJECT: "active-capture-project" };
     const attempt = await prepareCliBundleMcpCaptureAttempt({
-      mode: "gemini-system-settings",
-      env: prepared.env,
+      preparedBackend: prepared,
       captureKey: "attempt-123",
     });
 
@@ -177,6 +177,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
         mcpServers?: Record<string, { headers?: Record<string, string> }>;
       };
       expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("attempt-123");
+      expect(attempt.env?.GOOGLE_CLOUD_PROJECT).toBe("active-capture-project");
       expect(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).not.toBe(
         prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
       );

@@ -284,7 +284,6 @@ export function createTelegramEventBindings({
           enqueueRoutedSystemEvent(text, route, {
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
-          logVerbose(`telegram: reaction event enqueued chat=${chatId} message=${messageId}`);
         }
       } catch (err) {
         runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
@@ -414,7 +413,6 @@ export function createTelegramEventBindings({
           },
         });
         recordTelegramMessageProcessingResult(result);
-        logVerbose(`telegram: poll_answer dispatched for poll ${pollId} by ${senderId}`);
       } catch (err) {
         handlePollError(err, ctx, "poll_answer");
       }

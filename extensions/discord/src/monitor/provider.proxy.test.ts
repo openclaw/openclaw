@@ -108,6 +108,10 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayPlugin,
 }));
 vi.mock("node:https", () => ({ Agent: HttpsAgent }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
+  createNodeProxyAgent: ({ proxyUrl }: { proxyUrl: string }) => new HttpsProxyAgent(proxyUrl),
+}));
 vi.mock("../internal/ws-runtime.js", () => ({ WebSocket: MockWebSocket }));
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   captureHttpExchangeAsync: mocks.httpCapture,
@@ -173,27 +177,12 @@ describe("createDiscordGatewayPlugin", () => {
   function createPlugin(
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
     runtime = createRuntimeSpies(),
-    testing?: Parameters<typeof createDiscordGatewayPlugin>[0]["testing"],
   ): InstanceType<typeof GatewayPlugin> {
-    const plugin = createDiscordGatewayPlugin({ discordConfig, runtime, testing });
+    const plugin = createDiscordGatewayPlugin({ discordConfig, runtime });
     if (!(plugin instanceof GatewayPlugin)) {
       throw new Error("expected mocked Gateway base");
     }
     return plugin;
-  }
-  function proxyTesting(): NonNullable<
-    Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-  > {
-    return {
-      createProxyAgent: (proxyUrl: string) =>
-        new HttpsProxyAgent(proxyUrl) as unknown as import("node:http").Agent,
-      webSocketCtor: MockWebSocket as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
-      >["webSocketCtor"],
-      registerClient: async (_plugin: unknown, client: unknown) => {
-        mocks.register(client);
-      },
-    };
   }
 
   it("keeps metadata, initial sockets, and resume sockets on the configured endpoint", async () => {
@@ -256,7 +245,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("routes gateway metadata and sockets through the explicit DNS proxy", async () => {
     vi.stubEnv("https_proxy", "http://env-proxy.test:8080");
     const runtime = createRuntimeSpies();
-    const plugin = createPlugin({ proxy: "http://proxy.test:8080" }, runtime, proxyTesting());
+    const plugin = createPlugin({ proxy: "http://proxy.test:8080" }, runtime);
     mocks.fetch.mockResolvedValue(metadata());
     await plugin.register();
     plugin.openSocket();

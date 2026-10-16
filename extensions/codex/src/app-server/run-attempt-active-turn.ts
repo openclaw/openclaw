@@ -310,20 +310,17 @@ export function activateCodexAttemptTurn(
         if (!isJsonObject(turn.turn)) {
           throw new Error("Codex turn completion payload is not a JSON object");
         }
-        await enqueueNotification(
-          {
-            method: "turn/completed",
+        await enqueueNotification({
+          method: "turn/completed",
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          completedTurn: turn.turn,
+          params: {
             threadId: resourceState.thread.threadId,
             turnId: activeTurnId,
-            completedTurn: turn.turn,
-            params: {
-              threadId: resourceState.thread.threadId,
-              turnId: activeTurnId,
-              turn: turn.turn,
-            },
+            turn: turn.turn,
           },
-          { threadId: resourceState.thread.threadId, turnId: activeTurnId },
-        );
+        });
       }
     } finally {
       state.activeLocalProjections -= 1;

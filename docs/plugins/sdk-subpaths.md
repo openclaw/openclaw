@@ -425,7 +425,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; Darwin process snapshots and tree inspection (native under Bun, bounded ps under Node), bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
@@ -461,7 +461,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization and ASCII control-character detection helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization, ASCII control-character detection, and literal chat-display sanitization and escaping helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |

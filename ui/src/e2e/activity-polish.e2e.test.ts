@@ -77,11 +77,20 @@ suite.define(() => {
         const thumbnails = row.locator(".chat-message-image-button");
         await expect.poll(() => thumbnails.count()).toBe(4);
         await thumbnails.first().focus();
+        // Decode each focused preview before tabbing it offscreen in the phone gallery.
+        await thumbnails
+          .first()
+          .locator("img")
+          .evaluate((image: HTMLImageElement) => image.decode());
         for (let index = 1; index < 4; index++) {
           await page.keyboard.press("Tab");
           expect(
             await thumbnails.nth(index).evaluate((element) => element === document.activeElement),
           ).toBe(true);
+          await thumbnails
+            .nth(index)
+            .locator("img")
+            .evaluate((image: HTMLImageElement) => image.decode());
         }
         await expect.poll(() => thumbnails.locator("img").count()).toBe(4);
         await expect

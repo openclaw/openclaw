@@ -39,7 +39,7 @@ import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -71,7 +71,7 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
-    transcript: ChatTranscriptController;
+    transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
       | null;

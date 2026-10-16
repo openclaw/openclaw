@@ -311,7 +311,7 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   [
     key(machineState, "writeConfigMachineState"),
     [
-      key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand"),
+      key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
     ],
   ],
@@ -572,7 +572,12 @@ const callers = new Map<string, readonly string[]>([
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
-    [key("src/state/openclaw-state-worker-runtime.ts", "executeSharedStateCommand")],
+    [
+      key(
+        "src/state/github-personal-publication-lifecycle.worker.ts",
+        "githubPublication.deleteSessionReceipts",
+      ),
+    ],
   ],
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [

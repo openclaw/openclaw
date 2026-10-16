@@ -11,7 +11,6 @@ import {
 import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireMemorySearchDatabase } from "../memory-search-database.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   memoryEmbeddingCacheBatches,
@@ -21,6 +20,7 @@ import {
 } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { memoryTextSearchSchema } from "./manager-search-schema.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
@@ -237,7 +237,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(keyword("orchid")).toEqual([{ path: "memory/orchid.md" }]);
     }));
 
-  it("routes PostgreSQL indexing reads through the publication owner while search stays refused", async () => {
+  it("routes PostgreSQL indexing reads through the publication owner", async () => {
     const command = {
       type: "source.hash",
       input: { source: "memory", path: "memory/host-read.md" },
@@ -257,9 +257,6 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
     try {
       const { result } = admitted(() => {
         expect(publishInline(replacement("host-read"))).toMatchObject({ ok: true });
-        expect(() => requireMemorySearchDatabase(database)).toThrow(
-          "PostgreSQL memory indexing is unavailable",
-        );
         return {
           result: manager.read(command, () => {}),
         };
@@ -269,6 +266,63 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       dispatch.mockRestore();
     }
   });
+
+  it("atomically resets derived rows while retaining admitted search schema and revision", () =>
+    admitted(() => {
+      expect(publishInline(replacement("reset-me"))).toMatchObject({ ok: true });
+      expect(backend.execute({ type: "index.writeMetadata", input: metadata })).toMatchObject({
+        ok: true,
+      });
+      expect(
+        backend.execute({
+          type: "cache.write.inline",
+          input: {
+            header: {
+              agentId: "main",
+              provider: { id: "fixture", model: "fixture" },
+              providerKey: "fixture-key",
+            },
+            entries: [{ hash: "reset-cache", embedding: [1, 0, 0] }],
+          },
+        }),
+      ).toMatchObject({ ok: true, value: true });
+      const before = readMemoryDatabaseFacts(database);
+      denyCommit = true;
+      expect(backend.execute({ type: "database.reset", input: undefined })).toMatchObject({
+        ok: false,
+        entered: true,
+        committed: false,
+        error: { message: "publication authority revoked" },
+      });
+      expect(keyword("reset")).toEqual([{ path: "memory/reset-me.md" }]);
+      expect(rows()).toHaveLength(1);
+      expect(backend.execute({ type: "index.facts", input: undefined })).toEqual(before);
+
+      denyCommit = false;
+      const reset = backend.execute({ type: "database.reset", input: undefined });
+      expect(reset).toMatchObject({
+        ok: true,
+        value: true,
+        facts: { meta: null, hasIndexedChunks: false, hasVectorTable: true },
+      });
+      expect(keyword("reset")).toEqual([]);
+      expect(rows()).toEqual([]);
+      expect(pg().prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      expect(pg().prepare("SELECT chunk_id FROM memory_index_chunk_recall_metadata").all()).toEqual(
+        [],
+      );
+      expect(pg().prepare("SELECT chunk_id FROM memory_index_chunk_provenance").all()).toEqual([]);
+      const after = readMemoryDatabaseFacts(database);
+      expect(after.revision).toBeGreaterThan(before.revision);
+      expect(backend.execute({ type: "database.reset", input: undefined })).toMatchObject({
+        ok: true,
+        value: false,
+        facts: { revision: after.revision },
+      });
+      expect(publishInline(replacement("after-reset"))).toMatchObject({ ok: true });
+      expect(keyword("reset")).toEqual([{ path: "memory/after-reset.md" }]);
+      expect(rows()).toHaveLength(1);
+    }));
 
   it("retains a private full reindex across short bindings and rolls back a refused commit", () =>
     admitted(() => {

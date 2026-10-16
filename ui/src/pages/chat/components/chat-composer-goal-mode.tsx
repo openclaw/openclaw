@@ -7,8 +7,6 @@ import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
-import { resetSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -77,8 +75,8 @@ export function createGoalComposerController(
     };
     state.goalComposer = { ...mode, key, pending: false };
     props.onGoalDraftModeChange?.(mode);
-    resetSlashMenuState(state);
-    resetSkillMenuState(state);
+    state.slashMenu.reset();
+    state.skillMenu.reset();
     replaceDraft(goal?.objective ?? "");
     requestUpdate();
     focus();
@@ -111,13 +109,8 @@ export function createGoalComposerController(
     },
     begin,
     activateDraft,
-    activateCommand: (command: SlashCommandDef) => {
-      if (
-        command.key !== "goal" ||
-        command.source !== "native" ||
-        state.slashMenuCompletion?.inline ||
-        !props.onGoalSubmit
-      ) {
+    activateCommand: (command: SlashCommandDef, inline: boolean) => {
+      if (command.key !== "goal" || command.source !== "native" || inline || !props.onGoalSubmit) {
         return false;
       }
       begin();

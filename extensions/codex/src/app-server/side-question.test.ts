@@ -2441,39 +2441,5 @@ describe("runCodexAppServerSideQuestion", () => {
       }
     },
   );
-  it("delivers a side thread's question prompt through its provider channel", async () => {
-    const onToolResult = vi.fn();
-    type ToolOptions = NonNullable<
-      Parameters<
-        (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]
-      >[0]
-    >;
-    let capturedQuestionPrompt: ToolOptions["questionPrompt"];
-    createOpenClawCodingToolsMock.mockImplementation((options: ToolOptions) => {
-      capturedQuestionPrompt = options.questionPrompt;
-      return [
-        {
-          name: "ask_user",
-          description: "Ask the person a question",
-          parameters: { type: "object", properties: {}, additionalProperties: true },
-          execute: toolExecuteMock,
-        },
-      ];
-    });
-
-    await runSideQuestionWithManagedWebSearchCall(
-      sideParams({
-        messageProvider: "telegram",
-        opts: { onToolResult },
-      }),
-      { preserveToolFactory: true, toolName: "ask_user", toolArguments: { header: "Choice" } },
-    );
-
-    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
-    expect(capturedQuestionPrompt).toBeDefined();
-    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
-    await capturedQuestionPrompt?.send({ text: "Question for you:" });
-    expect(onToolResult).toHaveBeenCalledExactlyOnceWith({ text: "Question for you:" });
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

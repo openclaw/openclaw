@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
+import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -10,6 +14,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -47,6 +52,118 @@ function createFixture() {
     registerOperation: (operation) => operations.push(operation),
   });
 }
+
+it.for(["ready", "late", "abandoned"] as const)(
+  "persists a %s activity recap without holding up terminal accounting",
+  async (timing, { signal }) => {
+    const fixture = await createFixture();
+    const sessionKey = fixture.context.sessionKey!;
+    const cfg = {
+      ...fixture.context.cfg,
+      agents: { defaults: { utilityModel: "test/utility" } },
+    };
+    await persistSessionTranscriptTurn(
+      { storePath, sessionKey, sessionId: fixture.sessionId, agentId: "main" },
+      {
+        messages: [
+          { eventId: "request", message: { role: "user", content: "Verify the change." } },
+        ],
+        touchSessionEntry: false,
+      },
+    );
+    const started = createDeferred();
+    const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
+    const published = createDeferred();
+    const scheduler = createTestGatewayScheduler();
+    const service = createSessionActivitySummaries({
+      scheduler,
+      getConfig: () => cfg,
+      onChanged() {
+        if (fixture.read()?.activitySummary) {
+          published.resolve();
+        }
+      },
+      prepareModel: async () => ({
+        config: cfg,
+        authProfileId: undefined,
+        provider: "test",
+        model: "utility",
+        agentId: "main",
+        agentDir: root,
+        outputTextPolicy: "strict-visible",
+        thinkLevel: "off",
+      }),
+      completeModel: async () => {
+        started.resolve();
+        return result.promise;
+      },
+    });
+    const finishModel = () =>
+      result.resolve({
+        text: "Verified the change.",
+        provider: "test",
+        model: "utility",
+        owner: { kind: "harness", id: "test" },
+      });
+    const completion = service.beginCompletion(
+      { key: sessionKey, agentId: "main", storePath },
+      fixture.read(),
+    )!;
+    fixture.context.activitySummaryCompletion = completion;
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    const observer = observeCompletionCommands();
+    try {
+      service.handleEvent({
+        sessionKey,
+        agentId: "main",
+        runId: fixture.context.runId,
+        seq: 1,
+        ts: Date.now(),
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+      await withinTest(started.promise, signal);
+      if (timing !== "late") {
+        finishModel();
+        // Let the model's promise continuations offer their result before accounting starts.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(fixture.read()?.activitySummary).toBeUndefined();
+      }
+      if (timing !== "abandoned") {
+        await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({
+          text: "done",
+        });
+        expect(fixture.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
+        expect(
+          observer.commands.filter((command) => command === "session.actor.completeTurn"),
+        ).toHaveLength(1);
+      }
+      completion.release();
+      finishModel();
+      await withinTest(published.promise, signal);
+      expect(fixture.read()?.activitySummary).toMatchObject({
+        text: "Verified the change.",
+        coveredMessages: 1,
+      });
+      expect(
+        observer.commands.filter((command) => command === "session.entry.patch.commit"),
+      ).toHaveLength(timing === "ready" ? 0 : 1);
+    } finally {
+      completion.release();
+      finishModel();
+      await service.dispose();
+      await scheduler.stop();
+      observer.restore();
+    }
+  },
+);
 
 it.each([
   { stage: "initial", count: 1 },

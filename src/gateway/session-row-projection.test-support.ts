@@ -175,16 +175,6 @@ export function createSessionRowProjectionFixture(params: {
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration() {
-      const observedRevision = revision;
-      let active = true;
-      return {
-        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
-        dispose() {
-          active = false;
-        },
-      };
-    },
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);

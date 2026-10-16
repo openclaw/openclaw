@@ -187,12 +187,7 @@ export async function sendHostedFileUrl(
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
   const effect = captureEffectAuthority();
-  let body: string;
-  try {
-    body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
-  } catch {
-    return { status: "not-dispatched" };
-  }
+  const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   await waitForSendSlot(incomingUrl);
   await onPlatformSendDispatch?.();
@@ -286,28 +281,6 @@ function pruneIdleSendSlots(): void {
       sendSlots.delete(incomingUrl);
     }
   }
-}
-
-function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(fileUrl);
-  } catch (err) {
-    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
-  }
-
-  if (
-    parsed.protocol !== "https:" ||
-    !parsed.hostname ||
-    parsed.username ||
-    parsed.password ||
-    parsed.hash
-  ) {
-    throw new Error(
-      "Synology Chat hosted attachment URL must use HTTPS without credentials or a fragment",
-    );
-  }
-  return parsed.toString();
 }
 
 /**

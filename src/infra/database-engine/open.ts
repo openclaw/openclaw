@@ -10,6 +10,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+import { beginUpdatePostgresMigration } from "../update-doctor-migration-attribution.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
@@ -100,6 +101,8 @@ export function openEngineStore(ref: {
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
+  /** Family custody for schema writes; shared state defaults to its physical owner. */
+  assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
 }): EngineConnection {
   const { anchor } = ref;
@@ -197,6 +200,8 @@ export function openEngineStore(ref: {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
+      let migration: ReturnType<typeof beginUpdatePostgresMigration>;
+      let assertMigrationCurrent: (() => void) | undefined;
       db.runTransaction(
         () => {
           const fresh = !db
@@ -240,6 +245,9 @@ export function openEngineStore(ref: {
                 }
                 schema = { ...schema, ...source, version: Number(meta.version) };
               } else {
+                assertMigrationCurrent = ref.assertMigrationCurrent;
+                assertMigrationCurrent?.();
+                migration = beginUpdatePostgresMigration(db, assertMigrationCurrent);
                 invalidateLocalSqliteSchemaAdmissions(db);
                 stageSqliteTransactionState(db, {
                   stage: () => {},
@@ -253,9 +261,16 @@ export function openEngineStore(ref: {
           }
           admit(!meta);
         },
-        undefined,
+        {
+          withCommit(commit) {
+            assertMigrationCurrent?.();
+            migration?.beforeCommit();
+            commit();
+          },
+        },
         false,
       );
+      migration?.committed();
     } else {
       admit(false);
     }

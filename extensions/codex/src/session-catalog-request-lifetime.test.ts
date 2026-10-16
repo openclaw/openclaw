@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
+import type { CodexPluginConfig } from "./app-server/config.js";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { getCurrentSharedClientEntry } from "./app-server/shared-client-lifecycle.js";
 import {
@@ -94,7 +95,7 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
       authToken: "synthetic-catalog-lifetime-token",
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
     },
-  };
+  } satisfies CodexPluginConfig;
   let now = 1_000;
   const newFactory = (requestTimeoutMs = REQUEST_TIMEOUT_MS, state?: CodexCatalogState) => {
     const created = createCodexSessionCatalogControl({

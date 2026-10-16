@@ -4,7 +4,10 @@ const commandRpcMocks = vi.hoisted(() => ({
   codexControlRequest: vi.fn() as Mock,
 }));
 const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
+  client: {
+    connectionId: "pinned-catalog-client",
+    getInstanceId: () => "pinned-catalog-client",
+  },
   getClient: vi.fn() as Mock,
   releaseClient: vi.fn() as Mock,
   request: vi.fn() as Mock,

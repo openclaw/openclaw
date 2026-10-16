@@ -328,16 +328,23 @@ export function installSessionToolResultGuard(
     if (viewWasSuperseded) {
       transcriptSeqByEntryId.clear();
     }
-    const persistedEntry = sessionManager.getEntry(entryId);
+    const committedMessageSeq =
+      anchor && !viewWasSuperseded ? anchor.activeMessagePosition + 1 : undefined;
+    const persistedEntry =
+      committedMessageSeq === undefined ? sessionManager.getEntry(entryId) : undefined;
     const messageSeq =
       appended && sessionTarget && (!viewWasSuperseded || persistedEntry)
-        ? resolveAppendedMessageSeq({
+        ? (committedMessageSeq ??
+          resolveAppendedMessageSeq({
             sessionManager,
             entryId,
             parentEntryId: persistedEntry ? persistedEntry.parentId : parentEntryId,
             seqByEntryId: transcriptSeqByEntryId,
-          })
+          }))
         : undefined;
+    if (committedMessageSeq !== undefined) {
+      transcriptSeqByEntryId.set(entryId, committedMessageSeq);
+    }
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
@@ -571,7 +578,7 @@ export function installSessionToolResultGuard(
       void publishTranscriptUpdate(sessionTarget, {
         lifecycleRevision,
         message: persistedMessage,
-        messageId: typeof result === "string" ? result : undefined,
+        messageId: result,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...(runId ? { runId } : {}),
       });

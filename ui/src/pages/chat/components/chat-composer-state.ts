@@ -8,8 +8,8 @@ import {
 } from "./chat-composer-dom.ts";
 import { createComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import { createHumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
+import { createSkillMenu } from "./chat-composer-skill-menu.tsx";
+import { createSlashMenu } from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
@@ -23,8 +23,9 @@ function createChatComposerState(): ChatComposerState {
   return {
     presentation,
     updatePresentation,
-    ...createSlashMenuState(),
-    ...createSkillMenuState(),
+    slashMenu: createSlashMenu(),
+    skillMenu: createSkillMenu(),
+    slashCommandDispatchConnected: false,
     composerComposing: false,
     editRevision: 0,
     mentionMenu: createHumanMentionMenu(),
@@ -172,6 +173,8 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.slashMenu.dispose();
+  state.skillMenu.dispose();
   state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
