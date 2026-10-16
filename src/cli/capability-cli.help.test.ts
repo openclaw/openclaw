@@ -9,7 +9,6 @@ const rejectRuntimeImport = vi.hoisted(() => () => {
 
 vi.mock("./capability-cli/shared.js", rejectRuntimeImport);
 vi.mock("./capability-cli/local-account-secrets.js", rejectRuntimeImport);
-vi.mock("../commands/models/auth.js", rejectRuntimeImport);
 vi.mock("../config/config.js", rejectRuntimeImport);
 vi.mock("../agents/prepared-model-catalog.js", rejectRuntimeImport);
 vi.mock("../agents/simple-completion-runtime.js", rejectRuntimeImport);
