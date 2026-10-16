@@ -1,23 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
-import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
-import { createImageTool } from "./image-tool.js";
 import {
   ONE_PIXEL_PNG_B64,
+  createImageToolForTest,
+  createImageWebMediaRuntime,
+  makeModelDefinition,
+  resolveConfiguredImageModelForTest,
   resolveImageModelConfigForTool,
   testing,
 } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
-
-const buildProviderRegistry = buildMediaUnderstandingRegistry;
 
 const USER_PROVIDER = "hatchery-qwen3.6-plus";
 const USER_MODEL = "qwen3.6-plus";
@@ -31,19 +30,11 @@ const USER_PROVIDER_AUTH_ENV_KEYS = [
   "QWEN3_6_PLUS_API_KEY",
   "QWEN3_6_PLUS_OAUTH_TOKEN",
 ];
-const mediaRuntimeMock = {
-  loadWebMedia: async () => {
-    throw new Error("expected inline image");
-  },
-  optimizeImageBufferForWebMedia: vi.fn(
-    async (params: { buffer: Buffer; contentType?: string; fileName?: string }) => ({
-      buffer: params.buffer,
-      contentType: params.contentType ?? "image/png",
-      kind: "image" as const,
-      fileName: params.fileName,
-    }),
-  ),
-};
+const mediaRuntimeMock = createImageWebMediaRuntime(async () => {
+  throw new Error("expected inline image");
+});
+const optimizeImage = vi.fn(mediaRuntimeMock.optimizeImageBufferForWebMedia);
+mediaRuntimeMock.optimizeImageBufferForWebMedia = optimizeImage;
 
 const genericDescribe = vi.hoisted(() => vi.fn());
 vi.mock("../../media-understanding/image-runtime.js", () => ({
@@ -53,58 +44,30 @@ vi.mock("../../media-understanding/image-runtime.js", () => ({
   describeImagesWithModelPayloadTransform: genericDescribe,
 }));
 
-function makeVisionModel(id: string) {
+function providerConfig(
+  provider: string,
+  model: string,
+  options: Omit<ModelProviderConfig, "models"> & { primary?: string; mode?: "replace" },
+): OpenClawConfig {
+  const { primary = `${provider}/${model}`, mode, ...definition } = options;
   return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-  } satisfies ModelDefinitionConfig;
-}
-
-function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenClawConfig {
-  const includeApiKey = params?.includeApiKey ?? true;
-  return {
-    agents: {
-      defaults: {
-        model: { primary: USER_PRIMARY },
-      },
-    },
+    agents: { defaults: { model: { primary } } },
     models: {
-      providers: {
-        [USER_PROVIDER]: {
-          baseUrl: "https://example.com/v1",
-          api: "openai-completions",
-          ...(includeApiKey ? { apiKey: CONFIG_API_KEY } : {}),
-          models: [makeVisionModel(USER_MODEL)],
-        },
-      },
+      mode,
+      providers: { [provider]: { ...definition, models: [makeModelDefinition(model)] } },
     },
   };
 }
-
-function createBedrockSdkConfig(): OpenClawConfig {
-  return {
-    agents: { defaults: { model: { primary: `${BEDROCK_PROVIDER}/text-1` } } },
-    models: {
-      mode: "replace",
-      providers: {
-        [BEDROCK_PROVIDER]: {
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          auth: "aws-sdk",
-          api: "bedrock-converse-stream",
-          models: [makeVisionModel(BEDROCK_VISION_MODEL)],
-        },
-      },
-    },
-  };
+function createUserReportedConfig(includeApiKey = true) {
+  return providerConfig(USER_PROVIDER, USER_MODEL, {
+    baseUrl: "https://example.com/v1",
+    api: "openai-completions",
+    ...(includeApiKey ? { apiKey: CONFIG_API_KEY } : {}),
+  });
 }
 
 function createDeferredTool(config: OpenClawConfig, agentDir: string) {
-  return createImageTool({
+  return createImageToolForTest({
     config,
     agentDir,
     deferAutoModelResolution: true,
@@ -113,57 +76,56 @@ function createDeferredTool(config: OpenClawConfig, agentDir: string) {
   });
 }
 
-const inlineRequest = {
-  prompt: "Read this screenshot.",
-  path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-};
+const inlineRequest = { path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  testing.setProviderDepsForTest();
+});
+const describeModel = async (params: { provider: string; model: string }) => ({
+  text: `seen:${params.provider}/${params.model}`,
+  model: params.model,
+});
 
 describe("image custom provider auth regression", () => {
   let agentDir: string;
 
   beforeEach(() => {
     agentDir = tempDirs.make("openclaw-image-auth-regression-");
-    mediaRuntimeMock.optimizeImageBufferForWebMedia.mockClear();
+    optimizeImage.mockClear();
     for (const key of USER_PROVIDER_AUTH_ENV_KEYS) {
       vi.stubEnv(key, "");
     }
     testing.setProviderDepsForTest({
       buildProviderRegistry: () => new Map(),
       getMediaUnderstandingProvider: () => undefined,
-      describeImageWithModel: async (params: ImageDescriptionRequest) => ({
-        text: `seen:${params.provider}/${params.model}`,
-        model: params.model,
-      }),
-      describeImagesWithModel: async (params) => ({
-        text: `seen:${params.provider}/${params.model}`,
-        model: params.model,
-      }),
+      describeImageWithModel: describeModel,
+      describeImagesWithModel: describeModel,
       resolveAutoMediaKeyProviders: () => [],
       resolveDefaultMediaModel: () => undefined,
       resolveRegisteredMediaUnderstandingProvider: () => undefined,
-      resolveModelAsync: async (provider, model) => ({
-        logicalRef: { provider, model },
-        model: {} as never,
-        authStorage: {} as never,
-        modelRegistry: {} as never,
-      }),
+      resolveModelAsync: resolveConfiguredImageModelForTest,
       loadImageWebMediaRuntime: async () => mediaRuntimeMock,
     });
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    testing.setProviderDepsForTest(undefined);
-  });
-
   it("registers config-only AWS SDK Bedrock image models", async () => {
-    vi.stubEnv("AWS_PROFILE", "");
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
-    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
-    const cfg = createBedrockSdkConfig();
+    for (const key of [
+      "AWS_PROFILE",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_BEARER_TOKEN_BEDROCK",
+    ]) {
+      vi.stubEnv(key, "");
+    }
+    const cfg = providerConfig(BEDROCK_PROVIDER, BEDROCK_VISION_MODEL, {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      auth: "aws-sdk",
+      api: "bedrock-converse-stream",
+      primary: `${BEDROCK_PROVIDER}/text-1`,
+      mode: "replace",
+    });
 
     expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
     expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
@@ -175,11 +137,10 @@ describe("image custom provider auth regression", () => {
   });
 
   it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
-    // Deferred execution resolves credentials stored in config after registration.
     const cfg = createUserReportedConfig();
     const auth = await getApiKeyForModelCore({
       model: {
-        ...makeVisionModel(USER_MODEL),
+        ...makeModelDefinition(USER_MODEL),
         provider: USER_PROVIDER,
         api: "openai-completions",
         baseUrl: "https://example.com/v1",
@@ -188,29 +149,30 @@ describe("image custom provider auth regression", () => {
       agentDir,
       store: createAuthProfileStoreFixture({}),
     });
-    expect(auth.apiKey).toBe(CONFIG_API_KEY);
-    expect(auth.source).toContain("models.json");
+    expect(auth).toMatchObject({
+      apiKey: CONFIG_API_KEY,
+      source: expect.stringContaining("models.json"),
+    });
 
     const tool = createDeferredTool(cfg, agentDir);
-    expect(typeof tool?.execute).toBe("function");
-    expect(tool?.name).toBe("view_image");
+    expect(tool).toMatchObject({ execute: expect.any(Function), name: "view_image" });
 
-    const result = await tool!.execute("regression-1", inlineRequest);
+    const result = await tool.execute("regression-1", inlineRequest);
 
     const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
     expect(text).toContain(`seen:${USER_PRIMARY}`);
     expect(text).not.toMatch(/No image model is configured/i);
-    expect(mediaRuntimeMock.optimizeImageBufferForWebMedia).toHaveBeenCalledTimes(1);
+    expect(optimizeImage).toHaveBeenCalledTimes(1);
   });
 
   it("still rejects the same fallback config when apiKey is missing", async () => {
-    const cfg = createUserReportedConfig({ includeApiKey: false });
+    const cfg = createUserReportedConfig(false);
     expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
     expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
     expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
 
     const tool = createDeferredTool(cfg, agentDir);
-    await expect(tool!.execute("regression-2", inlineRequest)).rejects.toThrow(
+    await expect(tool.execute("regression-2", inlineRequest)).rejects.toThrow(
       /No image model is configured/,
     );
   });
@@ -221,8 +183,13 @@ const resolveProvider =
   vi.fn<NonNullable<ProviderDeps["resolveRegisteredMediaUnderstandingProvider"]>>();
 const image = "data:image/png;base64,aW1hZ2U=";
 
-function makeProvider(id: string, text = id): MediaUnderstandingProvider {
-  return { id, capabilities: ["image"], describeImage: vi.fn(async () => ({ text })) };
+function makeProvider(
+  id: string,
+  describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]> = async () => ({
+    text: id,
+  }),
+): MediaUnderstandingProvider {
+  return { id, capabilities: ["image"], describeImage: vi.fn(describeImage) };
 }
 
 async function executeImage(params: {
@@ -237,29 +204,19 @@ async function executeImage(params: {
     },
   };
   if (params.configuredProvider) {
-    config.models = {
-      providers: {
-        [params.configuredProvider]: {
-          baseUrl: "https://example.invalid/v1",
-          models: [{ ...makeVisionModel("vision"), name: "Vision", maxTokens: 4096 }],
-        },
-      },
-    };
+    config.models = providerConfig(params.configuredProvider, "vision", {
+      baseUrl: "https://example.invalid/v1",
+    }).models;
   }
-  const tool = createImageTool({
+  const tool = createImageToolForTest({
     config,
     agentDir: "/image-provider-loading-test",
-    ...(params.preparedProviders
-      ? {
-          preparedModelRuntime: {
-            mediaCapabilityProviders: { mediaUnderstandingProviders: params.preparedProviders },
-          } as never,
-        }
-      : {}),
+    preparedModelRuntime: params.preparedProviders
+      ? ({
+          mediaCapabilityProviders: { mediaUnderstandingProviders: params.preparedProviders },
+        } as never)
+      : undefined,
   });
-  if (!tool) {
-    throw new Error("expected configured image tool");
-  }
   return await tool.execute(
     "image-loading",
     params.paths ? { paths: params.paths } : { path: image },
@@ -276,7 +233,7 @@ describe("image tool provider loading", () => {
         if (preparedProviders === undefined) {
           throw new Error("unrelated media plugin failed to initialize");
         }
-        return buildProviderRegistry(overrides, cfg, preparedProviders);
+        return buildMediaUnderstandingRegistry(overrides, cfg, preparedProviders);
       },
       resolveRegisteredMediaUnderstandingProvider: resolveProvider,
       resolveImageCompressionPolicy: async () => ({ imageCount: 1 }),
@@ -284,18 +241,12 @@ describe("image tool provider loading", () => {
     });
   });
 
-  afterEach(() => testing.setProviderDepsForTest());
-
   it("uses a prepared single-image owner alias for each image", async () => {
-    const describeImage = vi.fn<NonNullable<MediaUnderstandingProvider["describeImage"]>>(
-      async ({ buffer }) => ({ text: buffer.toString("utf8") }),
-    );
-    const owner: MediaUnderstandingProvider & CapabilityModelProviderCandidate = {
-      id: "owner",
+    const owner = {
+      ...makeProvider("owner", async ({ buffer }) => ({ text: buffer.toString("utf8") })),
       aliases: ["selected"],
-      capabilities: ["image"],
-      describeImage,
     };
+    const describeImage = vi.mocked(owner.describeImage!);
     resolveProvider.mockReturnValue(owner);
     const result = await executeImage({
       paths: [image, "data:image/png;base64,aW1hZ2UtdHdv"],
@@ -303,10 +254,6 @@ describe("image tool provider loading", () => {
     });
 
     expect(describeImage).toHaveBeenCalledTimes(2);
-    expect(describeImage.mock.calls.map(([request]) => request.buffer.toString("utf8"))).toEqual([
-      "image",
-      "image-two",
-    ]);
     expect(result.content).toEqual([
       { type: "text", text: "Image 1:\nimage\n\nImage 2:\nimage-two" },
     ]);

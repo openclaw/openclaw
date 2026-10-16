@@ -29,7 +29,7 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
+  getGatewayToolCallerIdentity as getCaller,
   withGatewayPersonalToolUser,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
@@ -37,12 +37,36 @@ import {
 } from "./gateway-caller-context.js";
 
 type CallerIdentity = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+type Caller = Partial<CallerIdentity>;
 const defaultCaller = { agentId: "main", sessionKey: "agent:main:session" };
 const agentCaller = { agentId: "agent-a", sessionKey: "agent-a:session" };
 
-function withCaller<T>(identity: Partial<CallerIdentity>, run: () => T | Promise<T>) {
+function withCaller<T>(identity: Caller, run: () => T | Promise<T>) {
   return withGatewayToolCallerIdentity({ ...defaultCaller, ...identity }, run);
 }
+
+function withCallers<T>(identities: Caller[], run: () => T | Promise<T>): Promise<T> {
+  const [identity, ...nested] = identities;
+  return identity ? withCaller(identity, () => withCallers(nested, run)) : Promise.resolve(run());
+}
+
+const runInstance = (name: string) => ({ instanceId: `${name}-instance`, runId: `${name}-run` });
+const admittedCaller = (name: string, turnSourceChannel: string, admitted = true) => ({
+  agentId: name,
+  sessionKey: `agent:${name}:session`,
+  turnSourceChannel,
+  ...(admitted
+    ? {
+        operationalRunInstance: runInstance(name),
+        executionIdentityToken: createExecutionIdentityAdmissionToken(`${name}-run`),
+      }
+    : {}),
+});
+const denyTool = (denied: string) => (name: string) => {
+  if (name === denied) {
+    throw new Error(`${name} denied`);
+  }
+};
 
 function makeTool(): AnyAgentTool {
   return {
@@ -73,7 +97,7 @@ describe("gateway caller context wrapper", () => {
     });
     await withCaller(
       {
-        operationalRunInstance: { instanceId: "source-instance", runId: "source-run" },
+        operationalRunInstance: runInstance("source"),
         operatorAuthority,
         receiptAuthority: () => true,
         cronAuthorityCheck: () => false,
@@ -117,7 +141,7 @@ describe("gateway caller context wrapper", () => {
             : root;
       const entered = vi.fn(() => {
         const retained = expectDefined(
-          getGatewayToolCallerIdentity()?.approvalAuthority,
+          getCaller()?.approvalAuthority,
           "retained approval authority",
         );
         expect(validateAgentRunDelegatedAuthority(retained)).toBe(true);
@@ -143,55 +167,47 @@ describe("gateway caller context wrapper", () => {
   );
 
   it("preserves every delegated tool restriction through same-run wrappers", async () => {
-    await withCaller(
-      {
-        sessionEventToolsAllow: ["read", "process"],
-        sessionEventSettings: {
-          permissionMode: "workspace",
-          toolOverrides: { webSearch: false },
-        },
-        assertToolAllowed: (name) => {
-          if (name === "exec") {
-            throw new Error("exec denied");
-          }
-        },
-      },
-      () =>
-        withCaller(
-          {
-            sessionEventToolsAllow: ["read", "exec"],
-            sessionEventSettings: {
-              permissionMode: "full",
-              toolOverrides: { mcpServers: { fixture: false } },
-            },
-            assertToolAllowed: (name) => {
-              if (name === "process") {
-                throw new Error("process denied");
-              }
-            },
+    await withCallers(
+      [
+        {
+          sessionEventToolsAllow: ["read", "process"],
+          sessionEventSettings: {
+            permissionMode: "workspace",
+            toolOverrides: { webSearch: false },
           },
-          () =>
-            withCaller({}, () => {
-              const caller = getGatewayToolCallerIdentity();
-              expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
-              expect(caller?.sessionEventSettings).toEqual({
-                permissionMode: "workspace",
-                toolOverrides: { webSearch: false, mcpServers: { fixture: false } },
-              });
-              expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
-              expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
-              expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
-            }),
-        ),
+          assertToolAllowed: denyTool("exec"),
+        },
+        {
+          sessionEventToolsAllow: ["read", "exec"],
+          sessionEventSettings: {
+            permissionMode: "full",
+            toolOverrides: { mcpServers: { fixture: false } },
+          },
+          assertToolAllowed: denyTool("process"),
+        },
+        {},
+      ],
+      () => {
+        const caller = getCaller();
+        expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
+        expect(caller?.sessionEventSettings).toEqual({
+          permissionMode: "workspace",
+          toolOverrides: { webSearch: false, mcpServers: { fixture: false } },
+        });
+        expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
+        expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
+        expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
+      },
     );
   });
 
   it.each(["full", "guarded"] as const)(
-    "retains a captured default posture through a nested %s permission wrapper",
+    "retains default permissions through %s wrappers",
     async (permissionMode) => {
-      const execute = vi.fn(() => getGatewayToolCallerIdentity()?.sessionEventSettings);
-      const wrapped = withCaller({ sessionEventSettings: {} }, () =>
-        withCaller({ sessionEventSettings: { permissionMode } }, () => withCaller({}, execute)),
+      const execute = vi.fn(() => getCaller()?.sessionEventSettings);
+      const wrapped = withCallers(
+        [{ sessionEventSettings: {} }, { sessionEventSettings: { permissionMode } }, {}],
+        execute,
       );
       if (permissionMode === "guarded") {
         await expect(wrapped).rejects.toThrow("changed between default and explicit permissions");
@@ -203,18 +219,14 @@ describe("gateway caller context wrapper", () => {
     },
   );
 
-  it.each(["outer", "inner"] as const)(
-    "preserves the %s caller's automatic-delivery restriction through delegation",
-    async (restricted) => {
-      await withCaller(restricted === "outer" ? { sessionEventDelivery: false } : {}, () =>
-        withCaller(restricted === "inner" ? { sessionEventDelivery: false } : {}, () =>
-          withCaller({}, () => {
-            expect(getGatewayToolCallerIdentity()?.sessionEventDelivery).toBe(false);
-          }),
-        ),
-      );
-    },
-  );
+  it.each(["outer", "inner"] as const)("retains %s delivery restrictions", async (restricted) => {
+    await withCallers(
+      ["outer", "inner", "wrapper"].map((scope) =>
+        scope === restricted ? { sessionEventDelivery: false } : {},
+      ),
+      () => expect(getCaller()?.sessionEventDelivery).toBe(false),
+    );
+  });
 
   it("preserves tool metadata used by policy and presentation layers", () => {
     const tool = makeTool();
@@ -234,12 +246,12 @@ describe("gateway caller context wrapper", () => {
   it("applies caller identity to private preparation and execution", async () => {
     const seen: unknown[] = [];
     const tool = attachInternalToolExecutionPreparer(makeTool(), async () => {
-      seen.push(getGatewayToolCallerIdentity());
+      seen.push(getCaller());
       return {
         kind: "ready",
         args: {},
         execute: async () => {
-          seen.push(getGatewayToolCallerIdentity());
+          seen.push(getCaller());
           return { content: [], details: {} };
         },
         dispose: vi.fn(),
@@ -267,34 +279,17 @@ describe("gateway caller context wrapper", () => {
     replacement.resolveGatewayContext = () => replacement;
     let current = admitted;
     const selectGateway = vi.fn(() => current);
+    const captureResolver = () =>
+      expectDefined(getCaller()?.gatewayContextResolver, "admitted caller Gateway");
 
-    const first = await withGatewayToolCallerIdentity(
-      {
-        ...agentCaller,
-        gatewayContextResolver: selectGateway,
-      },
-      () => {
-        const resolveGatewayContext = expectDefined(
-          getGatewayToolCallerIdentity()?.gatewayContextResolver,
-          "admitted caller Gateway",
-        );
-        expect(resolveGatewayContext()).toBe(admitted);
-        current = replacement;
-        expect(resolveGatewayContext()).toBeUndefined();
-        return resolveGatewayContext;
-      },
-    );
-    const second = await withGatewayToolCallerIdentity(
-      {
-        ...agentCaller,
-        gatewayContextResolver: selectGateway,
-      },
-      () =>
-        expectDefined(
-          getGatewayToolCallerIdentity()?.gatewayContextResolver,
-          "replacement caller Gateway",
-        ),
-    );
+    const first = await withCaller({ gatewayContextResolver: selectGateway }, () => {
+      const resolveGatewayContext = captureResolver();
+      expect(resolveGatewayContext()).toBe(admitted);
+      current = replacement;
+      expect(resolveGatewayContext()).toBeUndefined();
+      return resolveGatewayContext;
+    });
+    const second = await withCaller({ gatewayContextResolver: selectGateway }, captureResolver);
     const callsBeforeLookup = selectGateway.mock.calls.length;
     expect(getCanonicalGatewayContextResolver(first)).toBe(admitted.resolveGatewayContext);
     expect(getCanonicalGatewayContextResolver(second)).toBe(replacement.resolveGatewayContext);
@@ -304,78 +299,41 @@ describe("gateway caller context wrapper", () => {
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {
-    let nestedOwner: string | undefined;
-    let restoredOwner: string | undefined;
-
     await withCaller(
-      {
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        approvalOwnerPluginId: "codex",
-      },
+      { operationalRunInstance: runInstance("owner"), approvalOwnerPluginId: "codex" },
       async () => {
         await withGatewayToolApprovalOwner("policy-plugin", async () => {
-          nestedOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+          expect(getCaller()?.approvalOwnerPluginId).toBe("policy-plugin");
         });
-        restoredOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+        expect(getCaller()?.approvalOwnerPluginId).toBe("codex");
       },
     );
-
-    expect(nestedOwner).toBe("policy-plugin");
-    expect(restoredOwner).toBe("codex");
   });
 
   it.each(["wrapper", "admitted run"] as const)(
     "selects the authority root for a nested %s",
     async (kind) => {
-      const outerRun = { instanceId: "outer-instance", runId: "outer-run" };
-      const childRun = { instanceId: "child-instance", runId: "child-run" };
-      const outerToken = createExecutionIdentityAdmissionToken("outer-run");
-      const childToken = createExecutionIdentityAdmissionToken("child-run");
       const distinct = kind === "admitted run";
-      const identity = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:session-1",
-          operationalRunInstance: outerRun,
-          executionIdentityToken: outerToken,
-          turnSourceChannel: "telegram",
-          ...(distinct ? { fullPermission: true, cronSelfManagementJobId: "outer-job" } : {}),
-        },
-        () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "child",
-              sessionKey: "agent:child:session-2",
-              turnSourceChannel: "discord",
-              ...(distinct
-                ? { operationalRunInstance: childRun, executionIdentityToken: childToken }
-                : { cronSelfManagementJobId: "job-1" }),
-            },
-            () => getGatewayToolCallerIdentity(),
-          ),
+      const outer = admittedCaller("outer", "telegram");
+      const child = admittedCaller("child", "discord", distinct);
+      const identity = await withCallers(
+        [
+          {
+            ...outer,
+            ...(distinct ? { fullPermission: true, cronSelfManagementJobId: "outer-job" } : {}),
+          },
+          {
+            ...child,
+            ...(!distinct ? { cronSelfManagementJobId: "job-1" } : {}),
+          },
+        ],
+        getCaller,
       );
       expect(identity).toMatchObject(
         distinct
-          ? {
-              agentId: "child",
-              sessionKey: "agent:child:session-2",
-              operationalRunInstance: childRun,
-              executionIdentityToken: childToken,
-              turnSourceChannel: "discord",
-            }
-          : {
-              agentId: "main",
-              sessionKey: "agent:main:session-1",
-              operationalRunInstance: outerRun,
-              executionIdentityToken: outerToken,
-              turnSourceChannel: "telegram",
-              cronSelfManagementJobId: "job-1",
-            },
+          ? { ...child, cronSelfManagementJobId: undefined, fullPermission: undefined }
+          : { ...outer, cronSelfManagementJobId: "job-1" },
       );
-      if (distinct) {
-        expect(identity?.cronSelfManagementJobId).toBeUndefined();
-        expect(identity?.fullPermission).toBeUndefined();
-      }
     },
   );
 
@@ -385,61 +343,43 @@ describe("gateway caller context wrapper", () => {
     [true, false, false],
     [false, true, false],
   ])("narrows same-run Full Access from %s and %s to %s", async (outer, inner, expected) => {
-    await withCaller({ fullPermission: outer }, () =>
-      withCaller({ fullPermission: inner }, () =>
-        expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(expected),
-      ),
+    await withCallers(
+      [outer, inner].map((fullPermission) => ({ fullPermission })),
+      () => expect(getCaller()?.fullPermission).toBe(expected),
     );
   });
 
-  it.each(["same", "distinct"] as const)(
-    "retains receipt authority and signals for %s nested runs",
-    async (kind) => {
-      const sameRun = kind === "same";
-      const run = { instanceId: "outer-instance", runId: "outer-run" };
-      let outerActive = sameRun;
-      let innerActive = true;
-      const outer = vi.fn(() => outerActive);
-      const inner = vi.fn(() => innerActive);
-      const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
-      const innerSignal = new AbortController().signal;
-      const identity = await withGatewayToolCallerIdentity(
-        {
-          agentId: "outer",
-          sessionKey: "agent:outer:session",
-          operationalRunInstance: run,
-          receiptAuthority: outer,
-          approvalSignals: [outerSignal],
-        },
-        () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "inner",
-              sessionKey: "agent:inner:session",
-              operationalRunInstance: sameRun
-                ? run
-                : { instanceId: "child-instance", runId: "child-run" },
-              receiptAuthority: inner,
-              approvalSignals: [innerSignal],
-            },
-            () => getGatewayToolCallerIdentity(),
-          ),
-      );
-      expect(identity?.receiptAuthority?.()).toBe(true);
-      if (sameRun) {
-        outerActive = false;
-        expect(identity?.receiptAuthority?.()).toBe(false);
-        outerActive = true;
-        innerActive = false;
-        expect(identity?.receiptAuthority?.()).toBe(false);
-        expect(outer).toHaveBeenCalledTimes(3);
-        expect(inner).toHaveBeenCalledTimes(3);
-        expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
-      } else {
-        expect(inner).toHaveBeenCalledOnce();
-        expect(outer).not.toHaveBeenCalled();
-        expect(identity?.approvalSignals).toEqual([innerSignal]);
-      }
-    },
-  );
+  it.each(["same", "distinct"] as const)("retains %s run receipts and signals", async (kind) => {
+    const sameRun = kind === "same";
+    const run = runInstance("outer");
+    let outerActive = sameRun;
+    let innerActive = true;
+    const outer = vi.fn(() => outerActive);
+    const inner = vi.fn(() => innerActive);
+    const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
+    const innerSignal = new AbortController().signal;
+    const identity = await withCallers(
+      [outer, inner].map((receiptAuthority, index) => ({
+        operationalRunInstance: index === 0 || sameRun ? run : runInstance("child"),
+        receiptAuthority,
+        approvalSignals: [index === 0 ? outerSignal : innerSignal],
+      })),
+      getCaller,
+    );
+    expect(identity?.receiptAuthority?.()).toBe(true);
+    if (sameRun) {
+      outerActive = false;
+      expect(identity?.receiptAuthority?.()).toBe(false);
+      outerActive = true;
+      innerActive = false;
+      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(outer).toHaveBeenCalledTimes(3);
+      expect(inner).toHaveBeenCalledTimes(3);
+      expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
+    } else {
+      expect(inner).toHaveBeenCalledOnce();
+      expect(outer).not.toHaveBeenCalled();
+      expect(identity?.approvalSignals).toEqual([innerSignal]);
+    }
+  });
 });

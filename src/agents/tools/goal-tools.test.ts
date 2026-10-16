@@ -1,5 +1,3 @@
-// Goal tool tests cover goal accounting projection and correct session-store
-// routing for global and scoped sessions.
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,23 +69,31 @@ describe("goal tools", () => {
 
     const result = await tool.execute("call-1", {});
 
-    expect((result.details as { goal?: { status?: string } }).goal?.status).toBe("budget_limited");
+    expect(result.details).toMatchObject({ goal: { status: "budget_limited" } });
     expect(readGoal()?.status).toBe("active");
   });
 
-  it.each([100])("creates a scoped goal with token_budget=%s", async (budget) => {
-    const { options, readGoal } = await createStoreConfig();
-    const tool = createCreateGoalTool(options);
-    const args = { objective: "ship global work", token_budget: budget };
-    expect(Value.Check(tool.parameters, args)).toBe(true);
-    await tool.execute("call-1", args);
-
-    expect(readGoal()).toMatchObject({
-      objective: "ship global work",
-      tokenBudget: budget,
-    });
-    expect(readGoal("main")).toBeUndefined();
-  });
+  it.each([
+    { sessionKey: "global", budget: 100, otherAgent: "main" },
+    { sessionKey: "agent:ops:main", budget: undefined, otherAgent: "research" },
+  ])(
+    "creates a goal in the owning store for $sessionKey",
+    async ({ sessionKey, budget, otherAgent }) => {
+      const { options, readGoal } = await createStoreConfig(sessionKey);
+      const tool = createCreateGoalTool(options);
+      const args = {
+        objective: "ship work",
+        ...(budget === undefined ? {} : { token_budget: budget }),
+      };
+      expect(Value.Check(tool.parameters, args)).toBe(true);
+      await tool.execute("call-1", args);
+      expect(readGoal()).toMatchObject({
+        objective: "ship work",
+        ...(budget === undefined ? {} : { tokenBudget: budget }),
+      });
+      expect(readGoal(otherAgent)).toBeUndefined();
+    },
+  );
 
   it.each(["42.9", 0])(
     "rejects invalid token budgets before creating a goal: %s",
@@ -104,15 +110,6 @@ describe("goal tools", () => {
       expect(readGoal()).toBeUndefined();
     },
   );
-
-  it("prefers scoped run session keys over the fallback session agent", async () => {
-    const { options, readGoal } = await createStoreConfig("agent:ops:main");
-    const tool = createCreateGoalTool(options);
-    await tool.execute("call-1", { objective: "ship ops work" });
-
-    expect(readGoal()?.objective).toBe("ship ops work");
-    expect(readGoal("research")).toBeUndefined();
-  });
 
   it("returns actionable guidance when goal is already complete", async () => {
     const { options, readGoal } = await createStoreConfig("global", {

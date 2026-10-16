@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
 import * as descriptions from "../../media-understanding/image-runtime.js";
@@ -15,8 +17,8 @@ import {
   hasImageReasoningOnlyResponse,
   type ImageModelConfig,
 } from "./image-tool.helpers.js";
+import { createImageTool } from "./image-tool.js";
 import * as execution from "./image-tool.model-execution.js";
-import "./image-tool.js";
 
 type ImageWebMediaRuntime = {
   loadWebMedia(
@@ -53,11 +55,10 @@ type ImageToolTestApi = {
 };
 
 function getTestApi(): ImageToolTestApi {
-  const api = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")];
-  if (!api) {
-    throw new Error("image tool test API is unavailable");
-  }
-  return api as ImageToolTestApi;
+  return expectDefined(
+    (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")],
+    "image tool test API",
+  ) as ImageToolTestApi;
 }
 
 const restoreSpies: Array<{ mockRestore(): void }> = [];
@@ -138,6 +139,39 @@ export const resolveImageModelConfigForTool: ImageToolTestApi["resolveImageModel
 
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
+
+export function createImageToolForTest(options: Parameters<typeof createImageTool>[0]) {
+  return expectDefined(createImageTool(options), "configured image tool");
+}
+
+export function createImageWebMediaRuntime(
+  loadWebMedia: ImageWebMediaRuntime["loadWebMedia"],
+): ImageWebMediaRuntime {
+  return {
+    loadWebMedia,
+    optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+      buffer,
+      contentType: contentType ?? "image/png",
+      kind: "image",
+      fileName,
+    }),
+  };
+}
+
+export function makeModelDefinition(
+  id: string,
+  input: Array<"text" | "image"> = ["text", "image"],
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
 
 export function createMinimaxImageConfig(): OpenClawConfig {
   return {

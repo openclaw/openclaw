@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
-  buildMediaUnderstandingRegistry,
-  getMediaUnderstandingProvider,
+  buildMediaUnderstandingRegistry as buildProviderRegistry,
+  getMediaUnderstandingProvider as readProvider,
 } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -14,61 +14,45 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { createImageTool } from "./image-tool.js";
 import {
+  createImageToolForTest,
+  createImageWebMediaRuntime,
   createMinimaxImageConfig,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
   testing,
 } from "./image-tool.test-support.js";
 
-const buildProviderRegistry = buildMediaUnderstandingRegistry;
-const readProvider = getMediaUnderstandingProvider;
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRequiredImageTool(options: Parameters<typeof createImageTool>[0]) {
-  const tool = createImageTool(options);
-  if (!tool) {
-    throw new Error("expected image tool");
-  }
-  return tool;
-}
 
 type ProviderDeps = NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>;
 type MockImageLoadWebMedia = Awaited<
   ReturnType<NonNullable<ProviderDeps["loadImageWebMediaRuntime"]>>
 >["loadWebMedia"];
 
-function imageMedia() {
-  return {
-    buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-    contentType: "image/png",
-    kind: "image" as const,
-  };
+const imageMedia = () => ({
+  buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+  contentType: "image/png",
+  kind: "image" as const,
+});
+
+function imageTool(config = createMinimaxImageConfig()) {
+  return createImageToolForTest({ config, agentDir: tempDirs.make("openclaw-image-abort-") });
 }
 
 function executeAbortImage(
   signal: AbortSignal,
   paths = ["https://example.test/a.png", "https://example.test/b.png"],
 ) {
-  const tool = createRequiredImageTool({
-    config: createMinimaxImageConfig(),
-    agentDir: tempDirs.make("openclaw-image-abort-"),
-  });
-  return tool.execute("t1", { prompt: "Describe the images.", paths }, signal);
+  return imageTool().execute("t1", { paths }, signal);
 }
 
 describe("image tool run abort", () => {
+  beforeEach(() => vi.stubEnv("MINIMAX_API_KEY", "minimax-test"));
   afterEach(() => {
     vi.unstubAllEnvs();
     testing.setProviderDepsForTest();
   });
-
-  function makeDescribeSpies() {
-    const describeModel = async ({ model }: { model: string }) => ({ text: "ok", model });
-    return { describeImage: vi.fn(describeModel), describeImages: vi.fn(describeModel) };
-  }
 
   function installAbortImageDeps(
     loadWebMedia: MockImageLoadWebMedia,
@@ -78,7 +62,8 @@ describe("image tool run abort", () => {
     ],
     resolveModelAsync = resolveConfiguredImageModelForTest,
   ) {
-    const spies = makeDescribeSpies();
+    const describeModel = async ({ model }: { model: string }) => ({ text: "ok", model });
+    const spies = { describeImage: vi.fn(describeModel), describeImages: vi.fn(describeModel) };
     const providerRegistry = buildProviderRegistry(undefined, undefined, providers);
     testing.setProviderDepsForTest({
       buildProviderRegistry: (overrides, cfg) => buildProviderRegistry(overrides, cfg, providers),
@@ -86,15 +71,7 @@ describe("image tool run abort", () => {
       resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
         readProvider(providerId, providerRegistry),
       resolveModelAsync,
-      loadImageWebMediaRuntime: async () => ({
-        loadWebMedia,
-        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
-          buffer,
-          contentType: contentType ?? "image/png",
-          kind: "image",
-          fileName,
-        }),
-      }),
+      loadImageWebMediaRuntime: async () => createImageWebMediaRuntime(loadWebMedia),
       describeImageWithModel: spies.describeImage,
       describeImagesWithModel: spies.describeImages,
     });
@@ -154,10 +131,7 @@ describe("image tool run abort", () => {
         [{ id: "test-provider", capabilities: ["image"] }],
         resolveModel,
       );
-      const tool = createRequiredImageTool({
-        config: cfg,
-        agentDir: tempDirs.make("openclaw-image-abort-"),
-      });
+      const tool = imageTool(cfg);
       const runWithRequester = <T>(run: () => Promise<T>) =>
         source === "direct"
           ? withOperatorToolGatewayAuthority(
@@ -169,6 +143,7 @@ describe("image tool run abort", () => {
               run,
             );
       const changedDuringCapture = scenario === "mutated override" || scenario === "mutated path";
+      const deniedOverride = scenario === "denied override" || scenario === "mutated override";
       const captureStarted = createDeferredCore();
       const resumeCapture = createDeferredCore();
       const capture = operatorInvocation.captureAmbientGatewayOperatorAuthority;
@@ -184,11 +159,7 @@ describe("image tool run abort", () => {
         : undefined;
       const args = {
         paths: ["https://example.test/image.png"],
-        prompt: "Answer using this image.",
-        model:
-          scenario === "denied override" || scenario === "mutated override"
-            ? "blocked-alias"
-            : undefined,
+        model: deniedOverride ? "blocked-alias" : undefined,
       };
       const work = new AsyncWorkScope();
       try {
@@ -217,7 +188,7 @@ describe("image tool run abort", () => {
             expect.any(Object),
           );
         }
-        if (scenario === "denied override" || scenario === "mutated override") {
+        if (deniedOverride) {
           expect(loadWebMedia).not.toHaveBeenCalled();
           expect(resolveModel).not.toHaveBeenCalled();
         }
@@ -231,7 +202,6 @@ describe("image tool run abort", () => {
   );
 
   it("forwards the run signal through the provider request contract", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => imageMedia());
     const spies = installAbortImageDeps(loadWebMedia, [{ id: "minimax", capabilities: ["image"] }]);
     const controller = new AbortController();
@@ -246,7 +216,6 @@ describe("image tool run abort", () => {
   it.each(["before execution", "during model resolution"] as const)(
     "skips downloads and provider calls when aborted %s",
     async (phase) => {
-      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => imageMedia());
       const controller = new AbortController();
       const reason = new Error("Image model selection cancelled");
@@ -288,7 +257,6 @@ describe("image tool run abort", () => {
   );
 
   it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const controller = new AbortController();
     const downloadStarted = createDeferredCore();
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
@@ -305,18 +273,12 @@ describe("image tool run abort", () => {
     });
     const spies = installAbortImageDeps(loadWebMedia);
 
-    const execution = executeAbortImage(controller.signal, [
-      "https://example.test/a.png",
-      "https://example.test/b.png",
-      "https://example.test/c.png",
-    ]);
+    const execution = executeAbortImage(controller.signal);
     await downloadStarted.promise;
     controller.abort();
 
     await expect(execution).rejects.toThrow();
 
-    // Only the first image is fetched; the loop exits before the rest and the
-    // paid vision provider is never called for the dead run.
     expect(loadWebMedia).toHaveBeenCalledTimes(1);
     expect(spies.describeImage).not.toHaveBeenCalled();
     expect(spies.describeImages).not.toHaveBeenCalled();
