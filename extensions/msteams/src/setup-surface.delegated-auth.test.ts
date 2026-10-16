@@ -130,74 +130,50 @@ describe("msteams setup delegated auth", () => {
     );
   });
 
-  it("stores delegated auth under the resolved named account", async () => {
-    resolveMSTeamsCredentials.mockReturnValue(credentials("support-app", "support-password"));
+  it.each([
+    ["support", "support", "/hooks/3979"],
+    ["default", "Default", "/hooks/3978"],
+  ] as const)("stores delegated auth under account %s", async (accountId, key, path) => {
+    const account = {
+      appId: `${accountId}-app`,
+      appPassword: `${accountId}-password`,
+      tenantId: "tenant-id",
+      webhook: { path },
+    };
+    resolveMSTeamsCredentials.mockReturnValue({ type: "secret", ...account });
     loginMSTeamsDelegated.mockResolvedValue({ ...tokens, scopes: ["ChatMessage.Send"] });
     const { prompter, progress } = createPrompter();
-
     const result = await msteamsSetupWizard.finalize?.({
       cfg: teamsConfig({
-        accounts: {
-          support: {
-            appId: "support-app",
-            appPassword: "support-password",
-            tenantId: "tenant-id",
-            webhook: { path: "/hooks/3979" },
-          },
-        },
+        ...(accountId === "default" ? { defaultAccount: key } : {}),
+        accounts: { [key]: account },
       }),
-      accountId: "support",
+      accountId,
       prompter,
     } as never);
-
-    expect(result?.cfg?.channels?.msteams?.accounts?.support).toEqual({
-      appId: "support-app",
-      appPassword: "support-password",
-      tenantId: "tenant-id",
-      webhook: { path: "/hooks/3979" },
-      delegatedAuth: { enabled: true },
-      enabled: true,
-    });
+    const configured = result?.cfg?.channels?.msteams;
+    if (accountId === "support") {
+      expect(configured?.accounts?.support).toEqual({
+        appId: "support-app",
+        appPassword: "support-password",
+        tenantId: "tenant-id",
+        webhook: { path: "/hooks/3979" },
+        delegatedAuth: { enabled: true },
+        enabled: true,
+      });
+      expect(progress.stop).toHaveBeenCalled();
+    } else {
+      expect(configured?.accounts?.Default).toMatchObject({ delegatedAuth: { enabled: true } });
+      expect(configured?.accounts).not.toHaveProperty("default");
+      expect(configured?.delegatedAuth).toBeUndefined();
+      expect(resolveMSTeamsCredentials).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ pathPrefix: "channels.msteams.accounts.Default" }),
+      );
+    }
     expect(saveDelegatedTokens).toHaveBeenCalledWith(
       expect.objectContaining({ accessToken: "access-token", refreshToken: "refresh-token" }),
-      "support",
-    );
-    expect(progress.stop).toHaveBeenCalled();
-  });
-
-  it("stores delegated auth under an explicit default account", async () => {
-    resolveMSTeamsCredentials.mockReturnValue(credentials("default-app", "default-password"));
-    loginMSTeamsDelegated.mockResolvedValue({ ...tokens, scopes: ["ChatMessage.Send"] });
-    const { prompter } = createPrompter();
-
-    const result = await msteamsSetupWizard.finalize?.({
-      cfg: teamsConfig({
-        defaultAccount: "Default",
-        accounts: {
-          Default: {
-            appId: "default-app",
-            appPassword: "default-password",
-            tenantId: "tenant-id",
-            webhook: { path: "/hooks/3978" },
-          },
-        },
-      }),
-      accountId: "default",
-      prompter,
-    } as never);
-
-    expect(result?.cfg?.channels?.msteams?.accounts?.Default).toMatchObject({
-      delegatedAuth: { enabled: true },
-    });
-    expect(result?.cfg?.channels?.msteams?.accounts).not.toHaveProperty("default");
-    expect(result?.cfg?.channels?.msteams?.delegatedAuth).toBeUndefined();
-    expect(resolveMSTeamsCredentials).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ pathPrefix: "channels.msteams.accounts.Default" }),
-    );
-    expect(saveDelegatedTokens).toHaveBeenCalledWith(
-      expect.objectContaining({ accessToken: "access-token", refreshToken: "refresh-token" }),
-      "default",
+      accountId,
     );
   });
 });

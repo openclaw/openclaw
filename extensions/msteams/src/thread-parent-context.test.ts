@@ -1,4 +1,3 @@
-// Msteams tests cover thread parent context plugin behavior.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
@@ -11,29 +10,15 @@ vi.mock("./graph-thread.js", async (importOriginal) => ({
   fetchChannelMessage,
 }));
 
-let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
-let markParentContextInjected: typeof import("./thread-parent-context.js").markParentContextInjected;
-let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
-let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
+let parentContext: typeof import("./thread-parent-context.js");
 
 async function loadParentContextModule() {
   vi.resetModules();
   fetchChannelMessage.mockReset();
-  ({
-    fetchParentMessageCached,
-    markParentContextInjected,
-    shouldInjectParentContext,
-    summarizeParentMessage,
-  } = await import("./thread-parent-context.js"));
+  parentContext = await import("./thread-parent-context.js");
 }
 
-// Formatting is stateless; only the cache and dedupe suites need per-case imports.
 beforeAll(loadParentContextModule);
-
-// Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
-// on the ES2024 String.prototype.isWellFormed() runtime API.
-const UNPAIRED_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 function message(
   content: string,
@@ -59,7 +44,7 @@ describe("summarizeParentMessage", () => {
     ],
     ["missing sender", message("orphan"), { sender: "unknown", text: "orphan" }],
   ] as const)("summarizes %s", (_label, input, expected) => {
-    expect(summarizeParentMessage(input)).toEqual(expected);
+    expect(parentContext.summarizeParentMessage(input)).toEqual(expected);
   });
 
   it("collapses whitespace in text contentType", () => {
@@ -75,13 +60,11 @@ describe("summarizeParentMessage", () => {
   });
 
   it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
-    const summary = summarizeParentMessage(
+    const summary = parentContext.summarizeParentMessage(
       message(`${"a".repeat(398)}🦞${"b".repeat(50)}`, { user: { displayName: "Dana" } }),
     );
 
-    expect(summary?.text).not.toMatch(UNPAIRED_SURROGATE_RE);
     expect(summary?.text).toBe(`${"a".repeat(398)}…`);
-    expect(summary?.text.endsWith("\ud83e…")).toBe(false);
   });
 });
 
@@ -96,14 +79,13 @@ describe("fetchParentMessageCached", () => {
     const mockMsg = message("hi");
     const fetcher = fetchChannelMessage.mockImplementation(async () => mockMsg);
 
-    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const first = await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(first).toEqual(mockMsg);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith("tok", "g1", "c1", "p1", undefined);
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
-    const third = await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const third = await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(third).toEqual(mockMsg);
@@ -126,9 +108,9 @@ describe("fetchParentMessageCached", () => {
       body: { content: `content-${parentId}`, contentType: "text" },
     }));
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
-    await fetchParentMessageCached("tok", "g1", "c1", "p2");
-    await fetchParentMessageCached("tok", "g2", "c1", "p1");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p2");
+    await parentContext.fetchParentMessageCached("tok", "g2", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
@@ -137,10 +119,9 @@ describe("fetchParentMessageCached", () => {
     vi.useFakeTimers();
     const fetcher = fetchChannelMessage.mockResolvedValue(message("hi"));
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
-    // 5 min TTL: advance just beyond.
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
@@ -180,12 +161,12 @@ describe("shouldInjectParentContext / markParentContextInjected", () => {
   beforeEach(loadParentContextModule);
 
   it("deduplicates a marked parent while keeping other parents and sessions independent", () => {
-    expect(shouldInjectParentContext("session-1", "parent-1")).toBe(true);
+    expect(parentContext.shouldInjectParentContext("session-1", "parent-1")).toBe(true);
 
-    markParentContextInjected("session-1", "parent-1");
+    parentContext.markParentContextInjected("session-1", "parent-1");
 
-    expect(shouldInjectParentContext("session-1", "parent-1")).toBe(false);
-    expect(shouldInjectParentContext("session-1", "parent-2")).toBe(true);
-    expect(shouldInjectParentContext("session-2", "parent-1")).toBe(true);
+    expect(parentContext.shouldInjectParentContext("session-1", "parent-1")).toBe(false);
+    expect(parentContext.shouldInjectParentContext("session-1", "parent-2")).toBe(true);
+    expect(parentContext.shouldInjectParentContext("session-2", "parent-1")).toBe(true);
   });
 });
