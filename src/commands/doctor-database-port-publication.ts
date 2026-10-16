@@ -241,7 +241,7 @@ export function loadDatabasePortStateReceipt(ctx: Context): void {
     artifact.path.startsWith(path.join(ctx.directory, "config-state-")),
   );
   if (receipt) {
-    // loadRecovery already verified the private artifact's recorded digest.
+    // SAFETY: loadRecovery verified the private artifact's recorded digest.
     ctx.stateReceipt = JSON.parse(fs.readFileSync(receipt.path, "utf8")) as Context["stateReceipt"];
   }
 }

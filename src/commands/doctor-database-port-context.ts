@@ -74,8 +74,12 @@ export const livePath = (target: DatabasePortManifest["targets"][number]) =>
   target.original.engine === "sqlite" ? target.original.path : target.original.anchorPath;
 export function revise(ctx: Context) {
   const current = manifest(ctx);
+  writeDatabasePortManifest(
+    ctx.stateDir,
+    { ...current, revision: current.revision + 1 },
+    ctx.assertCurrent,
+  );
   current.revision++;
-  writeDatabasePortManifest(ctx.stateDir, current, ctx.assertCurrent);
 }
 export async function record(ctx: Context, file: string, value: unknown) {
   const contents = `${JSON.stringify(value)}\n`;

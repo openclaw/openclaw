@@ -1,3 +1,4 @@
+import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,7 +163,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           error,
           ["config", "config committed", "complete revision"].includes(point)
             ? state.stateDir
-            : source,
+            : point === "initial manifest"
+              ? state.statePath("state", "openclaw.sqlite")
+              : source,
           point === "capture" ? "capture originals" : "Database port",
         );
         vi.restoreAllMocks();
