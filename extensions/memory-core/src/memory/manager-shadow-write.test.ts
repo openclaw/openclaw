@@ -5,7 +5,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
@@ -29,14 +29,7 @@ describe("private session source staging", () => {
   async function setup() {
     await fixture.seedSessionTranscript({
       sessionId: "shadow-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: 1,
-          content: "Violet session preference.",
-          senderIsOwner: true,
-        },
-      ],
+      messages: [{ role: "user", timestamp: 1, content: "Violet", senderIsOwner: true }],
     });
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
@@ -59,13 +52,12 @@ describe("private session source staging", () => {
     const publish = MemoryIndexDatabase.prototype.publishShadow;
     vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
+      ...args
     ) {
       // The shadow is complete; simulate forget advancing the published revision
       // before the final publication obtains transaction admission.
       seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
-      return publish.call(this, input, assertCurrent);
+      return publish.apply(this, args);
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
       "retry the full reindex",
@@ -114,9 +106,7 @@ describe("private session source staging", () => {
     await manager.sync({ reason: "baseline", force: true });
     const before = snapshot(db);
     const database: unknown = Reflect.get(manager, "publishedDatabase");
-    if (!(database instanceof MemoryIndexDatabase)) {
-      throw new Error("Expected the manager's published database owner");
-    }
+    assert.instanceOf(database, MemoryIndexDatabase);
     const original = new SqliteWorkerError(
       "controlled publication result failure",
       "outcome-unknown",
@@ -129,10 +119,7 @@ describe("private session source staging", () => {
     const failure: unknown = await manager
       .sync({ reason: "failure", force: true })
       .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw new Error("Expected sync and cleanup failures");
-    }
+    assert.instanceOf(failure, AggregateError);
     expect(failure.cause).toBe(original);
     expect(failure.errors).toHaveLength(2);
     expect(failure.errors[0]).toBe(original);
@@ -157,11 +144,10 @@ describe("private session source staging", () => {
     const replace = MemoryIndexDatabase.prototype.replaceSource;
     vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(async function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
-      prepare,
+      ...args
     ) {
-      const result = await replace.call(this, input, assertCurrent, prepare);
+      const result = await replace.apply(this, args);
+      const [input] = args;
       const replacements = Array.isArray(input) ? input : [input];
       if (this.isShadow && replacements.some(({ source }) => source === "sessions")) {
         entered.resolve();
@@ -256,14 +242,9 @@ describe("private session source staging", () => {
     const replace = MemoryIndexDatabase.prototype.replaceSource;
     const run = vi
       .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
-      .mockImplementation(async function (
-        this: MemoryIndexDatabase,
-        input,
-        assertCurrent,
-        prepare,
-      ) {
+      .mockImplementation(async function (this: MemoryIndexDatabase, ...args) {
         try {
-          return await replace.call(this, input, assertCurrent, prepare);
+          return await replace.apply(this, args);
         } finally {
           replacementSettled = true;
         }
@@ -277,9 +258,7 @@ describe("private session source staging", () => {
       await nextTurn();
       expect(shadowPath).toBeDefined();
       const shadow = shadowDatabase;
-      if (!shadow) {
-        throw new Error("Expected the retained shadow database");
-      }
+      assert.isDefined(shadow, "Expected the retained shadow database");
       const expectPendingSetup = () => {
         expect([shadow.isOpen, replacementSettled]).toEqual([true, false]);
         expect(

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -21,7 +21,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
@@ -34,14 +34,18 @@ import {
 } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
-function queryAll(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
-  return db.prepare(sql).all(...params);
-}
-function queryOne(db: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
-  return db.prepare(sql).get(...params);
+const cacheHashes = (db: DatabaseSync) =>
+  db.prepare("SELECT hash FROM memory_embedding_cache").all();
+const sessionWindow = (db: DatabaseSync, sessionId: string) =>
+  db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get(sessionId);
+
+function selectIndex(db: DatabaseSync, table: string, columns: string, suffix = "") {
+  return db.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
 }
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const openObserver = () =>
+  new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), { readOnly: true });
 
 describe("memory session update sync", () => {
   const fixture = createManagerIndexFixture({
@@ -49,8 +53,8 @@ describe("memory session update sync", () => {
     closeAllMemorySearchManagers,
   });
   const { createConfig, getFreshManager, seedSessionTranscript } = fixture;
-  const sessionConfig = () =>
-    createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true });
+  const sessionConfig = (vectorEnabled?: boolean) =>
+    createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true, vectorEnabled });
   const batchConfig = () =>
     createConfig({
       provider: "batch-test",
@@ -66,50 +70,57 @@ describe("memory session update sync", () => {
     role: "user" | "assistant" = "user",
     timestamp = 1,
   ) => seedSessionTranscript({ sessionId, sessionKey, messages: [{ role, timestamp, content }] });
+  const recordOrigins = (sessionId: string, entryKeys: string[], agentId = "main") =>
+    recordMemoryEntryOrigins({
+      agentId,
+      origins: entryKeys.map((entryKey) => ({
+        agentId,
+        sessionId,
+        sessionKey: null,
+        entryKey,
+        originClass: "owner" as const,
+        observedAt: Date.now(),
+      })),
+    });
+  const sessionTarget = (sessionId: string, sessionKey: string) => ({
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath: path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json"),
+  });
+  async function writePromotedFile(entryKey: string, fragment: string, filename = "MEMORY.md") {
+    const filePath = path.join(fixture.paths.workspace, filename);
+    const title = filename === "USER.md" ? "User" : "Memory";
+    await fs.writeFile(
+      filePath,
+      `# ${title}\n<!-- openclaw-memory-promotion:${entryKey} -->\n- ${fragment}\n`,
+    );
+    return filePath;
+  }
   const privateChunks = (db: DatabaseSync) =>
-    queryAll(db, "SELECT text FROM memory_index_chunks WHERE text LIKE '%Private violet%'");
+    selectIndex(db, "chunks", "text", "WHERE text LIKE '%Private violet%'").all();
   const expectPrivateDerivativesRemoved = (db: DatabaseSync, hashes: Set<unknown>) => {
     expect(privateChunks(db)).toEqual([]);
     expect(
-      queryAll(
-        db,
-        "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
-        "violet",
-      ),
+      selectIndex(db, "chunks_fts", "id", "WHERE memory_index_chunks_fts MATCH ?").all("violet"),
     ).toEqual([]);
-    expect(
-      queryAll(db, "SELECT hash FROM memory_embedding_cache").filter((row) => hashes.has(row.hash)),
-    ).toEqual([]);
+    expect(cacheHashes(db).filter((row) => hashes.has(row.hash))).toEqual([]);
   };
 
-  function seedIndexedSession(database: DatabaseSync, sessionPath: string, text: string): void {
-    database
-      .prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'sessions', ?, ?, ?)",
-      )
-      .run(sessionPath, "stale-session", 10, 20);
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        sessionPath,
-        sessionPath,
-        "stale-chunk",
-        "fts-only",
-        text,
-        encodeMemoryEmbedding([]),
-        10,
-      );
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'system', 'subagent', ?)",
-      )
-      .run(sessionPath, 10);
+  function seedIndexedSession(db: DatabaseSync, sessionPath: string, text: string): void {
+    db.prepare(
+      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'sessions', ?, ?, ?)",
+    ).run(sessionPath, "stale-session", 10, 20);
+    db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, 'stale-chunk', 'fts-only', ?, ?, 10)",
+    ).run(sessionPath, sessionPath, text, encodeMemoryEmbedding([]));
+    db.prepare(
+      "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'owner', 'unknown', ?)",
+    ).run(sessionPath, 10);
   }
 
-  function expectSessionIndexRemoved(database: DatabaseSync, sessionPath: string): void {
-    expect(readPublishedSessionIndex(database, sessionPath, "violet")).toEqual({
+  function expectSessionIndexRemoved(db: DatabaseSync, sessionPath: string): void {
+    expect(readPublishedSessionIndex(db, sessionPath, "violet")).toEqual({
       source: undefined,
       chunks: [],
       search: [],
@@ -121,19 +132,9 @@ describe("memory session update sync", () => {
     const sessionKey = `agent:main:chat:${sessionId}`;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
     await seed(sessionId, sessionKey, "Published violet preference.");
-    const manager = await getFreshManager(
-      createConfig({
-        provider: "none",
-        sources: ["sessions"],
-        sessionMemory: true,
-        vectorEnabled: false,
-      }),
-      "cli",
-    );
+    const manager = await getFreshManager(sessionConfig(false), "cli");
     await manager.sync({ reason: "before-worker-overload", force: true });
-    const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
-      readOnly: true,
-    });
+    using observer = openObserver();
     const snapshot = () => readPublishedSessionIndex(observer, sessionPath, "violet");
     const before = snapshot();
     expect(before.source).toBeDefined();
@@ -155,10 +156,7 @@ describe("memory session update sync", () => {
       try {
         await expect(
           manager.sync({ reason: "worker-overload", force: true }),
-        ).rejects.toMatchObject({
-          name: "WorkerTaskError",
-          code: "overloaded",
-        });
+        ).rejects.toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
         expect(snapshot()).toEqual(before);
         expect(manager.status().dirty).toBe(true);
         expect(manager.status().lastSyncError).toContain("worker task capacity reached");
@@ -182,7 +180,6 @@ describe("memory session update sync", () => {
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
       clock.mockRestore();
-      observer.close();
     }
   });
 
@@ -191,24 +188,15 @@ describe("memory session update sync", () => {
     async (mode) => {
       const sessionId = "reset-index-boundary";
       const sessionKey = `agent:main:chat:${sessionId}`;
-      const target = {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath: path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json"),
-      };
+      const target = sessionTarget(sessionId, sessionKey);
+      const owner = { role: "user" as const, senderIsOwner: true };
       await seedSessionTranscript({
         sessionId,
         sessionKey,
         messages: [
-          { role: "user", timestamp: 1, content: "Earlier owner preference.", senderIsOwner: true },
+          { ...owner, timestamp: 1, content: "Earlier owner preference." },
           { role: "assistant", timestamp: 2, content: "Earlier derived answer." },
-          {
-            role: "user",
-            timestamp: 3,
-            content: "Retained owner preference.",
-            senderIsOwner: true,
-          },
+          { ...owner, timestamp: 3, content: "Retained owner preference." },
           { role: "assistant", timestamp: 4, content: "Retained derived answer." },
         ],
       });
@@ -239,22 +227,18 @@ describe("memory session update sync", () => {
         const corpus = (await listSessionTranscriptCorpusEntriesForAgent("main")).find(
           (entry) => entry.sessionId === sessionId,
         );
-        if (!corpus) {
-          throw new Error("Expected the reset-bearing session in the corpus");
-        }
+        assert.isDefined(corpus, "Expected the reset-bearing session in the corpus");
         const entry = await buildSessionEntry(corpus.sessionFile, {
           ...target,
           sessionKind: corpus.sessionKind,
           updatedAtMs: corpus.updatedAtMs,
         });
-        if (!entry) {
-          throw new Error("Expected the reset-bearing session export");
-        }
-        const database = Reflect.get(manager, "db") as DatabaseSync;
+        assert.isNotNull(entry, "Expected the reset-bearing session export");
+        const db = Reflect.get(manager, "db") as DatabaseSync;
         // Revision 4 retained the reset-aware source hash but indexed one crossing
         // chunk because spreading the entry discarded its non-enumerable cutoff.
         expect(
-          database
+          db
             .prepare(
               "SELECT start_line, end_line FROM memory_index_chunks WHERE path = ? AND source = 'sessions'",
             )
@@ -278,46 +262,40 @@ describe("memory session update sync", () => {
         await manager.sync({ reason: "after-reset", sessions: [{ sessionId, sessionKey }] });
       }
 
-      const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
-        readOnly: true,
-      });
-      try {
-        const chunks = observer
-          .prepare(
-            "SELECT start_line, end_line, text FROM memory_index_chunks WHERE source = 'sessions' AND path = ? ORDER BY start_line, end_line",
-          )
-          .all(`sessions/main/${sessionId}.jsonl`);
-        expect(chunks).toEqual([
-          {
-            start_line: messages[0]!.line,
-            end_line: messages[1]!.line,
-            text: "User: Earlier owner preference.\nAssistant: Earlier derived answer.",
-          },
-          {
-            start_line: messages[2]!.line,
-            end_line: messages[3]!.line,
-            text: "User: Retained owner preference.\nAssistant: Retained derived answer.",
-          },
-        ]);
-        if (expectedSourceHash !== undefined) {
-          expect(
-            observer
-              .prepare(
-                "SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
-              )
-              .get(`sessions/main/${sessionId}.jsonl`)?.hash,
-          ).toBe(expectedSourceHash);
-          expect(
-            observer
-              .prepare(
-                "SELECT json_extract(value, '$.chunkingVersion') AS version FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
-              )
-              .get()?.version,
-          ).toBe(MEMORY_CHUNKING_VERSION);
-        }
-      } finally {
-        observer.close();
+      using observer = openObserver();
+
+      const chunks = observer
+        .prepare(
+          "SELECT start_line, end_line, text FROM memory_index_chunks WHERE source = 'sessions' AND path = ? ORDER BY start_line, end_line",
+        )
+        .all(`sessions/main/${sessionId}.jsonl`);
+      expect(chunks).toEqual([
+        {
+          start_line: messages[0]!.line,
+          end_line: messages[1]!.line,
+          text: "User: Earlier owner preference.\nAssistant: Earlier derived answer.",
+        },
+        {
+          start_line: messages[2]!.line,
+          end_line: messages[3]!.line,
+          text: "User: Retained owner preference.\nAssistant: Retained derived answer.",
+        },
+      ]);
+      if (expectedSourceHash !== undefined) {
+        expect(
+          observer
+            .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'sessions'")
+            .get(`sessions/main/${sessionId}.jsonl`)?.hash,
+        ).toBe(expectedSourceHash);
+        expect(
+          observer
+            .prepare(
+              "SELECT json_extract(value, '$.chunkingVersion') AS version FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
+            )
+            .get()?.version,
+        ).toBe(MEMORY_CHUNKING_VERSION);
       }
+
       expect(await readSessionTranscriptEvents(target)).toEqual(unchangedTranscript);
       expect(manager.status().dirty).toBe(false);
     },
@@ -376,14 +354,13 @@ describe("memory session update sync", () => {
       await queuedSessionSync;
       await sessionUpdateBatch;
 
-      using observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
-        readOnly: true,
-      });
-      const row = queryOne(
+      using observer = openObserver();
+      const row = selectIndex(
         observer,
-        "SELECT COUNT(*) AS count FROM memory_index_chunks WHERE source = 'sessions' AND text LIKE ?",
-        `%${updatedMarker}%`,
-      ) as { count: number };
+        "chunks",
+        "COUNT(*) AS count",
+        "WHERE source = 'sessions' AND text LIKE ?",
+      ).get(`%${updatedMarker}%`) as { count: number };
       expect(row.count).toBeGreaterThan(0);
       expect(manager.status().dirty).toBe(false);
     } finally {
@@ -398,14 +375,11 @@ describe("memory session update sync", () => {
   it("prunes a real compressed unchanged narrative archive through regular reconciliation", async () => {
     const sessionId = "3cb3f634-6821-4123-8123-abcdef123456";
     const sessionKey = "agent:main:dreaming-narrative-memory-core-v2-light-real";
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const target = sessionTarget(sessionId, sessionKey);
+    const sessionsDir = path.dirname(target.storePath);
     await seed(sessionId, sessionKey, "Previously retained violet fragment.", "user", Date.now());
     await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
+      ...target,
       message: {
         role: "assistant",
         timestamp: Date.now(),
@@ -415,11 +389,9 @@ describe("memory session update sync", () => {
     });
     await expect(
       deleteSessionEntry({
-        agentId: "main",
+        ...target,
         archiveTranscript: true,
         expectedSessionId: sessionId,
-        sessionKey,
-        storePath,
       }),
     ).resolves.toBe(true);
     const archiveName = (await fs.readdir(sessionsDir)).find(
@@ -430,11 +402,9 @@ describe("memory session update sync", () => {
     expect(manager.status().sourceCounts?.find((source) => source.source === "sessions")).toEqual(
       expect.objectContaining({ eligible: 0 }),
     );
-    const database = Reflect.get(manager, "db") as DatabaseSync;
+    const db = Reflect.get(manager, "db") as DatabaseSync;
     const sessionPath = `sessions/main/${archiveName}`;
-    expect(
-      queryOne(database, "SELECT session_id FROM session_windows WHERE session_id = ?", sessionId),
-    ).toBeUndefined();
+    expect(sessionWindow(db, sessionId)).toBeUndefined();
     expect(
       (await listSessionTranscriptCorpusEntriesForAgent("main")).find(
         (entry) => entry.sessionId === sessionId,
@@ -442,11 +412,6 @@ describe("memory session update sync", () => {
     ).toMatchObject({ artifactKind: "archive-artifact", sessionKind: "unknown" });
     const fixtureWriter = memoryIndexFixtureWriter(manager);
     seedIndexedSession(fixtureWriter, sessionPath, "Previously retained violet fragment");
-    fixtureWriter
-      .prepare(
-        "UPDATE memory_index_chunk_provenance SET origin_class = 'owner', session_kind = 'unknown' WHERE chunk_id = ?",
-      )
-      .run(sessionPath);
     const archiveStat = await fs.stat(path.join(sessionsDir, archiveName!));
     fixtureWriter
       .prepare("UPDATE memory_index_sources SET mtime = ?, size = ? WHERE path = ?")
@@ -457,7 +422,7 @@ describe("memory session update sync", () => {
     ).runSessionStartupCatchup();
     await manager.sync({ reason: "await-startup-catchup" });
 
-    expectSessionIndexRemoved(database, sessionPath);
+    expectSessionIndexRemoved(db, sessionPath);
   });
 
   it("never reindexes a tombstoned session while preserving its source transcript", async () => {
@@ -468,7 +433,7 @@ describe("memory session update sync", () => {
     await seed(sessionId, sessionKey, "Previously indexed violet fragment.", "user", Date.now());
     await seed(decoyId, decoyKey, "Previously indexed amber fragment.");
     const manager = await getFreshManager(sessionConfig(), "cli");
-    const database = Reflect.get(manager, "db") as DatabaseSync;
+    const db = Reflect.get(manager, "db") as DatabaseSync;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
     const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
     try {
@@ -489,19 +454,17 @@ describe("memory session update sync", () => {
     } finally {
       reads.mockRestore();
     }
-    expect(
-      queryOne(database, "SELECT path FROM memory_index_chunks WHERE path = ?", sessionPath),
-    ).toEqual({ path: sessionPath });
+    expect(selectIndex(db, "chunks", "path", "WHERE path = ?").get(sessionPath)).toEqual({
+      path: sessionPath,
+    });
 
     seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     await manager.sync({ reason: "forced-reindex-after-forget", force: true });
 
-    expectSessionIndexRemoved(database, sessionPath);
-    expect(
-      queryOne(database, "SELECT session_id FROM session_windows WHERE session_id = ?", sessionId),
-    ).toEqual({ session_id: sessionId });
+    expectSessionIndexRemoved(db, sessionPath);
+    expect(sessionWindow(db, sessionId)).toEqual({ session_id: sessionId });
     const decoyPath = `sessions/main/${decoyId}.jsonl`;
-    const decoyBefore = readPublishedSessionIndex(database, decoyPath, "amber");
+    const decoyBefore = readPublishedSessionIndex(db, decoyPath, "amber");
     expect(decoyBefore.chunks).toHaveLength(1);
     await seed(decoyId, decoyKey, "Unselected new amber response.", "assistant", 2);
     const selectedId = "selected-transcript";
@@ -518,13 +481,9 @@ describe("memory session update sync", () => {
         { sessionId: " " },
       ],
     });
-    expectSessionIndexRemoved(database, sessionPath);
-    expect(readPublishedSessionIndex(database, decoyPath, "amber")).toEqual(decoyBefore);
-    const selected = readPublishedSessionIndex(
-      database,
-      `sessions/main/${selectedId}.jsonl`,
-      "violet",
-    );
+    expectSessionIndexRemoved(db, sessionPath);
+    expect(readPublishedSessionIndex(db, decoyPath, "amber")).toEqual(decoyBefore);
+    const selected = readPublishedSessionIndex(db, `sessions/main/${selectedId}.jsonl`, "violet");
     expect(selected.chunks).toHaveLength(1);
     expect(selected.search).toHaveLength(1);
     expect(selected.chunks[0]?.text).toContain("Selected new violet fragment.");
@@ -540,24 +499,8 @@ describe("memory session update sync", () => {
     await baseline.sync({ reason: "index-before-new-memory", force: true });
     await baseline.close();
     const sessionId = "forgotten-memory-source";
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
-    await fs.writeFile(
-      memoryPath,
-      "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
-    );
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: [
-        {
-          agentId: "main",
-          sessionId,
-          sessionKey: null,
-          entryKey: "private-entry",
-          originClass: "owner",
-          observedAt: Date.now(),
-        },
-      ],
-    });
+    const memoryPath = await writePromotedFile("private-entry", "Private violet alpha fragment.");
+    await recordOrigins(sessionId, ["private-entry"]);
     if (repeatPurge) {
       // An earlier purge persisted its tombstone but failed before rewriting
       // this previously unindexed file. Retrying must fence a completed shadow.
@@ -600,19 +543,14 @@ describe("memory session update sync", () => {
       }
       await purge;
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
-      const database = Reflect.get(manager, "db") as DatabaseSync;
-      expect(
-        queryAll(database, "SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md'"),
-      ).toEqual([]);
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(selectIndex(db, "chunks", "text", "WHERE path = 'MEMORY.md'").all()).toEqual([]);
       expect(manager.status().dirty).toBe(true);
       await manager.sync({ reason: "retry-after-memory-forget", force: true });
       expect(manager.status().dirty).toBe(false);
-      expect(
-        queryAll(
-          database,
-          "SELECT text FROM memory_index_chunks WHERE text LIKE '%Private violet%'",
-        ),
-      ).toEqual([]);
+      expect(selectIndex(db, "chunks", "text", "WHERE text LIKE '%Private violet%'").all()).toEqual(
+        [],
+      );
     } finally {
       embeddingGate.resolve();
       await activeSync.catch(() => undefined);
@@ -625,35 +563,20 @@ describe("memory session update sync", () => {
   it("removes cached private data when reindexing runs between an interrupted purge and retry", async () => {
     const cfg = batchConfig();
     const sessionId = "interrupted-memory-source";
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
-    const userPath = path.join(fixture.paths.workspace, "USER.md");
-    await fs.writeFile(
-      memoryPath,
-      "# Memory\n<!-- openclaw-memory-promotion:private-first -->\n- Private violet alpha fragment.\n",
+    const memoryPath = await writePromotedFile("private-first", "Private violet alpha fragment.");
+    const userPath = await writePromotedFile(
+      "private-second",
+      "Private violet beta fragment.",
+      "USER.md",
     );
-    await fs.writeFile(
-      userPath,
-      "# User\n<!-- openclaw-memory-promotion:private-second -->\n- Private violet beta fragment.\n",
-    );
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: ["private-first", "private-second"].map((entryKey) => ({
-        agentId: "main",
-        sessionId,
-        sessionKey: null,
-        entryKey,
-        originClass: "owner" as const,
-        observedAt: Date.now(),
-      })),
-    });
+    await recordOrigins(sessionId, ["private-first", "private-second"]);
     const manager = await getFreshManager(cfg, "cli");
     await manager.sync({ reason: "index-before-interrupted-purge", force: true });
-    const database = Reflect.get(manager, "db") as DatabaseSync;
+    const db = Reflect.get(manager, "db") as DatabaseSync;
     const privateHashes = new Set(
-      queryAll(
-        database,
-        "SELECT hash FROM memory_index_chunks WHERE text LIKE '%Private violet%'",
-      ).map((row) => row.hash),
+      selectIndex(db, "chunks", "hash", "WHERE text LIKE '%Private violet%'")
+        .all()
+        .map((row) => row.hash),
     );
     expect(privateHashes.size).toBe(2);
 
@@ -682,16 +605,13 @@ describe("memory session update sync", () => {
     // embedding. The purge must remove derivatives before losing their source.
     await manager.sync({ reason: "reindex-before-purge-retry", force: true });
     expect(
-      queryAll(
-        database,
-        "SELECT id FROM memory_index_chunks WHERE text LIKE '%Private violet beta%'",
-      ),
+      selectIndex(db, "chunks", "id", "WHERE text LIKE '%Private violet beta%'").all(),
     ).not.toEqual([]);
     await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
 
     expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
     expect(await fs.readFile(userPath, "utf8")).not.toContain("Private violet");
-    expectPrivateDerivativesRemoved(database, privateHashes);
+    expectPrivateDerivativesRemoved(db, privateHashes);
   });
 
   it("purges a stale agent index after a sibling already removed their shared memory entry", async () => {
@@ -703,25 +623,9 @@ describe("memory session update sync", () => {
         peer: { workspace: fixture.paths.workspace },
       },
     };
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
-    await fs.writeFile(
-      memoryPath,
-      "# Memory\n<!-- openclaw-memory-promotion:shared-private -->\n- Private violet shared fragment.\n",
-    );
+    const memoryPath = await writePromotedFile("shared-private", "Private violet shared fragment.");
     for (const agentId of ["main", "peer"]) {
-      await recordMemoryEntryOrigins({
-        agentId,
-        origins: [
-          {
-            agentId,
-            sessionId: `source-${agentId}`,
-            sessionKey: null,
-            entryKey: "shared-private",
-            originClass: "owner",
-            observedAt: Date.now(),
-          },
-        ],
-      });
+      await recordOrigins(`source-${agentId}`, ["shared-private"], agentId);
     }
     const main = await getFreshManager(cfg, "cli");
     const peer = fixture.requireManager(
@@ -730,41 +634,31 @@ describe("memory session update sync", () => {
     fixture.trackManager(peer);
     await main.sync({ reason: "index-shared-memory", force: true });
     await peer.sync({ reason: "index-shared-memory", force: true });
-    const database = Reflect.get(peer, "db") as DatabaseSync;
-    const snapshot = queryAll(
-      database,
-      "SELECT hash, text FROM memory_index_chunks WHERE path = 'MEMORY.md'",
-    );
+    const db = Reflect.get(peer, "db") as DatabaseSync;
+    const snapshot = selectIndex(db, "chunks", "hash, text", "WHERE path = 'MEMORY.md'").all();
     expect(snapshot.some((row) => String(row.text).includes("Private violet"))).toBe(true);
     expect(
       snapshot.some((row) => String(row.text).includes("openclaw-memory-promotion:shared-private")),
     ).toBe(true);
     const privateHashes = new Set(snapshot.map((row) => row.hash));
-    expect(
-      queryAll(database, "SELECT hash FROM memory_embedding_cache").some((row) =>
-        privateHashes.has(row.hash),
-      ),
-    ).toBe(true);
+    expect(cacheHashes(db).some((row) => privateHashes.has(row.hash))).toBe(true);
 
     await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["source-main"] });
     expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
     // The first purge owns only main's database. Peer must use its retained
     // snapshot when its own explicit purge finds the shared file already clean.
-    expect(
-      queryAll(database, "SELECT hash, text FROM memory_index_chunks WHERE path = 'MEMORY.md'"),
-    ).toEqual(snapshot);
+    expect(selectIndex(db, "chunks", "hash, text", "WHERE path = 'MEMORY.md'").all()).toEqual(
+      snapshot,
+    );
 
     const forgotten = await forgetMemoryEntries({
       cfg,
       agentId: "peer",
       sessionIds: ["source-peer"],
     });
-    expect(forgotten.artifacts.memoryFiles).toBe(0);
-    expect(forgotten.artifacts.indexChunks).toBe(snapshot.length);
-    expect(
-      queryAll(database, "SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md'"),
-    ).toEqual([]);
-    expectPrivateDerivativesRemoved(database, privateHashes);
+    expect(forgotten.artifacts).toMatchObject({ memoryFiles: 0, indexChunks: snapshot.length });
+    expect(selectIndex(db, "chunks", "text", "WHERE path = 'MEMORY.md'").all()).toEqual([]);
+    expectPrivateDerivativesRemoved(db, privateHashes);
   });
 
   it("excludes system-only archived transcripts", async () => {
@@ -782,10 +676,10 @@ describe("memory session update sync", () => {
     await fs.writeFile(path.join(sessionsDir, archiveName), JSON.stringify(record) + "\n");
     const manager = await getFreshManager(sessionConfig(), "cli");
     await manager.sync({ reason: "forced-reindex", force: true });
-    const database = Reflect.get(manager, "db") as DatabaseSync;
-    expect(
-      queryAll(database, "SELECT DISTINCT path FROM memory_index_chunks WHERE source = 'sessions'"),
-    ).toEqual([]);
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
+      [],
+    );
   });
 
   it.each([

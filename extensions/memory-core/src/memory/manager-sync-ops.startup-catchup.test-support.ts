@@ -29,13 +29,13 @@ type MemorySessionTranscriptUpdate = Parameters<
 
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
 
-/** Clears the module-owned listener between tests; ESM bindings cannot be reassigned by importers. */
 export function resetTranscriptUpdateListener(): void {
   transcriptUpdateListener = undefined;
 }
 export const startupHarnessDatabases = new Set<MemoryIndexDatabase>();
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
+type SessionUpdateBatchRunner = { processSessionUpdateBatch(): Promise<void> };
 
 async function createStartupHarnessDatabase(
   sourceRows: SourceStateRow[],
@@ -71,7 +71,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };
-  protected readonly cfg: OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
@@ -84,9 +83,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
       fts: { tokenizer: "unicode61" },
       vector: { enabled: false },
     },
-    sync: {
-      sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true },
-    },
+    sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
   } as unknown as ResolvedMemorySearchConfig;
   protected readonly batch = {
     enabled: false,
@@ -98,7 +95,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected publishedDatabase: MemoryIndexDatabase;
 
   readonly syncCalls: MemorySyncParams[] = [];
   readonly indexedPaths: string[] = [];
@@ -111,15 +107,13 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   private pendingSyncWork: Promise<void> = Promise.resolve();
 
   private constructor(
-    database: MemoryIndexDatabase,
+    protected publishedDatabase: MemoryIndexDatabase,
     private readonly indexSessionUpdates = false,
     private readonly subscribeToRealEvents = false,
-    cfg: OpenClawConfig = {},
+    protected readonly cfg: OpenClawConfig = {},
   ) {
     super();
-    this.cfg = cfg;
     this.sources.add("sessions");
-    this.publishedDatabase = database;
   }
 
   static async create(
@@ -154,10 +148,9 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   }
 
   getSourceMetadataUpdateCount(): number {
-    const row = this.db
-      .prepare(`SELECT COUNT(*) AS count FROM memory_index_source_update_audit`)
-      .get() as { count: number };
-    return row.count;
+    return Number(
+      this.db.prepare("SELECT COUNT(*) AS n FROM memory_index_source_update_audit").get()?.n,
+    );
   }
 
   catchUp = () => this.runSessionStartupCatchup();
@@ -175,11 +168,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   }
 
   async processPendingSessionUpdates(): Promise<void> {
-    await (
-      this as unknown as {
-        processSessionUpdateBatch: () => Promise<void>;
-      }
-    ).processSessionUpdateBatch();
+    await (this as unknown as SessionUpdateBatchRunner).processSessionUpdateBatch();
   }
 
   async waitForCorpusList(): Promise<void> {
@@ -195,9 +184,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   isSessionsDirty = () => this.sessionsDirty;
 
-  startTranscriptListener(): void {
-    this.ensureSessionListener();
-  }
+  startTranscriptListener = () => this.ensureSessionListener();
 
   stopTranscriptListener(): void {
     this.sessionUnsubscribe?.();
@@ -218,13 +205,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     };
   }
 
-  protected computeProviderKey(): string {
-    return "test";
-  }
-
-  protected resolveProviderIndexIdentities() {
-    return [];
-  }
+  protected computeProviderKey = () => "test";
+  protected resolveProviderIndexIdentities = () => [];
 
   protected override readMeta(): MemoryIndexMeta {
     return {
@@ -254,13 +236,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     await this.pendingSyncWork;
   }
 
-  protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return await promise;
-  }
-
-  protected getIndexConcurrency(): number {
-    return 1;
-  }
+  protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
+  protected getIndexConcurrency = () => 1;
 
   protected override listSessionCorpusEntries(
     targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
@@ -277,9 +254,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   }
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-
   protected resetProviderInitializationForRetry(): void {}
-
   protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {

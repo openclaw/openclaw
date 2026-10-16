@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { collectMemoryStatusSnapshot, resolveStatusProviderInfo } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
@@ -58,27 +58,20 @@ describe("memory manager status state", () => {
   });
 
   it.each([
-    { initialized: false, provider: null, expected: ["openai", "mock-embed", "hybrid"] },
-    { initialized: true, provider: null, expected: ["none", undefined, "fts-only"] },
-    {
-      initialized: true,
-      provider: { id: "local", model: "fallback-model" },
-      expected: ["local", "fallback-model", "hybrid"],
-    },
-  ])("reports provider state $expected", ({ initialized, provider, expected }) => {
+    [false, null, ["openai", "mock-embed", "hybrid"]],
+    [true, null, ["none", undefined, "fts-only"]],
+    [true, { id: "local", model: "fallback-model" }, ["local", "fallback-model", "hybrid"]],
+  ] as const)("reports provider state %j %j %j", (initialized, provider, expected) => {
+    const resolveConfiguredModel = vi.fn(() => "mock-embed");
     expect(
       resolveStatusProviderInfo({
         provider,
         providerInitialized: initialized,
         requestedProvider: "openai",
-        resolveConfiguredModel: () => {
-          if (initialized) {
-            throw new Error("Configured model must not override an initialized provider");
-          }
-          return "mock-embed";
-        },
+        resolveConfiguredModel,
       }),
     ).toEqual({ provider: expected[0], model: expected[1], searchMode: expected[2] });
+    expect(resolveConfiguredModel).toHaveBeenCalledTimes(initialized ? 0 : 1);
   });
 
   it("counts ordinary status without evaluating stored payload columns", () => {

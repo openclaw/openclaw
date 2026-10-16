@@ -14,22 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildSessionEntryMock } = vi.hoisted(() => ({
-  buildSessionEntryMock: vi.fn(),
-}));
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
-  return {
-    ...actual,
-    Agent: vi.fn(),
-    EnvHttpProxyAgent: vi.fn(),
-    ProxyAgent: vi.fn(),
-    fetch: vi.fn(),
-    getGlobalDispatcher: vi.fn(),
-    setGlobalDispatcher: vi.fn(),
-  };
-});
-
+const { buildSessionEntryMock } = vi.hoisted(() => ({ buildSessionEntryMock: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
@@ -52,13 +37,6 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   };
 });
 
-vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
-    providerId === "local" ? "local" : "remote",
-  resolveEmbeddingProviderIndexIdentity: () => undefined,
-  createEmbeddingProvider: vi.fn(),
-}));
-
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
@@ -79,9 +57,7 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
-    sync: {
-      sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true },
-    },
+    sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
   } as ResolvedMemorySearchConfig;
   protected readonly batch = {
     enabled: false,
@@ -145,9 +121,7 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   }
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-
   protected resetProviderInitializationForRetry(): void {}
-
   protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
