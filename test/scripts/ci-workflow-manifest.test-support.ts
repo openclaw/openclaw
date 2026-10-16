@@ -33,6 +33,25 @@ export const CI_MANIFEST_FIXTURE_TARGETS = {
   windows: Array.from({ length: 5 }, (_, index) => `test/windows-part-${index + 1}.test.ts`),
 };
 
+// Shared by both generated planners so their rows have the same defaults.
+const nodeRowSource = `
+  const nodeRow = (name, fields = {}) => ({
+    checkName: name, requiresDist: false,
+    runner: "ubuntu-24.04", shardName: name, ...fields,
+  });
+  const runsonRow = () => nodeRow("changed-runson-cron", {
+    checkName: "checks-node-changed-runson-cron",
+    groups: [{
+      configs: ["test/vitest/vitest.cron.config.ts"],
+      includePatterns: ["src/cron/schedule.test.ts"],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      shard_name: "core-runtime-cron-parallel-core",
+    }],
+    env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    runner: "runson-c8i-8xlarge",
+  });
+`;
+
 export function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   sourceChannelPolicy?: boolean;
@@ -113,6 +132,8 @@ export function runCiManifestFixture(options: {
       writeFixture(`scripts/lib/${name}`, source);
     const appendPlanner = (source: string, name = "ci-node-test-plan.mts") =>
       appendFileSync(path.join(scriptsDir, name), source);
+    const reexport = (names: string, file: string) =>
+      `export { ${names} } from ${JSON.stringify(pathToFileURL(path.resolve(file)).href)};\n`;
     mkdirSync(scriptsDir, { recursive: true });
     const selectedTargetFiles = new Set(options.targetFiles ?? []);
     if (!options.nodeTestShards) {
@@ -194,50 +215,30 @@ export function runCiManifestFixture(options: {
            export const createNodeTestShardBundles = createNodeTestShards;`
         : options.bundledPlanner
           ? `
-          export const createNodeTestShards = () => [{
-            checkName: "legacy-node-plan",
+          ${nodeRowSource}
+          export const createNodeTestShards = () => [nodeRow("legacy-node-plan", {
             configs: ["test/vitest/legacy.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "legacy-node-plan",
-          }];
+          })];
           export const createNodeTestShardBundles = (options = {}) => {
             console.log("node-test-plan-options:" + JSON.stringify(options));
             const runson = options.runnerBackend === "runson";
-            return [{
-              checkName: runson ? "checks-node-changed-runson-cron" : "bundled-node-plan",
-              ...(runson ? {
-                groups: [{
-                  configs: ["test/vitest/vitest.cron.config.ts"],
-                  includePatterns: ["src/cron/schedule.test.ts"],
-                  env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-                  shard_name: "core-runtime-cron-parallel-core",
-                }],
-              } : {
-                configs: ["test/vitest/bundled.config.ts"],
-                includePatterns: options.changedPaths,
-              }),
-              env: {
-                ...(runson ? { OPENCLAW_VITEST_MAX_WORKERS: "2" } : {}),
+            const row = runson ? runsonRow() : nodeRow("bundled-node-plan", {
+              configs: ["test/vitest/bundled.config.ts"], includePatterns: options.changedPaths,
+            });
+            return [{ ...row, env: {
+                ...row.env,
                 OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full",
                 OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: String(options.compactNodeJobCap ?? ""),
                 OPENCLAW_CI_TEST_RUNNER_BACKEND: options.runnerBackend ?? "",
                 OPENCLAW_CI_TEST_PROOF_TIER: String(options.includeProofTests),
-              },
-              requiresDist: false,
-              runner: runson ? "runson-c8i-8xlarge" : "ubuntu-24.04",
-              shardName: runson ? "changed-runson-cron" : "bundled-node-plan",
-            }];
+              }}];
           };
         `
           : `
-          export const createNodeTestShards = () => [{
-            checkName: "legacy-node-plan",
+          ${nodeRowSource}
+          export const createNodeTestShards = () => [nodeRow("legacy-node-plan", {
             configs: ["test/vitest/legacy.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "legacy-node-plan",
-          }];
+          })];
         `,
     );
     if (options.sourceChannelPolicy ?? true) {
@@ -253,11 +254,6 @@ export function runCiManifestFixture(options: {
           targets: ["test/windows-part-" + (index + 1) + ".test.ts"],
           predicted_seconds: 400,
         }));\n`,
-      );
-    }
-    if (options.toolingOwnerSelection) {
-      appendPlanner(
-        `\nexport { isToolingTestOwnerPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
       );
     }
     if (options.uiReleaseTier || options.bundledPlanner) {
@@ -301,15 +297,19 @@ export function runCiManifestFixture(options: {
         );
       }
     }
-    if (options.startupCorpusCoverage) {
-      appendPlanner(
-        `\nexport { hasCompleteStartupCorpusCoverage } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
-      );
+    for (const [enabled, name] of [
+      [options.toolingOwnerSelection, "isToolingTestOwnerPath"],
+      [options.startupCorpusCoverage, "hasCompleteStartupCorpusCoverage"],
+      [
+        options.startupCorpusSelection ?? options.startupCorpusCoverage,
+        "resolveStartupCorpusTestFiles",
+      ],
+    ] as const) {
+      if (enabled) {
+        appendPlanner(`\n${reexport(name, "scripts/lib/ci-node-test-plan.mts")}`);
+      }
     }
     if (options.startupCorpusSelection ?? options.startupCorpusCoverage) {
-      appendPlanner(
-        `\nexport { resolveStartupCorpusTestFiles } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
-      );
       for (const file of startupCorpusTestFiles) {
         writeFixture(file);
       }
@@ -336,7 +336,7 @@ export function runCiManifestFixture(options: {
       copyFixture("scripts/ci-check-plan.mts");
       writeScript(
         "ci-check-family-scope.mts",
-        `export { resolveCiCheckFamilyScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-check-family-scope.mts")).href)};\n`,
+        reexport("resolveCiCheckFamilyScope", "scripts/lib/ci-check-family-scope.mts"),
       );
       for (const file of [
         "changed-path-facts.mjs",
@@ -354,7 +354,7 @@ export function runCiManifestFixture(options: {
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          `export { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/changed-lanes.mts")).href)};\n`,
+          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -425,6 +425,7 @@ export function runCiManifestFixture(options: {
         "ci-changed-node-test-plan.mts",
         options.changedPlannerSource ??
           `
+          ${nodeRowSource}
           export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
           export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
@@ -434,68 +435,41 @@ export function runCiManifestFixture(options: {
             }
             const selectedRows = ${JSON.stringify(options.nodeTestShards ?? null)};
             if (selectedRows) return selectedRows;
-            if (options.runnerBackend === "runson") return [{
-              checkName: "checks-node-changed-runson-cron",
-              groups: [{
-                configs: ["test/vitest/vitest.cron.config.ts"],
-                includePatterns: ["src/cron/schedule.test.ts"],
-                env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-                shard_name: "core-runtime-cron-parallel-core",
-              }],
-              env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-              requiresDist: false,
-              runner: "runson-c8i-8xlarge",
-              shardName: "changed-runson-cron",
-            }];
+            if (options.runnerBackend === "runson") return [runsonRow()];
             if (changedPaths.includes("src/focused.ts") ||
                 changedPaths.includes("scripts/openclaw-release-ready.mjs") ||
                 changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts")) {
-              return [{
-                checkName: "changed-node-plan",
+              return [nodeRow("changed-node-plan", {
                 configs: [],
-                requiresDist: false,
-                runner: "ubuntu-24.04",
-                shardName: "changed-node-plan",
                 targets: changedPaths.includes("src/focused.ts")
                   ? ["src/focused.test.ts"]
                   : changedPaths.includes("scripts/openclaw-release-ready.mjs")
                     ? ["test/scripts/openclaw-release-ready.test.ts"]
                     : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
-              }];
+              })];
             }
-            const rows = [{
-              checkName: "changed-owner-plan",
+            const rows = [nodeRow("changed-owner-plan", {
               configs: ["test/vitest/owner.config.ts"],
               includePatterns: changedPaths.includes("src/audit/message-delivery-progress-store.test.ts")
                 ? ["src/audit/message-delivery-progress-store.test.ts"]
                 : changedPaths.length ? ["src/owner.test.ts"] : ["src/smoke.test.ts"],
-              requiresDist: false,
-              runner: "ubuntu-24.04",
-              shardName: "changed-owner-plan",
-            }];
+            })];
             if (changedPaths.some((changedPath) => changedPath.startsWith("extensions/"))) {
-              rows.push(changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
-                ? {
-                    checkName: "changed-extension-owner-plan",
+              rows.push(nodeRow("changed-extension-owner-plan", {
+                predictedSeconds: 120,
+                ...(changedPaths.some((changedPath) => changedPath.startsWith("extensions/matrix/"))
+                  ? {
                     configs: ["test/vitest/vitest.extension-matrix.config.ts"],
                     includePatterns: [
                       "extensions/matrix/src/client.test.ts",
                       "extensions/matrix/src/monitor.test.ts",
                     ],
-                    requiresDist: false,
-                    runner: "ubuntu-24.04",
-                    shardName: "changed-extension-owner-plan",
-                    predictedSeconds: 120,
                   }
                 : {
-                    checkName: "changed-extension-owner-plan",
                     configs: [],
-                    requiresDist: false,
-                    runner: "ubuntu-24.04",
-                    shardName: "changed-extension-owner-plan",
-                    predictedSeconds: 120,
                     targets: ["extensions/codex/src/focused.test.ts"],
-                  });
+                  }),
+              }));
             }
             return rows;
           };
@@ -530,7 +504,7 @@ export function runCiManifestFixture(options: {
     }
     if (options.releaseFastLaneSelection) {
       appendPlanner(
-        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};\n`,
+        `\n${reexport("resolveReleaseFastLaneScope", "scripts/ci-changed-scope.mjs")}`,
         "ci-changed-node-test-plan.mts",
       );
     }
@@ -538,28 +512,26 @@ export function runCiManifestFixture(options: {
       writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
-          `export { resolveDockerSeedLanes, resolveChangedDockerSeedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-docker-seed-plan.mts")).href)};\n`,
+          reexport(
+            "resolveDockerSeedLanes, resolveChangedDockerSeedLanes",
+            "scripts/lib/ci-docker-seed-plan.mts",
+          ),
       );
       copyFixture("scripts/lib/ci-published-driver-update-plan.mts");
       writeFixture("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
-      writeScript(
-        "channel-contract-test-plan.mts",
-        `export const createChannelContractTestShards = () => ["a", "b"].map((suffix) => ({
-          checkName: "channel-contracts-" + suffix,
-          includePatterns: ["src/channels/plugins/contracts/fixture-" + suffix + ".test.ts"],
-          runtime: "node",
-          task: "contracts-channels",
-        }));\n`,
-      );
-      writeScript(
-        "plugin-contract-test-plan.mts",
-        `export const createPluginContractTestShards = () => ["a", "b"].map((suffix) => ({
-          checkName: "plugin-contracts-" + suffix,
-          includePatterns: ["src/plugins/contracts/fixture-" + suffix + ".test.ts"],
-          runtime: "node",
-          task: "contracts-plugins",
-        }));\n`,
-      );
+      for (const [kind, name, directory] of [
+        ["channel", "Channel", "channels/plugins"],
+        ["plugin", "Plugin", "plugins"],
+      ]) {
+        writeScript(
+          `${kind}-contract-test-plan.mts`,
+          `export const create${name}ContractTestShards = () => ["a", "b"].map((suffix) => ({
+            checkName: "${kind}-contracts-" + suffix,
+            includePatterns: ["src/${directory}/contracts/fixture-" + suffix + ".test.ts"],
+            runtime: "node", task: "contracts-${kind}s",
+          }));\n`,
+        );
+      }
     }
     if (options.qaSmokePlan ?? options.bundledPlanner) {
       writeFixture("extensions/qa-lab/src/ci-smoke-plan.ts");
@@ -586,23 +558,16 @@ export function runCiManifestFixture(options: {
     writeFixture(
       ".github/workflows/ci.yml",
       [
-        ...((options.formatCheck ?? options.bundledPlanner)
-          ? ["pnpm format:check", "pnpm format:check"]
-          : []),
-        ...((options.androidCiCapabilities ?? options.bundledPlanner)
-          ? ["android-ci-contract-v2"]
-          : []),
-        ...((options.openClawKitTests ?? options.bundledPlanner)
-          ? ["openclawkit-tests-contract-v1"]
-          : []),
-        ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
-        ...((options.publishedDriverUpdateCapability ?? options.bundledPlanner)
-          ? ["published-driver-update-contract-v1"]
-          : []),
-        ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
-          ? ["hosted-runner-profile-contract-v1"]
-          : []),
-      ].join("\n"),
+        [options.formatCheck, "pnpm format:check\npnpm format:check"],
+        [options.androidCiCapabilities, "android-ci-contract-v2"],
+        [options.openClawKitTests, "openclawkit-tests-contract-v1"],
+        [options.bundledPlanner, "docker-seed-e2e-contract-v1"],
+        [options.publishedDriverUpdateCapability, "published-driver-update-contract-v1"],
+        [options.targetHostedRunnerProfileContract, "hosted-runner-profile-contract-v1"],
+      ]
+        .filter(([enabled]) => enabled ?? options.bundledPlanner)
+        .map(([, marker]) => marker)
+        .join("\n"),
     );
     writeFixture(
       "test/vitest/vitest.ui-e2e.config.ts",
