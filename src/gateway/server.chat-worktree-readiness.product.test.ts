@@ -37,6 +37,14 @@ const fileContents = "WORKTREE_TOOL_MARKER: the complete checkout is ready.\n";
 const userMessage = "Read src/remaining.txt and report its marker.";
 const partial = "I can start while the workspace finishes.";
 
+function writeEvent(response: ServerResponse, event: Record<string, unknown>) {
+  response.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function finishText(response: ServerResponse, text: string, id: string) {
+  writeOpenAiResponsesText(response, { text, messageId: `msg_${id}`, responseId: `resp_${id}` });
+}
+
 function finishWithTool(response: ServerResponse, name: string, args: Record<string, unknown>) {
   const message = {
     type: "message",
@@ -80,7 +88,7 @@ function finishWithTool(response: ServerResponse, name: string, args: Record<str
       },
     },
   ]) {
-    response.write(`data: ${JSON.stringify(event)}\n\n`);
+    writeEvent(response, event);
   }
   response.end("data: [DONE]\n\n");
 }
@@ -387,20 +395,27 @@ it(
           }
         },
       });
+      const client = gateway.client;
+      const createWorktree = <T>(name: string, params: Record<string, unknown> = {}) =>
+        client.request<T>("sessions.create", {
+          key: `agent:main:${name}`,
+          agentId: "main",
+          displayName: name,
+          worktree: true,
+          worktreeName: name,
+          worktreeBaseRef: "HEAD",
+          ...params,
+        });
+      const expectRun = async (runId: string, status = "ok") =>
+        expect(await client.request("agent.wait", { runId, timeoutMs: 60_000 })).toMatchObject({
+          status,
+        });
       activeGate = makeGate("agent:main:readiness-early");
-      const early = await gateway.client.request<{
+      const early = await createWorktree<{
         key: string;
         runId: string;
         runStarted: boolean;
-      }>("sessions.create", {
-        key: activeGate.key,
-        agentId: "main",
-        displayName: "Readiness proof",
-        worktree: true,
-        worktreeName: "readiness-early",
-        worktreeBaseRef: "HEAD",
-        message: userMessage,
-      });
+      }>("readiness-early", { displayName: "Readiness proof", message: userMessage });
       expect(early.runStarted).toBe(true);
       checkpoint = "early prompt preparation";
       const facts = await withinTest(
@@ -418,28 +433,24 @@ it(
         code: "ENOENT",
       });
       initial.response.writeHead(200, { "content-type": "text/event-stream" });
-      initial.response.write(
-        `data: ${JSON.stringify({
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_readiness",
-            role: "assistant",
-            content: [],
-            status: "in_progress",
-          },
-        })}\n\n`,
-      );
-      initial.response.write(
-        `data: ${JSON.stringify({
-          type: "response.output_text.delta",
-          item_id: "msg_readiness",
-          output_index: 0,
-          content_index: 0,
-          delta: partial,
-        })}\n\n`,
-      );
+      writeEvent(initial.response, {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "message",
+          id: "msg_readiness",
+          role: "assistant",
+          content: [],
+          status: "in_progress",
+        },
+      });
+      writeEvent(initial.response, {
+        type: "response.output_text.delta",
+        item_id: "msg_readiness",
+        output_index: 0,
+        content_index: 0,
+        delta: partial,
+      });
       checkpoint = "first text delta";
       await withinTest(firstDelta.promise, signal);
       nextCall = createDeferred<ProviderCall>();
@@ -454,28 +465,15 @@ it(
       checkpoint = "workspace tool result";
       const result = await withinTest(nextCall.promise, signal);
       expect(JSON.stringify(result.body.input)).toContain(fileContents.trim());
-      writeOpenAiResponsesText(result.response, {
-        text: fileContents,
-        messageId: "msg_done",
-        responseId: "resp_done",
-      });
-      expect(
-        await gateway.client.request("agent.wait", { runId: early.runId, timeoutMs: 60_000 }),
-      ).toMatchObject({ status: "ok" });
+      finishText(result.response, fileContents, "done");
+      await expectRun(early.runId);
 
       activeGate = undefined;
       checkpoint = "prepared-workspace comparison";
-      const normal = await gateway.client.request<{
+      const normal = await createWorktree<{
         key: string;
         worktree: { path: string; branch: string };
-      }>("sessions.create", {
-        key: "agent:main:readiness-normal",
-        agentId: "main",
-        displayName: "Readiness proof",
-        worktree: true,
-        worktreeName: "readiness-normal",
-        worktreeBaseRef: "HEAD",
-      });
+      }>("readiness-normal", { displayName: "Readiness proof" });
       nextCall = createDeferred<ProviderCall>();
       const normalRun = await gateway.client.request<{ runId: string }>("chat.send", {
         sessionKey: normal.key,
@@ -490,24 +488,9 @@ it(
         normal.worktree.branch,
         normal.key,
       );
-      const mismatch = initialPrefix
-        .split("")
-        .findIndex((character, index) => character !== preparedPrefix[index]);
-      expect(
-        initialPrefix === preparedPrefix,
-        `Prompt differs at ${mismatch}: ${JSON.stringify({
-          initial: initialPrefix.slice(Math.max(0, mismatch - 60), mismatch + 140),
-          prepared: preparedPrefix.slice(Math.max(0, mismatch - 60), mismatch + 140),
-        })}`,
-      ).toBe(true);
-      writeOpenAiResponsesText(prepared.response, {
-        text: "Prepared prompt matches.",
-        messageId: "msg_normal",
-        responseId: "resp_normal",
-      });
-      expect(
-        await gateway.client.request("agent.wait", { runId: normalRun.runId, timeoutMs: 60_000 }),
-      ).toMatchObject({ status: "ok" });
+      expect(initialPrefix).toBe(preparedPrefix);
+      finishText(prepared.response, "Prepared prompt matches.", "normal");
+      await expectRun(normalRun.runId);
 
       for (const toolName of ["write", "message"] as const) {
         for (const revoked of [false, true]) {
@@ -516,21 +499,12 @@ it(
           const gate = makeGate(`agent:main:${name}`);
           activeGate = gate;
           nextCall = createDeferred<ProviderCall>();
-          const started = await gateway.client.request<{ runId: string; sessionId: string }>(
-            "sessions.create",
-            {
-              key: gate.key,
-              agentId: "main",
-              displayName: name,
-              worktree: true,
-              worktreeName: name,
-              worktreeBaseRef: "HEAD",
-              message:
-                toolName === "write"
-                  ? "Write a workspace canary."
-                  : "Send the workspace marker attachment.",
-            },
-          );
+          const started = await createWorktree<{ runId: string; sessionId: string }>(name, {
+            message:
+              toolName === "write"
+                ? "Write a workspace canary."
+                : "Send the workspace marker attachment.",
+          });
           await withinTest(gate.entered.promise, signal);
           const request = await withinTest(nextCall.promise, signal);
           // Checkout rollback must not erase evidence of an unauthorized effect.
@@ -580,16 +554,10 @@ it(
                 { to: name, text: name, contents: fileContents },
               ]);
             }
-            writeOpenAiResponsesText(completedTool.response, {
-              text: "Effect completed.",
-              messageId: `msg_${name}`,
-              responseId: `resp_${name}`,
-            });
+            finishText(completedTool.response, "Effect completed.", name);
           }
           expect(await withinTest(runEnded, signal)).toBe(true);
-          expect(
-            await gateway.client.request("agent.wait", { runId: started.runId, timeoutMs: 60_000 }),
-          ).toMatchObject({ status: revoked ? "error" : "ok" });
+          await expectRun(started.runId, revoked ? "error" : "ok");
           if (revoked) {
             await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
             expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
@@ -602,13 +570,8 @@ it(
       const failedGate = makeGate("agent:main:readiness-failure", preparationError);
       activeGate = failedGate;
       nextCall = createDeferred<ProviderCall>();
-      const failed = await gateway.client.request<{ runId: string }>("sessions.create", {
-        key: activeGate.key,
-        agentId: "main",
+      const failed = await createWorktree<{ runId: string }>("readiness-failure", {
         displayName: "Readiness failure",
-        worktree: true,
-        worktreeName: "readiness-failure",
-        worktreeBaseRef: "HEAD",
         message: userMessage,
       });
       await withinTest(activeGate.entered.promise, signal);

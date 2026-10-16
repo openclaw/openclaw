@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { McpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import * as oauthProvider from "../agents/mcp-oauth-provider.js";
 import * as oauthStore from "../agents/mcp-oauth-store.js";
@@ -50,6 +51,17 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     let changedConfig = false;
 
     const stored = () => oauthStore.readMcpOAuthStore(identity().storeKey);
+    const writeServerConfig = (server: McpServerConfig) =>
+      writeConfigFile({ gateway: { reload: { mode: "off" } }, mcp: { servers: { docs: server } } });
+    const holdEffect = () => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      releaseEffects.push(() => release.resolve());
+      return { entered, release };
+    };
+    const waitForEffect = (entered: PromiseLike<unknown>, label: string) =>
+      awaitGateBeforeSettlement(entered, session().whenSettled(), `Settled before ${label}`);
+
     const invocation = () => expectDefined(fixture.request(), "registered request");
     const session = () =>
       expectDefined(
@@ -172,10 +184,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         effects.tokenLifetimeSeconds = 3600;
         if (changedConfig) {
           changedConfig = false;
-          await writeConfigFile({
-            gateway: { reload: { mode: "off" } },
-            mcp: { servers: { docs: config } },
-          });
+          await writeServerConfig(config);
         }
         await oauthCoordinator.clearMcpOAuthCredentials(identity());
       }
@@ -217,10 +226,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     it("rejects the existing metadata-document client ID at its real local save", async () => {
       const clientMetadataUrl = "https://client.example/openclaw.json";
       changedConfig = true;
-      await writeConfigFile({
-        gateway: { reload: { mode: "off" } },
-        mcp: { servers: { docs: { ...config, oauth: { clientMetadataUrl } } } },
-      });
+      await writeServerConfig({ ...config, oauth: { clientMetadataUrl } });
       effects.endpoint = (request, response) => {
         if (request.url !== "/.well-known/oauth-authorization-server") {
           return false;
@@ -265,80 +271,71 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       ]);
     });
 
-    const fallbackCells = [
-      {
-        name: "OIDC path to suffix",
-        failures: [
-          "/.well-known/oauth-authorization-server/tenant",
-          "/.well-known/openid-configuration/tenant",
-        ],
-        next: "/tenant/.well-known/openid-configuration",
-        tenant: true,
-      },
-    ];
-
-    for (const cell of fallbackCells) {
-      it.each([false, true])(`${cell.name}, revoke=%s`, async (withdraw) => {
-        const stopPath = expectDefined(cell.failures.at(-1), "last failed discovery path");
-        const attempts: string[] = [];
-        let boundaryCount = 0;
-        effects.endpoint = (request, response) => {
-          const pathname = new URL(request.url ?? "/", resourceUrl).pathname;
-          if (cell.failures.includes(pathname)) {
-            response.writeHead(404).end();
-            return true;
-          }
-          if (cell.tenant && pathname.startsWith("/.well-known/oauth-protected-resource")) {
-            response.end(
-              JSON.stringify({
-                resource: resourceUrl,
-                authorization_servers: [new URL("/tenant", resourceUrl).href],
-              }),
-            );
-            return true;
-          }
-          if (pathname === cell.next && pathname.includes("openid-configuration")) {
-            response.end(
-              JSON.stringify({
-                ...metadata(cell.tenant ? new URL("/tenant", resourceUrl).href : undefined),
-                jwks_uri: new URL("/jwks", resourceUrl).href,
-                subject_types_supported: ["public"],
-                id_token_signing_alg_values_supported: ["RS256"],
-              }),
-            );
-            return true;
-          }
-          return false;
-        };
-        observeFetch({
-          request: (pathname) => {
-            attempts.push(pathname);
-          },
-          response: (pathname, response) => {
-            if (pathname === stopPath && response.status === 404) {
-              boundaryCount++;
-              if (withdraw) {
-                revoke();
-              }
-            }
-          },
-        });
-        const before = await stored();
-        const beforeRequests = requests.length;
-        if (withdraw) {
-          await finishError(await start());
-          expect(await stored()).toEqual(before);
-          expect(requests.slice(beforeRequests)).not.toContain(cell.next);
-          expect(requests.at(-1)).toBe(stopPath);
-        } else {
-          await begin();
-          expect(requests.slice(beforeRequests)).toContain(cell.next);
-          expect((await stored()).lastAuthorizationUrl).toBeDefined();
+    it.each([false, true])("OIDC path to suffix, revoke=%s", async (withdraw) => {
+      const failures = [
+        "/.well-known/oauth-authorization-server/tenant",
+        "/.well-known/openid-configuration/tenant",
+      ];
+      const next = "/tenant/.well-known/openid-configuration";
+      const stopPath = failures[1];
+      const attempts: string[] = [];
+      let boundaryCount = 0;
+      effects.endpoint = (request, response) => {
+        const pathname = new URL(request.url ?? "/", resourceUrl).pathname;
+        if (failures.includes(pathname)) {
+          response.writeHead(404).end();
+          return true;
         }
-        expect(boundaryCount).toBe(1);
-        expect(attempts).toContain(cell.next);
+        if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
+          response.end(
+            JSON.stringify({
+              resource: resourceUrl,
+              authorization_servers: [new URL("/tenant", resourceUrl).href],
+            }),
+          );
+          return true;
+        }
+        if (pathname === next) {
+          response.end(
+            JSON.stringify({
+              ...metadata(new URL("/tenant", resourceUrl).href),
+              jwks_uri: new URL("/jwks", resourceUrl).href,
+              subject_types_supported: ["public"],
+              id_token_signing_alg_values_supported: ["RS256"],
+            }),
+          );
+          return true;
+        }
+        return false;
+      };
+      observeFetch({
+        request: (pathname) => {
+          attempts.push(pathname);
+        },
+        response: (pathname, response) => {
+          if (pathname === stopPath && response.status === 404) {
+            boundaryCount++;
+            if (withdraw) {
+              revoke();
+            }
+          }
+        },
       });
-    }
+      const before = await stored();
+      const beforeRequests = requests.length;
+      if (withdraw) {
+        await finishError(await start());
+        expect(await stored()).toEqual(before);
+        expect(requests.slice(beforeRequests)).not.toContain(next);
+        expect(requests.at(-1)).toBe(stopPath);
+      } else {
+        await begin();
+        expect(requests.slice(beforeRequests)).toContain(next);
+        expect((await stored()).lastAuthorizationUrl).toBeDefined();
+      }
+      expect(boundaryCount).toBe(1);
+      expect(attempts).toContain(next);
+    });
 
     it("fences the real transport TypeError headerless fallback after revocation", async () => {
       const target = "/.well-known/oauth-protected-resource/mcp";
@@ -464,9 +461,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     });
 
     it("rejects verifier publication after the real PKCE digest resolves under revoked authority", async () => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      releaseEffects.push(() => release.resolve());
+      const { entered, release } = holdEffect();
       let digestInput: unknown;
       let verifier: string | undefined;
       let digestCalls = 0;
@@ -507,14 +502,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         });
       });
       const sessionId = await start();
-      expect(
-        await Promise.race([
-          entered.promise.then(() => "digest"),
-          session()
-            .whenSettled()
-            .then(() => "settled-before-digest"),
-        ]),
-      ).toBe("digest");
+      await waitForEffect(entered.promise, "digest");
       const before = await stored();
       const beforeRequests = requests.length;
       revoke();
@@ -536,13 +524,9 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     it.each([false, true])(
       "fences pending insertion after URL publication, newer CLI=%s",
       async (newerCli) => {
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        releaseEffects.push(() => release.resolve());
+        const { entered, release } = holdEffect();
         let state: string | undefined;
-        const cleanupEntered = createDeferredCore();
-        const releaseCleanup = createDeferredCore();
-        releaseEffects.push(() => releaseCleanup.resolve());
+        const { entered: cleanupEntered, release: releaseCleanup } = holdEffect();
         if (newerCli) {
           const cancel = oauthCoordinator.cancelMcpOAuthAuthorization;
           const cleanup = vi
@@ -573,14 +557,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           });
         restoreEffects.push(() => spy.mockRestore());
         const sessionId = await start();
-        expect(
-          await Promise.race([
-            entered.promise.then(() => "published"),
-            session()
-              .whenSettled()
-              .then(() => "settled-before-publication"),
-          ]),
-        ).toBe("published");
+        await waitForEffect(entered.promise, "publication");
         const published = await stored();
         const rejectedState = expectDefined(state, "published state");
         expect(
@@ -596,14 +573,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         let replacement: Awaited<ReturnType<typeof stored>> | undefined;
         let replacementState: string | undefined;
         if (newerCli) {
-          expect(
-            await Promise.race([
-              cleanupEntered.promise.then(() => "cleanup"),
-              session()
-                .whenSettled()
-                .then(() => "settled-before-cleanup"),
-            ]),
-          ).toBe("cleanup");
+          await waitForEffect(cleanupEntered.promise, "cleanup");
           const resolved = resolveMcpTransportConfig("docs", config);
           if (resolved?.kind !== "http") {
             throw new Error("Fixture transport unavailable");

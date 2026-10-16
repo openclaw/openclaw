@@ -35,6 +35,58 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const model = "openai/gpt-4.1";
 afterEach(() => vi.useRealTimers());
 
+function sessionCreation(
+  client: GatewayClient,
+  context: GatewayRequestHandlerOptions["context"],
+  key: string,
+  storePath: string,
+  id: string,
+) {
+  const respond = vi.fn();
+  const entry = () => loadSessionEntry({ sessionKey: key, storePath });
+  const expectRejected = (code = "FORBIDDEN", details: Record<string, unknown> = {}) => {
+    expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ code, ...details }),
+    ]);
+    expect(entry()).toBeUndefined();
+  };
+  const create = (selectedModel?: string, idempotencyKey?: string) =>
+    handleGatewayRequest({
+      req: {
+        type: "req",
+        id,
+        method: "sessions.create",
+        params: {
+          key,
+          ...(selectedModel ? { model: selectedModel } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+      },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+    });
+  return { respond, entry, expectRejected, create };
+}
+
+function holdCatalog(context: GatewayRequestHandlerOptions["context"]) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const load = expectDefined(
+    vi.mocked(context.loadGatewayModelCatalogSnapshot).getMockImplementation(),
+    "catalog loader",
+  );
+  vi.spyOn(context, "loadGatewayModelCatalogSnapshot").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return load(...args);
+  });
+  return { entered, release };
+}
+
 test("rejects an actor replacement while preparing account authority", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const fixture = await createFixture("operator.write", false);
@@ -161,25 +213,21 @@ async function createFixture(
     delete client.authenticatedUserId;
   }
   const key = "agent:main:dashboard:account-authority";
-  const respond = vi.fn();
+  const request = sessionCreation(client, context, key, storePath, "create-account-authority");
   const create = (selection?: string, idempotent = true) =>
-    handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "create-account-authority",
-        method: "sessions.create",
-        params: {
-          key,
-          ...(selection ? { model: selection } : {}),
-          ...(idempotent ? { idempotencyKey: "create-once" } : {}),
-        },
-      },
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => false,
-    });
-  return { authProfileId, client, clients, context, create, key, owner, respond, role, storePath };
+    request.create(selection, idempotent ? "create-once" : undefined);
+  return {
+    authProfileId,
+    client,
+    clients,
+    context,
+    key,
+    owner,
+    role,
+    storePath,
+    ...request,
+    create,
+  };
 }
 
 test.each([
@@ -206,7 +254,7 @@ test.each([
         true,
         expect.objectContaining({ ok: true }),
       ]);
-      const entry = loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath });
+      const entry = fixture.entry();
       expect(entry).toMatchObject({
         createdActor: { type: "human", source: "profile", id: fixture.owner.id },
       });
@@ -224,16 +272,7 @@ test.each(["disconnect", "role scope", "connection scope", "profile"] as const)(
   async (change) => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const fixture = await createFixture("operator.sessions.write", true);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const loadCatalog = fixture.context.loadGatewayModelCatalogSnapshot;
-      fixture.context.loadGatewayModelCatalogSnapshot = vi.fn<typeof loadCatalog>(
-        async (request) => {
-          entered.resolve();
-          await release.promise;
-          return await loadCatalog(request);
-        },
-      );
+      const { entered, release } = holdCatalog(fixture.context);
       const request = fixture.create(model);
       try {
         await Promise.race([entered.promise, request]);
@@ -253,14 +292,7 @@ test.each(["disconnect", "role scope", "connection scope", "profile"] as const)(
         release.resolve();
         await request;
       }
-      expect(fixture.respond.mock.calls[0]?.slice(0, 3)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      ]);
-      expect(
-        loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-      ).toBeUndefined();
+      fixture.expectRejected();
     });
   },
 );
@@ -269,14 +301,7 @@ test("session-only creation does not authorize an explicit personal account sele
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const fixture = await createFixture("operator.sessions.write", true);
     await fixture.create(`${model}@${expectDefined(fixture.authProfileId, "owned account")}`);
-    expect(fixture.respond.mock.calls[0]?.slice(0, 3)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    ]);
-    expect(
-      loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-    ).toBeUndefined();
+    fixture.expectRejected();
   });
 });
 
@@ -295,9 +320,7 @@ test("raw session-write scopes do not replace recorded session-create admission"
       },
     );
     expect(result).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-    expect(
-      loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-    ).toBeUndefined();
+    expect(fixture.entry()).toBeUndefined();
   });
 });
 
@@ -380,34 +403,17 @@ async function createCatalogFixture(withCapturedAuthority = false) {
   });
   await initializeSessionReadContext(context);
   const key = "agent:main:dashboard:catalog-wait";
-  const respond = vi.fn();
+  const request = sessionCreation(client, context, key, storePath, "catalog-wait");
   const create = (selectedModel?: string, idempotencyKey = "catalog-wait") =>
-    handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "catalog-wait",
-        method: "sessions.create",
-        params: { key, ...(selectedModel ? { model: selectedModel } : {}), idempotencyKey },
-      },
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => false,
-    });
-  return { storePath, connection, revocation, catalog, context, key, respond, create };
+    request.create(selectedModel, idempotencyKey);
+  return { storePath, connection, revocation, catalog, context, key, ...request, create };
 }
 
 test.each(["deadline", "disconnect", "authority revocation"])(
   "sessions.create ends a stalled catalog wait on %s without a late commit",
   async (reason) => {
     const fixture = await createCatalogFixture(reason === "authority revocation");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return fixture.catalog;
-    });
+    const { entered, release } = holdCatalog(fixture.context);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const creating = fixture.create("openai/gpt-4.1");
     try {
@@ -420,33 +426,24 @@ test.each(["deadline", "disconnect", "authority revocation"])(
         expect(fixture.connection.signal.aborted).toBe(false);
       }
       await vi.advanceTimersByTimeAsync(reason === "deadline" ? 20_000 : 0);
-      expect(fixture.respond.mock.calls[0]?.slice(0, 3)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringMatching(/model catalog.*loading.*session.*not created.*retry/i),
-        }),
-      ]);
+      fixture.expectRejected("UNAVAILABLE", {
+        message: expect.stringMatching(/model catalog.*loading.*session.*not created.*retry/i),
+      });
       await creating;
-      expect(
-        loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-      ).toBeUndefined();
     } finally {
       vi.useRealTimers();
       release.resolve();
       await creating;
     }
-    expect(
-      loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-    ).toBeUndefined();
+    expect(fixture.entry()).toBeUndefined();
     if (reason === "deadline") {
       fixture.respond.mockClear();
       await fixture.create("openai/gpt-4.1");
       expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-      expect(
-        loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-      ).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-4.1" });
+      expect(fixture.entry()).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1",
+      });
     }
   },
 );
@@ -459,7 +456,7 @@ test("sessions.create without catalog-dependent fields never waits on catalog pu
   await fixture.create();
   expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
   expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-  expect(loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath })).toBeDefined();
+  expect(fixture.entry()).toBeDefined();
 });
 
 test("sessions.create does not await unused thinking catalog hydration", async () => {
@@ -479,9 +476,7 @@ test("sessions.create does not await unused thinking catalog hydration", async (
       await Promise.race([creating.then(() => "created"), entered.promise.then(() => "hydrating")]),
     ).toBe("created");
     expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(
-      loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-    ).toBeDefined();
+    expect(fixture.entry()).toBeDefined();
   } finally {
     release.resolve();
     await creating;
@@ -494,27 +489,17 @@ test.each([-3_600_000, 3_600_000])(
   async (clockStep) => {
     const fixture = await createCatalogFixture();
     await fixture.create("openai/gpt-4.1", "seed");
-    const before = loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath });
-    const entered = [createDeferredCore(), createDeferredCore()];
-    const release = [createDeferredCore(), createDeferredCore()];
-    for (const index of [0, 1]) {
-      vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot).mockImplementationOnce(
-        async () => {
-          entered[index]!.resolve();
-          await release[index]!.promise;
-          return fixture.catalog;
-        },
-      );
-    }
+    const before = fixture.entry();
+    const gates = [holdCatalog(fixture.context), holdCatalog(fixture.context)];
     fixture.respond.mockClear();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const creating = fixture.create("openai/gpt-4.1");
     try {
-      await Promise.race([entered[0]!.promise, creating]);
+      await Promise.race([gates[0]!.entered.promise, creating]);
       await vi.advanceTimersByTimeAsync(10_000);
       vi.setSystemTime(Date.now() + clockStep);
-      release[0]!.resolve();
-      await Promise.race([entered[1]!.promise, creating]);
+      gates[0]!.release.resolve();
+      await Promise.race([gates[1]!.entered.promise, creating]);
       await vi.advanceTimersByTimeAsync(9_999);
       expect(fixture.respond).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
@@ -524,13 +509,11 @@ test.each([-3_600_000, 3_600_000])(
         expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
       ]);
       await creating;
-      expect(loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath })).toEqual(
-        before,
-      );
+      expect(fixture.entry()).toEqual(before);
     } finally {
       vi.useRealTimers();
-      for (const gate of release) {
-        gate.resolve();
+      for (const gate of gates) {
+        gate.release.resolve();
       }
       await creating;
     }
@@ -600,7 +583,7 @@ test("an unqualified synthetic creation does not acquire the operator's default"
     delete expectDefined(fixture.client.internal, "hosted client").sessionCreation;
     await fixture.create();
     expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-    const entry = loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath });
+    const entry = fixture.entry();
     expect(entry).toBeDefined();
     expect(entry?.authProfileOverride).toBeUndefined();
   });
@@ -612,14 +595,7 @@ test("ordinary tool default use does not authorize personal selection or account
     const authProfileId = expectDefined(fixture.authProfileId, "owned account");
     const links = listUserProfileAuthLinks(fixture.owner.id);
     await fixture.create(`${model}@${authProfileId}`);
-    expect(fixture.respond.mock.calls[0]?.slice(0, 3)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    ]);
-    expect(
-      loadSessionEntry({ sessionKey: fixture.key, storePath: fixture.storePath }),
-    ).toBeUndefined();
+    fixture.expectRejected();
     const service = createModelAccountConnectService({
       getConfig: fixture.context.getRuntimeConfig,
     });

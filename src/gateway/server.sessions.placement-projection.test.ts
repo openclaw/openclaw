@@ -204,6 +204,31 @@ function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state:
   };
 }
 
+function failedPlacement(reason: string, activeOwnerEpoch: number | null = 12) {
+  return {
+    ...activePlacementRecord(),
+    state: "failed" as const,
+    turnClaim: null,
+    activeOwnerEpoch,
+    recoveryError: reason,
+    terminalReason: reason,
+    terminalAtMs: 400,
+  } satisfies WorkerSessionPlacementRecord;
+}
+
+async function describePlacement(
+  context: NonNullable<Parameters<typeof directSessionReq>[2]>["context"],
+  key = "main",
+) {
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key },
+    { context },
+  );
+  expect(result.ok).toBe(true);
+  return result.payload?.session?.placement;
+}
+
 async function seedSessionRows(): Promise<void> {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -362,20 +387,15 @@ test("sessions.describe preserves pre-epoch identity while starting", async () =
     lastTranscriptAckCursor: null,
     lastLiveEventAckCursor: null,
   } satisfies WorkerSessionPlacementRecord;
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    {
-      context: placementContext(placement, {
-        providerId: "machine0",
-        profileId: "team",
-        ownerEpoch: 0,
-        state: "provisioning",
-      }),
-    },
+  const projected = await describePlacement(
+    placementContext(placement, {
+      providerId: "machine0",
+      profileId: "team",
+      ownerEpoch: 0,
+      state: "provisioning",
+    }),
   );
-  expect(result.ok).toBe(true);
-  expect(result.payload?.session?.placement).toMatchObject({
+  expect(projected).toMatchObject({
     state: "starting",
     providerId: "machine0",
     profileId: "team",
@@ -409,15 +429,10 @@ test.each([
     const retryBlock = "retryBlock" in scenario ? scenario.retryBlock : undefined;
     await seedSessionRows();
     const active = activePlacementRecord();
-    const placement = {
-      ...active,
-      state: "failed" as const,
+    const placement = failedPlacement(
+      "cloud worker disappeared: provider reported lease destroyed",
       activeOwnerEpoch,
-      turnClaim: null,
-      recoveryError: "cloud worker disappeared: provider reported lease destroyed",
-      terminalReason: "cloud worker disappeared: provider reported lease destroyed",
-      terminalAtMs: 400,
-    } satisfies WorkerSessionPlacementRecord;
+    );
     const move = placementMove(active, null);
     const context = placementContext(
       placement,
@@ -442,22 +457,13 @@ test.each([
     });
     trackSessionReadProjection(projection);
 
-    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-      "sessions.describe",
-      { key: "main" },
-      {
-        context: bindSessionRowProjection(context, () => projection),
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.session?.placement).toMatchObject({
+    const projected = await describePlacement(bindSessionRowProjection(context, () => projection));
+    expect(projected).toMatchObject({
       state: "failed",
       recoveryAction: "restart",
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     });
-    const projected = result.payload?.session?.placement;
     expect(projected).toBeDefined();
     if (ownerEpoch !== undefined && activeOwnerEpoch !== null && !retryBlock) {
       expect(projected).toHaveProperty("retryOnSend", true);
@@ -614,33 +620,15 @@ test.each([
 
 test("sessions.describe requires worker teardown before failed-placement restart", async () => {
   await seedSessionRows();
-  const active = activePlacementRecord();
-  const placement = {
-    ...active,
-    state: "failed" as const,
-    turnClaim: null,
-    recoveryError: "worker unavailable",
-    terminalReason: "worker unavailable",
-    terminalAtMs: 400,
-  } satisfies WorkerSessionPlacementRecord;
-
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    {
-      context: placementContext(placement, {
-        providerId: "machine0",
-        profileId: "team",
-        ownerEpoch: placement.activeOwnerEpoch,
-        state: "failed",
-        leaseId: "lease-live",
-      }),
-    },
+  const placement = failedPlacement("worker unavailable");
+  const projected = await describePlacement(
+    placementContext(placement, {
+      providerId: "machine0",
+      profileId: "team",
+      ownerEpoch: 12,
+      state: "failed",
+      leaseId: "lease-live",
+    }),
   );
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.session?.placement).toMatchObject({
-    state: "failed",
-    recoveryAction: "stop-first",
-  });
+  expect(projected).toMatchObject({ state: "failed", recoveryAction: "stop-first" });
 });
