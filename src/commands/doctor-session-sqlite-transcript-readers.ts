@@ -24,6 +24,7 @@ function resetReadIterator(iterator: ReturnType<StatementSync["iterate"]> | unde
 
 export class ReadOnlySqliteTranscriptReader {
   private labelDetection?: StatementSync;
+  private labelCandidate?: StatementSync;
   private labelSnapshot?: StatementSync;
   private firstHeaderRow?: StatementSync;
   private headerSnapshot?: StatementSync;
@@ -41,29 +42,8 @@ export class ReadOnlySqliteTranscriptReader {
       ? transcriptEventJsonSql(database).compile(getSessionKysely(database)).sql
       : "event_json";
     this.labelRowsSql = `SELECT ${this.eventJsonSql} AS event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC`;
-    if (compressed) {
-      database.function(
-        "openclaw_doctor_label_candidate",
-        { deterministic: true, directOnly: true },
-        (metadata) => {
-          if (typeof metadata !== "string") {
-            return 1;
-          }
-          // The stored projection preserves duplicate keys; SQL role columns use first-key semantics.
-          const { navigation } = JSON.parse(metadata) as { navigation: unknown };
-          return Number(
-            isRecord(navigation) &&
-              navigation.type === "message" &&
-              isRecord(navigation.message) &&
-              (navigation.message.role === "user" || navigation.message.role === "assistant"),
-          );
-        },
-      );
-    }
     this.labelDetectionSql = compressed
-      ? `SELECT CASE WHEN event_json IS NOT NULL THEN event_json
-          WHEN openclaw_doctor_label_candidate(navigation_json) THEN ${this.eventJsonSql}
-          ELSE NULL END AS event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC`
+      ? "SELECT event_json, navigation_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC"
       : this.labelRowsSql;
   }
 
@@ -91,15 +71,34 @@ export class ReadOnlySqliteTranscriptReader {
       this.labelDetection ??= this.database.prepare(this.labelDetectionSql);
       iterator = this.labelDetection.iterate(sessionId);
       for (const row of iterator) {
-        if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
+        if (typeof row.seq !== "number") {
           continue;
         }
-        if (!mayNeedRepair(row.event_json)) {
+        let eventJson = row.event_json;
+        if (typeof eventJson !== "string") {
+          if (typeof row.navigation_json === "string") {
+            // The stored projection preserves duplicate keys; SQL role columns use first-key semantics.
+            const { navigation }: { navigation: unknown } = JSON.parse(row.navigation_json);
+            if (
+              !isRecord(navigation) ||
+              navigation.type !== "message" ||
+              !isRecord(navigation.message) ||
+              (navigation.message.role !== "user" && navigation.message.role !== "assistant")
+            ) {
+              continue;
+            }
+          }
+          this.labelCandidate ??= this.database.prepare(
+            `SELECT ${this.eventJsonSql} AS event_json FROM transcript_events WHERE session_id = ? AND seq = ?`,
+          );
+          eventJson = this.labelCandidate.get(sessionId, row.seq)?.event_json ?? null;
+        }
+        if (typeof eventJson !== "string" || !mayNeedRepair(eventJson)) {
           continue;
         }
         let event: unknown;
         try {
-          event = JSON.parse(row.event_json);
+          event = JSON.parse(eventJson);
         } catch {
           continue;
         }
