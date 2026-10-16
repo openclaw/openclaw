@@ -1,16 +1,12 @@
-import { dynamic, insert, type JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import {
   For,
   Show,
   createEffect,
   createMemo,
-  createRoot,
   createSignal,
   flush,
-  getOwner,
-  onCleanup,
   onSettled,
-  runWithOwner,
   untrack,
   merge,
 } from "solid-js";
@@ -98,15 +94,15 @@ export type MenuProps = {
   id: string;
   label: string;
   items: readonly MenuEntry[];
-  /** Materialize content on first open, then retain it across closes. Stable for this mount. */
-  lazy?: boolean;
+  /** Defer until opened; "while-open" releases transient content after the exit. */
+  lazy?: boolean | "while-open";
   /** Prepare a closed menu in idle slices after its page content has settled. */
   prewarm?: boolean;
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
   panelClass?: string;
-  triggerClass?: string;
+  triggerClass?: JSX.ClassValue;
   triggerAttributes?: Pick<
     JSX.ButtonHTMLAttributes<HTMLButtonElement>,
     "title" | "style" | "tabindex" | "aria-hidden" | "aria-keyshortcuts" | "aria-busy" | "value"
@@ -177,15 +173,13 @@ export function Menu(props: BranchProps): JSX.Element {
     root: props.root,
   }));
   const direction = () => props.dir ?? (document.documentElement.dir === "rtl" ? "rtl" : "ltr");
-  const owner = getOwner();
   const lazy = untrack(() => props.lazy);
-  let disposeBody: (() => void) | undefined;
   let cancelPrewarm: (() => void) | undefined;
   let renderedCount = 0;
-  let extendBody: ((count: number) => void) | undefined;
+  const [limit, setLimit] = createSignal(lazy === true ? 0 : Infinity);
   const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
   createEffect(prewarmEnabled, (enabled) => {
-    if (enabled && lazy && renderedCount !== Infinity) {
+    if (enabled && lazy === true && renderedCount !== Infinity) {
       let frame = requestAnimationFrame(() => {
         frame = requestAnimationFrame(schedulePrewarm);
       });
@@ -193,11 +187,10 @@ export function Menu(props: BranchProps): JSX.Element {
     }
     return () => cancelPrewarm?.();
   });
-  onCleanup(() => disposeBody?.());
   const overlay = createOverlay(identity.id, identity.parent, {
     exclusiveGroup: "menu",
     isValid: (panel) =>
-      (lazy && !disposeBody) ||
+      (lazy && !control.bodyMounted()) ||
       Boolean(
         panel.querySelector(
           '[role^="menuitem"], [data-form-control], [data-search], input, textarea, select, button, a[href]',
@@ -272,14 +265,17 @@ export function Menu(props: BranchProps): JSX.Element {
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
   const [opened, setOpened] = createSignal(false);
-  const connectControl = useOverlayControl(
+  const control = useOverlayControl(
     overlay,
     merge(props, {
       onBeforeShow(event: Event) {
-        materializeBody();
+        if (lazy === true && !event.defaultPrevented) {
+          prepareItems();
+        }
         props.onBeforeShow?.(event);
       },
     }),
+    () => body(),
   );
   createEffect(placement, (value) => {
     if (mounted) {
@@ -317,7 +313,7 @@ export function Menu(props: BranchProps): JSX.Element {
     }
     const controls = formControls();
     const row = target.closest<HTMLElement>('[role^="menuitem"]');
-    const firstControl = row ? controls.find((control) => row.contains(control)) : undefined;
+    const firstControl = row ? controls.find((element) => row.contains(element)) : undefined;
     if (
       firstControl &&
       ((!event.shiftKey && target === row) || (event.shiftKey && target === firstControl))
@@ -356,9 +352,10 @@ export function Menu(props: BranchProps): JSX.Element {
     if (!identity.parent) {
       overlay.setParent(findOverlayParent(trigger));
     }
-    anchorBinding = createOverlayAnchor(overlay.surface);
+    // This menu owns its trigger and surface in the same DOM root.
+    anchorBinding = createOverlayAnchor(overlay.surface, { sameRoot: true });
     anchorBinding.update(trigger, placement());
-    const disconnectControl = connectControl(
+    const disconnectControl = control.connect(
       () =>
         props.ref?.({
           overlay,
@@ -522,41 +519,32 @@ export function Menu(props: BranchProps): JSX.Element {
       }}
     </For>
   );
-  const body = (count: () => number = () => Infinity) => (
+  const body = () => (
     <>
       {props.children}
-      {renderEntries(() => (count() === Infinity ? props.items : props.items.slice(0, count())))}
+      {renderEntries(() => (limit() === Infinity ? props.items : props.items.slice(0, limit())))}
     </>
   );
-  function materializeBody(count = Infinity) {
+  function prepareItems(count = Infinity) {
     cancelPrewarm?.();
     cancelPrewarm = undefined;
     renderedCount = count;
-    if (lazy && !disposeBody) {
-      runWithOwner(owner, () => {
-        disposeBody = createRoot((dispose) => {
-          const [limit, setLimit] = createSignal(count);
-          extendBody = setLimit;
-          insert(surface, body(limit));
-          return dispose;
-        });
-      });
-    } else if (extendBody) {
-      extendBody(count);
-      // Native opening/focus must see the complete menu before showPopover.
-      if (count === Infinity) {
-        flush();
-      }
+    setLimit(count);
+    control.mountBody();
+    // Native opening/focus must see the complete menu before showPopover.
+    if (count === Infinity) {
+      flush();
     }
   }
+
   function schedulePrewarm() {
     const slice = () => {
-      materializeBody(renderedCount + 8);
+      prepareItems(renderedCount + 8);
       if (renderedCount < untrack(() => props.items.length)) {
         schedulePrewarm();
       } else {
         renderedCount = Infinity;
-        extendBody?.(Infinity);
+        setLimit(Infinity);
       }
     };
     if (typeof requestIdleCallback === "function") {
