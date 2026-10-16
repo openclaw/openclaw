@@ -110,6 +110,64 @@ function selectSegment(group: Element, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("keeps access details in open model options and out of selected settings triggers", async () => {
+    const onPrimaryChange = vi.fn();
+    const onUtilityChange = vi.fn();
+    const onFallbackChange = vi.fn();
+    const model = (id: string) => ({
+      id,
+      provider: "openai",
+      name: "A deliberately long model name",
+      available: true,
+    });
+    const pinned = "openai/other@openai:team";
+    const container = mount(
+      props({
+        configuredModels: [
+          model("primary"),
+          model("other"),
+          { ...model("other"), selectionRef: pinned },
+        ],
+        authStatus: {
+          ts: 1,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai:team", type: "api_key", status: "static" }],
+              apiKey: { source: "config" },
+            },
+          ],
+        },
+        defaultModels: { primary: "openai/primary", fallbacks: [pinned], utilityModel: pinned },
+        onPrimaryChange,
+        onUtilityChange,
+        onFallbackChange,
+      }),
+    );
+    await updatePickers(container);
+    for (const [label, change] of [
+      ["Model", onPrimaryChange],
+      ["Utility Model", onUtilityChange],
+      ["Fallback Model", onFallbackChange],
+    ] as const) {
+      const picker = settingsRow(container, label).querySelector<HTMLElement>(
+        "openclaw-select-picker",
+      )!;
+      const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+      expect(text(trigger)).toBe("A deliberately long model name");
+      expect(trigger.getAttribute("aria-label")).toBe(`${label}: A deliberately long model name`);
+      expect(trigger.querySelector(".picker-select__description")).toBeNull();
+      await openPicker(picker);
+      const option = picker.querySelector(`[role="option"][data-value="${pinned}"]`)!;
+      expect(text(option.querySelector(".picker-select__description"))).toBe("API");
+      await choosePickerValue(picker, pinned);
+      expect(change).toHaveBeenCalledExactlyOnceWith(pinned);
+      expect(text(trigger)).not.toContain("API");
+    }
+  });
+
   it("does not offer one account's Ultrafast entitlement for another saved account pin", () => {
     const onFastModeChange = vi.fn();
     const configured = {

@@ -168,7 +168,7 @@ describe("Models page catalog publication", () => {
     profiles: ModelAuthStatusResult["providers"][number]["profiles"];
     expected: string;
   }>)(
-    "Models page shows $expected beside saved defaults and refreshes the resolved Auto model",
+    "Models page keeps $expected in open options and refreshes the resolved Auto model",
     async ({ profile, plan, profiles, expected }) => {
       const { context, request } = createHarness("main");
       const originalRequest = request.getMockImplementation()!;
@@ -209,15 +209,19 @@ describe("Models page catalog publication", () => {
       const primaryTrigger = primary.querySelector(".picker-select__trigger")!;
       const utilityTrigger = utility.querySelector(".picker-select__trigger")!;
       expect(primaryTrigger.textContent).toContain("Prepared primary");
-      expect(primaryTrigger.querySelector(".picker-select__description")?.textContent).toBe(
-        expected,
-      );
+      expect(primaryTrigger.querySelector(".picker-select__description")).toBeNull();
+      expect(primaryTrigger.getAttribute("aria-label")).not.toContain(expected);
       expect(utilityTrigger.textContent).toContain("Auto · Prepared utility");
-      expect(utilityTrigger.querySelector(".picker-select__description")?.textContent).toBe(
-        expected,
-      );
-      expect(utilityTrigger.getAttribute("aria-label")).toContain(expected);
+      expect(utilityTrigger.querySelector(".picker-select__description")).toBeNull();
+      expect(utilityTrigger.getAttribute("aria-label")).not.toContain(expected);
       const requestsBeforeOpen = request.mock.calls.length;
+      await openModelPicker(page, "primary");
+      await drainPageUpdates(page);
+      expect(
+        primary.querySelector(
+          `[role="option"][data-value="openai/prepared-primary${suffix}"] .picker-select__description`,
+        )?.textContent,
+      ).toBe(expected);
       await openModelPicker(page, "utility");
       await drainPageUpdates(page);
       expect(
@@ -233,9 +237,12 @@ describe("Models page catalog publication", () => {
       );
       await drainPageUpdates(page);
       expect(utilityTrigger.textContent).toContain("Auto · Prepared fallback");
-      expect(utilityTrigger.querySelector(".picker-select__description")?.textContent).toBe(
-        expected,
-      );
+      expect(utilityTrigger.querySelector(".picker-select__description")).toBeNull();
+      expect(utilityTrigger.getAttribute("aria-label")).not.toContain(expected);
+      expect(
+        utility.querySelector('[role="option"][data-value="__openclaw_automatic_utility__"]')
+          ?.textContent,
+      ).toContain(expected);
     },
   );
 
