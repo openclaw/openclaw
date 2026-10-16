@@ -34,11 +34,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 
 afterEach(() => {
-  const workers = [...observedWorkers];
+  expect(Array.from(observedWorkers, (worker) => worker.threadId)).toEqual(
+    Array.from(observedWorkers, () => -1),
+  );
   observedWorkers.clear();
-  for (const worker of workers) {
-    expect(worker.threadId).toBe(-1);
-  }
 });
 
 type DecodeObservation = {
@@ -63,9 +62,7 @@ if (parentPort) {
   parentPort.on("message", (message) => {
     if (message.responseId !== undefined) return;
     operation = message.input?.kind === "usage-cost" ? message.input.operation.kind : undefined;
-    parsedRollups = 0;
-    parsedCheckpoints = 0;
-    parsedBucketBodies = 0;
+    parsedRollups = parsedCheckpoints = parsedBucketBodies = 0;
   });
   const parse = JSON.parse;
   JSON.parse = function(text, ...args) {
@@ -88,7 +85,6 @@ if (parentPort) {
     return Reflect.apply(post, this, [message, ...args]);
   };
 }
-
 `,
   );
   return async (): Promise<DecodeObservation[]> =>
@@ -98,8 +94,8 @@ if (parentPort) {
       .map((line) => JSON.parse(line) as DecodeObservation);
 }
 
-it("refreshes registered usage.cost without decoding unchanged date partitions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("refreshes registered usage.cost without decoding unchanged date partitions", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config = {};
     setRuntimeConfigSnapshot(config);
     const preload = state.path("observe-usage-decode.cjs");
@@ -129,18 +125,13 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
             { respond, handlers: coreGatewayHandlers, context: { getRuntimeConfig: () => config } },
           ),
         );
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => {},
-        );
+        await work.runWhenIdle(() => {});
       } finally {
         await work.drain();
       }
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({ totals: expect.objectContaining({ totalTokens: 40 }) }),
-        undefined,
-      );
+      expect(respond.mock.calls).toMatchObject([
+        [true, { totals: { totalTokens: 40 } }, undefined],
+      ]);
       const fresh = await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false });
       expect(fresh).toMatchObject({
         cacheStatus: { status: "fresh" },
@@ -149,7 +140,6 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
       const records = await observations();
       const refreshes = records.filter((record) => record.operation === "refresh");
       expect(refreshes).toHaveLength(2);
-      // The changed transcript reads its checkpoint and date partition; the other three stay cold.
       expect(refreshes[1]).toMatchObject({
         threadId: refreshes[0]!.threadId,
         parsedRollups: 2,
@@ -165,5 +155,4 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
         }),
       );
     });
-  });
-});
+  }));

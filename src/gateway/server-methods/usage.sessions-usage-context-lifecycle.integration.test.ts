@@ -27,6 +27,7 @@ import {
   contextReport,
   invokeUsage,
   usageClient,
+  usageReply,
   usageRoleConfig,
   writeUsage,
 } from "./usage.test-support.js";
@@ -49,14 +50,10 @@ it.for([
     });
     const release = createDeferred();
     const targetReadStarted = createDeferred();
-    const summaryLoaded =
-      createDeferred<
-        Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
-      >();
+    const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
+    const summaryLoaded = createDeferred<Awaited<ReturnType<typeof actualLoad>>>();
     let request: Promise<unknown> | undefined;
     let projection: SessionRowProjection | undefined;
-    let restoreSummaryLoader: (() => void) | undefined;
-    let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
     let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
@@ -69,8 +66,7 @@ it.for([
           releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
-          restoreSummaryLoader?.();
-          restoreTargetReader?.();
+          vi.restoreAllMocks();
           signal.removeEventListener("abort", releaseSummary);
         }
       })());
@@ -102,29 +98,22 @@ it.for([
       const originalReport = contextReport(timestamp);
       const changedReport = { ...originalReport, generatedAt: timestamp + 1 };
       const siblingReport = { ...originalReport, generatedAt: timestamp + 2 };
-      replaceSessionEntrySync(scope, {
-        sessionId,
-        updatedAt: timestamp,
-        createdActor: { type: "human", source: "profile", id: viewer.id },
-        visibility: "shared",
-        systemPromptReport: originalReport,
-      });
       const sibling = {
         ...scope,
         sessionKey: "agent:main:usage-unaffected",
         sessionId: "usage-unaffected",
       };
-      replaceSessionEntrySync(sibling, {
-        sessionId: sibling.sessionId,
-        updatedAt: timestamp - 1,
-        createdActor: { type: "human", source: "profile", id: viewer.id },
-        visibility: "shared",
-        ...(pageBackfill ? { systemPromptReport: siblingReport } : {}),
-      });
-      for (const [target, tokens] of [
-        [{ ...scope, sessionId }, 17],
-        [sibling, 23],
+      for (const [target, tokens, updatedAt, report] of [
+        [{ ...scope, sessionId }, 17, timestamp, originalReport],
+        [sibling, 23, timestamp - 1, pageBackfill ? siblingReport : undefined],
       ] as const) {
+        replaceSessionEntrySync(target, {
+          sessionId: target.sessionId,
+          updatedAt,
+          createdActor: { type: "human", source: "profile", id: viewer.id },
+          visibility: "shared",
+          ...(report ? { systemPromptReport: report } : {}),
+        });
         await writeUsage(target, state.workspaceDir, tokens, timestamp, 0);
       }
       await sessionCostUsage.loadCostUsageSummary({
@@ -135,28 +124,25 @@ it.for([
       });
 
       projection = await createSessionRowProjection({ cfg: config, getConfig: () => config });
-      const actualLoad = sessionCostUsage.loadSessionCostSummariesFromCache;
-      const summaryLoader = vi
-        .spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache")
-        .mockImplementation(async (params) => {
+      vi.spyOn(sessionCostUsage, "loadSessionCostSummariesFromCache").mockImplementation(
+        async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
           if (!holdContext) {
             await release.promise;
           }
           return result;
-        });
-      restoreSummaryLoader = () => summaryLoader.mockRestore();
+        },
+      );
       if (holdContext) {
         const actualRead = usageSessionSelection.loadUsageSessionContext;
-        const reader = vi
-          .spyOn(usageSessionSelection, "loadUsageSessionContext")
-          .mockImplementation(async (...args) => {
+        vi.spyOn(usageSessionSelection, "loadUsageSessionContext").mockImplementation(
+          async (...args) => {
             await actualRead(...args);
             targetReadStarted.resolve();
             await release.promise;
-          });
-        restoreTargetReader = () => reader.mockRestore();
+          },
+        );
       }
       const respond = vi.fn();
       request = invokeUsage(
@@ -225,8 +211,7 @@ it.for([
       } finally {
         sql?.restore();
       }
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
+      const [ok, payload] = usageReply(respond);
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
       const unaffected = {

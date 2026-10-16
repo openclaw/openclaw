@@ -43,6 +43,18 @@ function failureReport(response: { runId: string; result: UpdateRunResult }) {
   });
 }
 
+function expectRedacted(values: unknown[], privateTexts: string[]) {
+  for (const value of values) {
+    for (const privateText of privateTexts) {
+      expect(typeof value === "string" ? value : JSON.stringify(value)).not.toContain(privateText);
+    }
+  }
+}
+
+function expectWarning(warn: ReturnType<typeof vi.fn>, text: string) {
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(text));
+}
+
 describe("update.run unexpected-error diagnostics", () => {
   it("refuses exhausted Git discovery before adopting a campaign", async () => {
     const root = "/tmp/openclaw-source";
@@ -77,10 +89,9 @@ describe("update.run unexpected-error diagnostics", () => {
       status: "error",
       reason: "managed-service-handoff-failed",
     });
-    expect(logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `status=error reason=managed-service-handoff-failed error="Error code=Error"`,
-      ),
+    expectWarning(
+      logGateway.warn,
+      `status=error reason=managed-service-handoff-failed error="Error code=Error"`,
     );
     expect(logGateway.info).not.toHaveBeenCalledWith(
       expect.stringContaining("update.run completed"),
@@ -107,26 +118,22 @@ describe("update.run unexpected-error diagnostics", () => {
     });
     expect(JSON.stringify(response.result)).not.toContain("history lookup failed");
     expect(getUpdateRun(response.runId)?.status).toBe("failed");
-    expect(logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Update history could not be read"),
-    );
+    expectWarning(logGateway.warn, "Update history could not be read");
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
   it.each(["none", "state", "diagnostics"] as const)(
     "preserves structured transfer failures and cancellation when recording fails=%s",
     async (recordingFailure) => {
-      const error = Object.assign(
-        new TypeError("handoff pipe failed", {
-          cause: Object.assign(
-            new Error(
-              "Connection refused token=synthetic-secret host=private-host.example at /Users/example/private-file",
-            ),
-            { code: "ECONNREFUSED" },
-          ),
-        }),
-        { code: "EACCES" },
+      const cause = Object.assign(
+        new Error(
+          "Connection refused token=synthetic-secret host=private-host.example at /Users/example/private-file",
+        ),
+        { code: "ECONNREFUSED" },
       );
+      const error = Object.assign(new TypeError("handoff pipe failed", { cause }), {
+        code: "EACCES",
+      });
       error.stack = `TypeError: handoff pipe failed\n    at transfer (${path.resolve("src/infra/update-managed-service-handoff.ts")}:42:7)`;
       let restoreDiagnosticFailure: (() => void) | undefined;
       transferManagedServiceUpdateHandoffMock.mockImplementationOnce(async () => {
@@ -141,11 +148,10 @@ describe("update.run unexpected-error diagnostics", () => {
                 (scope) =>
                   operation({
                     execute: (command, executeOptions) => {
-                      const shouldFail =
-                        recordingFailure === "state"
-                          ? command.type === "updateRuns.recordStep"
-                          : command.type === "updateRuns.recordDiagnostics";
-                      if (shouldFail) {
+                      if (
+                        command.type ===
+                        `updateRuns.${recordingFailure === "state" ? "recordStep" : "recordDiagnostics"}`
+                      ) {
                         write.mockRestore();
                         throw new Error("diagnostic ledger is read-only");
                       }
@@ -185,22 +191,21 @@ describe("update.run unexpected-error diagnostics", () => {
       const report = await failureReport(response);
       expect(report.body).toContain("EACCES");
       expect(report.body).toContain("ECONNREFUSED");
-      for (const privateText of [
-        "synthetic-secret",
-        "private-host.example",
-        "/Users/example",
-        "diagnostic ledger is read-only",
-      ]) {
-        expect(JSON.stringify(response.result)).not.toContain(privateText);
-        expect(report.body).not.toContain(privateText);
-      }
+      expectRedacted(
+        [response.result, report.body],
+        [
+          "synthetic-secret",
+          "private-host.example",
+          "/Users/example",
+          "diagnostic ledger is read-only",
+        ],
+      );
       if (recordingFailure !== "none") {
-        expect(logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining(
-            recordingFailure === "state"
-              ? "Update failure state could not be recorded"
-              : "Update diagnostics could not be recorded",
-          ),
+        expectWarning(
+          logGateway.warn,
+          recordingFailure === "state"
+            ? "Update failure state could not be recorded"
+            : "Update diagnostics could not be recorded",
         );
       }
     },
@@ -251,13 +256,6 @@ describe("update.run unexpected-error diagnostics", () => {
         target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "a".repeat(40) },
       });
       const recordedRun = expectDefined(getUpdateRun(response.runId), "recorded update run");
-      expect(response).toMatchObject({ ok: false, ackDelivered: false });
-      expect(recordedRun).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: "unexpected-error",
-        target: { kind: "git", sha: "a".repeat(40) },
-      });
       const phase = source === "campaign adoption" ? "requested" : "installation-inspection";
       const failureFacts = [
         expect.objectContaining({
@@ -267,23 +265,29 @@ describe("update.run unexpected-error diagnostics", () => {
           message: expect.stringContaining("EACCES: permission denied, open [redacted-path]"),
         }),
       ];
-      expect(recordedRun.steps).toContainEqual(
-        expect.objectContaining({
-          step: phase,
-          status: "failed",
-          failureFacts,
-        }),
-      );
-      expect(response.result).toMatchObject({
-        status: "error",
-        mode: "git",
+      expect(recordedRun).toMatchObject({
+        status: "failed",
+        phase: "finished",
         reason: "unexpected-error",
-        before: { version: "1.0.0" },
-        steps: [{ name: phase, exitCode: 1, failureFacts }],
+        target: { kind: "git", sha: "a".repeat(40) },
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: phase, status: "failed", failureFacts }),
+        ]),
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        ackDelivered: false,
+        result: {
+          status: "error",
+          mode: "git",
+          reason: "unexpected-error",
+          before: { version: "1.0.0" },
+          steps: [{ name: phase, exitCode: 1, failureFacts }],
+        },
       });
       expect(response.result.root).toBe(source === "campaign adoption" ? root : undefined);
-      expect(adoptUpdateCampaignMock).toHaveBeenCalledTimes(source === "campaign adoption" ? 1 : 0);
       expect(response.result.recovery).toBeUndefined();
+      expect(adoptUpdateCampaignMock).toHaveBeenCalledTimes(source === "campaign adoption" ? 1 : 0);
       expect(sentinelState.capturedPayload).toBeUndefined();
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
@@ -299,22 +303,15 @@ describe("update.run unexpected-error diagnostics", () => {
       if (source !== "discovery") {
         expect(report.body).toContain("Installation method: git-checkout");
       }
-      for (const privateText of [
-        "/Users/example",
-        "private-file",
-        "synthetic-secret",
-        "private second line",
-      ]) {
-        expect(JSON.stringify(response.result)).not.toContain(privateText);
-        expect(JSON.stringify(recordedRun)).not.toContain(privateText);
-        expect(report.body).not.toContain(privateText);
-      }
+      expectRedacted(
+        [response.result, recordedRun, report.body],
+        ["/Users/example", "private-file", "synthetic-secret", "private second line"],
+      );
       expect(logGateway.warn).toHaveBeenCalledTimes(2);
-      expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
-      expect(logGateway.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `status=error reason=unexpected-error error="Error code=EACCES exitCode=1"`,
-        ),
+      expectWarning(logGateway.warn, "EACCES");
+      expectWarning(
+        logGateway.warn,
+        `status=error reason=unexpected-error error="Error code=EACCES exitCode=1"`,
       );
     },
   );

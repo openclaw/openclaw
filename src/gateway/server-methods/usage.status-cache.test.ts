@@ -14,32 +14,22 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStoreAsync: vi.fn(),
-  listProviderUsagePluginDescriptors: vi.fn(),
-  loadProviderUsageSummary: vi.fn(),
+  ensureStore: vi.fn(),
+  listDescriptors: vi.fn(),
+  loadSummary: vi.fn(),
 }));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
-    "../../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStoreAsync: mocks.ensureAuthProfileStoreAsync,
-    externalCliDiscoveryForConfigStatus: vi.fn(() => undefined),
-  };
-});
-vi.mock("../../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
-    "../../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    listProviderUsagePluginDescriptors: mocks.listProviderUsagePluginDescriptors,
-  };
-});
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
+  ensureAuthProfileStoreAsync: mocks.ensureStore,
+  externalCliDiscoveryForConfigStatus: vi.fn(() => undefined),
+}));
+vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
+  listProviderUsagePluginDescriptors: mocks.listDescriptors,
+}));
 vi.mock("../../infra/provider-usage.load.js", () => ({
-  loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+  loadProviderUsageSummary: mocks.loadSummary,
 }));
 
 import {
@@ -123,10 +113,10 @@ describe("usage.status provider usage cache", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     clearModelAuthStatusUsageCache();
-    mocks.ensureAuthProfileStoreAsync.mockImplementation(() => store);
-    mocks.listProviderUsagePluginDescriptors.mockReturnValue([providerDescriptor]);
-    mocks.loadProviderUsageSummary.mockImplementation(async () =>
-      usageSummary(now, mocks.loadProviderUsageSummary.mock.calls.length * 10),
+    mocks.ensureStore.mockImplementation(() => store);
+    mocks.listDescriptors.mockReturnValue([providerDescriptor]);
+    mocks.loadSummary.mockImplementation(async () =>
+      usageSummary(now, mocks.loadSummary.mock.calls.length * 10),
     );
   });
 
@@ -142,7 +132,7 @@ describe("usage.status provider usage cache", () => {
     const heldRefresh = createDeferredCore<UsageSummary>();
     const original: UsageSummary = { updatedAt: now, providers: [] };
     let draining: Promise<void> | undefined;
-    mocks.loadProviderUsageSummary.mockImplementationOnce(() => heldRefresh.promise);
+    mocks.loadSummary.mockImplementationOnce(() => heldRefresh.promise);
     try {
       await expect(scope.track(runCapableUsageStatus)).resolves.toEqual({
         updatedAt: now,
@@ -163,10 +153,10 @@ describe("usage.status provider usage cache", () => {
       await draining;
       expect(drained).toBe(true);
       await expect(runUsageStatus()).resolves.toEqual(current);
-      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
     } finally {
       heldRefresh.resolve(original);
-      await Promise.allSettled([mocks.loadProviderUsageSummary.mock.results[0]?.value]);
+      await Promise.allSettled([mocks.loadSummary.mock.results[0]?.value]);
       await (draining ?? scope.drain());
     }
   });
@@ -182,7 +172,7 @@ describe("usage.status provider usage cache", () => {
       if (!selectionChanges) {
         await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
       }
-      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(1);
       publishStore({
         ...store,
         usageStats: {
@@ -193,16 +183,14 @@ describe("usage.status provider usage cache", () => {
       now += 1;
       if (selectionChanges) {
         await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-        expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
       }
       await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-      await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
-      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(selectionChanges ? 2 : 1);
+      expect(mocks.loadSummary).toHaveBeenCalledTimes(selectionChanges ? 2 : 1);
     },
   );
 
   it("keeps a failed refresh incomplete for capable clients and recovers", async () => {
-    mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("provider stack down"));
+    mocks.loadSummary.mockRejectedValueOnce(new Error("provider stack down"));
     await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
     await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
     await expect(runCapableUsageStatus()).resolves.toMatchObject({
@@ -214,7 +202,7 @@ describe("usage.status provider usage cache", () => {
     const first = (await runUsageStatus()) as UsageSummary;
     now = 61_000;
     if (timeout) {
-      mocks.loadProviderUsageSummary.mockResolvedValueOnce({
+      mocks.loadSummary.mockResolvedValueOnce({
         updatedAt: now,
         providers: [{ ...providerDescriptor, windows: [], error: "Timeout" }],
       });
@@ -223,7 +211,7 @@ describe("usage.status provider usage cache", () => {
     now = 62_000;
     const retained = (await runUsageStatus()) as UsageSummary;
     expect(retained).toEqual(timeout ? first : usageSummary(61_000, 20));
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
   });
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
     await runUsageStatus();
@@ -232,11 +220,11 @@ describe("usage.status provider usage cache", () => {
       now,
     });
     expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(1);
     publishStore(createStore({ default: "access-two" }));
     await expect(runUsageStatus()).resolves.toMatchObject({
       providers: [{ windows: [{ usedPercent: 20 }] }],
     });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
   });
 });

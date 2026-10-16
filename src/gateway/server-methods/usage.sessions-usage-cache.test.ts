@@ -118,10 +118,10 @@ describe("sessions.usage result cache and owner attribution", () => {
         range: "all",
         agentId: "main",
       });
-      expect(result.sessions).toMatchObject([
-        { key, sessionId, label: "Private usage", usage: { totalTokens: 13 } },
-      ]);
-      expect(result.totals.totalTokens).toBe(13);
+      expect(result).toMatchObject({
+        sessions: [{ key, sessionId, label: "Private usage", usage: { totalTokens: 13 } }],
+        totals: { totalTokens: 13 },
+      });
     });
   });
 
@@ -250,22 +250,15 @@ function fixture(entries: SessionEntry[], tokens: Record<string, number>) {
     params: Record<string, unknown> = {},
     client: GatewayClient | null = null,
     runtimeConfig = creatorConfig,
-  ): Promise<SessionsUsageResult> => {
-    return runSessionsUsage(
+  ): Promise<SessionsUsageResult> =>
+    runSessionsUsage(
       { range: "all", agentId: "main", limit: 1, ...params },
       runtimeConfig,
       client ?? undefined,
       "sessions.usage",
       { store: rows, agentId: "main", storePath: "/tmp/usage.sqlite" },
     );
-  };
 }
-
-const actor = (id: string): SessionEntry["createdActor"] => ({
-  type: "human",
-  source: "profile",
-  id,
-});
 
 function channelRow(
   sessionId: string,
@@ -289,7 +282,12 @@ function ownedRow(
   profileId: string,
   extra: Partial<SessionEntry> = {},
 ): SessionEntry {
-  return { sessionId, updatedAt, createdActor: actor(profileId), ...extra };
+  return {
+    sessionId,
+    updatedAt,
+    createdActor: { type: "human", source: "profile", id: profileId },
+    ...extra,
+  };
 }
 
 describe("usage creator attribution", () => {
@@ -381,8 +379,10 @@ describe("usage creator attribution", () => {
         totals: { totalTokens: 65 },
       });
       const selected = await query({ limit: 20, creatorKey: merged.key });
-      expect(selected.sessions.map(({ sessionId }) => sessionId)).toEqual(["ada", "former"]);
-      expect(selected.totals.totalTokens).toBe(30);
+      expect(selected).toMatchObject({
+        sessions: [{ sessionId: "ada" }, { sessionId: "former" }],
+        totals: { totalTokens: 30 },
+      });
       expect(new Set(after.creatorOptions?.map(({ key }) => key)).size).toBe(5);
     });
   });
