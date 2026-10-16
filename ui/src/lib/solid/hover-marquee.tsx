@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createHoverMarquee, type MarqueeOptions } from "../hover-marquee.ts";
+import { createHoverMarquee, type MarqueeOptions } from "../hover-marquee-controller.ts";
 
 export function HoverMarquee(props: {
   content: JSX.Element;
