@@ -16,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
   throw new Error("Lazy capability metadata must not load the broad agent runtime");
 });
 
-const runtimeMocks = vi.hoisted(() => ({
+export const runtimeMocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
   transcribeAudio: vi.fn(),
   generateVideo: vi.fn(),
@@ -67,7 +67,7 @@ vi.mock("./realtime-voice-provider.js", () => ({
   buildXaiRealtimeVoiceProvider: runtimeMocks.buildVoiceProvider,
 }));
 
-const capabilityHost = {
+export const capabilityHost = {
   isProviderAuthProfileConfigured,
   isProviderApiKeyConfiguredAsync,
   isProviderAuthProfileConfiguredAsync,
@@ -79,13 +79,13 @@ const capabilityHost = {
 const lazyProvidersUrl = new URL("./lazy-capability-provider-factories.ts", import.meta.url).href;
 let lazyProviderCase = 0;
 
-async function loadLazyProviders(): Promise<
+export async function loadLazyProviders(): Promise<
   typeof import("./lazy-capability-provider-factories.js")
 > {
   return await import(`${lazyProvidersUrl}?testCase=${lazyProviderCase}`);
 }
 
-async function createLazyVoiceBridge(
+export async function createLazyVoiceBridge(
   overrides: Partial<RealtimeVoiceBridgeCreateRequest> = {},
 ): Promise<RealtimeVoiceBridge> {
   const lazy = await loadLazyProviders();
@@ -94,7 +94,7 @@ async function createLazyVoiceBridge(
     .createBridge(createVoiceRequest(overrides));
 }
 
-function createVoiceRequest(
+export function createVoiceRequest(
   overrides: Partial<RealtimeVoiceBridgeCreateRequest> = {},
 ): RealtimeVoiceBridgeCreateRequest {
   return {
@@ -107,74 +107,54 @@ function createVoiceRequest(
 }
 
 beforeEach(() => {
+  const m = runtimeMocks;
   // Refresh provider caches without reloading unchanged SDK dependencies.
   lazyProviderCase += 1;
-  for (const value of Object.values(runtimeMocks)) {
+  for (const value of Object.values(m)) {
     value.mockReset();
   }
 
-  runtimeMocks.generateImage.mockResolvedValue({ images: [] });
-  runtimeMocks.transcribeAudio.mockResolvedValue({ text: "transcript" });
-  runtimeMocks.generateVideo.mockResolvedValue({ videos: [] });
-  runtimeMocks.listVoices.mockResolvedValue([]);
-  runtimeMocks.synthesize.mockResolvedValue({ audioBuffer: Buffer.alloc(0) });
-  runtimeMocks.streamSynthesize.mockResolvedValue({ audioStream: {} });
-  runtimeMocks.synthesizeTelephony.mockResolvedValue({ audioBuffer: Buffer.alloc(0) });
-  runtimeMocks.transcriptionConnect.mockResolvedValue(undefined);
-  runtimeMocks.transcriptionIsConnected.mockReturnValue(false);
-  runtimeMocks.voiceConnect.mockResolvedValue(undefined);
-  runtimeMocks.voiceIsConnected.mockReturnValue(false);
+  m.generateImage.mockResolvedValue({ images: [] });
+  m.transcribeAudio.mockResolvedValue({ text: "transcript" });
+  m.generateVideo.mockResolvedValue({ videos: [] });
+  m.listVoices.mockResolvedValue([]);
+  m.synthesize.mockResolvedValue({ audioBuffer: Buffer.alloc(0) });
+  m.streamSynthesize.mockResolvedValue({ audioStream: {} });
+  m.synthesizeTelephony.mockResolvedValue({ audioBuffer: Buffer.alloc(0) });
+  m.transcriptionConnect.mockResolvedValue(undefined);
+  m.transcriptionIsConnected.mockReturnValue(false);
+  m.voiceConnect.mockResolvedValue(undefined);
+  m.voiceIsConnected.mockReturnValue(false);
 
-  runtimeMocks.createTranscriptionSession.mockReturnValue({
-    connect: runtimeMocks.transcriptionConnect,
-    sendAudio: runtimeMocks.transcriptionSendAudio,
-    close: runtimeMocks.transcriptionClose,
-    isConnected: runtimeMocks.transcriptionIsConnected,
+  m.createTranscriptionSession.mockReturnValue({
+    connect: m.transcriptionConnect,
+    sendAudio: m.transcriptionSendAudio,
+    close: m.transcriptionClose,
+    isConnected: m.transcriptionIsConnected,
   });
-  runtimeMocks.createVoiceBridge.mockImplementation(
-    () =>
-      ({
-        supportsToolResultContinuation: false,
-        connect: runtimeMocks.voiceConnect,
-        sendAudio: runtimeMocks.voiceSendAudio,
-        setMediaTimestamp: runtimeMocks.voiceSetMediaTimestamp,
-        sendUserMessage: runtimeMocks.voiceSendUserMessage,
-        triggerGreeting: runtimeMocks.voiceTriggerGreeting,
-        handleBargeIn: runtimeMocks.voiceHandleBargeIn,
-        submitToolResult: runtimeMocks.voiceSubmitToolResult,
-        acknowledgeMark: runtimeMocks.voiceAcknowledgeMark,
-        close: runtimeMocks.voiceClose,
-        isConnected: runtimeMocks.voiceIsConnected,
-      }) satisfies RealtimeVoiceBridge,
-  );
+  m.createVoiceBridge.mockImplementation(() => ({
+    supportsToolResultContinuation: false,
+    connect: m.voiceConnect,
+    sendAudio: m.voiceSendAudio,
+    setMediaTimestamp: m.voiceSetMediaTimestamp,
+    sendUserMessage: m.voiceSendUserMessage,
+    triggerGreeting: m.voiceTriggerGreeting,
+    handleBargeIn: m.voiceHandleBargeIn,
+    submitToolResult: m.voiceSubmitToolResult,
+    acknowledgeMark: m.voiceAcknowledgeMark,
+    close: m.voiceClose,
+    isConnected: m.voiceIsConnected,
+  }));
 
-  runtimeMocks.buildImageProvider.mockReturnValue({
-    generateImage: runtimeMocks.generateImage,
+  m.buildImageProvider.mockReturnValue({ generateImage: m.generateImage });
+  m.buildMediaProvider.mockReturnValue({ transcribeAudio: m.transcribeAudio });
+  m.buildVideoProvider.mockReturnValue({ generateVideo: m.generateVideo });
+  m.buildSpeechProvider.mockReturnValue({
+    listVoices: m.listVoices,
+    synthesize: m.synthesize,
+    streamSynthesize: m.streamSynthesize,
+    synthesizeTelephony: m.synthesizeTelephony,
   });
-  runtimeMocks.buildMediaProvider.mockReturnValue({
-    transcribeAudio: runtimeMocks.transcribeAudio,
-  });
-  runtimeMocks.buildVideoProvider.mockReturnValue({
-    generateVideo: runtimeMocks.generateVideo,
-  });
-  runtimeMocks.buildSpeechProvider.mockReturnValue({
-    listVoices: runtimeMocks.listVoices,
-    synthesize: runtimeMocks.synthesize,
-    streamSynthesize: runtimeMocks.streamSynthesize,
-    synthesizeTelephony: runtimeMocks.synthesizeTelephony,
-  });
-  runtimeMocks.buildTranscriptionProvider.mockReturnValue({
-    createSession: runtimeMocks.createTranscriptionSession,
-  });
-  runtimeMocks.buildVoiceProvider.mockReturnValue({
-    createBridge: runtimeMocks.createVoiceBridge,
-  });
+  m.buildTranscriptionProvider.mockReturnValue({ createSession: m.createTranscriptionSession });
+  m.buildVoiceProvider.mockReturnValue({ createBridge: m.createVoiceBridge });
 });
-
-export {
-  capabilityHost,
-  createLazyVoiceBridge,
-  createVoiceRequest,
-  loadLazyProviders,
-  runtimeMocks,
-};

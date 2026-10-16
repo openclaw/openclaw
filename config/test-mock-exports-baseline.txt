@@ -1589,7 +1589,6 @@
 ["extensions/xai/catalog-defaults.test.ts","openclaw/plugin-sdk/provider-auth-runtime","005e66becdcf07db6e8006b7aa7eaff697d8a4b292d7a7a4669eaf6ef8e309dc",1]
 ["extensions/xai/image-generation-provider.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
 ["extensions/xai/image-generation-provider.test.ts","openclaw/plugin-sdk/provider-http","7b2f0c7c2dd8572eee44cc8e58f5e0cc8ee46811adf0de7d387455c0abc47471",1]
-["extensions/xai/image-generation-provider.test.ts","openclaw/plugin-sdk/string-coerce-runtime","ace9930f2bc8a77d6832630019afbc15772b68b5e1f2d2a9e937198213611db7",1]
 ["extensions/xai/index.test.ts","openclaw/plugin-sdk/provider-auth-runtime","aa79590f83a377a0c8bbf101184dd75adf297d8908e60eeb5fe610f0e873da84",1]
 ["extensions/xai/lazy-capability-providers.test-support.ts","./image-generation-provider.js","545a0a9c77b6693432455f67695b797de6c8fa931484cd3cb5500c19e9559383",1]
 ["extensions/xai/lazy-capability-providers.test-support.ts","./realtime-transcription-provider-factory.js","2f68903757c18eca4b4ccbe43a83df7135638858613de1dd0e4ba6c82dc7fc92",1]

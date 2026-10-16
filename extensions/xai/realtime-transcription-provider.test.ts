@@ -1,34 +1,31 @@
-// Xai tests cover realtime transcription provider plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type WebSocket from "ws";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createLazyXaiRealtimeTranscriptionProvider } from "./lazy-capability-provider-factories.js";
 
-const { isProviderAuthProfileConfiguredAsyncMock, resolveApiKeyForProviderMock } = vi.hoisted(
-  () => ({
-    isProviderAuthProfileConfiguredAsyncMock: vi.fn(async () => false),
-    resolveApiKeyForProviderMock: vi.fn<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>(
-      async () => ({ apiKey: undefined, source: "test", mode: "oauth" }),
+const { profileAuth, resolveKey, authResult } = vi.hoisted(() => {
+  const makeAuth = (apiKey?: string) => ({ apiKey, source: "test", mode: "oauth" as const });
+  return {
+    authResult: makeAuth,
+    profileAuth: vi.fn(async () => false),
+    resolveKey: vi.fn<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>(async () =>
+      makeAuth(),
     ),
-  }),
-);
+  };
+});
 
 const transcriptionHost = {
   isProviderAuthProfileConfigured: () => false,
-  isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  isProviderAuthProfileConfiguredAsync: profileAuth,
+  resolveApiKeyForProvider: resolveKey,
   createRealtimeTranscriptionWebSocketSession,
 };
 
-let provider: ReturnType<typeof createLazyXaiRealtimeTranscriptionProvider>;
-beforeEach(() => {
-  provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
-});
+const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
 type SessionRequest = Parameters<typeof provider.createSession>[0];
 function createSession(baseUrl: string, overrides: Partial<SessionRequest> = {}) {
   return provider.createSession({
@@ -39,59 +36,50 @@ function createSession(baseUrl: string, overrides: Partial<SessionRequest> = {})
 
 let cleanup: (() => Promise<void>) | undefined;
 
+const transcript = (text: string, final = false) => ({
+  type: "transcript.partial",
+  text,
+  is_final: final,
+  speech_final: final,
+});
+
+function completed(register: (done: () => void) => void) {
+  return new Promise<void>((resolve) => {
+    register(resolve);
+  });
+}
+
 afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
-  isProviderAuthProfileConfiguredAsyncMock.mockReset().mockResolvedValue(false);
-  resolveApiKeyForProviderMock.mockReset().mockResolvedValue({
-    apiKey: undefined,
-    source: "test",
-    mode: "oauth",
-  });
+  profileAuth.mockReset().mockResolvedValue(false);
+  resolveKey.mockReset().mockResolvedValue(authResult());
   delete process.env.XAI_API_KEY;
   vi.unstubAllEnvs();
 });
 
 async function createRealtimeSttServer(params?: {
-  onRequest?: (url: URL, headers: Record<string, string | string[] | undefined>) => void;
-  onBinary?: (audio: Buffer) => void;
   initialEvent?: unknown;
   transcriptionEvents?: readonly Record<string, unknown>[];
 }) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
-  const clients = new Set<WebSocket>();
-  const done = vi.fn();
+  const requests: Array<{ url: URL; headers: import("node:http").IncomingHttpHeaders }> = [];
+  const binaryFrames: Buffer[] = [];
   const completion = createDeferred<void>();
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    params?.onRequest?.(url, request.headers);
+    requests.push({ url, headers: request.headers });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
       ws.send(JSON.stringify(params?.initialEvent ?? { type: "transcript.created" }));
       ws.on("message", (data, isBinary) => {
-        const buffer = Buffer.isBuffer(data)
-          ? data
-          : Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.from(data);
+        const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
         if (isBinary) {
-          params?.onBinary?.(buffer);
+          binaryFrames.push(buffer);
           const events = params?.transcriptionEvents ?? [
-            {
-              type: "transcript.partial",
-              text: "hello openclaw",
-              is_final: false,
-              speech_final: false,
-            },
-            {
-              type: "transcript.partial",
-              text: "hello openclaw final",
-              is_final: true,
-              speech_final: true,
-            },
+            transcript("hello openclaw"),
+            transcript("hello openclaw final", true),
           ];
           for (const event of events) {
             ws.send(JSON.stringify(event));
@@ -101,29 +89,27 @@ async function createRealtimeSttServer(params?: {
         const event = JSON.parse(buffer.toString()) as { type?: string };
         if (event.type === "audio.done") {
           ws.send(JSON.stringify({ type: "transcript.done", text: "hello openclaw final" }));
-          done();
           completion.resolve();
         }
       });
     });
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await completed((done) => server.listen(0, "127.0.0.1", done));
   const port = (server.address() as AddressInfo).port;
   cleanup = async () => {
-    for (const ws of clients) {
+    for (const ws of wss.clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await completed((done) => wss.close(done));
+    await completed((done) => server.close(done));
   };
-  return { baseUrl: `http://127.0.0.1:${port}/v1`, done, donePromise: completion.promise };
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    requests,
+    binaryFrames,
+    donePromise: completion.promise,
+  };
 }
 
 describe("xai realtime transcription provider", () => {
@@ -147,16 +133,7 @@ describe("xai realtime transcription provider", () => {
 
   it("streams raw binary audio and maps partial and final transcript events", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const binaryFrames: Buffer[] = [];
-    const requestUrls: URL[] = [];
-    const upgradeHeaders: Array<Record<string, string | string[] | undefined>> = [];
-    const server = await createRealtimeSttServer({
-      onRequest: (url, headers) => {
-        requestUrls.push(url);
-        upgradeHeaders.push(headers);
-      },
-      onBinary: (audio) => binaryFrames.push(audio),
-    });
+    const server = await createRealtimeSttServer();
     const onPartial = vi.fn();
     const finalTranscript = createDeferred<void>();
     const onTranscript = vi.fn((text: string) => {
@@ -180,28 +157,26 @@ describe("xai realtime transcription provider", () => {
     session.close();
     await server.donePromise;
 
-    expect(requestUrls[0]?.pathname).toBe("/v1/stt");
-    expect(Object.fromEntries(requestUrls[0]!.searchParams)).toMatchObject({
+    const { url, headers } = server.requests[0]!;
+    expect(url.pathname).toBe("/v1/stt");
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
       sample_rate: "24000",
       encoding: "pcm",
       interim_results: "true",
       endpointing: "500",
     });
-    expect(upgradeHeaders[0]?.["user-agent"]).toBeUndefined();
-    expect(upgradeHeaders[0]?.authorization).toBe("Bearer xai-test-key");
-    expect(Buffer.concat(binaryFrames).toString()).toContain("queued-before-ready");
-    expect(Buffer.concat(binaryFrames).toString()).toContain("after-ready");
+    expect(headers["user-agent"]).toBeUndefined();
+    expect(headers.authorization).toBe("Bearer xai-test-key");
+    const audio = Buffer.concat(server.binaryFrames).toString();
+    expect(audio).toContain("queued-before-ready");
+    expect(audio).toContain("after-ready");
     expect(onSpeechStart).toHaveBeenCalled();
     expect(onPartial).toHaveBeenCalledWith("hello openclaw");
-    vi.unstubAllEnvs();
   });
 
   it("preserves identical final transcripts from separate speech turns", async () => {
     const server = await createRealtimeSttServer({
-      transcriptionEvents: [
-        { type: "transcript.partial", text: "yes", is_final: true, speech_final: true },
-        { type: "transcript.partial", text: "yes", is_final: true, speech_final: true },
-      ],
+      transcriptionEvents: [transcript("yes", true), transcript("yes", true)],
     });
     const onTranscript = vi.fn();
     const onSpeechStart = vi.fn();
@@ -221,12 +196,7 @@ describe("xai realtime transcription provider", () => {
 
   it("rejects setup errors before the stream is ready", async () => {
     const server = await createRealtimeSttServer({
-      initialEvent: {
-        type: "error",
-        error: {
-          message: "Streaming ASR unavailable",
-        },
-      },
+      initialEvent: { type: "error", error: { message: "Streaming ASR unavailable" } },
     });
     const onError = vi.fn();
 
@@ -238,50 +208,31 @@ describe("xai realtime transcription provider", () => {
     expect(onError.mock.calls[0]?.[0]).toEqual(new Error("Streaming ASR unavailable"));
   });
 
-  it("reports configured when an xAI auth profile exists, even without env or config apiKey", async () => {
-    delete process.env.XAI_API_KEY;
-    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(true);
-    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(true);
-    expect(isProviderAuthProfileConfiguredAsyncMock).toHaveBeenCalledWith({
-      provider: "xai",
-      cfg: {},
-    });
-  });
-
-  it("does not treat a blank environment api key as configured", async () => {
-    vi.stubEnv("XAI_API_KEY", "   ");
-    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
-
-    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
+  it.each([
+    ["uses an auth profile without an environment key", undefined, true],
+    ["rejects a blank environment key without an auth profile", "   ", false],
+  ] as const)("%s", async (_name, key, configured) => {
+    vi.stubEnv("XAI_API_KEY", key);
+    profileAuth.mockResolvedValue(configured);
+    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(configured);
+    expect(profileAuth).toHaveBeenCalledWith({ provider: "xai", cfg: {} });
   });
 
   it("threads cfg into the lazy WebSocket bearer resolver", async () => {
-    delete process.env.XAI_API_KEY;
-    resolveApiKeyForProviderMock.mockResolvedValue({
-      apiKey: "oauth-bearer",
-      source: "test",
-      mode: "oauth",
-    });
-    const upgradeHeaders: Array<Record<string, string | string[] | undefined>> = [];
-    const server = await createRealtimeSttServer({
-      onRequest: (_url, headers) => {
-        upgradeHeaders.push(headers);
-      },
-    });
+    resolveKey.mockResolvedValue(authResult("oauth-bearer"));
+    const server = await createRealtimeSttServer();
 
     const cfg = { agents: { defaults: {} } };
     const session = provider.createSession({
       cfg,
-      providerConfig: {
-        baseUrl: server.baseUrl,
-      },
+      providerConfig: { baseUrl: server.baseUrl },
     });
 
     await session.connect();
     session.close();
     await server.donePromise;
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({ provider: "xai", cfg });
-    expect(upgradeHeaders[0]?.authorization).toBe("Bearer oauth-bearer");
+    expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
+    expect(server.requests[0]?.headers.authorization).toBe("Bearer oauth-bearer");
   });
 });

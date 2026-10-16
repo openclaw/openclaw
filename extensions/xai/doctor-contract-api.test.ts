@@ -1,4 +1,3 @@
-// Xai tests cover plugin-owned doctor compatibility migrations.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
@@ -146,12 +145,11 @@ describe("xAI doctor contract", () => {
       { provider: "xai" },
     ]);
 
+    const unchangedModels = structuredClone(config.tools?.media?.models?.slice(1, 4));
     const result = migrate(config, 1);
     expect(result.config.tools?.media?.models).toEqual([
       { provider: " xAI ", language: "en", timeoutSeconds: 30 },
-      { type: "provider", provider: "xai", model: "custom-stt" },
-      { type: "provider", provider: "openai", model: "grok-stt" },
-      { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },
+      ...unchangedModels!,
       { provider: "x-ai" },
       { provider: "xai" },
     ]);
