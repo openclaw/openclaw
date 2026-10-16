@@ -4,10 +4,14 @@ import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
-import { createTestInstance } from "./plugin-instance.test-support.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import {
+  createOwnedTestInstance,
+  createTestInstance,
+  iterable,
+  throwing,
+  trackCompletion,
+} from "./plugin-instance.test-support.js";
+import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
 describe("plugin value invocation ownership", () => {
   it("preserves a custom then receiver and its exact owned continuation", async () => {
@@ -21,9 +25,7 @@ describe("plugin value invocation ownership", () => {
       return continuation;
     };
     Object.defineProperty(then, "call", {
-      get() {
-        throw new Error("then.call must not be inspected");
-      },
+      get: throwing(new Error("then.call must not be inspected")),
     });
     // oxlint-disable-next-line unicorn/no-thenable -- Exercise a plugin-defined continuation without changing native assimilation.
     void Object.defineProperty(source, "then", { value: then });
@@ -37,10 +39,8 @@ describe("plugin value invocation ownership", () => {
   it.each(["function", "active iterator getter"] as const)(
     "keeps Promise inspection and assimilation in %s admission",
     async (surface) => {
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: "promise-export" });
-      registry.plugins.push(record);
-      const instance = createTestInstance(record.id, { record, registry });
+      const instance = createOwnedTestInstance("promise-export");
+      const registry = instance.owner!.registry;
       const store = createPluginRuntimeStore<string>("unset fixture runtime");
       instance.run(() => store.setRuntime("owned runtime"));
       const pending = createDeferredCore();
@@ -49,7 +49,7 @@ describe("plugin value invocation ownership", () => {
       const observe = (phase: string) =>
         observed.push({
           phase,
-          registry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+          registry: getScope()?.pluginRegistry,
           runtime: store.tryGetRuntime(),
         });
       // oxlint-disable-next-line unicorn/no-thenable -- Promise assimilation remains part of the executable invocation.
@@ -68,18 +68,16 @@ describe("plugin value invocation ownership", () => {
         if (surface === "function") {
           result = Promise.resolve(instance.wrap(() => value)());
         } else {
-          const stream = instance.wrap({
-            [Symbol.asyncIterator]() {
-              return {
-                next: async () => ({ done: false, value: "chunk" }),
-                return: async () => ({ done: true, value: undefined }),
-                get metadata() {
-                  observe("value getter");
-                  return value;
-                },
-              };
-            },
-          });
+          const stream = instance.wrap(
+            iterable({
+              next: async () => ({ done: false, value: "chunk" }),
+              return: async () => ({ done: true, value: undefined }),
+              get metadata() {
+                observe("value getter");
+                return value;
+              },
+            }),
+          );
           const iterator = stream[Symbol.asyncIterator]();
           closeIterator = () => iterator.return();
           await iterator.next();
@@ -115,17 +113,9 @@ describe("plugin values delivered through caller callbacks", () => {
           registrations.set(handle, label);
           return handle;
         },
-        lookup(handle: () => string) {
-          return registrations.get(handle);
-        },
-        remove(handle: () => string) {
-          return registrations.delete(handle);
-        },
-        emit() {
-          for (const handle of registrations.keys()) {
-            handle();
-          }
-        },
+        lookup: (handle: () => string) => registrations.get(handle),
+        remove: (handle: () => string) => registrations.delete(handle),
+        emit: () => registrations.forEach((_, handle) => handle()),
       });
       let calls = 0;
       const callback = () => {
@@ -294,7 +284,6 @@ describe("async iterable helper callbacks", () => {
     async ({ target, lifetime }) => {
       const instance = createTestInstance(`iterable-${target}-${lifetime}`);
       const release = createDeferredCore();
-      const finished = createDeferredCore();
       class Visitor {
         #handler = () => "private helper value";
         visit(callback: (handler: () => string) => unknown) {
@@ -313,8 +302,8 @@ describe("async iterable helper callbacks", () => {
       const view = stream[Symbol.asyncIterator]();
       const helper = target === "source" ? stream : view;
       let retained: (() => string) | undefined;
-      let answer: unknown;
-      let disposal: Promise<void> | undefined;
+      let callback: Promise<string> | undefined;
+      let retirement: ReturnType<typeof trackCompletion> | undefined;
       try {
         helper.visit(
           lifetime === "retained"
@@ -322,40 +311,31 @@ describe("async iterable helper callbacks", () => {
                 retained = handler;
                 expect(handler()).toBe("private helper value");
               }
-            : async (handler) => {
-                try {
-                  await release.promise;
-                  answer = handler();
-                } catch (error) {
-                  answer = error;
-                } finally {
-                  finished.resolve();
-                }
+            : (handler) => {
+                callback = release.promise.then(() => handler());
+                void callback.catch(() => {});
+                return callback;
               },
         );
         await view.next();
-        let disposed = false;
-        disposal = instance.dispose().then(() => {
-          disposed = true;
-        });
+        retirement = trackCompletion(instance.dispose());
         if (lifetime === "retained") {
-          await disposal;
+          await retirement.promise;
           expect(retained?.()).toBe("private helper value");
         } else {
           await yieldImmediate();
-          expect(disposed, "stream completion retired an admitted helper callback").toBe(false);
+          expect(retirement.done, "stream completion retired an admitted helper callback").toBe(
+            false,
+          );
           release.resolve();
-          await finished.promise;
-          await disposal;
-          expect(answer).toBe("private helper value");
+          await expect(callback).resolves.toBe("private helper value");
+          await retirement.promise;
         }
       } finally {
         release.resolve();
         await view.return();
-        await (disposal ?? instance.dispose());
-        if (lifetime === "async") {
-          await finished.promise;
-        }
+        await (retirement?.promise ?? instance.dispose());
+        await callback?.catch(() => {});
       }
     },
   );

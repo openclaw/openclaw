@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, onTestFinished } from "vitest";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
@@ -49,4 +50,41 @@ function disposeAfterTest(instance: PluginInstance) {
   onTestFinished(async () => {
     await instance.dispose();
   });
+}
+
+export async function* chunks<T>(...values: T[]) {
+  for (const value of values) {
+    yield value;
+  }
+}
+
+export const iterable = <T extends object>(cursor: T) => ({ [Symbol.asyncIterator]: () => cursor });
+
+export const throwing = (error: unknown) => () => {
+  throw error;
+};
+
+export function expectUnavailable(...calls: Array<() => unknown>) {
+  for (const call of calls) {
+    expect(call).toThrow("reloaded or disabled");
+  }
+}
+
+export function drainTimeout(error: unknown) {
+  expect(error).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+  if (!(error instanceof PluginInstanceDrainTimeoutError)) {
+    throw new Error("Expected a plugin drain timeout");
+  }
+  return error;
+}
+
+export function trackCompletion<T>(promise: Promise<T>) {
+  const tracked = {
+    done: false,
+    promise: promise.then((value) => {
+      tracked.done = true;
+      return value;
+    }),
+  };
+  return tracked;
 }

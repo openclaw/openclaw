@@ -17,7 +17,7 @@ import {
   markPluginRecordBorrowed,
   markPluginRegistryActive,
 } from "./registry-lifecycle.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
 it.each([
   { kind: "run", reject: false },
@@ -35,23 +35,16 @@ it.each([
     const resume = createDeferredCore();
     const failure = new Error("callback failed");
     let observed: string | undefined;
-    const successor = createEmptyPluginRegistry();
-    successor.plugins.push(record);
-    successor.coreGatewayMethodNames.push("successor");
-    const pending = (() => {
-      selectRegistry(record, "intermediate", new PendingRegistry());
-      const run = async () => {
-        await resume.promise;
-        observed = readRegistryLabel();
-        if (reject) {
-          throw failure;
-        }
-        return observed;
-      };
-      const result = consumer ? consumer.run(run) : instance.run(run);
-      adoptPluginRegistryRecords(successor);
-      return result;
-    })();
+    selectRegistry(record, "intermediate", new PendingRegistry());
+    const pending = (consumer ?? instance).run(async () => {
+      await resume.promise;
+      observed = readRegistryLabel();
+      if (reject) {
+        throw failure;
+      }
+      return observed;
+    });
+    selectRegistry(record, "successor");
     const outcome = pending.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -151,42 +144,39 @@ it.each(["sync", "promise", "thenable"] as const)(
       expect(instance.hasActiveCall).toBe(true);
       observed = readRegistryLabel();
     };
-    const nested = (() => {
-      selectRegistry(record, "nested", new NestedRegistry());
-      const result = resource.runInAsyncScope(() =>
-        instance.run(() => {
-          if (kind === "sync") {
-            readSelection();
-            return payload;
-          }
-          const pending = (async () => {
-            await nestedFinish.promise;
-            readSelection();
-            return payload;
-          })();
-          if (kind === "promise") {
-            return pending;
-          }
-          // The custom then getter and receiver must be consumed only once.
-          const thenable: PromiseLike<typeof payload> = {
-            // oxlint-disable-next-line unicorn/no-thenable -- Exercise exactly-once foreign thenable assimilation.
-            get then() {
-              thenReads++;
-              return new Proxy(pending.then.bind(pending), {
-                apply(target, receiver, args) {
-                  thenCalls++;
-                  expect(receiver).toBe(thenable);
-                  return Reflect.apply(target, receiver, args);
-                },
-              });
-            },
-          };
-          return thenable;
-        }),
-      );
-      adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
-      return result;
-    })();
+    selectRegistry(record, "nested", new NestedRegistry());
+    const nested = resource.runInAsyncScope(() =>
+      instance.run(() => {
+        if (kind === "sync") {
+          readSelection();
+          return payload;
+        }
+        const pending = (async () => {
+          await nestedFinish.promise;
+          readSelection();
+          return payload;
+        })();
+        if (kind === "promise") {
+          return pending;
+        }
+        // The custom then getter and receiver must be consumed only once.
+        const thenable: PromiseLike<typeof payload> = {
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise exactly-once foreign thenable assimilation.
+          get then() {
+            thenReads++;
+            return new Proxy(pending.then.bind(pending), {
+              apply(target, receiver, args) {
+                thenCalls++;
+                expect(receiver).toBe(thenable);
+                return Reflect.apply(target, receiver, args);
+              },
+            });
+          },
+        };
+        return thenable;
+      }),
+    );
+    adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
     const outcome = Promise.resolve(nested);
     try {
       if (kind === "sync") {
@@ -223,17 +213,14 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   const consumer = instance.retainConsumer();
   const resource = consumer.run(() => new AsyncResource("completed-consumer-scope"));
   const resume = createDeferredCore();
-  const pending = (() => {
-    selectRegistry(record, "late", new PendingRegistry());
-    const result = resource.runInAsyncScope(() =>
-      instance.run(async () => {
-        await resume.promise;
-        return readRegistryLabel();
-      }),
-    );
-    adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
-    return result;
-  })();
+  selectRegistry(record, "late", new PendingRegistry());
+  const pending = resource.runInAsyncScope(() =>
+    instance.run(async () => {
+      await resume.promise;
+      return readRegistryLabel();
+    }),
+  );
+  adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
     await expectLiveObjects(PendingRegistry, 1);
     resume.resolve();
@@ -263,7 +250,7 @@ it("releases the adopted registry only after consumer and module cleanup settle"
   const entered = createDeferredCore();
   const finish = createDeferredCore();
   instance.onModuleDispose(async () => {
-    expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(replacement);
+    expect(getScope()?.pluginRegistry).toBe(replacement);
     entered.resolve();
     await finish.promise;
   });
@@ -271,9 +258,7 @@ it("releases the adopted registry only after consumer and module cleanup settle"
   try {
     expect(instance.owner?.revoked).toBe(true);
     expect(instance.owner?.registry).toBe(replacement);
-    expect(consumer.run(() => getPluginRuntimeGatewayRequestScope()?.pluginRegistry)).toBe(
-      registry,
-    );
+    expect(consumer.run(() => getScope()?.pluginRegistry)).toBe(registry);
     expect(() => call()).toThrow(PluginInstanceUnavailableError);
     consumer.release();
     await entered.promise;
