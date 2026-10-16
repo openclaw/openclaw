@@ -21,7 +21,6 @@ import {
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
-  spawnCall,
   syncPluginCall,
   freshRestartCalls,
   gatewayCommandCall,
@@ -39,6 +38,7 @@ import {
   runtimeCapture,
   select,
   sourceRuntimeCompletion,
+  spawn,
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   gatewayFixturePid,
@@ -533,13 +533,19 @@ describe("update-cli", () => {
         const call = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
         expect(call?.opts.channel).toBe("dev");
         await expect(fs.realpath(packageRoot)).resolves.toBe(tempDir);
-        expect(spawnCall()?.[1]).toEqual([
-          path.join(tempDir, "dist", "entry.js"),
-          "update",
-          "--no-restart",
-          "--accept-capabilities",
-          "--timeout",
-          "1800",
+        // Directory-observation helpers can also spawn while the update runs.
+        const updateInvocations = spawn.mock.calls
+          .map(([, args]) => args)
+          .filter((args) => args[1] === "update");
+        expect(updateInvocations).toEqual([
+          [
+            path.join(tempDir, "dist", "entry.js"),
+            "update",
+            "--no-restart",
+            "--accept-capabilities",
+            "--timeout",
+            "1800",
+          ],
         ]);
         expectNoSideEffects(syncPluginsForUpdateChannel, updateNpmInstalledPlugins);
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);

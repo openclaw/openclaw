@@ -11,7 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { liveValue } from "../../lib/solid-dom.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  admitStoreSearch,
-  type EngineConnection,
+import type {
+  EngineConnection,
+  SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
@@ -47,6 +47,7 @@ import {
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 import { readMemoryIndex } from "./manager-index-read.js";
+import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -61,7 +62,6 @@ import {
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex } from "./manager-search-knn.js";
-import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -166,60 +166,12 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
+    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
   if (isPostgresSqlConnection(context.database)) {
-    const db = context.database;
-    return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
-      execute(command) {
-        if (command.type !== "schema.admit" && command.type !== "vector.ensure") {
-          requireMemorySearchDatabase(db);
-          throw new Error("PostgreSQL memory publication is unavailable");
-        }
-        db.runTransaction(
-          () => {
-            context.admit("transaction");
-            if (command.type === "schema.admit") {
-              if (command.input.ftsEnabled) {
-                admitStoreSearch(
-                  db,
-                  memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61"),
-                  { extension: "memory.text" },
-                );
-              }
-            } else {
-              admitStoreSearch(db, memoryVectorSearchSchema(command.input.dimensions), {
-                extension: "memory.vector",
-              });
-            }
-          },
-          {
-            withCommit: (commit) => {
-              context.admit("commit");
-              commit();
-            },
-          },
-        );
-        const facts = readMemoryDatabaseFacts(db);
-        return {
-          ok: true,
-          facts,
-          value:
-            command.type === "schema.admit"
-              ? {
-                  ftsAvailable: command.input.ftsEnabled,
-                  admission: {
-                    hasIndex: true,
-                    ftsAvailable: command.input.ftsEnabled,
-                    identity: readOpenClawAgentDatabaseIdentity({ db }),
-                    facts,
-                  },
-                }
-              : undefined,
-        };
-      },
-    });
+    return bindPostgresMemoryPublication(context, "kind" in input ? input.stageId : undefined);
   }
   const db = requireMemorySearchDatabase(context.database);
   let pragmas = agentConnectionPragmas.get(db);
@@ -435,6 +387,13 @@ function createPublicationBackend(
       loadedExtensions.set(db, loaded.extensionPath);
     },
     execute(command) {
+      if (
+        command.type === "database.stage.start" ||
+        command.type === "database.stage.publish" ||
+        command.type === "database.stage.discard"
+      ) {
+        throw new Error("Connection-local memory staging requires PostgreSQL");
+      }
       if (command.type === "connection.inspect") {
         return "kind" in input
           ? {

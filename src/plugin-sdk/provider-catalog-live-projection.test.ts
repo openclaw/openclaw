@@ -21,6 +21,42 @@ function buildModel(id: string): ModelDefinitionConfig {
 describe("live provider catalog projection", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
 
+  it("preserves identity-specific size facts through live catalog projection", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = async () => ({
+      response: Response.json({
+        data: [
+          { id: "known-chat", parameterCount: 4_000_000_000 },
+          { id: "enriched-chat", parameterCount: 4_000_000_000 },
+          { id: "novel-chat", parameterCount: 4_000_000_000 },
+          { id: "template-next" },
+          { id: "invalid-chat", parameterCount: 0 },
+        ],
+      }),
+      finalUrl: "https://provider.example.test/v1/models",
+      release: async () => undefined,
+    });
+    const provider = await buildLiveModelProviderConfig({
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      providerConfig: { api: "openai-completions", baseUrl: "https://provider.example.test/v1" },
+      models: [
+        { ...buildModel("known-chat"), parameterCount: 70_000_000_000 },
+        buildModel("enriched-chat"),
+        { ...buildModel("template-base"), parameterCount: 7_000_000_000 },
+      ],
+      fetchGuard,
+    });
+    expect(
+      Object.fromEntries(provider.models.map((model) => [model.id, model.parameterCount])),
+    ).toEqual({
+      "known-chat": 70_000_000_000,
+      "enriched-chat": 4_000_000_000,
+      "novel-chat": 4_000_000_000,
+      "template-next": undefined,
+      "invalid-chat": undefined,
+    });
+  });
+
   it("keeps cache admission and fallback shared", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi

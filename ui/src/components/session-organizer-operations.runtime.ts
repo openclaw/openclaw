@@ -179,6 +179,7 @@ async function acknowledgeUnreadHiddenRuns(
       const access = readSessionMethodAccess(scope.gateway.snapshot, {
         method: "sessions.patch",
         params: { key: run.key, unread: false, agentId, ...expectedSessionId },
+        sessionScope: true,
         session: run,
       });
       // Runs the caller cannot patch keep their state without a second error.
@@ -245,7 +246,7 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessionRows(host, rows, { unread: !allUnread }, scope);
+      await patchSessionRows(host, rows, { unread: !allUnread }, scope, { sessionScope: true });
       if (allUnread) {
         await acknowledgeUnreadHiddenRuns(host, rows, scope);
       }

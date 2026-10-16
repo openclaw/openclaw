@@ -1,4 +1,10 @@
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
+import {
+  prepareSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
+} from "../embedded-agent-runner/session-prompt-state.js";
+import type { SessionEntry } from "./session-manager-types.js";
 import { SessionManager } from "./session-manager.js";
 
 const MIB = 1024 * 1024;
@@ -51,3 +57,36 @@ for (const restored of [false, true]) {
     }
   }
 }
+
+// Retained admission callbacks need the prompt series, not the history used to restore it.
+function prepareRetainedAdmission() {
+  const lease = retainEmbeddedSessionPromptState("retained-admission");
+  const entries: SessionEntry[] = [
+    {
+      type: "custom",
+      customType: "synthetic-history",
+      id: "history",
+      parentId: null,
+      timestamp: "2026-10-01T00:00:00Z",
+      data: { text: "Historical payload" },
+    },
+  ];
+  return {
+    lease,
+    history: new WeakRef(entries),
+    prepared: prepareSessionSystemPrompt({
+      state: lease.state,
+      routeKey: "synthetic/model",
+      systemPrompt: prompt,
+      entries,
+    }),
+  };
+}
+
+const admission = prepareRetainedAdmission();
+await setImmediate();
+global.gc!();
+assert.equal(admission.history.deref(), undefined, "admission retained the transcript history");
+admission.prepared.commit();
+assert.equal(admission.prepared.systemPrompt, prompt);
+admission.lease[Symbol.dispose]();

@@ -971,6 +971,12 @@ const reviewedOperations = new Map([
     "src/infra/gateway-boot-lifecycle.kernel.ts",
     [
       {
+        tier: "W",
+        operations: ["readGatewayLastShutdownInDatabase"],
+        evidence:
+          "Private reader called only by gatewayBootReadOperations in the state read worker. Daemon status and update inspection both dispatch through readGatewayLastShutdownAsync; no synchronous caller remains.",
+      },
+      {
         tier: "T2",
         operations: [
           "inspectGatewayCrashLoopBreakerInDatabase",
@@ -3089,6 +3095,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.
   "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.
   "src/plugin-state/plugin-state.worker.ts", // Only openclaw-state.worker.ts imports and calls this command dispatcher; its nested callbacks share that worker ownership.
   "src/config/sessions/session-suggestion-store.kernel.ts", // session-sharing-store.worker.ts owns add/claim/release/finalize; session-transcript.worker.ts owns list. The host read facade imports only its type.
@@ -3134,6 +3141,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
   "extensions/memory-core/src/memory/manager-search.ts", // Only manager-search.worker.ts executes keyword SQL; host imports are the pure prepareExactPathMatcher helper or types.
+  "extensions/memory-core/src/memory/manager-search-postgres.ts", // Only manager-search.worker.ts calls this PostgreSQL query adapter with its admitted worker connection; conformance calls the same internal entry.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
   "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.

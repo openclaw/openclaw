@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -386,9 +387,15 @@ export async function discoverOpenAICompatibleLocalModels(
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
+    const parameterCount = asPositiveSafeInteger(model.parameterCount);
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
-      name: modelId,
+      name:
+        normalizeOptionalString(model.display_name) ??
+        normalizeOptionalString(model.displayName) ??
+        normalizeOptionalString(model.name) ??
+        modelId,
+      ...(parameterCount !== undefined ? { parameterCount } : {}),
       reasoning: /r1|reason|think|deepseek[-_]?v4|nemotron-3[-_](?:nano|super|ultra)\b/i.test(
         modelId,
       ),

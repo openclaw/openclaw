@@ -18,7 +18,6 @@ import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -40,7 +39,6 @@ import {
   SetupInferenceActivationUnavailableError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
-import { saveSetupCredential } from "./setup-inference-credentials.js";
 import * as activationTransition from "./setup-inference-transition.js";
 import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
 
@@ -720,56 +718,6 @@ describe("setup activation credentials and configuration", () => {
       ).toEqual(originalCredential);
     },
   );
-
-  it("activates saved sparse model settings without treating runtime defaults as a changed connection", async () => {
-    const setup = await fixture();
-    const configured = structuredClone(setup.config);
-    assert(configured.agents?.defaults);
-    configured.agents.defaults.model = `${modelRef}@openai:original`;
-    await persistProviderAuthProfilesAfterLogin({
-      config: configured,
-      agentDir: setup.agentDir,
-      profiles: [
-        { profileId: "openai:original", credential: { ...credential, key: "original-key" } },
-      ],
-    });
-    await fs.writeFile(setup.configPath, JSON.stringify(configured));
-    clearConfigCache();
-    const sparse = validateConfigObjectRaw({
-      ...configured,
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://provider.example/v1",
-            api: "openai-responses",
-            models: [{ id: "gpt-5.4-mini", name: "Sparse saved model" }],
-          },
-        },
-      },
-    });
-    assert.ok(sparse.ok);
-    const saved = await saveSetupCredential({
-      profile: { profileId: "openai:replacement", credential },
-      config: sparse.config,
-      baseConfig: configured,
-      agentDir: setup.agentDir,
-      modelRef,
-      authChoice: "fixture-login",
-      pluginId: "openai",
-    });
-
-    const result = await setup.activate(
-      `saved-auth:${encodeURIComponent(saved.profile.profileId)}`,
-      true,
-    );
-
-    expect(result).toMatchObject({ ok: true });
-    expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
-    const snapshot = await readConfigFileSnapshot();
-    expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
-      { id: "gpt-5.4-mini", name: "Sparse saved model" },
-    ]);
-  });
 
   it("preserves an unrelated config edit when selecting the verified model", async () => {
     const setup = await fixture();

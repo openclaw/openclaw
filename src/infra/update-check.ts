@@ -626,7 +626,11 @@ export async function checkUpdateStatus(params: {
   const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
     params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
-    const result = await resolveNpmChannelTag({ channel: channel ?? "stable", timeoutMs });
+    const result = await resolveNpmChannelTag({
+      channel: channel ?? "stable",
+      timeoutMs,
+      signal: params.signal,
+    });
     return {
       latestVersion: result.version,
       ...(channel ? { tag: result.tag } : {}),

@@ -12,13 +12,10 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
-import {
-  DESKTOP_PANEL_TOGGLE_EVENT,
-  type DesktopPanelToggleDetail,
-} from "../panel-toggle-contract.ts";
+import type { DesktopPanelToggleDetail } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
-import { DesktopAudio } from "./desktop-audio.ts";
+import type { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
@@ -32,7 +29,7 @@ import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
-import { DesktopSessionController } from "./desktop-session-controller.ts";
+import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
@@ -61,6 +58,7 @@ export class DesktopPanelController extends SolidPanelController {
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null = null;
   fullscreenMode!: DesktopFullscreen;
+  audio!: DesktopAudio;
   pictureInPicture!: DesktopPictureInPicture;
   launcher!: DesktopAppLauncher;
 
@@ -82,11 +80,6 @@ export class DesktopPanelController extends SolidPanelController {
   private canResize = false;
 
   private readonly connection = new DesktopConnectionHandoff();
-  private readonly audio = new DesktopAudio(
-    this,
-    () => this.state === "connected",
-    () => void this.connectEnvironment(this.environmentId, this.controlling),
-  );
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -94,8 +87,9 @@ export class DesktopPanelController extends SolidPanelController {
   private controlTakeoverRecoveryUsed = false;
   // Automatic resolution follows the session; an explicit choice owns its pop-out target.
   private sourceSelection: "pending" | "resolved" | "explicit" | "picker" = "pending";
-  private readonly sessionSource = new DesktopSessionController(
+  readonly sessionSource = new DesktopSessionOwner(
     this,
+    () => this.invalidate(),
     () => this.environmentId,
     (target) => {
       if (this.usesAutomaticSource) {
@@ -142,6 +136,11 @@ export class DesktopPanelController extends SolidPanelController {
     isFullscreen: () => this.fullscreenMode?.ownsFullscreen() ?? false,
   });
 
+  readonly audioTarget = () => ({
+    connected: this.state === "connected",
+    reconnect: () => void this.connectEnvironment(this.environmentId, this.controlling),
+  });
+
   get launchTarget() {
     return {
       client: this.client,
@@ -153,9 +152,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override connectedCallback(): void {
-    if (!this.embedded) {
-      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    }
     this.dockLayout.setSuppressed(this.suppressed);
     // The first document update owns startup; reconnects still need a fresh lookup.
     if (
@@ -167,7 +163,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override disconnectedCallback(): void {
-    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     if (this.documentMode && this.usesAutomaticSource) {
       this.returnToPicker("pending");
     } else {
@@ -178,13 +173,6 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has("embedded")) {
-      if (this.embedded) {
-        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      } else {
-        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      }
-    }
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
@@ -312,9 +300,9 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   private disconnectConnection(retainViewer = false): void {
-    this.audio.close();
     // Native close can precede Solid mounting; each Solid owner handles its disposal.
     if (this.isConnected) {
+      this.audio.close();
       this.pictureInPicture.close();
       this.mobileKeyboard.reset();
     }
@@ -353,7 +341,6 @@ export class DesktopPanelController extends SolidPanelController {
       );
       if (selected && this.sourceSelection === "pending") {
         this.sourceSelection = "resolved";
-        this.invalidate();
         await this.connectEnvironment(selected.id, false);
       }
       return true;
@@ -414,7 +401,6 @@ export class DesktopPanelController extends SolidPanelController {
     this.returnToPicker(explicit ? "explicit" : this.sourceSelection);
     this.environmentId = environmentId;
     this.state = "connecting";
-    this.invalidate();
     const operationId = this.operationId;
     const inventoryLoaded = await this.refreshEnvironments(operationId, environmentId);
     if (operationId !== this.operationId) {

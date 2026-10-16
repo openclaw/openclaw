@@ -138,6 +138,23 @@ describe("chat sidebar region", () => {
     });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
+    const icon = root(region).querySelector(
+      '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
+    );
+    expect(icon).not.toBeNull();
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(icon!.closest(".tabstrip-tab__icon")!, { childList: true, subtree: true });
+    region.layout = { ...region.layout, columns: [...region.layout.columns] };
+    await region.updateComplete;
+    mutations.push(...observer.takeRecords());
+    observer.disconnect();
+    expect(mutations).toHaveLength(0);
+    expect(
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
+      ),
+    ).toBe(icon);
     expect(
       root(region)
         .querySelector(

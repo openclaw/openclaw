@@ -105,10 +105,7 @@ export function McpServersCard(props: McpServersCardProps) {
     }
     return null;
   };
-  const canMutate = () => {
-    revision();
-    return mutationBlockedReason() === null && login.state().phase === "idle";
-  };
+  const canMutate = () => mutationBlockedReason() === null && login.state().phase === "idle";
   const signIn = (server: McpServerSummary) => {
     if (
       state.busy ||
@@ -235,7 +232,7 @@ export function McpServersCard(props: McpServersCardProps) {
           <Show when={view().message}>
             {(message) => (
               <div
-                class={`mcp-server-message mcp-server-message--${message().kind}`}
+                class={["mcp-server-message", `mcp-server-message--${message().kind}`]}
                 role={message().kind === "error" ? "alert" : "status"}
               >
                 {message().text}

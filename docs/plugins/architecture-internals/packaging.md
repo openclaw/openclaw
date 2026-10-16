@@ -200,6 +200,13 @@ hand-built entries and catalog shims do not have to synthesize it.
 This lets onboarding and diagnostics explain source-plane state without
 importing plugin runtime.
 
+An entry in the bundled official catalog can advertise an install route while
+remaining part of the default core package. Its `openclaw.build.bundledDist: true`
+keeps that distribution ownership explicit; Cloudflare R2 uses this for selected
+standalone builds that omit it. Publication eligibility still comes from the
+source package, so the catalog marker does not defer npm or ClawHub releases.
+An explicit build declaration on the loaded package takes precedence.
+
 Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move

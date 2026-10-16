@@ -129,7 +129,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
             noticeText={props.view.content.noticeText}
             availability={props.view.content.availability}
           />
-          <DesktopAudioNotice state={props.view.audio.state} />
+          <DesktopAudioNotice state={props.view.audio.state()} />
           {props.view.startup && (
             <DesktopNotice
               errorText={null}
@@ -167,7 +167,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
   );
   const audioControl = () => (
     <DesktopAudioControl
-      state={props.view.audio.state}
+      state={props.view.audio.state()}
       connected={props.view.content.state === "connected"}
       documentMode={props.view.documentMode}
       onToggle={() => props.view.audio.toggle()}

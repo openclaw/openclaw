@@ -161,6 +161,12 @@ describe("chat pane read markers", () => {
       scopes: ["operator.write"],
       session: { visibility: "draft" as const, sharingRole: "member" as const },
     },
+    {
+      name: "foreign session with narrow write scope",
+      methods: ["sessions.patch"],
+      scopes: ["operator.sessions.write"],
+      session: { visibility: "shared" as const, sharingRole: "member" as const },
+    },
   ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
     const { pane, state, patch } = createReadMarkerPane();
     pane.context.gateway.snapshot.hello = {
@@ -187,6 +193,7 @@ describe("chat pane read markers", () => {
   it.each([
     { visibility: "read-only", sharingRole: "member", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "owner", scopes: ["operator.sessions.write"] },
   ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
     const { pane, patch } = createReadMarkerPane({});
     pane.context.gateway.snapshot.hello = {
@@ -423,22 +430,33 @@ describe("chat pane read markers", () => {
       expect(patch).not.toHaveBeenCalled();
     });
 
-    it("acknowledges newer run activity only on a later read", () => {
-      const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+    it.each(["operator.write", "operator.sessions.write"])(
+      "acknowledges newer owned run activity only on a later read with %s",
+      (scope) => {
+        const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+        pane.context.gateway.snapshot.hello = {
+          auth: { role: "operator", scopes: [scope] },
+          features: { methods: ["sessions.patch"] },
+        } as ApplicationGatewaySnapshot["hello"];
+        const ownedParent = { ...parent, sharingRole: "owner" as const };
 
-      pane.markSessionRead(parent);
-      expect(patch).not.toHaveBeenCalled();
+        pane.markSessionRead(ownedParent);
+        expect(patch).not.toHaveBeenCalled();
 
-      state.sessionsResult = sessionsResult([parent, run("done", { updatedAt: 30 })], 30);
-      pane.markSessionRead(parent);
+        state.sessionsResult = sessionsResult(
+          [ownedParent, run("done", { updatedAt: 30, sharingRole: "owner" })],
+          30,
+        );
+        pane.markSessionRead(ownedParent);
 
-      expect(patch).toHaveBeenCalledOnce();
-      expect(patch).toHaveBeenCalledWith(
-        "agent:main:subagent:done",
-        { unread: false },
-        { agentId: "main", expectedMarkedUnreadAt: null },
-      );
-    });
+        expect(patch).toHaveBeenCalledOnce();
+        expect(patch).toHaveBeenCalledWith(
+          "agent:main:subagent:done",
+          { unread: false },
+          { agentId: "main", expectedMarkedUnreadAt: null },
+        );
+      },
+    );
 
     it.each([{ code: ErrorCodes.UNAVAILABLE, calls: 2 }])(
       "retries a hidden run after a $code failure only when transient",

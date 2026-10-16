@@ -1,11 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  REPETITIVE_OUTPUT_ERROR_MESSAGE,
   REPEATED_TOOL_ERROR_CODE,
   REPEATED_TOOL_ERROR_MESSAGE,
 } from "../../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -313,6 +314,9 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
+    return REPETITIVE_OUTPUT_ERROR_MESSAGE;
+  }
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
     return REPEATED_TOOL_ERROR_MESSAGE;
   }

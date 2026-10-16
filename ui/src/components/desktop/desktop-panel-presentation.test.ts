@@ -76,6 +76,41 @@ describe("desktop panel presentation lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("receives global toggles only while mounted as a standalone panel", async () => {
+    const request = vi.fn(async () => ({ environments: [] }));
+    const panel = createPanel();
+    updatePanel(panel, { available: true, client: createGatewayClient(request).client });
+    mountPanel(panel);
+    const toggle = (detail: { open: boolean; environmentId?: string }) =>
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail }));
+    try {
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).not.toBeNull();
+
+      updatePanel(panel, { embedded: true, presented: true });
+      await panel.updateComplete;
+      request.mockClear();
+      toggle({ open: true, environmentId: "ignored-global-target" });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+
+      updatePanel(panel, { embedded: false });
+      await panel.updateComplete;
+      toggle({ open: false });
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
+
+      unmountPanel(panel);
+      request.mockClear();
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      unmountPanel(panel);
+    }
+  });
+
   it("admits one same-turn launch and retires pending feedback with the panel", async () => {
     let launch = createDeferred();
     const environment = {

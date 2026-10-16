@@ -157,24 +157,23 @@ function renderAgentRow(
               aria-pressed={pinned() ? "true" : "false"}
               tabindex="-1"
               data-form-control
-              ref={(button) => {
+              onClick={(event) => {
                 // Pinning does not select the enclosing agent.
-                button.addEventListener("click", (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  // Moving a keyed row into pinned-first order can drop native focus.
-                  const focused = button === document.activeElement;
-                  const menu = button.closest('[role="menu"]');
-                  const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
-                  void params.onTogglePinnedAgent(agentId()).then(() => {
-                    if (focused) {
-                      menu
-                        ?.querySelector<HTMLElement>(
-                          `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
-                        )
-                        ?.focus({ preventScroll: true });
-                    }
-                  });
+                event.preventDefault();
+                event.stopPropagation();
+                const button = event.currentTarget;
+                // Moving a keyed row into pinned-first order can drop native focus.
+                const focused = button === document.activeElement;
+                const menu = button.closest('[role="menu"]');
+                const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
+                void params.onTogglePinnedAgent(agentId()).then(() => {
+                  if (focused) {
+                    menu
+                      ?.querySelector<HTMLElement>(
+                        `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
+                      )
+                      ?.focus({ preventScroll: true });
+                  }
                 });
               }}
             >

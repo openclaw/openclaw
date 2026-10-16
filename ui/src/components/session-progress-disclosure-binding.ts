@@ -323,10 +323,16 @@ function createDisclosure(
     const chosen = readChoice();
     const partial = typeof chosen === "number";
     const extent = partial ? Math.min(chosen, limit()) : 0;
-    element.open = partial ? extent > 0 : chosen;
+    const open = partial ? extent > 0 : chosen;
+    if (element.open !== open) {
+      element.open = open;
+    }
     body.style.height = partial ? extent + "px" : "";
     body.style.minHeight = partial ? extent + "px" : "";
-    element.dataset.reveal = partial ? "partial" : chosen ? "open" : "closed";
+    const reveal = partial ? "partial" : chosen ? "open" : "closed";
+    if (element.dataset.reveal !== reveal) {
+      element.dataset.reveal = reveal;
+    }
   }
 
   function clampExtent() {

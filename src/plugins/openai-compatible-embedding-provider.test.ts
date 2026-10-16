@@ -475,6 +475,106 @@ describe("openai-compatible generic embedding provider", () => {
     ).not.toHaveProperty("x-api-key");
   });
 
+  it("aliases the exact prior custom-auth identity while keeping rotation stable", async () => {
+    const canonical = {
+      provider: "custom",
+      baseUrl: "http://127.0.0.1:18001/v1",
+      model: "fixture-embedding",
+      dimensions: 3,
+      inputType: "default",
+      queryInputType: "query",
+      documentInputType: "document",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-deployment": "tenant-a",
+      },
+    };
+    for (const key of ["fixture-before", "fixture-after"]) {
+      const result = await openAICompatibleEmbeddingProviderAdapter.create(
+        createOptions({
+          provider: "custom",
+          model: "fixture-embedding",
+          dimensions: 3,
+          inputType: "default",
+          queryInputType: "query",
+          documentInputType: "document",
+          config: {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: canonical.baseUrl,
+                  headers: { "X-Access": key, "X-Deployment": "tenant-a" },
+                  request: { auth: { mode: "header", headerName: " X-Access ", value: key } },
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      );
+      const priorIdentity = {
+        ...canonical,
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-access": key,
+          "x-deployment": "tenant-a",
+        },
+      };
+      expect(result.runtime?.cacheKeyData).toEqual(canonical);
+      expect(result.runtime?.indexIdentityAliases).toEqual([
+        {
+          model: "fixture-embedding",
+          cacheKeyData: priorIdentity,
+        },
+      ]);
+      expect(JSON.stringify(result.runtime?.indexIdentityAliases?.[0]?.cacheKeyData)).toBe(
+        JSON.stringify(priorIdentity),
+      );
+    }
+  });
+
+  it.each<{
+    name: string;
+    authHeaderName: string;
+    headers: Record<string, string>;
+    remote?: EmbeddingProviderCreateOptions["remote"];
+  }>([
+    { name: "standard auth", authHeaderName: "Authorization", headers: { Authorization: "key" } },
+    { name: "sensitive custom auth", authHeaderName: "X-Api-Key", headers: { "X-Api-Key": "key" } },
+    { name: "missing auth header", authHeaderName: "X-Access", headers: {} },
+    {
+      name: "another destination",
+      authHeaderName: "X-Access",
+      headers: { "X-Access": "key" },
+      remote: { baseUrl: "http://127.0.0.1:18002/v1", headers: { "X-Access": "remote-route" } },
+    },
+  ])(
+    "does not create an index identity alias for $name",
+    async ({ authHeaderName, headers, remote }) => {
+      const result = await openAICompatibleEmbeddingProviderAdapter.create(
+        createOptions({
+          provider: "custom",
+          config: {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "http://127.0.0.1:18001/v1",
+                  headers,
+                  request: { auth: { mode: "header", headerName: authHeaderName, value: "key" } },
+                  models: [],
+                },
+              },
+            },
+          },
+          remote,
+        }),
+      );
+      expect(result.runtime?.indexIdentityAliases).toBeUndefined();
+    },
+  );
+
   it("posts OpenAI-compatible embedding requests without warming up during create", async () => {
     const token = "local-test-token";
     const server = await startEmbeddingServer({

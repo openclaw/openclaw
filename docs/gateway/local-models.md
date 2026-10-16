@@ -298,6 +298,39 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 
 5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
+## Output budgets and repetition stops
+
+OpenClaw sends the resolved model output limit to local model servers. Native
+Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
+`params.num_predict` takes precedence. Set realistic `maxTokens` and context
+limits for custom model entries. Discovered local Ollama models default to 8,192
+output tokens. Ollama Cloud models use their documented output limit, or their
+context window when a separate output limit is unavailable. Set
+`params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
+request output cap still wins.
+
+Embedded agent runs also watch long text and reasoning from models with a known
+total parameter count in the **32B class or smaller** (less than 34 billion, to
+allow for rounded model names). Discovery/catalog metadata takes precedence over
+a size inferred from the model name. Active-parameter-only MoE names do not establish
+the total size. The detector stays off for larger models and models whose size is
+unknown. There is no separate setting.
+
+The first check starts around 16,000 characters, with increasing intervals and a
+bounded recent tail. A single repeated line, repeated windows, or a repeated period
+must dominate the tail; a line-novelty check also protects varied output. Repeated
+boilerplate lines in distinct multi-line records are not added together to trigger
+the line check. This heuristic can miss loops and can stop legitimate output with
+sufficiently dominant repetition. Output limits still bound requests that the
+detector misses.
+
+When it triggers, OpenClaw stops the model request and reports a repetition
+failure. The affected unfinished block is replaced with
+`[Repetitive output stopped]` in session history, so later turns do not imitate
+the discarded text. Earlier unaffected blocks and completed tool work remain.
+Side effects are not retried automatically. Choose a stronger model or request a
+smaller output, then start a new turn.
+
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.

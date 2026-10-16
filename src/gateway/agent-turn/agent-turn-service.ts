@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
+import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
@@ -26,6 +27,7 @@ import { prepareAgentSession } from "../server-methods/agent-session-prepare.js"
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { authorizeResolvedSessionMutationAsync } from "../session-sharing.js";
+import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
@@ -320,7 +322,6 @@ export function createAgentTurnService(
           const {
             cfg: cfgLocal,
             storePath,
-            entry,
             canonicalKey: canonicalSessionKey,
             storeKeys,
             maintenanceConfig: sessionMaintenanceConfig,
@@ -329,6 +330,7 @@ export function createAgentTurnService(
             sessionId,
             touchInteraction,
           } = preparedSession;
+          let { entry } = preparedSession;
           cfgForAgent = cfgLocal;
           freshChild = preparedSession.freshChild;
           sessionStorePath = storePath;
@@ -350,6 +352,31 @@ export function createAgentTurnService(
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);
             return;
+          }
+          if (
+            !isRestartRecoveryResumeRun &&
+            entry &&
+            isMainSessionRecoveryReconciliationCandidate(entry)
+          ) {
+            // Replay can precede startup recovery. Restore the dead predecessor's
+            // custody before this admission touches its row or replaces its claim.
+            const { reconcileOrphanedGatewaySessionRecovery } =
+              await import("../session-recovery-service.js");
+            entry =
+              (await reconcileOrphanedGatewaySessionRecovery({
+                cfg: cfgLocal,
+                target: {
+                  agentId: sessionAgentId,
+                  storePath,
+                  canonicalKey: canonicalSessionKey,
+                  storeKeys,
+                },
+                entry,
+                authorizedPluginId: principal?.internal?.pluginRuntimeOwnerId,
+                commitGuard: assertRequestCurrent,
+                workerPlacementContext: resolveSessionWorkerPlacementContext(context),
+              })) ?? entry;
+            assertRequestCurrent();
           }
           effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
           restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;

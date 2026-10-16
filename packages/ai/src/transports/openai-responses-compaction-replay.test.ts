@@ -514,7 +514,7 @@ describe("OpenAI Responses compaction replay", () => {
     expect(encoded).toContain("current route A turn");
   });
 
-  it("redacts encrypted compaction bytes from payload and event previews", () => {
+  it("omits encrypted compaction bytes from request and failure diagnostics", () => {
     const secret = "opaque-preview-compaction";
     const value = { input: [{ type: "compaction", encrypted_content: secret }] };
 
@@ -523,16 +523,10 @@ describe("OpenAI Responses compaction replay", () => {
     try {
       const payload = summarizeResponsesPayload(value);
       expect(payload).not.toContain(secret);
-      expect(payload).toContain("<opaque data omitted>");
       const failure = normalizeResponsesFailedEvent({ response: { error_details: value } }, model);
       assert(failure.observation);
-      for (const preview of [
-        failure.observation.failureFieldsPreview,
-        failure.observation.responsePreview,
-      ]) {
-        expect(preview).not.toContain(secret);
-        expect(preview).toContain("<opaque data omitted>");
-      }
+      expect(JSON.stringify(failure.observation)).not.toContain(secret);
+      expect(failure.observation.failureFieldNames).toEqual(["error_details"]);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;

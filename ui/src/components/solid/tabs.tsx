@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo, onCleanup, onSettled, untrack } from "solid-js";
-import { createTabsController, type TabsOptions } from "../../lib/tabs-controller.ts";
+import { For, createEffect, untrack } from "solid-js";
+import { createTabList, type TabsOptions } from "../../lib/tabs.ts";
 import { bindShadowStyles } from "./shadow-styles.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
 import "../../styles/tabs.css";
@@ -29,44 +29,23 @@ export type TabsProps = TabsOptions & {
 
 export function Tabs(props: TabsProps) {
   let element!: HTMLDivElement;
-  let controller: ReturnType<typeof createTabsController> | undefined;
-  let styles: ReturnType<typeof bindShadowStyles> | undefined;
-  let styleTexts: readonly string[] = [];
-  const options = createMemo(() => ({
-    active: props.active,
-    defaultActive: props.defaultActive,
-    orientation: props.orientation,
-    activation: props.activation,
-    onSelect: props.onSelect,
-    onActivate: props.onActivate,
-    items: props.items,
-    shadowStyles: props.shadowStyles,
-  }));
-  createEffect(options, (snapshot) => {
-    const nextStyles = [tabsStyles, ...(snapshot.shadowStyles ?? [])];
-    if (
-      nextStyles.length !== styleTexts.length ||
-      nextStyles.some((css, index) => css !== styleTexts[index])
-    ) {
-      styleTexts = nextStyles;
-      styles?.dispose();
-      styles = undefined;
-    }
-    if (controller) {
-      styles ??= bindShadowStyles(element, styleTexts);
-      styles.sync();
-      controller.sync();
-    }
-  });
-  onSettled(() => {
-    // DOM operations sample current options; the effect above owns dependency tracking.
-    controller = createTabsController(element, () => untrack(options));
-    styles = bindShadowStyles(element, styleTexts);
-  });
-  onCleanup(() => {
-    controller?.dispose();
-    styles?.dispose();
-  });
+  const tabs = createTabList(
+    () => props,
+    () =>
+      props.items.map((item) => ({
+        value: item.value,
+        disabled: item.disabled || item.attributes?.["aria-disabled"] === "true",
+      })),
+    () => element,
+  );
+  // A hosted tablist must install its styles in the actual shadow root.
+  createEffect(
+    () => [props.shadowStyles, props.items, props.active, props.defaultActive] as const,
+    ([extra]) => {
+      const styles = bindShadowStyles(element, [tabsStyles, ...(extra ?? [])]);
+      return () => styles.dispose();
+    },
+  );
   return (
     <div
       ref={(node) => {
@@ -80,31 +59,31 @@ export function Tabs(props: TabsProps) {
       aria-orientation={props.orientation ?? "horizontal"}
     >
       <For each={props.items} keyed={(item) => item.value}>
-        {(item) => (
-          <button
-            {...item().attributes}
-            type="button"
-            role="tab"
-            class={["oc-tab", item().className]}
-            id={item().id}
-            data-tab-value={item().value}
-            data-test-id={item().testId}
-            aria-controls={item().panelId}
-            aria-selected={
-              item().value === (props.active === undefined ? props.defaultActive : props.active)
-                ? "true"
-                : "false"
-            }
-            disabled={item().disabled}
-            tabindex={
-              item().value === (props.active === undefined ? props.defaultActive : props.active)
-                ? 0
-                : -1
-            }
-          >
-            {item().label}
-          </button>
-        )}
+        {(item) => {
+          // The keyed value is this node's lifetime identity.
+          const ref = tabs.ref(untrack(() => item().value));
+          return (
+            <button
+              {...item().attributes}
+              ref={ref}
+              type="button"
+              role="tab"
+              class={["oc-tab", item().className]}
+              id={item().id}
+              data-tab-value={item().value}
+              data-test-id={item().testId}
+              aria-controls={item().panelId}
+              aria-selected={item().value === tabs.active() ? "true" : "false"}
+              {...{ active: item().value === tabs.active() ? "" : undefined }}
+              disabled={item().disabled}
+              tabindex={tabs.tabIndex(item().value)}
+              onClick={tabs.onClick}
+              onKeyDown={tabs.onKeyDown}
+            >
+              {item().label}
+            </button>
+          );
+        }}
       </For>
     </div>
   );

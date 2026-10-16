@@ -20,7 +20,6 @@ import {
   logVerbose,
   shouldLogVerbose,
   getChildLogger,
-  createSubsystemLogger,
   createNonExitingRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
@@ -61,7 +60,6 @@ import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
 } from "./poll-answer-context.js";
-import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -234,19 +232,6 @@ export async function createTelegramBotCore(
   // only that route's sequential lane until registration succeeds or declines it.
   bot.use(async (ctx, next) => {
     await settleTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
-    await next();
-  });
-
-  const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-
-  bot.use(async (ctx, next) => {
-    if (shouldLogVerbose()) {
-      try {
-        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
-      } catch (err) {
-        rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
-      }
-    }
     await next();
   });
 

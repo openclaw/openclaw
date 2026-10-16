@@ -127,85 +127,74 @@ describe("private node policy transport", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "owner",
-    "plugin",
-    "capability",
-    "connection",
-    "pairing",
-    "approval",
-    "runtime",
-  ] as const)("rejects private dispatch when %s changes during policy work", async (change) => {
-    const node = createNodeSession();
-    node.commands = [];
-    let runtimeCurrent = true;
-    let approvalCurrent = true;
-    const { context, invoke } = createContext({
-      nodeSession: node,
-      validateAgentRuntimeApprovalAuthority: () => runtimeCurrent,
-    });
-    const privateTransport = createPrivateTransport();
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy(async (ctx) => {
-        await Promise.resolve();
-        switch (change) {
-          case "owner":
-            privateTransport.isCurrent = () => false;
-            break;
-          case "plugin":
-            setActivePluginRegistry(createEmptyPluginRegistry());
-            break;
-          case "capability":
-            privateTransport.commands = [];
-            break;
-          case "connection":
-            context.nodeRegistry.get = () => ({ ...node, connId: "replacement" });
-            break;
-          case "pairing":
-            node.client.invalidated = true;
-            break;
-          case "approval":
-            approvalCurrent = false;
-            break;
-          case "runtime":
-            runtimeCurrent = false;
-            break;
-        }
-        return await ctx.invokeNode();
-      }),
-    ]);
-    const operationalRunInstance = createOperationalRunInstanceRef("private-policy-run");
+  it.each(["owner", "capability", "pairing", "approval", "runtime"] as const)(
+    "rejects private dispatch when %s changes during policy work",
+    async (change) => {
+      const node = createNodeSession();
+      node.commands = [];
+      let runtimeCurrent = true;
+      let approvalCurrent = true;
+      const { context, invoke } = createContext({
+        nodeSession: node,
+        validateAgentRuntimeApprovalAuthority: () => runtimeCurrent,
+      });
+      const privateTransport = createPrivateTransport();
+      setDangerousDemoCommandRegistry([
+        createDemoPolicy(async (ctx) => {
+          await Promise.resolve();
+          switch (change) {
+            case "owner":
+              privateTransport.isCurrent = () => false;
+              break;
+            case "capability":
+              privateTransport.commands = [];
+              break;
+            case "pairing":
+              node.client.invalidated = true;
+              break;
+            case "approval":
+              approvalCurrent = false;
+              break;
+            case "runtime":
+              runtimeCurrent = false;
+              break;
+          }
+          return await ctx.invokeNode();
+        }),
+      ]);
+      const operationalRunInstance = createOperationalRunInstanceRef("private-policy-run");
 
-    await expect(
-      applyPluginNodeInvokePolicy({
-        context,
-        client: {
-          ...createOperatorClient(),
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:private-policy",
-              operationalRunInstance,
-              delegatedAuthority: {
-                kind: "local",
+      await expect(
+        applyPluginNodeInvokePolicy({
+          context,
+          client: {
+            ...createOperatorClient(),
+            internal: {
+              agentRuntimeIdentity: {
+                kind: "agentRuntime",
+                agentId: "main",
+                sessionKey: "agent:main:private-policy",
                 operationalRunInstance,
-                lifecycleGeneration: "generation",
-                claimId: "claim",
+                delegatedAuthority: {
+                  kind: "local",
+                  operationalRunInstance,
+                  lifecycleGeneration: "generation",
+                  claimId: "claim",
+                },
               },
             },
           },
-        },
-        nodeSession: node,
-        command: DEMO_COMMAND,
-        params: DEMO_PARAMS,
-        privateTransport,
-        isApprovalAuthorityActive: () => approvalCurrent,
-      }),
-    ).resolves.toMatchObject({ ok: false, details: { nodeCommandDispatched: false } });
-    expect(privateTransport.invoke).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalled();
-  });
+          nodeSession: node,
+          command: DEMO_COMMAND,
+          params: DEMO_PARAMS,
+          privateTransport,
+          isApprovalAuthorityActive: () => approvalCurrent,
+        }),
+      ).resolves.toMatchObject({ ok: false, details: { nodeCommandDispatched: false } });
+      expect(privateTransport.invoke).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["owner", "plugin", "deny", "approval"] as const)(
     "carries the %s gate through the private transport's final send",

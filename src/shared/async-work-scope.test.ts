@@ -6,12 +6,55 @@ import {
   captureAsyncWorkTracker,
   getAsyncWorkSignal,
   isAsyncWorkScopeActiveHere,
+  runWithTrackedCancellation,
   trackAsyncWork,
 } from "./async-work-scope.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 describe("async work scope", () => {
+  it.each([false, true])(
+    "keeps cancellation and accepted work after foreground settlement (fails=%s)",
+    async (fails) => {
+      const owner = new AsyncWorkScope();
+      const requester = new AbortController();
+      const finishWork = createDeferredCore();
+      const failure = new Error("foreground failed");
+      let operationSignal: AbortSignal | undefined;
+      let workSignal: AbortSignal | undefined;
+      const result = owner.run(() =>
+        runWithTrackedCancellation(requester.signal, (signal) => {
+          operationSignal = signal;
+          workSignal = getAsyncWorkSignal();
+          void trackAsyncWork(() => finishWork.promise);
+          if (fails) {
+            throw failure;
+          }
+          return "accepted";
+        }),
+      );
+      try {
+        if (fails) {
+          await expect(result).rejects.toBe(failure);
+        } else {
+          expect(await result).toBe("accepted");
+        }
+        expect(owner.hasPendingWork).toBe(true);
+        const cancelReason = new Error("requester cancelled");
+        requester.abort(cancelReason);
+        expect(operationSignal?.reason).toBe(cancelReason);
+        const closeReason = new Error("owner closing");
+        owner.beginClose(closeReason);
+        expect(workSignal?.reason).toBe(closeReason);
+        expect(owner.hasPendingWork).toBe(true);
+      } finally {
+        finishWork.resolve();
+        await owner.drain();
+      }
+      expect(owner.hasPendingWork).toBe(false);
+    },
+  );
+
   it.each(["released caller", "released helper"])(
     "joins work across the shipped scope carrier with a %s",
     async (direction) => {

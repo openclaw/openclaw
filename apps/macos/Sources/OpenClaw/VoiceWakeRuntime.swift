@@ -56,10 +56,6 @@ actor VoiceWakeRuntime {
     private var activeTriggerEndTime: TimeInterval?
     private var activeTriggerWord: String?
     private var scheduledRestartTask: Task<Void, Never>?
-    private var lastLoggedText: String?
-    private var lastLoggedAt: Date?
-    private var lastTapLogAt: Date?
-    private var lastCallbackLogAt: Date?
     private var lastTranscript: String?
     private var lastTranscriptAt: Date?
     private var pauseCheckTask: Task<Void, Never>?
@@ -205,7 +201,6 @@ actor VoiceWakeRuntime {
                 let rms = TalkAudioLevel.rms(buffer: buffer)
                 Task.detached { [weak self] in
                     await self?.noteAudioLevel(rms: rms)
-                    await self?.noteAudioTap(rms: rms)
                 }
             }
 
@@ -224,7 +219,6 @@ actor VoiceWakeRuntime {
                     WakeWordSpeechSegments.from(transcription: $0, transcript: $0.formattedString)
                 } ?? []
                 let isFinal = result?.isFinal ?? false
-                Task { await self.noteRecognitionCallback(transcript: transcript, isFinal: isFinal, error: error) }
                 let update = RecognitionUpdate(
                     transcript: transcript,
                     segments: segments,
@@ -427,14 +421,6 @@ actor VoiceWakeRuntime {
                 self.lastTranscriptAt = now
             }
             if self.isCapturing {
-                self.maybeLogRecognition(
-                    transcript: transcript,
-                    segments: update.segments,
-                    triggers: config.triggers,
-                    isFinal: update.isFinal,
-                    match: nil,
-                    usedFallback: false,
-                    capturing: true)
                 let trimmed = Self.commandAfterTrigger(
                     transcript: transcript,
                     segments: update.segments,
@@ -482,14 +468,6 @@ actor VoiceWakeRuntime {
                 trimWake: self.diagnostic == nil ? Self.trimmedAfterTrigger : WakeWordGate.stripWake)
             usedFallback = match != nil
         }
-        self.maybeLogRecognition(
-            transcript: transcript,
-            segments: update.segments,
-            triggers: config.triggers,
-            isFinal: update.isFinal,
-            match: match,
-            usedFallback: usedFallback,
-            capturing: false)
 
         if self.diagnostic != nil {
             let triggerOnlyMatch = match == nil
@@ -531,61 +509,6 @@ actor VoiceWakeRuntime {
                 triggerOnly: Self.isTriggerOnlyText(transcript: transcript, triggers: config.triggers),
                 config: config)
         }
-    }
-
-    private func maybeLogRecognition(
-        transcript: String,
-        segments: [WakeWordSegment],
-        triggers: [String],
-        isFinal: Bool,
-        match: WakeWordGateMatch?,
-        usedFallback: Bool,
-        capturing: Bool)
-    {
-        guard VoiceWakeRecognitionDebugSupport.shouldLogTranscript(
-            transcript: transcript,
-            isFinal: isFinal,
-            loggerLevel: self.logger.logLevel,
-            lastLoggedText: &self.lastLoggedText,
-            lastLoggedAt: &self.lastLoggedAt)
-        else { return }
-
-        let summary = VoiceWakeRecognitionDebugSupport.transcriptSummary(
-            transcript: transcript,
-            triggers: triggers,
-            segments: segments)
-        let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
-
-        self.logger.debug(
-            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
-                "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
-                "capturing=\(capturing) fallback=\(usedFallback) " +
-                "\(matchSummary) " +
-                "segments=[\(VoiceWakeRecognitionDebugSupport.segmentSummary(segments), privacy: .private)]")
-    }
-
-    private func noteAudioTap(rms: Double) {
-        let now = Date()
-        if let last = self.lastTapLogAt, now.timeIntervalSince(last) < 1.0 {
-            return
-        }
-        self.lastTapLogAt = now
-        let db = 20 * log10(max(rms, 1e-7))
-        self.logger.debug(
-            "voicewake runtime audio tap rms=\(String(format: "%.6f", rms)) " +
-                "db=\(String(format: "%.1f", db)) capturing=\(self.isCapturing)")
-    }
-
-    private func noteRecognitionCallback(transcript: String?, isFinal: Bool, error: Error?) {
-        guard transcript?.isEmpty ?? true else { return }
-        let now = Date()
-        if let last = self.lastCallbackLogAt, now.timeIntervalSince(last) < 1.0 {
-            return
-        }
-        self.lastCallbackLogAt = now
-        let errorSummary = error?.localizedDescription ?? "none"
-        self.logger.debug(
-            "voicewake runtime callback empty transcript isFinal=\(isFinal) error=\(errorSummary, privacy: .public)")
     }
 
     private func schedulePauseCheck(triggerOnly: Bool, config: RuntimeConfig) {
@@ -703,7 +626,6 @@ actor VoiceWakeRuntime {
         self.overlayToken = await MainActor.run {
             guard self.state() != nil else { return nil as UUID? }
             return self.sessions.startSession(
-                source: .wakeWord,
                 text: snapshot,
                 attributed: attributed,
                 forwardEnabled: true,

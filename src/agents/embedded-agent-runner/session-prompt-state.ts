@@ -170,6 +170,8 @@ export function prepareSessionSystemPrompt(params: {
         restart: true,
       }
     : { ...series!, renderedPrefix, permissionNotice, restart: false };
+  // Admission callbacks need the series, not the transcript used to restore it.
+  const { state, routeKey } = params;
   let committed = false;
   return {
     systemPrompt: next.prefix,
@@ -189,8 +191,8 @@ export function prepareSessionSystemPrompt(params: {
       }
       committed = true;
       // An early restart marker already retired old overrides; keep this turn's new operators.
-      params.state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
-      params.state.systemPromptRouteKey = params.routeKey;
+      state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
+      state.systemPromptRouteKey = routeKey;
     },
   };
 }

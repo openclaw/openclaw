@@ -9,6 +9,7 @@ export {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export {
   normalizeAntigravityPreviewModelId,
   normalizeGooglePreviewModelId,

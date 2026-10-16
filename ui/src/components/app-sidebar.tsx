@@ -2,6 +2,7 @@ import { getObserver } from "@solidjs/signals";
 import { insert, type JSX } from "@solidjs/web";
 import {
   createEffect,
+  createMemo,
   createRoot,
   getOwner,
   onCleanup,
@@ -17,6 +18,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
+import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 
@@ -60,6 +62,18 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     subscribe: (current, notify) => current.subscribe(notify),
     equality: "revision",
   });
+  const prepared = createMemo(
+    () => {
+      projection.revision();
+      Object.values(props);
+      // Snapshot capture keeps observing Pages after its navigation view closes.
+      void catalog.dashboards;
+      // Synchronous owners release boot snapshots and restore query state before row consumers read.
+      owner.prepareRender();
+      return owner;
+    },
+    { equals: false },
+  );
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -89,6 +103,14 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     owner.sessionOrganizer,
     owner.people,
   ].forEach(observe);
+  owner.sessionPullRequests = createSessionPullRequestIndicators({
+    getConnected: () => prepared().isConnected && props.connected,
+    getPresented: () => props.navigationVisible,
+    getRows: () => prepared().readSessionPullRequestRows(),
+    getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
+    getGateway: () => prepared().sessionDataContext?.gateway,
+    getSessions: () => prepared().sessionDataContext?.sessions,
+  });
   const solidOwner = getOwner();
   const mountDefaultView = (target: HTMLElement) =>
     runWithOwner(solidOwner, () =>
@@ -121,18 +143,26 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const content = hostView.renderSidebar(Sessions, scroll);
   createEffect(
     () => {
-      projection.revision();
-      // Props remain on the bridge's live object; source changes refresh its subscriptions.
-      Object.values(props);
-      // Snapshot capture keeps observing Pages after its navigation view closes.
-      void catalog.dashboards;
-      owner.prepareRender();
+      prepared();
       scroll.capture();
     },
     () =>
       untrack(() => {
         owner.commitRender();
         scroll.restore();
+        // The projection owns the display deadline; this mounted view owns its timer.
+        const deadline = owner.sessionProjection.subtitleDeadline;
+        if (owner.isConnected && Number.isFinite(deadline)) {
+          const timer = globalThis.setTimeout(
+            () => {
+              owner.sessionProjection.invalidate();
+              owner.requestUpdate();
+            },
+            Math.max(0, deadline - Date.now()),
+          );
+          return () => globalThis.clearTimeout(timer);
+        }
+        return undefined;
       }),
   );
   onSettled(() => {

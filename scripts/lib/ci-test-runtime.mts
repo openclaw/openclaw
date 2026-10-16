@@ -210,6 +210,7 @@ const bunCompatibleScopedOwners = new Map([
         "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
+        "src/state/openclaw-state-lease.retention.test.ts",
       ],
     },
   ],
@@ -343,8 +344,6 @@ const unitRequiresNode = (file: string) =>
       !file.startsWith("src/security/")) ||
     file === "packages/normalization-core/src/grapheme.test.ts"
   );
-// State-lease retention stays with its separate infra owner on Node: the completed
-// worker-heartbeat case still retains caller async context on the pinned Bun fork.
 const runtimePartitions = new Map<
   string,
   {
