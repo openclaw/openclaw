@@ -56,16 +56,46 @@ describe("parseControlUiSessionPath", () => {
   });
 
   it.each([
-    ["/chat/main/~key/release-deadbeef", "agent:main:release-deadbeef"],
-    ["/chat/main/cron/~dot/~dotdot/run", "agent:main:cron:.:..:run"],
-    ["/chat/main/channel/~~dot", "agent:main:channel:~dot"],
-  ])("decodes literal path %s", (pathname, sessionKey) => {
+    ["/chat/main/~key/release-deadbeef", "agent:main:release-deadbeef", true],
+    ["/chat/main/cron/~dot/~dotdot/run", "agent:main:cron:.:..:run", false],
+    ["/chat/main/channel/~~dot", "agent:main:channel:~dot", false],
+  ])("decodes literal path %s", (pathname, sessionKey, literalKey) => {
     expect(parseControlUiSessionPath(pathname)).toEqual({
       namespace: "chat",
       kind: "literal",
       agentId: "main",
       sessionKey,
+      ...(literalKey ? { literalKey } : {}),
     });
+  });
+
+  it.each([
+    ["agent:research:workspace", "~key/workspace"],
+    [
+      "agent:research:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      "~key/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+    ],
+    ["agent:research:channel:~dot:.:..", "~key/channel/~~dot/~dot/~dotdot"],
+    ["global", "~global"],
+  ])("keeps explicit %s identity independent of current home defaults", (sessionKey, suffix) => {
+    for (const mainKey of ["workspace", "project"]) {
+      const pathname = buildControlUiSessionPath({
+        namespace: "dashboard",
+        sessionKey,
+        fallbackAgentId: "research",
+        basePath: "/control",
+        mainKey,
+        literalKey: true,
+      });
+      expect(pathname).toBe(`/control/dashboard/research/${suffix}`);
+      expect(parseControlUiSessionPath(pathname!, "/control", mainKey)).toEqual({
+        namespace: "dashboard",
+        kind: "literal",
+        agentId: "research",
+        sessionKey,
+        literalKey: true,
+      });
+    }
   });
 
   it("keeps reserved boot literal", () => {
@@ -100,6 +130,28 @@ describe("parseControlUiSessionPath", () => {
     expect(parseControlUiSessionPath(pathname)).toBeNull();
   });
 
+  it.each(["main", "workspace", "global", "deadbeef"])(
+    "keeps source keys exact when the receiver does not know mainKey=%s",
+    (mainKey) => {
+      for (const rest of ["main", mainKey]) {
+        const sessionKey = `agent:research:${rest}`;
+        const path = buildControlUiSessionPath({
+          namespace: "chat",
+          sessionKey,
+          exactKey: true,
+          literalMainKey: true,
+          basePath: "/control",
+        });
+        expect(parseControlUiSessionPath(path ?? "", "/control", mainKey)).toMatchObject({
+          namespace: "chat",
+          kind: "literal",
+          agentId: "research",
+          sessionKey,
+        });
+      }
+    },
+  );
+
   it.each([
     ["agent:main:standup", "/chat/main/standup", "standup"],
     ["agent:main:sessions", "/chat/main/~key/sessions", undefined],
@@ -123,9 +175,47 @@ describe("parseControlUiSessionPath", () => {
       kind: "literal",
       agentId: "main",
       sessionKey,
+      ...(expectedPath.includes("/~key/") ? { literalKey: true } : {}),
       slugCandidate,
     });
   });
+
+  it.each(["chat", "dashboard"] as const)(
+    "keeps raw global, agent global, and an escaped marker distinct in %s",
+    (namespace) => {
+      for (const [sessionKey, suffix] of [
+        ["global", "~global"],
+        ["agent:research:global", "~key/global"],
+        ["agent:research:~global", "~~global"],
+      ]) {
+        const pathname = buildControlUiSessionPath({
+          namespace,
+          sessionKey: sessionKey!,
+          fallbackAgentId: "research",
+          basePath: "/control",
+          exactKey: true,
+          literalMainKey: true,
+          literalGlobalKey: true,
+        });
+        expect(pathname).toBe(`/control/${namespace}/research/${suffix}`);
+        expect(parseControlUiSessionPath(pathname!, "/control")).toMatchObject({
+          namespace,
+          kind: "literal",
+          agentId: "research",
+          sessionKey,
+        });
+      }
+      expect(
+        buildControlUiSessionPath({
+          namespace,
+          sessionKey: "global",
+          fallbackAgentId: "research",
+          exactKey: true,
+          literalMainKey: true,
+        }),
+      ).toBe(`/${namespace}/research`);
+    },
+  );
 
   it("parses a tool-composed forced literal with multiple segments", () => {
     expect(
@@ -138,6 +228,7 @@ describe("parseControlUiSessionPath", () => {
       kind: "literal",
       agentId: "roboclaw",
       sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      literalKey: true,
     });
   });
 });

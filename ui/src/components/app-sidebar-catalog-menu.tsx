@@ -3,9 +3,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { resolveCatalogOriginalUrl } from "../lib/sessions/catalog-original-url.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
@@ -108,6 +110,13 @@ export class SidebarCatalogMenuController {
     if (action === "import") {
       if (this.canImport()) {
         void this.importSession(menu);
+      }
+      return;
+    }
+    if (action === "original") {
+      const url = resolveCatalogOriginalUrl(menu.originalUrl);
+      if (url) {
+        openExternalUrlSafe(url);
       }
       return;
     }
@@ -252,6 +261,7 @@ export class SidebarCatalogMenuController {
             lastActive={menu.meta}
             canDelete={menu.canDelete}
             canImport={this.canImport()}
+            canOpenOriginal={Boolean(resolveCatalogOriginalUrl(menu.originalUrl))}
             terminalDisabled={!menu.canOpenTerminal || !this.host.terminalAvailable}
             onAction={(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
             onClose={() => this.close()}

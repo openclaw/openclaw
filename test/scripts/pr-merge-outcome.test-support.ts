@@ -30,6 +30,7 @@ export function createMergeOutcomeFixtureHarness() {
   const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
   const gitEnv = {
     PATH: process.env.PATH,
+    HOME: templateDirs.make("pr-merge-home-"),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ALLOW_PROTOCOL: "file",

@@ -40,6 +40,38 @@ describe("SessionCatalogShareRouteSchema", () => {
 });
 
 describe("SessionsCatalogListResultSchema", () => {
+  it("carries the optional source-freshness policy on list and progress publications", () => {
+    const catalog = {
+      id: "source",
+      label: "Source",
+      capabilities: {
+        continueSession: false,
+        archive: false,
+      },
+      hosts: [
+        { hostId: "node:source", label: "Source", kind: "node", connected: true, sessions: [] },
+      ],
+    };
+    for (const declaration of [{}, { requiresFreshList: true }]) {
+      const published = { ...catalog, ...declaration };
+      expect(Value.Check(SessionsCatalogListResultSchema, { catalogs: [published] })).toBe(true);
+      expect(
+        Value.Check(SessionsCatalogHostEventSchema, {
+          agentId: "main",
+          progressId: "request",
+          catalog: published,
+        }),
+      ).toBe(true);
+    }
+    for (const invalid of [false, "true", 1]) {
+      expect(
+        Value.Check(SessionsCatalogListResultSchema, {
+          catalogs: [{ ...catalog, requiresFreshList: invalid }],
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("accepts a closed catalog result with hosts", () => {
     expect(
       Value.Check(SessionsCatalogListResultSchema, {

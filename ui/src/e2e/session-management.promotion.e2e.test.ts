@@ -6,6 +6,7 @@ import {
   installMockGateway,
   requireRecord,
   waitForPatch,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
@@ -30,7 +31,12 @@ suite.define(() => {
     });
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      await page.locator('[data-child-session-toggle="' + parentKey + '"]').click();
+      await waitForSessionRosterHydration(page);
+      const toggle = page.locator('[data-child-session-toggle="' + parentKey + '"]');
+      // A newly hydrated child can already have revealed the branch.
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
       const row = page.locator('.sidebar-recent-session[data-session-key="' + childKey + '"]');
       await row.waitFor({ state: "visible" });
       expect(await row.getAttribute("draggable")).toBe("true");

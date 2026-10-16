@@ -241,7 +241,9 @@ function renderCatalogGroup(
   const hasUnread = createMemo(() => activity().unread);
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
   const loadingMore = createMemo(() => params.loadingMoreCatalogIds.has(readCatalog().id));
-  const hasMore = createMemo(() => readCatalog().hosts.some((host) => Boolean(host.nextCursor)));
+  const hasMore = createMemo(
+    () => readCatalog().retryable || readCatalog().hosts.some((host) => Boolean(host.nextCursor)),
+  );
   const canCreateSession = createMemo(() => readCatalog().capabilities.startTerminal === true);
   const errorMessages = createMemo(() => catalogErrorMessages(readCatalog()));
   const hasError = createMemo(() => errorMessages().length > 0);

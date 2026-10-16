@@ -24,6 +24,7 @@ import {
   SESSION_SHARE_LIST_COMMAND,
   SESSION_SHARE_READ_COMMAND,
 } from "./node-commands.js";
+import { sessionShareOriginalUrl } from "./original-url.js";
 import { parseSessionSharePage, parseSessionShareTranscriptPage } from "./wire.js";
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
@@ -180,6 +181,11 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     node?.connected && isSessionHost(node) && node.connectedAtMs === entry.node.connectedAtMs;
 
   function refresh(entry: NodeSnapshot, owner: OpenClawPluginServiceContextV2) {
+    if (entry.pending) {
+      return;
+    }
+    // Metadata from a previous source authorization is not a disclosure grant.
+    entry.sessions = undefined;
     const completion = Promise.withResolvers<void>();
     entry.pending = completion.promise;
     const signal = entry.scope.signal;
@@ -317,6 +323,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       if (existing) {
         snapshots.delete(node.nodeId);
         snapshots.set(node.nodeId, existing);
+        refresh(existing, owner);
         continue;
       }
       if (snapshots.size >= MAX_SNAPSHOTS) {
@@ -410,6 +417,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
               "Session Share catalog is still loading. Refresh the catalog.",
             );
       }
+      const publication = entry.sessions;
       const sessions = search
         ? entry.sessions.filter(
             (session) =>
@@ -431,26 +439,52 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
                 : [],
             })
           : undefined;
-      if (!current(entry) || signal?.aborted) {
+      if (!current(entry) || entry.sessions !== publication || signal?.aborted) {
         return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
       }
       const owner = binding.owner ? linker?.resolveOwner(binding.owner) : undefined;
       const linkParticipant = binding.linkGitHubIdentities ? linker?.linkParticipant : undefined;
       const host: SessionCatalogHost = {
         ...common,
-        sessions: selected.map((session) => bindSession(session, hostId, owner, linkParticipant)),
+        sessions: selected.map((session) =>
+          Object.assign({}, bindSession(session, hostId, owner, linkParticipant), {
+            originalUrl: sessionShareOriginalUrl(
+              binding.controlUiOrigin,
+              session.threadId,
+              binding.controlUiBasePath,
+            ),
+          }),
+        ),
         ...(offset + limit < sessions.length
           ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit) }
           : {}),
       };
       publicationGuards.set(host, () => {
-        if (!current(entry) || signal?.aborted) {
+        if (!current(entry) || entry.sessions !== publication || signal?.aborted) {
           throw new Error("Session Share is unavailable. Refresh the catalog.");
         }
         linker?.assertCurrent();
       });
       return host;
     };
+    if (entry?.pending && !(allowPartialResults === true && onHost && waitUntil)) {
+      signal?.throwIfAborted();
+      let abort: (() => void) | undefined;
+      try {
+        await Promise.race([
+          entry.pending,
+          new Promise<void>((resolve) => {
+            abort = resolve;
+            signal?.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+      } finally {
+        if (abort) {
+          signal?.removeEventListener("abort", abort);
+        }
+      }
+      signal?.throwIfAborted();
+    }
     const host = await project();
     if ((entry && !current(entry)) || signal?.aborted) {
       return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
@@ -469,8 +503,8 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         },
         entry.pending.then(() => (signal?.aborted ? undefined : project())),
       );
-      if (!host.error) {
-        const pendingHost = { ...host, pending: true };
+      if (!entry.error) {
+        const pendingHost = { ...common, sessions: [], pending: true };
         const guard = publicationGuards.get(host);
         if (guard) {
           publicationGuards.set(pendingHost, guard);
@@ -487,6 +521,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     label: "OpenClaw sessions",
     supportsProcessHomeIsolation: true,
     audience: "session-viewers",
+    requiresFreshList: true,
     async list(query) {
       query.signal?.throwIfAborted();
       const config = api.runtime.config.current();
@@ -495,7 +530,12 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
       } catch {
         query.signal?.throwIfAborted();
-        return [];
+        if (api.runtime.config.current() !== config) {
+          return [];
+        }
+        // Discovery failure is retryable, not proof that authorized sources vanished.
+        // Do not expose node-runtime details through the provider error boundary.
+        throw new Error("Cannot discover OpenClaw session sources. Refresh the catalog to retry.");
       }
       query.signal?.throwIfAborted();
       if (api.runtime.config.current() !== config) {

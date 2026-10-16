@@ -36,6 +36,7 @@ type SessionNavigationTargetOptions = {
   basePath?: string;
   shortIdLength?: number;
   exactKey?: boolean;
+  literalKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
   navigationKey?: string;
@@ -171,10 +172,13 @@ export function sessionNavigationTarget<TRouteId extends string>(
         agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
         mainKey: mainKey ?? "main",
       })
-    : (row?.key ?? sessionKey);
+    : params.literalKey
+      ? sessionKey
+      : (row?.key ?? sessionKey);
   const sessionPath = pathForSession(params.face, fallbackAgentId, targetKey, basePath, {
     displayName: catalogKey ? undefined : row?.displayName,
     exactKey: params.exactKey,
+    literalKey: params.literalKey,
     mainKey,
     shortIdLength: params.shortIdLength,
   });

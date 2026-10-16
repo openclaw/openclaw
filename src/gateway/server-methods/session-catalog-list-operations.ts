@@ -167,7 +167,7 @@ function startProviderOperation(
   ]);
   let active = true;
   const result = run().then((page) => {
-    if (active && !page.catalogs[0]!.error) {
+    if (active && !page.catalogs[0]!.requiresFreshList && !page.catalogs[0]!.error) {
       operations.pages.delete(key);
       operations.pages.set(key, page);
       if (operations.pages.size > 128) {
@@ -229,7 +229,10 @@ export async function listSessionCatalogWithinBudget(
     return result;
   }
   const cached =
-    retirement.aborted || operations.gatewaySignal?.aborted || operations.connectionSignal?.aborted
+    empty.requiresFreshList ||
+    retirement.aborted ||
+    operations.gatewaySignal?.aborted ||
+    operations.connectionSignal?.aborted
       ? undefined
       : operations.pages.get(key);
   if (result && !cached) {
@@ -251,7 +254,8 @@ export async function listSessionCatalogWithinBudget(
         },
       },
     ],
-    // Preserve the original adoption identity; delivery rechecks current authority.
+    // Preserve adoption identity only for catalogs whose source allows stale lists.
+    // Receiver visibility checks cannot reauthorize a source-owned publication.
     instancesByCatalog: cached?.instancesByCatalog ?? new Map([[empty.id, new Map()]]),
   };
 }

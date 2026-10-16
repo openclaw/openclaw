@@ -3189,6 +3189,7 @@ export const en: TranslationMap & {
       importIncomplete:
         "Imported {count} transcript items. Older history exceeded the import limit.",
       openImportedSession: "Open imported session",
+      openOriginal: "Open original",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
       deleteSessionConfirm:

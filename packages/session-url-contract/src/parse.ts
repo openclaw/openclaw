@@ -28,6 +28,8 @@ export type ControlUiSessionPathTarget =
       kind: "literal";
       agentId: string;
       sessionKey: string;
+      /** An explicit key marker pins this transcript, even when it is the configured home. */
+      literalKey?: true;
       slugCandidate?: string;
     };
 
@@ -74,6 +76,11 @@ export function parseControlUiSessionPath(
     if (rawSegments.length === 1) {
       return { namespace, kind: "main", agentId };
     }
+    // Tilde-prefixed key segments are escaped by the builder. This marker
+    // retains the unqualified stored key and its explicit agent ownership.
+    if (rawSegments.length === 2 && rawSegments[1] === "~global") {
+      return { namespace, kind: "literal", agentId, sessionKey: "global", literalKey: true };
+    }
     const forceLiteral = rawSegments[1] === "~key";
     const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
     if (restSegments.length === 0 || !restSegments.every((segment) => segment !== null)) {
@@ -81,7 +88,13 @@ export function parseControlUiSessionPath(
     }
     const sessionKey = `agent:${agentId}:${restSegments.join(":")}`;
     if (forceLiteral || restSegments.length !== 1) {
-      return { namespace, kind: "literal", agentId, sessionKey };
+      return {
+        namespace,
+        kind: "literal",
+        agentId,
+        sessionKey,
+        ...(forceLiteral ? { literalKey: true as const } : {}),
+      };
     }
     const segment = restSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {

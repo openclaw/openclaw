@@ -8,11 +8,23 @@
   "uiHints": {
     "share.groups": {
       "label": "Shared Session Groups",
-      "help": "Only sessions in these exact group names are published. Subagent, incognito, draft, and adopted catalog sessions are never shared."
+      "help": "Required source publication boundary: publish only sessions in these exact groups. The optional person filter narrows them further. Missing or empty groups publish nothing."
+    },
+    "share.involvingProfileId": {
+      "label": "Involving Person",
+      "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
     },
     "nodes": {
-      "label": "Paired Node Attribution",
-      "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
+      "label": "Paired Nodes",
+      "help": "Receiver-owned source links and display attribution keyed by paired node id. These settings never grant session access."
+    },
+    "nodes.*.controlUiOrigin": {
+      "label": "Source Control UI Origin",
+      "help": "Optional HTTP(S) origin for Open original, such as https://team.example.com. No credentials, path, query, or fragment. Opens a separate authenticated connection to the source."
+    },
+    "nodes.*.controlUiBasePath": {
+      "label": "Source Control UI Base Path",
+      "help": "Optional source path prefix for Open original, such as /openclaw. Defaults to root. Receiver-owned; never inferred from this Gateway or source session rows. No query, fragment, whitespace, or dot segments."
     },
     "nodes.*.owner": {
       "label": "Default Owner",
@@ -32,7 +44,7 @@
     },
     {
       "id": "node-attribution",
-      "title": "Node attribution",
+      "title": "Paired nodes",
       "order": 20,
       "properties": ["nodes"]
     }
@@ -50,6 +62,12 @@
             "type": "array",
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "involvingProfileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^\\S+$"
           }
         }
       },
@@ -60,7 +78,18 @@
           "additionalProperties": false,
           "properties": {
             "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
-            "linkGitHubIdentities": { "type": "boolean", "default": false }
+            "linkGitHubIdentities": { "type": "boolean", "default": false },
+            "controlUiBasePath": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^(?:/(?!/)[^\\s?#\\\\]*)?$"
+            },
+            "controlUiOrigin": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https?://[^\\s/@?#\\\\]+/?$"
+            }
           }
         }
       }

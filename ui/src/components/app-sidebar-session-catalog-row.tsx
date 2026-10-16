@@ -131,6 +131,7 @@ export function renderCatalogSessionRow(
     routeId,
     navigation: navigation(),
     canOpenTerminal: readSession().canOpenTerminal === true,
+    originalUrl: readSession().originalUrl,
     canDelete: readSession().canArchive && readCatalog().capabilities.archive,
     name: readSession().name ?? readSession().threadId,
     displayName: readSession().name,

@@ -3,10 +3,12 @@ import type { SessionsRecoverParams } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { resolveCatalogOriginalUrl } from "../../lib/sessions/catalog-original-url.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -74,7 +76,16 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       };
     }
     if (params.catalogDisabledReason) {
-      return undefined;
+      const originalUrl = resolveCatalogOriginalUrl(this.catalogSession?.originalUrl);
+      return originalUrl
+        ? {
+            kind: "composer-replacement" as const,
+            text: params.catalogDisabledReason,
+            tone: "neutral" as const,
+            actionLabel: t("chat.catalog.openOriginal"),
+            onAction: () => openExternalUrlSafe(originalUrl),
+          }
+        : undefined;
     }
     if (this.state && isExpiredIncognitoSession(this.state)) {
       const access = readSessionMethodAccess(this.context.gateway.snapshot, {

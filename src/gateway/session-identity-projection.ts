@@ -25,7 +25,10 @@ import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
-import { resolveUserProfileReference } from "../state/user-profile-list.js";
+import {
+  type prepareUserProfileCatalog,
+  resolveUserProfileReference,
+} from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -248,6 +251,34 @@ export function projectSessionParticipants(
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;
+}
+
+/** Match canonical owners or profile participants, never mentions or display-reference prefixes. */
+export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>(params: {
+  entries: T[];
+  profileId: string;
+  readCurrentIdentity: Awaited<ReturnType<typeof prepareUserProfileCatalog>>["readCurrentIdentity"];
+}): T[] {
+  const canonicalId = (id: string | undefined) =>
+    id ? params.readCurrentIdentity(id)?.profileId : undefined;
+  const profileId = canonicalId(params.profileId);
+  if (!profileId) {
+    return [];
+  }
+  return params.entries.filter(({ entry }) => {
+    const owner = entry.owner?.actor;
+    const ownerId = owner
+      ? owner.type === "human"
+        ? normalizeOptionalString(owner.id)
+        : undefined
+      : sessionCreatorProfileId(entry.createdActor);
+    return (
+      canonicalId(ownerId) === profileId ||
+      (entry.participants ?? []).some(
+        ({ identity }) => identity.type === "profile" && canonicalId(identity.id) === profileId,
+      )
+    );
+  });
 }
 
 /** Participation, creation, and responsibility are associations, never access grants. */

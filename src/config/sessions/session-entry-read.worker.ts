@@ -331,6 +331,7 @@ export function readExactSessionEntriesWithLifecycle(
               : {}),
             entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys ?? [], {
               continuation: request.continuation,
+              includeParticipants: request.includeParticipants,
               ...(request.selection?.kind === "label" ? { label: request.selection.label } : {}),
               ...(request.selection?.kind === "session-id-or-key"
                 ? { sessionIdOrKey: request.selection.sessionIdOrKey }

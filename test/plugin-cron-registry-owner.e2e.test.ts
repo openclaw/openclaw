@@ -279,14 +279,15 @@ async function listCronJobs(client: {
 
 describe("plugin cron registry ownership e2e", () => {
   it.each(["cron", "subagent"] as const)(
-    "prepares distinct selected and fallback providers for %s under per-agent defaults",
+    "prepares selected and fallback model runtimes for %s under per-agent defaults",
     async (route) => {
       const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-cron-selection-e2e-"));
       cleanupDirs.push(fixtureDir);
       const bundledRoot = path.join(fixtureDir, "bundled");
       const provider = "selected-cron";
-      const fallbackProvider = "selected-fallback";
-      const pluginIds = [provider, fallbackProvider];
+      // Cron remains bound to its recorded provider; ordinary turns may change providers.
+      const fallbackProvider = route === "cron" ? provider : "selected-fallback";
+      const pluginIds = [...new Set([provider, fallbackProvider])];
       for (const pluginId of pluginIds) {
         const pluginDir = path.join(bundledRoot, pluginId);
         await mkdir(pluginDir, { recursive: true });
@@ -306,7 +307,6 @@ describe("plugin cron registry ownership e2e", () => {
         register(api) {
           api.registerProvider({
             id: ${JSON.stringify(pluginId)}, label: "Selected provider", auth: [],
-            resolveSyntheticAuth: () => ({ apiKey: "cron-fixture", source: "fixture", mode: "api-key" }),
             transformSystemPrompt: ({ systemPrompt }) => systemPrompt + "\\n" + ${JSON.stringify(`PROVIDER_HOOK_${pluginId}`)},
           });
         },
@@ -358,23 +358,23 @@ describe("plugin cron registry ownership e2e", () => {
               request: { allowPrivateNetwork: true },
               models: [model("default"), model("agent-default")],
             },
-            [provider]: {
-              baseUrl: `${server.baseUrl}/v1`,
-              api: "openai-responses",
-              // Cron admission needs explicit key auth before the provider runtime loads.
-              auth: route === "cron" ? "api-key" : undefined,
-              apiKey: route === "cron" ? TEST_API_KEY : undefined,
-              request: { allowPrivateNetwork: true },
-              models: [model("unavailable")],
-            },
-            [fallbackProvider]: {
-              baseUrl: `${server.baseUrl}/v1`,
-              api: "openai-responses",
-              auth: route === "cron" ? "api-key" : undefined,
-              apiKey: route === "cron" ? TEST_API_KEY : undefined,
-              request: { allowPrivateNetwork: true },
-              models: [model("available")],
-            },
+            ...Object.fromEntries(
+              pluginIds.map((id) => [
+                id,
+                {
+                  baseUrl: `${server.baseUrl}/v1`,
+                  api: "openai-responses" as const,
+                  // Cron admission classifies auth before the provider runtime loads.
+                  auth: route === "cron" ? "api-key" : undefined,
+                  apiKey: `${id}:fixture`,
+                  request: { allowPrivateNetwork: true },
+                  models: [
+                    ...(id === provider ? [model("unavailable")] : []),
+                    ...(id === fallbackProvider ? [model("available")] : []),
+                  ],
+                },
+              ]),
+            ),
           },
         },
       };
@@ -391,6 +391,15 @@ describe("plugin cron registry ownership e2e", () => {
         },
       });
       instances.push(instance);
+      await instance.state.writeAuthProfiles({
+        version: 1,
+        profiles: Object.fromEntries(
+          pluginIds.map((id) => [
+            `${id}:fixture`,
+            { type: "api_key" as const, provider: id, key: TEST_API_KEY },
+          ]),
+        ),
+      });
       const sessionKey = "agent:main:subagent:provider-fallback";
       if (route === "subagent") {
         instance.state.applyEnv();
@@ -579,6 +588,12 @@ describe("plugin cron registry ownership e2e", () => {
         },
       });
       instances.push(instance);
+      await instance.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "cron-owner:fixture": { type: "api_key", provider: "cron-owner", key: TEST_API_KEY },
+        },
+      });
       await instance.startGateway();
       expect(instance.port).toBe(claim.port);
 
@@ -612,6 +627,14 @@ describe("plugin cron registry ownership e2e", () => {
           kind: "session-turn",
         });
         scheduledIds.push(ownerId);
+        // Scheduling owns registry lifetime; the operator explicitly authorizes inference.
+        await client.request("cron.update", {
+          id: ownerId,
+          patch: {
+            agentId: "main",
+            payload: { kind: "agentTurn", model: `${modelRef}@cron-owner:fixture` },
+          },
+        });
 
         await client.request("chat.send", {
           sessionKey: "agent:worker:registry-churn",
@@ -634,6 +657,14 @@ describe("plugin cron registry ownership e2e", () => {
           kind: "session-turn",
         });
         scheduledIds.push(pinnedId);
+        // Scheduling owns registry lifetime; the operator explicitly authorizes inference.
+        await client.request("cron.update", {
+          id: pinnedId,
+          patch: {
+            agentId: "main",
+            payload: { kind: "agentTurn", model: `${modelRef}@cron-owner:fixture` },
+          },
+        });
 
         const ownerWorkerActiveBaseline = requestsContaining(modelServer, OWNER_FIRE).length;
         const pinnedWorkerActiveBaseline = requestsContaining(modelServer, PINNED_FIRE).length;

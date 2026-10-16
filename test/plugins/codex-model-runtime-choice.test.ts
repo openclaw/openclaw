@@ -18,7 +18,11 @@ describe("registered Codex runtime choices", () => {
     "keeps native %s authentication with its registered harness",
     async (mode) => {
       await withOpenClawTestState(
-        { layout: "state-only", prefix: "native-choice-" },
+        {
+          layout: "state-only",
+          prefix: "native-choice-",
+          env: { OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined },
+        },
         async (state) => {
           const config: OpenClawConfig = {
             plugins: { entries: { codex: { enabled: true } } },

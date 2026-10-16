@@ -253,6 +253,10 @@ export function memoizedSidebarCatalogs(
       host.expandedAgentId(),
       host.resolveSessionAttention,
       host.sessionData.sessionCatalogs,
+      // A failed root request can change safe retry intent without replacing rows.
+      host.sessionData.sessionCatalogs
+        .map((catalog) => host.sessionData.sessionCatalogLive.canRetry(catalog))
+        .join(","),
       host.sessionData.pendingCatalogArchives,
       host.hiddenSessionCatalogIds,
       host.sessionsStatusFilter,

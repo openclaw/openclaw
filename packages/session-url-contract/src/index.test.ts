@@ -121,7 +121,7 @@ describe("buildControlUiSessionPath", () => {
       "/chat/research/~key/GlObAl",
     ],
     [
-      "global as the configured main key",
+      "exact global as the configured main key",
       { sessionKey: "agent:research:global", mainKey: "global", exactKey: true },
       "/chat/research",
     ],
@@ -172,6 +172,34 @@ describe("buildControlUiSessionPath", () => {
     "builds $0",
     (_name, params, expected) => {
       expect(buildChatPath(params)).toBe(expected);
+    },
+  );
+
+  it.each(["main", "workspace", "global"])(
+    "only preserves qualified mainKey=%s literally when requested",
+    (mainKey) => {
+      const params = {
+        namespace: "dashboard" as const,
+        sessionKey: `agent:research:${mainKey}`,
+        mainKey,
+        basePath: "/control",
+        exactKey: true,
+      };
+      expect(buildControlUiSessionPath(params)).toBe("/control/dashboard/research");
+      expect(buildControlUiSessionPath({ ...params, literalMainKey: true })).toBe(
+        `/control/dashboard/research/~key/${mainKey}`,
+      );
+      expect(buildControlUiSessionPath({ ...params, exactKey: false, literalMainKey: true })).toBe(
+        `/control/dashboard/research/~key/${mainKey}`,
+      );
+      expect(
+        buildControlUiSessionPath({
+          ...params,
+          sessionKey: mainKey,
+          fallbackAgentId: "research",
+          literalMainKey: true,
+        }),
+      ).toBe("/control/dashboard/research");
     },
   );
 

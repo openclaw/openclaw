@@ -111,12 +111,26 @@ describe("plugin registry runtime session ownership", () => {
     },
   );
 
-  it.each(["key", "id"] as const)(
-    "fences a managed asynchronous %s read when its plugin retires before disclosure",
-    async (selection) => {
+  it.each([
+    ["key", true],
+    ["id", true],
+    ["selected", true],
+    ["selected", false],
+  ] as const)(
+    "keeps a managed asynchronous %s read current (retired=%s)",
+    async (selection, retired) => {
       const runtime = createPluginRuntime();
       const pending = createDeferredCore<SessionEntry | undefined>();
       const entry = { sessionId: "managed", updatedAt: 1 };
+      const scopes: Array<string | undefined> = [];
+      const selectedEntries = [
+        {
+          agentId: "main",
+          storePath: "/synthetic/sessions.json",
+          sessionKey: "agent:main:managed",
+          entry,
+        },
+      ];
       runtime.agent.session.getSessionEntryAsync = () => pending.promise;
       runtime.agent.session.getSessionEntryByIdAsync = async () => {
         const selectedEntry = await pending.promise;
@@ -124,6 +138,15 @@ describe("plugin registry runtime session ownership", () => {
           ? { sessionKey: "agent:main:managed", entry: selectedEntry }
           : undefined;
       };
+      runtime.agent.session.withSessionEntriesAsync = async (_params, consume) => {
+        scopes.push(getPluginRuntimeGatewayRequestScope()?.pluginId);
+        await pending.promise;
+        return consume(selectedEntries);
+      };
+      const consume = vi.fn(() => {
+        scopes.push(getPluginRuntimeGatewayRequestScope()?.pluginId);
+        return "selected";
+      });
       const registry = createRuntimeTestRegistry(runtime);
       const record = createPluginRecord({
         id: "managed-reader",
@@ -136,13 +159,37 @@ describe("plugin registry runtime session ownership", () => {
       const reading =
         selection === "key"
           ? api.runtime.agent.session.getSessionEntryAsync({ sessionKey: "agent:main:managed" })
-          : api.runtime.agent.session.getSessionEntryByIdAsync({
-              agentId: "main",
-              sessionId: "managed",
-            });
-      revokePluginRecord(registry.registry, record);
+          : selection === "id"
+            ? api.runtime.agent.session.getSessionEntryByIdAsync({
+                agentId: "main",
+                sessionId: "managed",
+              })
+            : api.runtime.agent.session.withSessionEntriesAsync(
+                {
+                  stores: [
+                    {
+                      agentId: "main",
+                      storePath: "/synthetic/sessions.json",
+                      sessionKeys: ["agent:main:managed"],
+                    },
+                  ],
+                },
+                consume,
+              );
+      if (retired) {
+        revokePluginRecord(registry.registry, record);
+      }
       pending.resolve(entry);
-      await expect(reading).rejects.toThrow("runtime is no longer active");
+      if (retired) {
+        await expect(reading).rejects.toThrow("runtime is no longer active");
+        expect(consume).not.toHaveBeenCalled();
+      } else {
+        expect(await reading).toBe("selected");
+        expect(consume).toHaveBeenCalledExactlyOnceWith(selectedEntries);
+      }
+      if (selection === "selected") {
+        expect(scopes).toEqual(retired ? ["managed-reader"] : ["managed-reader", "managed-reader"]);
+      }
     },
   );
 

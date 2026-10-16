@@ -35,8 +35,21 @@ export function excludeSessionCatalogRows(
   }));
 }
 
-function repeatedCatalogCursorError(): NonNullable<SessionCatalog["error"]> {
-  return { code: "PAGINATION_FAILED", message: t("chat.sidebar.catalogPaginationFailed") };
+// Local outcome identity; the Gateway error's serialized shape stays unchanged.
+const repeatedCursorFailure = Symbol("repeated-catalog-cursor");
+
+function repeatedCatalogCursorError(): NonNullable<SessionCatalog["error"]> & {
+  [repeatedCursorFailure]: true;
+} {
+  return {
+    code: "PAGINATION_FAILED",
+    message: t("chat.sidebar.catalogPaginationFailed"),
+    [repeatedCursorFailure]: true,
+  };
+}
+
+export function isRepeatedCatalogCursorError(error: SessionCatalog["error"]): boolean {
+  return error !== undefined && repeatedCursorFailure in error;
 }
 
 function missingCatalogPageError(): NonNullable<SessionCatalog["error"]> {
@@ -58,10 +71,36 @@ function mergeCatalogSessionRows(
   return [...first, ...second.filter((session) => !seen.has(session.threadId))];
 }
 
+/** Fresh-required rows and cursors cannot authorize a later request. */
+export function withdrawSessionCatalogRows(
+  catalog: SessionCatalog,
+  hostIds?: readonly string[],
+): SessionCatalog {
+  if (!catalog.requiresFreshList) {
+    return catalog;
+  }
+  return {
+    ...catalog,
+    hosts: catalog.hosts.map((host) =>
+      !hostIds || hostIds.includes(host.hostId)
+        ? { ...host, sessions: [], nextCursor: undefined }
+        : host,
+    ),
+  };
+}
+
 export function preserveExpandedCatalogHost(
   freshHost: SessionCatalogHost,
   previous: SessionCatalogHost | undefined,
+  catalog: SessionCatalog,
 ): SessionCatalogHost {
+  if (catalog.requiresFreshList) {
+    if (catalog.error || freshHost.error || freshHost.pending) {
+      const { nextCursor: _cursor, ...host } = freshHost;
+      return { ...host, sessions: [] };
+    }
+    return freshHost;
+  }
   if (!previous) {
     return freshHost;
   }
@@ -79,8 +118,25 @@ export function mergeSessionCatalogPage(params: {
   page: SessionCatalog | undefined;
   cursors: Readonly<Record<string, string>>;
   previousCursors?: ReadonlyMap<string, ReadonlySet<string>>;
+  freshHostIds?: readonly string[];
 }): { catalog: SessionCatalog; advancedHostIds: string[]; repeatedHostIds: string[] } {
   const { page } = params;
+  if (params.freshHostIds && (!page || page.error)) {
+    const current = params.current;
+    const error = page?.error ?? missingCatalogPageError();
+    return {
+      catalog: {
+        ...current,
+        hosts: current.hosts.map((host) =>
+          params.freshHostIds!.includes(host.hostId)
+            ? preserveExpandedCatalogHost({ ...host, error }, undefined, current)
+            : host,
+        ),
+      },
+      advancedHostIds: [],
+      repeatedHostIds: [],
+    };
+  }
   if (!page) {
     return {
       catalog: { ...params.current, error: missingCatalogPageError() },
@@ -94,19 +150,26 @@ export function mergeSessionCatalogPage(params: {
   const hosts = params.current.hosts.map((host) => {
     const requestedCursor = params.cursors[host.hostId];
     const pageHost = pageHosts.get(host.hostId);
-    if (page.error || requestedCursor === undefined || host.nextCursor !== requestedCursor) {
+    const freshRequest = params.freshHostIds?.includes(host.hostId) === true;
+    if (
+      page.error ||
+      (!freshRequest && (requestedCursor === undefined || host.nextCursor !== requestedCursor))
+    ) {
       return host;
     }
     if (!pageHost) {
       return { ...host, error: missingCatalogPageError() };
     }
-    if (pageHost.error) {
-      return preserveExpandedCatalogHost(pageHost, host);
+    if (pageHost.error || (freshRequest && pageHost.pending)) {
+      return preserveExpandedCatalogHost(pageHost, host, page);
     }
     const { nextCursor, sessions, error: _pageError, ...pageHostDetails } = pageHost;
+    // A fresh window was cycle-checked by its replay. Retired cursors do not
+    // identify the current authorized request, even when their strings match.
     const repeatedCursor =
-      nextCursor === requestedCursor ||
-      (nextCursor !== undefined && params.previousCursors?.get(host.hostId)?.has(nextCursor));
+      !freshRequest &&
+      ((nextCursor !== undefined && nextCursor === requestedCursor) ||
+        (nextCursor !== undefined && params.previousCursors?.get(host.hostId)?.has(nextCursor)));
     if (repeatedCursor) {
       repeatedHostIds.push(host.hostId);
     } else {
@@ -121,7 +184,7 @@ export function mergeSessionCatalogPage(params: {
     return {
       ...currentHost,
       ...pageHostDetails,
-      sessions: mergeCatalogSessionRows(host.sessions, sessions),
+      sessions: freshRequest ? sessions : mergeCatalogSessionRows(host.sessions, sessions),
       ...(nextCursor ? { nextCursor } : {}),
       ...(repeatedCursor ? { error: repeatedCatalogCursorError() } : {}),
     };
@@ -133,7 +196,10 @@ export function mergeSessionCatalogPage(params: {
       ...currentDetails,
       ...pageDetails,
       hosts,
-      ...(pageError ? { error: pageError } : {}),
+      // A targeted success cannot settle a concurrent root discovery failure.
+      ...(pageError || (params.freshHostIds && params.current.error)
+        ? { error: pageError ?? params.current.error }
+        : {}),
     },
     advancedHostIds,
     repeatedHostIds,
@@ -146,8 +212,8 @@ export async function refetchExpandedSessionCatalogPages(params: {
   client: GatewayBrowserClient;
   agentId: string;
   pageDepths: ReadonlyMap<string, number>;
-  isCurrent: () => boolean;
-  canRequestPage: () => boolean;
+  isCurrent: (catalogId: string, hostId: string) => boolean;
+  canRequestPage: (catalogId: string, hostId: string) => boolean;
 }): Promise<SessionCatalog[]> {
   const previousCatalogs = new Map(params.previousCatalogs.map((catalog) => [catalog.id, catalog]));
   return Promise.all(
@@ -156,7 +222,8 @@ export async function refetchExpandedSessionCatalogPages(params: {
         previousCatalogs.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
       );
       const hosts = await Promise.all(
-        catalog.hosts.map(async (host) => {
+        catalog.hosts.map(async (incomingHost) => {
+          const host = preserveExpandedCatalogHost(incomingHost, undefined, catalog);
           const pageDepth =
             params.pageDepths.get(sessionCatalogHostKey(catalog.id, host.hostId)) ?? 0;
           if (pageDepth === 0 || host.pending) {
@@ -167,6 +234,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
             return preserveExpandedCatalogHost(
               { ...host, error: host.error ?? catalog.error },
               previous,
+              catalog,
             );
           }
           let sessions = host.sessions;
@@ -175,12 +243,14 @@ export async function refetchExpandedSessionCatalogPages(params: {
             preserveExpandedCatalogHost(
               { ...host, error },
               previous ?? { ...host, sessions, nextCursor },
+              catalog,
             );
           const requestedCursors = new Set<string>();
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
-            // Pausing automatic replay must retain the full visible window, not its partial prefix.
-            if (!params.canRequestPage()) {
-              return preserveExpandedCatalogHost(host, previous);
+            // Ordinary catalogs retain the expanded window on pause; fresh-required
+            // catalogs can keep only the head authorized in this cycle.
+            if (!params.canRequestPage(catalog.id, host.hostId)) {
+              return preserveExpandedCatalogHost(host, previous, catalog);
             }
             requestedCursors.add(nextCursor);
             let result: SessionsCatalogListResult;
@@ -197,8 +267,8 @@ export async function refetchExpandedSessionCatalogPages(params: {
             } catch (error) {
               return preserveOnError(sessionCatalogRequestError(error));
             }
-            if (!params.isCurrent()) {
-              return previous ?? host;
+            if (!params.isCurrent(catalog.id, host.hostId)) {
+              return catalog.requiresFreshList ? { ...host, sessions: [] } : (previous ?? host);
             }
             const page = result.catalogs.find((candidate) => candidate.id === catalog.id);
             const pageHost = page?.hosts.find((candidate) => candidate.hostId === host.hostId);
@@ -208,8 +278,12 @@ export async function refetchExpandedSessionCatalogPages(params: {
             if (!pageHost) {
               return preserveOnError(missingCatalogPageError());
             }
-            if (pageHost.error) {
-              return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
+            if (pageHost.error || pageHost.pending) {
+              return preserveExpandedCatalogHost(
+                { ...host, ...pageHost },
+                previous ?? host,
+                catalog,
+              );
             }
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;

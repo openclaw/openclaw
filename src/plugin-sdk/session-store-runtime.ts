@@ -42,6 +42,7 @@ import { preserveGenerationPrivateFields } from "../config/sessions/session-entr
 import {
   readSessionEntrySummariesInWorker,
   readSessionUpdatedAtInWorker,
+  withSessionEntriesFromStoresInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
@@ -53,9 +54,11 @@ import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "..
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import { filterSessionEntriesByProfile } from "../gateway/session-identity-projection.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   getSessionEntryAsync,
   projectPluginSessionEntry,
@@ -257,6 +260,71 @@ export async function listSessionEntriesAsync(params: {
     sessionKey,
     entry: projectPluginSessionEntry(entry),
   }));
+}
+
+export type SessionStoreSelectedEntries = {
+  agentId: string;
+  storePath: string;
+  sessionKeys: readonly string[];
+};
+
+export type SessionStoreSelectedEntry = SessionStoreEntrySummary & {
+  agentId: string;
+  storePath: string;
+};
+
+/**
+ * Prepare exact metadata off-thread and retain every source through synchronous consumption.
+ * Profile matching uses current canonical owners/direct participants, never display references.
+ * Returned data carries no authority after the callback; caller policy must be checked inside it.
+ */
+export async function withSessionEntriesAsync<T>(
+  params: {
+    stores: readonly SessionStoreSelectedEntries[];
+    env?: NodeJS.ProcessEnv;
+    involvingProfileId?: string;
+  },
+  consume: (entries: SessionStoreSelectedEntry[]) => T,
+): Promise<T> {
+  const stores = params.stores.map((store) => ({
+    ...store,
+    sessionKeys: [...store.sessionKeys],
+  }));
+  const profileId = params.involvingProfileId;
+  const catalog =
+    profileId !== undefined ? await prepareUserProfileCatalog({ env: params.env }) : undefined;
+  try {
+    return await withSessionEntriesFromStoresInWorker(
+      stores.map((store) => ({
+        ...store,
+        env: params.env,
+        projection: "list" as const,
+        includeParticipants: true,
+      })),
+      (reads) => {
+        const entries = reads.flatMap((read, index) =>
+          read.result.entries.map(({ sessionKey, entry }) => ({
+            agentId: stores[index]!.agentId,
+            storePath: stores[index]!.storePath,
+            sessionKey,
+            entry: projectPluginSessionEntry(entry),
+          })),
+        );
+        return consume(
+          catalog && profileId !== undefined
+            ? filterSessionEntriesByProfile({
+                entries,
+                profileId,
+                readCurrentIdentity: catalog.readCurrentIdentity,
+              })
+            : entries,
+        );
+      },
+      { ordered: true },
+    );
+  } finally {
+    catalog?.release();
+  }
 }
 
 type SessionStoreTranscriptReadParams = {

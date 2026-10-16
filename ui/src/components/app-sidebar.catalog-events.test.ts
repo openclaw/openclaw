@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { loadMoreSessionCatalog } from "./session-data-controller-catalog.ts";
 import "./app-sidebar.tsx";
 
 // Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
@@ -22,6 +24,14 @@ const cancelNativeFrame = window.cancelAnimationFrame.bind(window);
 const catalogClock: Parameters<typeof vi.useFakeTimers>[0] = {
   toFake: ["setTimeout", "clearTimeout", "Date"],
 };
+
+function sourceCatalogPage(rows: Parameters<typeof catalogPage>[0], cursor?: string) {
+  const page = catalogPage(rows, cursor);
+  for (const catalog of page.catalogs) {
+    catalog.requiresFreshList = true;
+  }
+  return page;
+}
 
 async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(
@@ -56,6 +66,275 @@ describe("AppSidebar catalog event refresh", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
+
+  it.each(["pending", "failed", "success"] as const)(
+    "withdraws source-authorized rows before a %s refresh settles",
+    async (outcome) => {
+      const shared = sourceCatalogPage([{ threadId: "private", name: "Source-authorized row" }]);
+      const pending = deferred<typeof shared>();
+      const request = createGatewayRequestMock()
+        .mockResolvedValueOnce(shared)
+        .mockReturnValueOnce(pending.promise);
+      const { sidebar } = await mountTab(request);
+      expect(sidebar.textContent).toContain("Source-authorized row");
+      const refresh = sidebar.sessionData.refreshSessionCatalogs();
+      await vi.advanceTimersByTimeAsync(0);
+      await settleLitElement(sidebar);
+      expect.soft(sidebar.textContent).not.toContain("Source-authorized row");
+      if (outcome === "failed") {
+        pending.reject(new Error("Source unavailable"));
+      } else {
+        const result = outcome === "success" ? shared : sourceCatalogPage([]);
+        if (outcome === "pending") {
+          for (const catalog of result.catalogs) {
+            for (const host of catalog.hosts) {
+              host.pending = true;
+            }
+          }
+        }
+        pending.resolve(result);
+      }
+      await refresh;
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent?.includes("Source-authorized row")).toBe(outcome === "success");
+    },
+  );
+
+  it.each(["success", "failed", "revoked"] as const)(
+    "reauthorizes the whole source window during %s load-more",
+    async (outcome) => {
+      const page = sourceCatalogPage;
+      const warm = page([{ threadId: "old", name: "Previously authorized head" }], "old-cursor");
+      const refreshed = deferred<typeof warm>();
+      const request = createGatewayRequestMock()
+        .mockResolvedValueOnce(warm)
+        .mockReturnValueOnce(refreshed.promise)
+        .mockResolvedValue(page([{ threadId: "older", name: "Fresh older row" }]));
+      const { sidebar } = await mountTab(request);
+      const more = sidebar.sessionData.loadMoreSessionCatalog("codex");
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Previously authorized head");
+      expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+        agentId: "main",
+        catalogId: "codex",
+        hostIds: ["gateway:local"],
+      });
+      if (outcome === "failed") {
+        refreshed.reject(new Error("Source unavailable"));
+      } else {
+        refreshed.resolve(
+          outcome === "revoked"
+            ? page([])
+            : page([{ threadId: "fresh", name: "Fresh authorized head" }], "fresh-cursor"),
+        );
+      }
+      await more;
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Previously authorized head");
+      if (outcome === "success") {
+        expect(sidebar.textContent).toContain("Fresh authorized head");
+        expect(sidebar.textContent).toContain("Fresh older row");
+        expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+          agentId: "main",
+          catalogId: "codex",
+          hostIds: ["gateway:local"],
+          cursors: { "gateway:local": "fresh-cursor" },
+        });
+      } else {
+        expect(sidebar.textContent).not.toContain("Fresh older row");
+        expect(request).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("advances source-authorized discovery across multiple empty pages", async () => {
+    const page = sourceCatalogPage;
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(page([{ threadId: "old", name: "Old head" }], "page-2"))
+      .mockResolvedValueOnce(page([], "page-2"))
+      .mockResolvedValueOnce(page([], "page-3"))
+      .mockResolvedValueOnce(page([], "page-2"))
+      .mockResolvedValueOnce(page([], "page-3"))
+      .mockResolvedValueOnce(page([{ threadId: "visible", name: "Visible later page" }]));
+    const { sidebar } = await mountTab(request);
+    await loadMoreSessionCatalog(sidebar.sessionData, "codex", undefined, true);
+    await loadMoreSessionCatalog(sidebar.sessionData, "codex", undefined, true);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Visible later page");
+    expect(request).toHaveBeenCalledTimes(6);
+    expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+      agentId: "main",
+      catalogId: "codex",
+      hostIds: ["gateway:local"],
+      cursors: { "gateway:local": "page-3" },
+    });
+  });
+
+  it.each(["revoked", "failed"] as const)(
+    "rejects old host publications during and after %s source load-more",
+    async (outcome) => {
+      const warm = sourceCatalogPage([{ threadId: "old", name: "Old source publication" }], "next");
+      const next = deferred<typeof warm>();
+      const request = createGatewayRequestMock()
+        .mockResolvedValueOnce(warm)
+        .mockReturnValueOnce(next.promise);
+      const { sidebar, gateway } = await mountTab(request);
+      const progressId = (request.mock.calls[0]![1] as { progressId: string }).progressId;
+      const more = sidebar.sessionData.loadMoreSessionCatalog("codex");
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: warm.catalogs[0],
+      });
+      await settleLitElement(sidebar);
+      expect.soft(sidebar.textContent).not.toContain("Old source publication");
+      if (outcome === "failed") {
+        next.reject(new Error("Source unavailable"));
+      } else {
+        next.resolve(sourceCatalogPage([]));
+      }
+      await more;
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: warm.catalogs[0],
+      });
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Old source publication");
+    },
+  );
+
+  it("does not let an older root result overwrite source load-more withdrawal", async () => {
+    const warm = sourceCatalogPage([{ threadId: "old", name: "Old root publication" }], "next");
+    const root = deferred<typeof warm>();
+    const next = deferred<typeof warm>();
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(warm)
+      .mockReturnValueOnce(root.promise)
+      .mockReturnValueOnce(next.promise);
+    const { sidebar } = await mountTab(request);
+    const refresh = sidebar.sessionData.refreshSessionCatalogs();
+    const more = sidebar.sessionData.loadMoreSessionCatalog("codex");
+    root.resolve(warm);
+    await refresh;
+    await settleLitElement(sidebar);
+    expect.soft(sidebar.textContent).not.toContain("Old root publication");
+    next.resolve(sourceCatalogPage([]));
+    await more;
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).not.toContain("Old root publication");
+  });
+
+  it.each(["head", "deeper"] as const)(
+    "keeps both hosts when late sibling progress arrives during the fresh %s request",
+    async (phase) => {
+      const warm = sourceCatalogPage([{ threadId: "old-a", name: "Old A" }], "old-next");
+      const hostA = warm.catalogs[0]!.hosts[0]!;
+      const hostB = {
+        ...hostA,
+        hostId: "node:b",
+        label: "Host B",
+        pending: true,
+        nextCursor: undefined,
+        sessions: [],
+      };
+      warm.catalogs[0]!.hosts.push(hostB);
+      const head = sourceCatalogPage([{ threadId: "fresh-a", name: "Fresh A" }], "fresh-next");
+      const deep = sourceCatalogPage([{ threadId: "deep-a", name: "Deep A" }]);
+      const held = deferred<typeof warm>();
+      const request = createGatewayRequestMock()
+        .mockResolvedValueOnce(warm)
+        .mockReturnValueOnce(phase === "head" ? held.promise : Promise.resolve(head))
+        .mockReturnValueOnce(phase === "deeper" ? held.promise : Promise.resolve(deep));
+      const { sidebar, gateway } = await mountTab(request);
+      const progressId = (request.mock.calls[0]![1] as { progressId: string }).progressId;
+      const more = loadMoreSessionCatalog(sidebar.sessionData, "codex", ["gateway:local"]);
+      await vi.advanceTimersByTimeAsync(0);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Old A");
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: {
+          ...warm.catalogs[0],
+          hosts: [
+            {
+              ...hostB,
+              pending: false,
+              sessions: [{ ...hostA.sessions[0]!, threadId: "fresh-b", name: "Fresh B" }],
+            },
+          ],
+        },
+      });
+      held.resolve(phase === "head" ? head : deep);
+      await more;
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain("Fresh A");
+      expect(sidebar.textContent).toContain("Deep A");
+      expect(sidebar.textContent).toContain("Fresh B");
+      expect(sidebar.textContent).not.toContain("Old A");
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each(["success", "revoked", "failed", "new-root"] as const)(
+    "replays only currently authorized expanded pages after late host progress: %s",
+    async (outcome) => {
+      const head = sourceCatalogPage([{ threadId: "head", name: "Authorized head" }], "next");
+      const oldDeep = sourceCatalogPage([{ threadId: "old-deep", name: "Old deeper row" }]);
+      const pending = sourceCatalogPage([]);
+      pending.catalogs[0]!.hosts[0]!.pending = true;
+      const held = deferred<typeof head>();
+      void held.promise.catch(() => undefined);
+      const request = createGatewayRequestMock()
+        .mockResolvedValueOnce(head)
+        .mockResolvedValueOnce(head)
+        .mockResolvedValueOnce(oldDeep)
+        .mockResolvedValueOnce(pending)
+        .mockReturnValueOnce(held.promise)
+        .mockResolvedValue(sourceCatalogPage([]));
+      const { sidebar, gateway } = await mountTab(request);
+      await loadMoreSessionCatalog(sidebar.sessionData, "codex", ["gateway:local"]);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain("Old deeper row");
+      await sidebar.sessionData.refreshSessionCatalogs();
+      const progressId = (request.mock.calls[3]![1] as { progressId: string }).progressId;
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: head.catalogs[0],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Old deeper row");
+      expect(request).toHaveBeenCalledTimes(5);
+      if (outcome === "new-root") {
+        await sidebar.sessionData.refreshSessionCatalogs();
+      }
+      if (outcome === "failed") {
+        held.reject(new Error("Source unavailable"));
+      } else {
+        held.resolve(
+          sourceCatalogPage(
+            outcome === "revoked" ? [] : [{ threadId: "fresh-deep", name: "Fresh deeper row" }],
+          ),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain("Old deeper row");
+      expect(sidebar.textContent?.includes("Fresh deeper row")).toBe(outcome === "success");
+      expect(sidebar.textContent?.includes("Authorized head")).toBe(
+        outcome === "success" || outcome === "revoked",
+      );
+      if (outcome === "failed") {
+        expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.error?.message).toBe(
+          "Source unavailable",
+        );
+      }
+    },
+  );
 
   it("ignores session churn and unrelated agents while coalescing catalog event bursts", async () => {
     const { gateway, request } = await mountTab();

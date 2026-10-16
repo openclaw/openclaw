@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -138,6 +139,7 @@ class LockTests(unittest.TestCase):
         self.env.pop('BASH_COMPAT', None)
         self.env.pop('OPENCLAW_PR_LOCK_NOTIFY_FD', None)
         self.env.pop('OPENCLAW_PR_DEDICATED_PROCESS_GROUP', None)
+        self.git_command = GIT
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
@@ -154,10 +156,10 @@ class LockTests(unittest.TestCase):
         self.ref = 'refs/openclaw/pr-operation-locks/42'
 
     def git(self, *args, **kwargs):
-        return subprocess.check_output([GIT, '-C', str(self.repo), *args], text=True, env=self.env, **kwargs).strip()
+        return subprocess.check_output([self.git_command, '-C', str(self.repo), *args], text=True, env=self.env, **kwargs).strip()
 
     def exists(self):
-        return run([GIT, '-C', str(self.repo), 'rev-parse', '--verify', self.ref], env=self.env).returncode == 0
+        return run([self.git_command, '-C', str(self.repo), 'rev-parse', '--verify', self.ref], env=self.env).returncode == 0
 
     def shell(self, code, *args):
         return run([BASH, '-c', 'set -eu; source "$1"; _fixture_root="$2"; repo_root() { printf "%s\\n" "$_fixture_root"; }; '+code, 'test', str(self.sources/'operation-lock.sh'), str(self.repo), *args], env=self.env)
@@ -385,8 +387,15 @@ class LockTests(unittest.TestCase):
         # Real platform tools, but no Python. The unsandboxed workflow already
         # works on released versions; adding sandbox support must preserve it.
         tools = self.root / 'tools'; tools.mkdir()
-        for name in ('bash', 'node', 'git', 'ps', 'awk', 'uname', 'sleep'):
+        for name in ('bash', 'node', 'ps', 'awk', 'uname', 'sleep'):
             (tools / name).symlink_to(shutil.which(name))
+        # Preserve Git launcher dependencies without exposing Python to identity lookup.
+        git_launcher = tools / 'git'
+        git_launcher.write_text('#!'+BASH+'\nexport PATH='+shlex.quote(self.env['PATH'])+
+                                '\nexec '+shlex.quote(GIT)+' "$@"\n')
+        git_launcher.chmod(0o755)
+        self.git_command = str(git_launcher)
+        self.env['OPENCLAW_PR_GIT'] = self.git_command
         self.env['PATH'] = str(tools)
         marker = self.root / 'child-started'
         for sandbox in (False, True):

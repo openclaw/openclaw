@@ -305,7 +305,7 @@ describePosix("native auto-merge recovery", () => {
       const recovered = f.run(false, f.repo, "squash", retired, replacement);
       expect(recovered.status, recovered.output).toBe(0);
       expect(f.state()).toMatchObject({ mutations: 2, cancellations: absent ? 0 : 1, posts: 1 });
-      expect(f.record()).toMatchObject({
+      expect(f.record(), recovered.output).toMatchObject({
         phase: "complete",
         head: replacement,
         recovery: { outcome: retired, replacementHead: replacement },

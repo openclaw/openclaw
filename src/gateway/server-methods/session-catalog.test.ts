@@ -766,7 +766,7 @@ describe("session catalog Gateway methods", () => {
   });
 });
 
-it("keeps a delayed source off the catalog RPC path", async () => {
+it("keeps progressive RPCs nonblocking while awaiting fresh authorization for metadata", async () => {
   const sourceDelayMs = 5_000;
   resetSessionCatalogTestState();
   vi.useFakeTimers();
@@ -865,24 +865,14 @@ it("keeps a delayed source off the catalog RPC path", async () => {
               expect.objectContaining({
                 hostId: "node:source",
                 sessions: [],
-                error: expect.objectContaining({ code: "CATALOG_LOADING" }),
+                pending: true,
               }),
             ],
           }),
         ],
       });
     }
-    expect(metadata.respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [
-            expect.objectContaining({
-              error: expect.objectContaining({ code: "CATALOG_LOADING" }),
-            }),
-          ],
-        }),
-      ],
-    });
+    expect(metadata.respond).not.toHaveBeenCalled();
     clients[5]!.connect.scopes = ["operator.read"];
     await vi.advanceTimersByTimeAsync(sourceDelayMs - 49);
     source.resolve();
@@ -912,6 +902,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         config,
         clients[0],
       );
+      await vi.advanceTimersByTimeAsync(2);
       await warm.completion;
       expect(warm.respond).toHaveBeenCalledWith(true, {
         catalogs: [
@@ -925,7 +916,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         ],
       });
     }
-    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledTimes(7);
     console.log(
       JSON.stringify({
         clock: "fake",
@@ -944,7 +935,11 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       broadcastToConnIds: broadcasts[0],
     });
     await current.completion;
-    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toMatchObject({
+      sessions: [],
+      pending: true,
+    });
+    await vi.advanceTimersByTimeAsync(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
       .mockImplementation(async () => {
@@ -952,7 +947,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         throw new Error("Paired node did not respond");
       });
     await vi.advanceTimersByTimeAsync(60_005);
-    expect(invokeNode).toHaveBeenCalledTimes(3);
+    expect(invokeNode).toHaveBeenCalledTimes(10);
     const refreshing = startCall("sessions.catalog.list", progressiveQuery, config, clients[0], {
       broadcastToConnIds: broadcasts[0],
     });
@@ -974,6 +969,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         config,
         clients[0],
       );
+      await vi.advanceTimersByTimeAsync(2);
       await expired.completion;
       expect(expired.respond).toHaveBeenCalledWith(true, {
         catalogs: [

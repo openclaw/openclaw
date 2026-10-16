@@ -405,12 +405,19 @@ export async function readSessionEntryWithRetainedFacts(
   };
   const cached = readRetainedSessionEntryFacts(database, request);
   if (cached) {
-    return { ...ok(cached.entries[0]?.entry), source: cached.source };
+    const entry = cached.entries[0]?.entry;
+    return {
+      ...ok(scope.clone === false ? entry : structuredClone(entry)),
+      source: cached.source,
+    };
   }
   const before = readSqliteDatabaseWriteTokenForPath(database.path);
   const result = await read();
   if (result.ok && result.facts) {
+    // Retention freezes nested facts; default singular reads own a mutable snapshot.
+    const value = scope.clone === false ? result.value : structuredClone(result.value);
     retainSessionEntryReadFacts(database, request, result.facts, before);
+    return { ...result, value };
   }
   return result;
 }

@@ -142,3 +142,84 @@ describe("SessionCatalogLiveState", () => {
     expect(result!).toBeNull();
   });
 });
+
+it.each(["pending", "error", "fresh"] as const)(
+  "does not retain prior source-authorized rows in %s final or incremental snapshots",
+  async (state) => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = { ...catalog("source-authorized", 1), requiresFreshList: true as const };
+    current.hosts[0]!.nextCursor = "old-cursor";
+    const { nextCursor: _cursor, ...host } = current.hosts[0]!;
+    const fresh = {
+      ...current,
+      hosts: [
+        {
+          ...host,
+          sessions: [],
+          ...(state === "pending" ? { pending: true } : {}),
+          ...(state === "error"
+            ? { error: { code: "UNAVAILABLE", message: "Source offline" } }
+            : {}),
+        },
+      ],
+    };
+    const depths = new Map([[sessionCatalogHostKey(current.id, host.hostId), 1]]);
+    const final = live.mergeFinal([fresh], [current]);
+    const incremental = live.applyHost({
+      payload: { progressId, agentId: "main", catalog: fresh },
+      agentId: "main",
+      catalogs: [current],
+      pageDepths: depths,
+    });
+    expect(incremental?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
+    const expanded = await refetchExpandedSessionCatalogPages({
+      catalogs: final,
+      previousCatalogs: [current],
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      agentId: "main",
+      pageDepths: depths,
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    });
+    expect(expanded[0]?.hosts[0]?.sessions).toEqual([]);
+    expect(expanded[0]?.hosts[0]?.nextCursor).toBeUndefined();
+  },
+);
+
+it("rejects earlier source-authorized progress after a new refresh starts", () => {
+  const live = new SessionCatalogLiveState();
+  const previous = live.beginRequest(1);
+  const current = { ...catalog("source-authorized", 1), requiresFreshList: true as const };
+  const next = live.beginRequest(1);
+  const withdrawn = {
+    ...current,
+    hosts: current.hosts.map((host) => Object.assign({}, host, { sessions: [] })),
+  };
+  expect(
+    live.applyHost({
+      payload: { progressId: previous.progressId, agentId: "main", catalog: current },
+      agentId: "main",
+      catalogs: [withdrawn],
+      pageDepths: new Map(),
+    }),
+  ).toBeNull();
+  const fresh = live.applyHost({
+    payload: { progressId: next.progressId, agentId: "main", catalog: current },
+    agentId: "main",
+    catalogs: [withdrawn],
+    pageDepths: new Map(),
+  });
+  expect(fresh?.catalogs).toEqual([current]);
+  expect(
+    live.mergeFinal(
+      [
+        {
+          ...withdrawn,
+          hosts: withdrawn.hosts.map((host) => Object.assign({}, host, { pending: true })),
+        },
+      ],
+      fresh!.catalogs,
+    ),
+  ).toEqual([current]);
+});

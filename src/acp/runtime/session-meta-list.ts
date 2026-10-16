@@ -41,7 +41,7 @@ export async function listAcpSessionEntries(params: {
         continue;
       }
       const joined = await withSessionEntryReadOnlyInWorker(
-        { agentId, storePath, sessionKey: storeSessionKey, env },
+        { agentId, storePath, sessionKey: storeSessionKey, env, clone: false },
         assertCurrent,
         async (read) => {
           if (!read.ok || !read.value) {

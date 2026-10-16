@@ -261,4 +261,57 @@ describe("projectSidebarSessionCatalogs", () => {
       ]),
     ).toEqual([{ ...catalog(hosts), visibleHosts: hosts }]);
   });
+  it.each([
+    {
+      involving: undefined,
+      retryable: false,
+      expected: ["member", "nonmember", "unbacked"],
+      sections: 1,
+    },
+    {
+      involving: new Set(["agent:main:member"]),
+      retryable: true,
+      expected: ["member"],
+      sections: 1,
+    },
+    { involving: new Set<string>(), retryable: true, expected: [], sections: 1 },
+    { involving: new Set<string>(), retryable: false, expected: [], sections: 0 },
+  ])(
+    "composes Gateway involvement with empty-section retry: $expected / $retryable",
+    ({ involving, retryable, expected, sections }) => {
+      const hosts: SessionCatalogHost[] = [
+        {
+          hostId: "node:remote",
+          label: "Remote node",
+          kind: "node",
+          connected: true,
+          sessions: [
+            { ...session("member", "Member"), sessionKey: "agent:main:member" },
+            {
+              ...session("nonmember", "Not in Gateway roster"),
+              sessionKey: "agent:main:nonmember",
+            },
+            session("unbacked", "No backing session"),
+          ],
+        },
+      ];
+      const projected = projectSidebarSessionCatalogs(
+        [catalog(hosts)],
+        null,
+        [],
+        undefined,
+        involving,
+        () => retryable,
+      );
+      expect(projected).toHaveLength(sections);
+      expect(
+        projected.flatMap((entry) =>
+          entry.visibleHosts.flatMap((host) => host.sessions.map((row) => row.threadId)),
+        ),
+      ).toEqual(expected);
+      if (retryable) {
+        expect(projected[0]?.retryable).toBe(true);
+      }
+    },
+  );
 });

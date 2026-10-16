@@ -122,13 +122,18 @@ function canonicalSessionLocation(params: {
   face: BoardFace;
   row: SessionRoutePresentation;
   shortIdLength?: number;
+  literalKey?: true;
 }): RouteLocation | null | undefined {
   const face = params.face;
-  const agentId = resolveAgentIdFromSessionKey(params.row.key);
+  const agentId =
+    parseAgentSessionKey(params.row.key)?.agentId ??
+    params.row.agentId ??
+    resolveAgentIdFromSessionKey(params.row.key);
   const pathname = pathForSession(face, agentId, params.row.key, params.context.basePath, {
     displayName: params.row.displayName,
     mainKey: configuredMainKey(params.context),
     shortIdLength: params.shortIdLength,
+    literalKey: params.literalKey,
   });
   if (!pathname) {
     return undefined;
@@ -222,6 +227,7 @@ function resolvedSessionRouteData(params: {
   isResolutionSourceCurrent: () => boolean;
   shortId?: string;
   mainTarget?: Extract<SessionPathTarget, { kind: "main" }>;
+  literalKey?: true;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
   // The loader owns face resolution: a preference-derived open adopts the row's stored
   // face, so the page renders that board directly and replaces the URL with the matching
@@ -233,6 +239,7 @@ function resolvedSessionRouteData(params: {
     location: params.location,
     face,
     row: mainTarget ? { key: mainSessionKey(params.context, mainTarget) } : params.row,
+    literalKey: params.literalKey,
     ...(params.shortId ? { shortIdLength: params.shortId.length } : {}),
   });
   if (canonicalLocation === undefined) {
@@ -249,6 +256,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
+    ...(params.literalKey ? { literalKey: params.literalKey } : {}),
     ...(mainTarget
       ? { agentId: mainTarget.agentId }
       : params.row.agentId
@@ -417,6 +425,7 @@ export async function loadChatRoute(
         const resolved = resolvedSessionRouteData({
           ...presentation,
           row: resolution.session,
+          literalKey: target.literalKey,
         });
         return resolved
           ? { ...resolved, ...(cachedRow ? { sessionResolutionFromCache: true as const } : {}) }
@@ -438,12 +447,13 @@ export async function loadChatRoute(
         }
       }
     }
-    const canonicalLocation = defaultsKnown
-      ? canonicalMainLocation(context, routeLocation, face, target.sessionKey)
-      : null;
+    const canonicalLocation =
+      defaultsKnown && !target.literalKey
+        ? canonicalMainLocation(context, routeLocation, face, target.sessionKey)
+        : null;
     const parsed = parseAgentSessionKey(target.sessionKey);
     const canonicalLocationReady =
-      !defaultsKnown && parsed
+      !defaultsKnown && parsed && !target.literalKey
         ? waitForGatewayClient(context.gateway, signal)
             .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
             .catch(() => null)
@@ -452,6 +462,8 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
+      ...(target.literalKey ? { literalKey: target.literalKey } : {}),
+      ...(isUiGlobalSessionKey(target.sessionKey) ? { agentId: target.agentId } : {}),
       ...sessionRouteHints(routeLocation),
       face,
       ...(canonicalLocation

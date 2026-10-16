@@ -253,7 +253,7 @@ export async function withSessionRowDatabaseFacts(
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
-        sharedRead?.assertCurrent();
+        shared.admission.assertCurrent();
         assertCurrent();
         if (owner.isActive()) {
           const currentIds = rows

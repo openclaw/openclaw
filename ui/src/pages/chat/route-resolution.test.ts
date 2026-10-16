@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -22,6 +23,34 @@ import {
 } from "./route-resolution.test-support.ts";
 
 describe("gateway-backed session route resolution", () => {
+  it.each(["main", "workspace"])(
+    "opens literal raw global in its source agent with mainKey=%s",
+    async (mainKey) => {
+      const { context, request } = contextFor({ ok: false });
+      context.basePath = "/control";
+      context.agents.state.agentsList = {
+        defaultId: "main",
+        mainKey,
+        scope: "per-sender",
+        agents: [],
+      };
+      const pathname = buildControlUiSessionPath({
+        namespace: "chat",
+        sessionKey: "global",
+        fallbackAgentId: "research",
+        basePath: context.basePath,
+        exactKey: true,
+        literalMainKey: true,
+        literalGlobalKey: true,
+      });
+      const location = { pathname: pathname!, search: "", hash: "" };
+      const loaded = await loadChatRoute(context, location, "chat", new AbortController().signal);
+      expect(loaded).toMatchObject({ kind: "session", sessionKey: "global", agentId: "research" });
+      expect(loaded).not.toHaveProperty("canonicalLocation");
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list, request } = contextFor({ ok: true, ...globalRow, agentId: "research" });

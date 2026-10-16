@@ -30,6 +30,7 @@ import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
   applySessionCatalogContinuation,
+  clearSessionCatalogRows,
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
@@ -92,7 +93,10 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   sessionScopeGeneration = 0;
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
-  readonly sessionCatalogPageDepths = new Map<string, number>();
+  get sessionCatalogPageDepths(): ReadonlyMap<string, number> {
+    return this.sessionCatalogLive.pageDepths;
+  }
+  readonly sessionCatalogRevisions = new Map<string, number>();
   private sessionScopeAgentId: string | null = null;
   private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
   private agentSelectionIntentRevision: number | undefined;
@@ -377,8 +381,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
     if (agentChanged || catalogAgentChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
-      this.sessionCatalogs = [];
-      this.sessionCatalogPageDepths.clear();
+      clearSessionCatalogRows(this);
     }
     if (agentChanged && !ownsCurrentCanonicalList) {
       // A replacement capability may publish its new-agent list before selection synchronizes.
@@ -402,9 +405,7 @@ export class SessionDataController implements SolidController, SessionCatalogDat
 
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,
-  ) => {
-    applySessionCatalogContinuation(this, event.detail);
-  };
+  ) => applySessionCatalogContinuation(this, event.detail);
 
   private readonly handleSessionCatalogPageActivation = () => scheduleSessionCatalogRefresh(this);
 

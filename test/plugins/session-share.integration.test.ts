@@ -2,33 +2,22 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-import type {
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createTestPluginApi,
-  createTestPluginServiceScheduler,
-} from "openclaw/plugin-sdk/plugin-test-api";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
-  type SessionCatalogProvider,
   type SessionCatalogSession,
-  type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import sessionSharePlugin from "../../extensions/session-share/index.js";
-import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
-import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -41,60 +30,13 @@ import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writ
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../src/test-utils/native-sqlite.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
+import {
+  commandFixture,
+  registerSessionShare,
+  type SessionPage,
+} from "./session-share.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
-  const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
-  const catalogs: SessionCatalogProvider[] = [];
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-  const api = createTestPluginApi({
-    runtime,
-    config,
-    registerNodeHostCommand: (command) => {
-      nodeCommands.push(command);
-    },
-    registerSessionCatalog: (catalog) => {
-      catalogs.push(catalog);
-    },
-    registerService: (service) => {
-      services.push(service);
-    },
-  });
-  sessionSharePlugin.register(api);
-  const catalog = catalogs.find((entry) => entry.id === "openclaw");
-  if (!catalog) {
-    throw new Error("Session Share did not register its catalog");
-  }
-  return { commands: nodeCommands, catalog, services, logger: api.logger };
-}
-
-type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
-type TranscriptPage = {
-  threadId: string;
-  items: SessionCatalogTranscriptItem[];
-  nextCursor?: string;
-};
-
-function commandFixture(groups: string[] = ["Team"]) {
-  const config: OpenClawConfig = {
-    plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
-  };
-  setRuntimeConfigSnapshot(config);
-  const runtime = createPluginRuntime();
-  runtime.config.current = () => config;
-  const commands = registerSessionShare(runtime, config).commands;
-  const list = commands.find((command) => command.command === "openclaw.sessions.list.v1")!;
-  const read = commands.find((command) => command.command === "openclaw.sessions.read.v1")!;
-  return {
-    config,
-    commands,
-    list: async (params: Record<string, unknown> = {}) =>
-      JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
-    read: async (threadId: string, params: Record<string, unknown> = {}) =>
-      JSON.parse(await read.handle(JSON.stringify({ threadId, ...params }))) as TranscriptPage,
-  };
-}
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
 const nativeSession: SessionCatalogSession = {
@@ -142,6 +84,12 @@ function catalogFixture(stateDir: string) {
     catalog,
     list,
     invoke,
+    read: async (query: Parameters<typeof catalog.list>[0] = {}) => {
+      const page = catalog.list(query);
+      void page.catch(() => {});
+      await vi.advanceTimersByTimeAsync(2);
+      return page;
+    },
     hydrate: async () => {
       const publications: Promise<void>[] = [];
       await catalog.list({
@@ -236,6 +184,71 @@ describe("session-share node commands", () => {
     });
   });
 
+  it("keeps global source agents distinct through catalog links and transcript reads", async () => {
+    await withCatalogFixture(async (receiver) => {
+      const source = commandFixture();
+      source.config.agents = { ownership: "explicit", entries: { research: {}, ops: {} } };
+      AgentsSchema.parse(source.config.agents);
+      receiver.setConfig({
+        agents: { entries: { receiver: {} } },
+        plugins: {
+          entries: {
+            "session-share": {
+              config: { nodes: { alpha: { controlUiOrigin: "https://team.example.com" } } },
+            },
+          },
+        },
+      });
+      receiver.invoke.mockImplementation(async ({ command, params }) => {
+        const handler = source.commands.find((candidate) => candidate.command === command)!;
+        return { payloadJSON: await handler.handle(JSON.stringify(params)) };
+      });
+      const cases = [
+        { agentId: "research", sessionKey: "global", path: "/chat/research/~global" },
+        { agentId: "ops", sessionKey: "global", path: "/chat/ops/~global" },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:global",
+          path: "/chat/research/~key/global",
+        },
+        {
+          agentId: "research",
+          sessionKey: "agent:research:shared",
+          path: "/chat/research/~key/shared",
+        },
+      ];
+      for (const [index, { agentId, sessionKey }] of cases.entries()) {
+        const scope = { agentId, sessionKey, sessionId: `source-${index}` };
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+          category: "Team",
+          label: scope.sessionId,
+        });
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          message: { role: "user", content: `Message from ${scope.sessionId}` },
+        });
+      }
+      const rows = (await receiver.read({}))[0]?.sessions ?? [];
+      expect(rows).toHaveLength(cases.length);
+      expect(new Set(rows.map(({ threadId }) => threadId)).size).toBe(cases.length);
+      for (const [index, { path }] of cases.entries()) {
+        const row = rows.find(({ name }) => name === `source-${index}`)!;
+        expect(row.originalUrl).toBe(`https://team.example.com${path}`);
+        expect(row.canContinue).toBe(false);
+        const transcript = await receiver.catalog.read({
+          hostId: "node:alpha",
+          threadId: row.threadId,
+        });
+        expect(transcript.threadId).toBe(row.threadId);
+        expect(transcript.items).toEqual([
+          expect.objectContaining({ type: "userMessage", text: `Message from source-${index}` }),
+        ]);
+      }
+    });
+  });
+
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
@@ -309,12 +322,12 @@ describe("session-share node commands", () => {
         hashes,
       });
       await receiver.hydrate();
-      const first = await receiver.catalog.list({ limitPerHost: 1 });
+      const first = await receiver.read({ limitPerHost: 1 });
       expect(first[0]?.sessions).toMatchObject([
         { threadId: "agent:main:named", name: "Named session" },
       ]);
       expect(first[0]?.nextCursor).toBeDefined();
-      const second = await receiver.catalog.list({
+      const second = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": first[0]!.nextCursor! },
       });
@@ -322,7 +335,7 @@ describe("session-share node commands", () => {
         { threadId: "agent:main:derived-0", name: "Derived title 0" },
         { threadId: "agent:main:derived-1", name: "Derived title 1" },
       ]);
-      const last = await receiver.catalog.list({
+      const last = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": second[0]!.nextCursor! },
       });
@@ -331,12 +344,13 @@ describe("session-share node commands", () => {
       ]);
       expect(last[0]?.nextCursor).toBeUndefined();
       for (const search of ["Derived title 2", "MAIN:DERIVED-2"]) {
-        const found = await receiver.catalog.list({ search, limitPerHost: 1 });
+        const found = await receiver.read({ search, limitPerHost: 1 });
         expect(found[0]?.sessions).toMatchObject([
           { threadId: "agent:main:derived-2", name: "Derived title 2" },
         ]);
       }
-      expect(receiver.invoke).toHaveBeenCalledTimes(1);
+      // Every list/search/page reauthorizes the source; inventory reuse remains source-owned.
+      expect(receiver.invoke).toHaveBeenCalledTimes(6);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
         "invalid-json",
         "derived-0",
@@ -392,7 +406,9 @@ describe("session-share node commands", () => {
 
         const pendingRead = fixture.read(scope.sessionKey);
         fixture.config.session = { store: defaultStorePath };
-        await expect(pendingRead).rejects.toThrow("no longer shared");
+        await expect(pendingRead).rejects.toThrow(
+          "Session sharing configuration changed. Refresh the session catalog.",
+        );
 
         fixture.config.session = { store };
         await upsertSessionEntryCore(
@@ -896,7 +912,7 @@ describe("session-share receiver identity integration", () => {
           return result;
         },
       );
-      const pending = fixture.catalog.list({
+      const pending = fixture.read({
         onHost: (host) => {
           if (host.hostId === "node:alpha") {
             expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
@@ -914,7 +930,7 @@ describe("session-share receiver identity integration", () => {
         fixture.list.mockResolvedValue({
           nodes: [{ nodeId: "beta", connected: true, commands }],
         });
-        await fixture.catalog.list({ hostIds: [] });
+        await fixture.read({ hostIds: [] });
       } finally {
         release.resolve();
       }
@@ -983,7 +999,7 @@ describe("session-share receiver identity integration", () => {
         },
       };
       await fixture.hydrate();
-      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
+      expect((await fixture.read({}))[0]?.sessions).toEqual([
         namespacedHuman,
         agent,
         namespacedUnmatched,
@@ -1000,7 +1016,7 @@ describe("session-share receiver identity integration", () => {
           },
         });
         await fixture.hydrate();
-        const rows = (await fixture.catalog.list({}))[0]!.sessions;
+        const rows = (await fixture.read({}))[0]!.sessions;
         expect(rows[0]).toEqual(namespacedHuman);
         expect(rows[1]?.createdActor).toMatchObject({
           type: "human",
@@ -1019,7 +1035,7 @@ describe("session-share receiver identity integration", () => {
       });
       await fixture.hydrate();
       identityReads.mockClear();
-      const linked = (await fixture.catalog.list({}))[0]!.sessions;
+      const linked = (await fixture.read({}))[0]!.sessions;
       expect.soft(fullIdentityScans()).toBe(0);
       expect(linked[0]?.createdActor).toMatchObject({
         type: "human",

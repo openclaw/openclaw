@@ -28,6 +28,8 @@ export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
     snapshotFields?: readonly SessionEntrySnapshotField[];
     projection?: "full" | "sharing" | "list" | "exact" | "worktree";
     includeMembers?: boolean;
+    /** Hydrate direct participants on selected list entries. */
+    includeParticipants?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
     transcript?: SessionExactEntriesWorkerRequest["transcript"];

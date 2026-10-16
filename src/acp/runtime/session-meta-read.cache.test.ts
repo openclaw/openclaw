@@ -10,6 +10,7 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -103,7 +104,13 @@ it("reuses admitted ACP rows and committed postimages without rereading metadata
     expect(read().rows).toEqual([null]);
     expect(metadataReads()).toHaveLength(0);
     insert(writer, "first");
-    expect(readPublishedAcpSessionRows(pathname, command.entries)?.[0]).toMatchObject({
+    expect(
+      readPublishedAcpSessionRows(
+        pathname,
+        readDatabasePathIdentitySync(pathname),
+        command.entries,
+      )?.[0],
+    ).toMatchObject({
       runtime_session_name: "first",
     });
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
@@ -125,7 +132,13 @@ it("reuses admitted ACP rows and committed postimages without rereading metadata
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "second" });
     deleteAcpSessionMetaRows(writer, [key]);
     expect(read().rows).toEqual([null]);
-    expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
+    expect(
+      readPublishedAcpSessionRows(
+        pathname,
+        readDatabasePathIdentitySync(pathname),
+        command.entries,
+      ),
+    ).toEqual([null]);
     expect(metadataReads()).toHaveLength(0);
     expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
   } finally {

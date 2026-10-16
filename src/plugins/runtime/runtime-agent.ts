@@ -38,6 +38,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   listSessionEntriesAsync,
+  withSessionEntriesAsync,
   patchSessionEntry,
   prepareSessionEntryPatch,
   updateSessionStoreEntry,
@@ -94,7 +95,7 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
-  return listEntries({
+  const entries = listEntries({
     ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
     ...(params.includeParticipants !== undefined
       ? { includeParticipants: params.includeParticipants }
@@ -107,6 +108,7 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
+  return entries;
 };
 
 async function runWithSessionWorkAdmission<T>(
@@ -278,6 +280,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryByIdAsync,
     listSessionEntries,
     listSessionEntriesAsync,
+    withSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>
