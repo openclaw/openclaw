@@ -14,6 +14,7 @@ export function memorySchemaSource(schemaSql: string, cacheTable: string): Sqlit
   const rename = (text: string) => text.replaceAll(MEMORY_EMBEDDING_CACHE_TABLE, cacheTable);
   return {
     views: catalog.views,
+    // eslint-disable-next-line oxc/no-map-spread -- Generated facts are shared; custom names require copy-on-write.
     tables: catalog.tables.map((table) =>
       table.name !== MEMORY_EMBEDDING_CACHE_TABLE
         ? table
