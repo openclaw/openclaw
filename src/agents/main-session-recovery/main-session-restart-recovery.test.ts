@@ -6,7 +6,11 @@ import path from "node:path";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -467,9 +471,9 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
-  it.each(["finish", "stop"] as const)(
+  it.for(["finish", "stop"] as const)(
     "starts recovery in interruption order across stores and preserves waiting work on %s",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const cfg = { agents: { entries: { main: {}, worker: {} } } };
       const sessions = Array.from({ length: 8 }, (_, index) => {
         const agentId = index % 2 === 0 ? "worker" : "main";
@@ -508,6 +512,7 @@ describe("main-session-restart-recovery", () => {
       });
       await backgroundStarted.promise;
       const started: number[] = [];
+      const firstFourStarted = createDeferred();
       let active = 0;
       let peak = 0;
       const runtime: GatewayRecoveryRuntime = {
@@ -530,6 +535,9 @@ describe("main-session-restart-recovery", () => {
             started.push(index);
             executionStarted = true;
             options?.onExecutionStarted?.();
+            if (started.length === 4) {
+              firstFourStarted.resolve();
+            }
             try {
               await gates[index]!.promise;
               return { runId: request.idempotencyKey, status: "ok" } as T;
@@ -547,7 +555,15 @@ describe("main-session-restart-recovery", () => {
         gatewayRuntime: runtime,
       });
       try {
-        await waitForFast(() => expect(started).toEqual([0, 1, 2, 3]));
+        await withinTest(
+          awaitGateBeforeSettlement(
+            firstFourStarted.promise,
+            recovery,
+            "recovery settled before four interrupted sessions started",
+          ),
+          signal,
+        );
+        expect(started).toEqual([0, 1, 2, 3]);
         await waitForFast(() => expect(getQueueSize(CommandLane.RestartRecovery)).toBe(5));
         await expect(enqueueCommandInLane("main", async () => "interactive reply")).resolves.toBe(
           "interactive reply",
