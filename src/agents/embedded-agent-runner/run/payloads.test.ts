@@ -210,10 +210,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   ])(
     "preserves earlier segment source and boundaries after trailing cleanup: $type $parts",
     ({ parts, expected, type = "text" }) => {
-      const earlier = {
-        ...makeAgentAssistantMessage(),
-        content: parts.map((text) => ({ type, text })),
-      } as AssistantMessage;
+      const earlier = makeAgentAssistantMessage({
+        content: parts.map((text) => ({ type, text })) as AssistantMessage["content"],
+      });
       const current = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Final answer." }],
       });
