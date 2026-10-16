@@ -146,7 +146,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const original = phaseWrites.recordUpdateRunPhaseAsync;
-        const phaseWrite = vi
+        using _ = vi
           .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
           .mockImplementation(async (...args) => {
             const record = await original(...args);
@@ -177,8 +177,8 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             admissionSql.push(sql);
           }
         };
-        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+        using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+        using exec = vi.spyOn(DatabaseSync.prototype, "exec");
         DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql) {
           observe(sql);
           return prepare.call(this, sql);
@@ -217,9 +217,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         } finally {
           release.resolve();
           await pending.catch(() => undefined);
-          phaseWrite.mockRestore();
-          prepare.mockRestore();
-          exec.mockRestore();
         }
       }),
   );
@@ -272,23 +269,19 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     await withPhase("staging", async (fixture) => {
       let received = false;
       const inspect = gitAdmission.recordInspectedGitTarget;
-      const inspected = vi
+      using _ = vi
         .spyOn(gitAdmission, "recordInspectedGitTarget")
         .mockImplementation(async (...args) => {
           await inspect(...args);
           received = true;
           fixture.run.interrupted = true;
         });
-      try {
-        expect(await fixture.start()).toMatchObject({
-          mutationStarted: false,
-          result: { status: "error" },
-        });
-        expect(received).toBe(true);
-        expect(fixture.events).toEqual([]);
-      } finally {
-        inspected.mockRestore();
-      }
+      expect(await fixture.start()).toMatchObject({
+        mutationStarted: false,
+        result: { status: "error" },
+      });
+      expect(received).toBe(true);
+      expect(fixture.events).toEqual([]);
     });
   });
 
@@ -298,8 +291,8 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       withPhase("validating", async (fixture) => {
         const original = phaseWrites.recordUpdateRunPhaseAsync;
         let receiptAttempted = false;
-        const worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-        const phaseWrite = vi
+        using worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        using _ = vi
           .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
           .mockImplementation(async (...args) => {
             receiptAttempted = true;
@@ -323,26 +316,21 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             }
             return original(...args);
           });
-        try {
-          const result = await fixture.start();
-          expect(receiptAttempted).toBe(true);
-          expect(worker).toHaveBeenCalledOnce();
-          expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
-          expect(fixture.events).toEqual([]);
-          if (failure === "missing-row") {
-            expect(result?.failure?.detail).toContain("Unknown update run");
-            expect(await fixture.readRun()).toBeUndefined();
-          } else if (failure === "missing-reply") {
-            expect(result?.failure?.detail).toContain("Update history disappeared");
-          } else {
-            expect(result?.failure?.cause).toMatchObject({
-              name: "UpdateRecoveryRequiredError",
-              record: { runId: fixture.run.runId },
-            });
-          }
-        } finally {
-          phaseWrite.mockRestore();
-          worker.mockRestore();
+        const result = await fixture.start();
+        expect(receiptAttempted).toBe(true);
+        expect(worker).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
+        expect(fixture.events).toEqual([]);
+        if (failure === "missing-row") {
+          expect(result?.failure?.detail).toContain("Unknown update run");
+          expect(await fixture.readRun()).toBeUndefined();
+        } else if (failure === "missing-reply") {
+          expect(result?.failure?.detail).toContain("Update history disappeared");
+        } else {
+          expect(result?.failure?.cause).toMatchObject({
+            name: "UpdateRecoveryRequiredError",
+            record: { runId: fixture.run.runId },
+          });
         }
       }),
   );
@@ -369,23 +357,19 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           outcome === "unknown"
             ? new SqliteWorkerError("phase acknowledgement lost", "outcome-unknown")
             : new Error("phase acknowledgement failed");
-        const worker = vi
+        using _ = vi
           .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
           .mockImplementation(async (...args) => {
             await original(...args);
             throw originalError;
           });
-        try {
-          const observed = await fixture.start().then(
-            (result) => result?.failure?.cause,
-            (error: unknown) => error,
-          );
-          expect(hasCommandProcessCleanupError(observed)).toBe(outcome === "unknown");
-          expect(collectNestedErrorCandidates(observed)).toContain(originalError);
-          expect(fixture.events).toEqual([]);
-        } finally {
-          worker.mockRestore();
-        }
+        const observed = await fixture.start().then(
+          (result) => result?.failure?.cause,
+          (error: unknown) => error,
+        );
+        expect(hasCommandProcessCleanupError(observed)).toBe(outcome === "unknown");
+        expect(collectNestedErrorCandidates(observed)).toContain(originalError);
+        expect(fixture.events).toEqual([]);
       }),
   );
 }

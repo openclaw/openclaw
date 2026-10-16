@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,7 +17,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import * as processTree from "../../process/child-process-tree.js";
-import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runUtf8CommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
@@ -31,6 +32,7 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+type NativeResult = Pick<SpawnResult, "code" | "stderr" | "cleanup">;
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -62,15 +64,18 @@ it("nested native child retains a settled spawner until its descendant finishes"
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
   const proceed = path.join(root, "proceed");
   const effect = path.join(root, "effect");
+  const bindingFile = path.join(root, "binding");
   const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
   const leaf = `
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {json} from "node:stream/consumers";
       import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(ownerUrl)};
       const {grant,proceed,effect}=await json(process.stdin);
       await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-        process.stdout.write(JSON.stringify({ready:true,rootKey:grant.parent.key,spawnerKey:grant.spawner.key})+"\\n");
+        fs.writeFileSync(${JSON.stringify(bindingFile)},JSON.stringify({rootKey:grant.parent.key,spawnerKey:grant.spawner.key}));
+        sendReceipt(${JSON.stringify(bindingFile)},"ready");
         while(!fs.existsSync(proceed)) await setTimeout(10);
         fence.assertCurrent();
         fs.writeFileSync(effect,"owned");
@@ -85,13 +90,11 @@ it("nested native child retains a settled spawner until its descendant finishes"
         const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
           [process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(leaf)}],
           {input:JSON.stringify({...input,grant}),beforeInput,timeoutMs:15000,killProcessTree:true,
-           requireProcessTreeExtinction:true,onOutputChunk:chunk=>{process.stdout.write(chunk);}}));
+           requireProcessTreeExtinction:true}));
         if(result.code!==0)throw new Error(result.stderr);
         fence.assertCurrent();
       });
     `;
-  const ready = createDeferred<{ rootKey: string; spawnerKey: string }>();
-  let output = "";
   const run = withUpdateCommandExecutor(randomUUID(), async (executor) => {
     const fence = await executor.enter(root);
     const pending = withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
@@ -103,23 +106,12 @@ it("nested native child retains a settled spawner until its descendant finishes"
           timeoutMs: 20_000,
           killProcessTree: true,
           requireProcessTreeExtinction: true,
-          onOutputChunk: (chunk) => {
-            output += chunk.toString();
-            const line = output.split("\n").find((entry) => entry.startsWith('{"ready":true'));
-            if (line) {
-              ready.resolve(JSON.parse(line));
-            }
-          },
         },
       ),
     );
     try {
-      const binding = await Promise.race([
-        ready.promise,
-        pending.then((result) => {
-          throw new Error(result.stderr || "Child exited before admission");
-        }),
-      ]);
+      await fixtureReadyBeforeSettlement(bindingFile, pending);
+      const binding = JSON.parse(fs.readFileSync(bindingFile, "utf8"));
       expect(binding.rootKey).toBe(root);
       expect(binding.spawnerKey).not.toBe(root);
       const store = createManagedHandoffLeaseStore();
@@ -130,24 +122,24 @@ it("nested native child retains a settled spawner until its descendant finishes"
       }
       // Simulate a settled intermediate without killing either real child.
       // Its live descendant must still block release of the spawner row.
+      using spies = new DisposableStack();
       const isDead = pidAlive.isPidDefinitelyDead;
       const isTreeAlive = processTree.isChildProcessTreeAlive;
-      const deadSpy = vi
-        .spyOn(pidAlive, "isPidDefinitelyDead")
-        .mockImplementation((pid) => pid === spawner.lease.executor.pid || isDead(pid));
-      const treeSpy = vi
-        .spyOn(processTree, "isChildProcessTreeAlive")
-        .mockImplementation(
-          (child) => child.pid !== spawner.lease.executor.pid && isTreeAlive(child),
-        );
-      try {
-        expect(store.release(spawner.lease), "live descendant retains intermediate custody").toBe(
-          false,
-        );
-      } finally {
-        treeSpy.mockRestore();
-        deadSpy.mockRestore();
-      }
+      spies.use(
+        vi
+          .spyOn(pidAlive, "isPidDefinitelyDead")
+          .mockImplementation((pid) => pid === spawner.lease.executor.pid || isDead(pid)),
+      );
+      spies.use(
+        vi
+          .spyOn(processTree, "isChildProcessTreeAlive")
+          .mockImplementation(
+            (child) => child.pid !== spawner.lease.executor.pid && isTreeAlive(child),
+          ),
+      );
+      expect(store.release(spawner.lease), "live descendant retains intermediate custody").toBe(
+        false,
+      );
     } finally {
       fs.writeFileSync(proceed, "go");
     }
@@ -273,62 +265,55 @@ it
     const spawnerExited = createDeferred();
     const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
-      return withUpdateCommandExecutorChild<{
-        code: number | null;
-        stderr: string;
-        cleanup?: string;
-      }>(fence, target, (grant, beforeInput) => {
-        if (fault === "spawner-killed") {
-          // Bypass the transport's stronger whole-tree teardown only in this
-          // fixture, so the genuine receiver can survive its dead spawner.
-          return new Promise<{ code: number | null; stderr: string; cleanup: string }>(
-            (resolve, reject) => {
-              const child = spawn(
-                process.execPath,
-                [...sourceImportArgs, "--input-type=module", "-e", spawner],
-                { env: childEnv, stdio: ["pipe", "ignore", "pipe"], detached: true },
-              );
-              let stderr = "";
-              child.stderr.on("data", (chunk) => {
-                stderr += String(chunk);
+      return withUpdateCommandExecutorChild<NativeResult>(
+        fence,
+        target,
+        async (grant, beforeInput) => {
+          if (fault === "spawner-killed") {
+            // Bypass the transport's stronger whole-tree teardown only in this
+            // fixture, so the genuine receiver can survive its dead spawner.
+            const child = spawn(
+              process.execPath,
+              [...sourceImportArgs, "--input-type=module", "-e", spawner],
+              { env: childEnv, stdio: ["pipe", "ignore", "pipe"], detached: true },
+            );
+            let stderr = "";
+            child.stderr.on("data", (chunk) => {
+              stderr += String(chunk);
+              nativeOutput += String(chunk);
+            });
+            const exited = once(child, "exit");
+            void exited.catch(() => {}); // Binding may fail before the exit join.
+            child.once("exit", () => spawnerExited.resolve());
+            await once(child, "spawn");
+            try {
+              beforeInput(child.pid!);
+              child.stdin.end(JSON.stringify({ grant }));
+            } catch (error) {
+              child.kill("SIGKILL");
+              throw error instanceof Error
+                ? error
+                : new Error("Child binding failed", { cause: error });
+            }
+            const [code] = await exited;
+            return { code, stderr, cleanup: "normal" };
+          }
+          return runUtf8CommandWithTimeout(
+            [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", spawner],
+            {
+              input: JSON.stringify({ grant }),
+              env: childEnv,
+              beforeInput,
+              timeoutMs: 40_000,
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+              onOutputChunk: (chunk) => {
                 nativeOutput += String(chunk);
-              });
-              child.once("error", reject);
-              child.once("spawn", () => {
-                try {
-                  beforeInput(child.pid!);
-                  child.stdin.end(JSON.stringify({ grant }));
-                } catch (error) {
-                  child.kill("SIGKILL");
-                  reject(
-                    error instanceof Error
-                      ? error
-                      : new Error("Child binding failed", { cause: error }),
-                  );
-                }
-              });
-              child.once("exit", (code) => {
-                spawnerExited.resolve();
-                resolve({ code, stderr, cleanup: "normal" });
-              });
+              },
             },
           );
-        }
-        return runUtf8CommandWithTimeout(
-          [process.execPath, ...sourceImportArgs, "--input-type=module", "-e", spawner],
-          {
-            input: JSON.stringify({ grant }),
-            env: childEnv,
-            beforeInput,
-            timeoutMs: 40_000,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-            onOutputChunk: (chunk) => {
-              nativeOutput += String(chunk);
-            },
-          },
-        );
-      });
+        },
+      );
     });
     // A killed intermediate may settle before the retained receiver: join below.
     const outcome = work.then(
@@ -343,15 +328,11 @@ it
       expect(grant.parent.key).toBe(target);
       expect(grant.spawner.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
       const revoke = (key: string) => {
-        const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-        try {
-          db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
-            "revoked",
-            key,
-          );
-        } finally {
-          db.close();
-        }
+        using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+        db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
+          "revoked",
+          key,
+        );
       };
       if (fault === "original-replaced") {
         revoke(root);
@@ -391,15 +372,16 @@ it
         const installed = JSON.parse(
           decodeLaunchAgentPlistFixture(fs.readFileSync(plist), "json").stdout,
         );
-        expect(installed.Label).toBe(label);
-        expect(installed.ProgramArguments).toEqual([process.execPath, "next-definition"]);
+        expect(installed).toMatchObject({
+          Label: label,
+          ProgramArguments: [process.execPath, "next-definition"],
+        });
       } else {
-        expect(Object.values(results)).toHaveLength(3);
-        for (const result of Object.values(results)) {
-          expect(result).toBe(
+        expect(Object.values(results)).toEqual(
+          Array(3).fill(
             "UPDATE_NATIVE_AUTHORITY: The update process no longer has permission to continue.",
-          );
-        }
+          ),
+        );
         expect(fs.readFileSync(config, "utf8")).toBe(JSON.stringify(before));
         expect(fs.existsSync(effect)).toBe(false);
         expect(fs.readFileSync(plist, "utf8")).toBe("previous-definition");

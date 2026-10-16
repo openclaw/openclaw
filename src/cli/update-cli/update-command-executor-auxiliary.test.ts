@@ -13,6 +13,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { getGatewayServiceUpdateNativeCommand } from "../../daemon/service-update-authority.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as processRunner from "../../process/exec.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
@@ -22,6 +23,7 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
+  type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
@@ -32,6 +34,7 @@ const nodeExecPath = resolveTestNodeExecPath();
 let root: string;
 let serviceRoot: string;
 let receipts: FixtureReceiptChannel;
+let run: NonNullable<UpdateCommandOptions["run"]>;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
@@ -39,6 +42,7 @@ afterAll(async () => {
   await receipts?.close();
 });
 beforeEach(() => {
+  run = { runId: randomUUID(), env: process.env };
   const base = fs.realpathSync(dirs.make("auxiliary-node-owner-"));
   root = path.join(base, "package-B");
   serviceRoot = path.join(base, "service-A");
@@ -49,6 +53,38 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
 });
 afterEach(() => vi.restoreAllMocks());
+
+function withOwner<T>(
+  operation: (fence: UpdateRecoveryFence, executor: UpdateCommandExecutor) => Promise<T>,
+  preflight = true,
+) {
+  return withUpdateCommandExecutor(run.runId, async (executor) => {
+    const fence = await executor.enter(root, {
+      serviceRoot,
+      preflight: preflight ? true : undefined,
+    });
+    run.executorFence = fence;
+    return operation(fence, executor);
+  });
+}
+
+function expectReleased(...keys: string[]) {
+  for (const key of keys.length ? keys : [root, serviceRoot]) {
+    expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
+  }
+}
+
+function expectBusy(...keys: string[]) {
+  for (const key of keys) {
+    expect(
+      createManagedHandoffLeaseStore().acquire(key, "contender", { kind: "update" }).kind,
+    ).toBe("busy");
+  }
+}
+
+function expectReleaseRefused(fence: UpdateRecoveryFence, reason = "not current") {
+  expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(reason);
+}
 
 // A receipt may arrive after the command settles; the fixture writes its marker first.
 function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
@@ -69,16 +105,22 @@ function runBoundChild(
   _grant: UpdateCommandChildGrant,
   beforeInput: (pid: number, argv?: readonly string[]) => void,
 ) {
-  return runUtf8CommandWithTimeout(
-    [process.execPath, "-e", "require('node:fs').readFileSync(0,'utf8')"],
-    {
-      input: "",
-      beforeInput,
-      timeoutMs: 10000,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-    },
-  );
+  return runChild(beforeInput, "require('node:fs').readFileSync(0,'utf8')");
+}
+
+function runChild(
+  beforeInput: (pid: number, argv?: readonly string[]) => void,
+  program: string,
+  options: { killGraceMs?: number } = {},
+) {
+  return runUtf8CommandWithTimeout([process.execPath, "-e", program], {
+    input: "",
+    beforeInput,
+    timeoutMs: 10000,
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+    ...options,
+  });
 }
 
 function preloadFixture(kind: "require" | "import") {
@@ -92,6 +134,10 @@ function preloadFixture(kind: "require" | "import") {
   return { marker, env: { ...process.env, NODE_OPTIONS: `--${kind}=${JSON.stringify(value)}` } };
 }
 
+function effectArgs(effect: string, value = "'unauthorized'") {
+  return ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},${value})`];
+}
+
 function installer(
   params: Omit<Parameters<typeof createPackageRuntimeRecovery>[0], "root" | "timeoutMs"> & {
     timeoutMs?: number;
@@ -102,17 +148,13 @@ function installer(
   return recovery.installCommand;
 }
 
-it.for([
-  { phase: "initializing", fragmented: false },
-  { phase: "admitted", fragmented: true },
-] as const)(
-  "preserves direct preflight release through a healthy installer child and active drain: $phase/fragmented=$fragmented",
-  async ({ phase, fragmented }, { signal }) => {
-    const runId = randomUUID();
+it.for(["initializing", "admitted"] as const)(
+  "preserves direct preflight release through a healthy installer child and active drain: %s",
+  async (phase, { signal }) => {
     const ready = path.join(root, "ready");
     const proceed = path.join(root, "proceed");
     const preload = preloadFixture(phase === "admitted" ? "require" : "import");
-    if (fragmented) {
+    if (phase === "admitted") {
       const runCommand = processRunner.runCommandWithTimeout;
       vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) => {
         assert(typeof options !== "number" && typeof options.input === "string");
@@ -129,11 +171,9 @@ it.for([
         return runCommand([...argv.slice(0, 3), receiver + argv[3], ...argv.slice(4)], options);
       });
     }
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+    await withOwner(async (fence, executor) => {
       const install = installer({
-        opts:
-          phase === "admitted" ? { run: { runId, env: process.env, executorFence: fence } } : {},
+        opts: phase === "admitted" ? { run } : {},
         executorFence: phase === "initializing" ? fence : undefined,
       });
       const installing = install(
@@ -148,17 +188,11 @@ it.for([
       );
       try {
         await withinTest(fixtureReadyBeforeSettlement(ready, installing), signal);
-        expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
-          "The update process is still running.",
-        );
+        expectReleaseRefused(fence, "The update process is still running.");
         await expect(executor.enter(root, { serviceRoot })).rejects.toThrow(
           "The update process is still running.",
         );
-        for (const key of [root, serviceRoot]) {
-          expect(
-            createManagedHandoffLeaseStore().acquire(key, "contender", { kind: "update" }).kind,
-          ).toBe("busy");
-        }
+        expectBusy(root, serviceRoot);
       } finally {
         fs.writeFileSync(proceed, "continue");
       }
@@ -169,20 +203,17 @@ it.for([
       releaseUpdateCommandPreflightForHandoff(fence);
       expect(() => fence.assertCurrent()).toThrow();
     });
-    expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
+    expectReleased();
   },
 );
 
 it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as const)(
   "caught auxiliary failure never restores handoff eligibility: %s",
   async (failure) => {
-    const runId = randomUUID();
-    const work = withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+    const work = withOwner(async (fence) => {
       if (failure === "nonzero" || failure === "timeout" || failure === "unsettled") {
         const install = installer({
-          opts: { run: { runId, env: process.env, executorFence: fence } },
+          opts: { run },
           timeoutMs: failure === "timeout" ? 150 : 10000,
         });
         const childCode =
@@ -206,7 +237,10 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
         const candidate = path.join(root, "candidate");
         fs.mkdirSync(candidate);
         const store = createManagedHandoffLeaseStore();
-        const incumbent = store.acquire(candidate, "other-owner", { kind: "update" });
+        const incumbent =
+          failure === "candidate-busy"
+            ? store.acquire(candidate, "other-owner", { kind: "update" })
+            : undefined;
         try {
           await expect(
             withUpdateCommandExecutorChild(
@@ -220,18 +254,20 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
             ),
           ).rejects.toThrow();
         } finally {
-          if (incumbent.kind === "acquired") {
-            expect(store.current(incumbent.lease)).toBe(true);
-            expect(store.release(incumbent.lease)).toBe(true);
+          if (incumbent?.kind === "acquired") {
+            expect([store.current(incumbent.lease), store.release(incumbent.lease)]).toEqual([
+              true,
+              true,
+            ]);
           }
         }
       }
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expectReleaseRefused(fence);
       // A later healthy auxiliary call may not re-arm the deleted entry.
       await withUpdateCommandExecutorChild(fence, root, runBoundChild, {
         auxiliaryPreflight: true,
       });
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expectReleaseRefused(fence);
     });
     // The original child failure remains sticky even if the caller catches it.
     await expect(work).rejects.toThrow();
@@ -241,8 +277,7 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
 it.each(["ordinary", "promote-before", "promote-after"] as const)(
   "does not re-arm a non-preflight owner after %s",
   async (scenario) => {
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+    await withOwner(async (fence, executor) => {
       if (scenario === "promote-before") {
         await executor.enter(root, { serviceRoot });
       }
@@ -255,7 +290,7 @@ it.each(["ordinary", "promote-before", "promote-after"] as const)(
       if (scenario === "promote-after") {
         await executor.enter(root, { serviceRoot });
       }
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
+      expectReleaseRefused(fence);
       fence.assertCurrent();
     });
   },
@@ -271,8 +306,7 @@ it("keeps B extra-child custody after partial preflight release without reactiva
   await once(child, "message");
   assert(child.pid);
   try {
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot, preflight: true });
+    await withOwner(async (fence) => {
       const store = createManagedHandoffLeaseStore();
       const acquired = store.acquire(`${root}/.openclaw-update-child-extra`, "extra-child", {
         kind: "update",
@@ -280,11 +314,11 @@ it("keeps B extra-child custody after partial preflight release without reactiva
       assert(acquired.kind === "acquired");
       const registered = store.bind(acquired.lease, child.pid!);
       assert(registered);
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("release failed");
+      expectReleaseRefused(fence, "release failed");
       expect(() => fence.assertCurrent()).toThrow("no longer current");
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
-      expect(store.read(serviceRoot)).toEqual({ kind: "absent" });
-      expect(store.acquire(root, "contender", { kind: "update" }).kind).toBe("busy");
+      expectReleaseRefused(fence);
+      expectReleased(serviceRoot);
+      expectBusy(root);
       expect(store.current(registered)).toBe(true);
       child.kill("SIGTERM");
       await exited;
@@ -296,7 +330,7 @@ it("keeps B extra-child custody after partial preflight release without reactiva
     }
     await exited;
   }
-  expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+  expectReleased(root);
 });
 
 it("preserves eligible preflight release until a healthy auxiliary descendant drain joins", async ({
@@ -307,30 +341,17 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
   const descendant = `${fixtureReceiptClientSource(receipts.endpoint)}
   import fs from 'node:fs';process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(ready)},'draining');sendReceipt(${JSON.stringify(ready)},"ready");const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.exit(0)}},10)});setInterval(()=>{},1000);process.send('ready');`;
   const program = `const child=require('node:child_process').spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
-  await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const fence = await executor.enter(root, { serviceRoot, preflight: true });
+  await withOwner(async (fence) => {
     const pending = withUpdateCommandExecutorChild(
       fence,
       root,
-      (_grant, beforeInput) =>
-        runUtf8CommandWithTimeout([process.execPath, "-e", program], {
-          input: "",
-          beforeInput,
-          timeoutMs: 10000,
-          killGraceMs: 5000,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-        }),
+      (_grant, beforeInput) => runChild(beforeInput, program, { killGraceMs: 5000 }),
       { auxiliaryPreflight: true },
     );
     try {
       await withinTest(fixtureReadyBeforeSettlement(ready, pending), signal);
-      expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow(
-        "The update process is still running.",
-      );
-      expect(
-        createManagedHandoffLeaseStore().acquire(root, "contender", { kind: "update" }).kind,
-      ).toBe("busy");
+      expectReleaseRefused(fence, "The update process is still running.");
+      expectBusy(root);
     } finally {
       fs.writeFileSync(proceed, "continue");
     }
@@ -342,7 +363,6 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
 it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] as const)(
   "never starts Node provisioning without released authorization input: %s",
   async (frame) => {
-    const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
     const drained = path.join(root, "gate-drained");
     const preload = preloadFixture("require");
@@ -352,28 +372,23 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
     const runCommand = processRunner.runCommandWithTimeout;
     let observed: Awaited<ReturnType<typeof runCommand>> | undefined;
     vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) => {
-      assert(typeof options !== "number");
-      assert(typeof options.input === "string");
+      assert(typeof options !== "number" && typeof options.input === "string");
       // Corrupt only the private input, retaining real admission, process custody and payload.
       let input: string | Uint8Array = options.input;
-      if (frame === "empty") {
-        input = "";
-      }
-      if (frame === "extra") {
-        input += " ";
-      }
-      if (frame === "malformed") {
-        input = "{" + input.slice(1);
-      }
-      if (frame === "invalid-entry") {
-        input = input.replace("NODE_OPTIONS", "_ODE_OPTIONS");
-      }
       if (frame === "invalid-utf8") {
         const bytes = Buffer.from(input);
         const index = bytes.indexOf(Buffer.from("é"));
         assert(index >= 0);
         bytes[index] = 0xff;
         input = bytes;
+      } else {
+        input = {
+          empty: "",
+          extra: input + " ",
+          malformed: "{" + input.slice(1),
+          "invalid-entry": input.replace("NODE_OPTIONS", "_ODE_OPTIONS"),
+          nul: input,
+        }[frame];
       }
       if (["malformed", "invalid-entry", "invalid-utf8"].includes(frame)) {
         expect(Buffer.byteLength(input)).toBe(Buffer.byteLength(options.input));
@@ -392,28 +407,18 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
         return result;
       });
     });
-    const outcome = await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot, preflight: true });
-      const install = installer({
-        opts: { run: { runId, env: process.env, executorFence: fence } },
-      });
-      await install(
-        nodeExecPath,
-        ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
-        preload.env,
-      );
+    const outcome = await withOwner(async () => {
+      const install = installer({ opts: { run } });
+      await install(nodeExecPath, effectArgs(effect), preload.env);
     }).then(
       () => "installed",
       () => "refused",
     );
-    expect(fs.existsSync(effect)).toBe(false);
-    expect(fs.existsSync(preload.marker)).toBe(false);
+    expect([effect, preload.marker].map(fs.existsSync)).toEqual([false, false]);
     expect(observed).toMatchObject({ code: 1, stdout: "", stderr: "" });
     expect(fs.readFileSync(drained, "utf8")).toBe("settled");
     expect(outcome).toBe("refused");
-    for (const key of [root, serviceRoot]) {
-      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
-    }
+    expectReleased();
   },
 );
 
@@ -459,12 +464,10 @@ it.skipIf(process.platform === "win32").each([false, true])(
         return runCommand(argv, { ...options, input: "" });
       });
     }
-    const runId = randomUUID();
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot });
+    await withOwner(async () => {
       await withRetainedUpdateServiceAuthority(
         {
-          run: { runId, env: process.env, executorFence: fence },
+          run,
           root: serviceRoot,
           assertCurrent: () => {},
         },
@@ -473,26 +476,18 @@ it.skipIf(process.platform === "win32").each([false, true])(
           const native = getGatewayServiceUpdateNativeCommand();
           assert(native);
           const result = await native(
-            [
-              nodeExecPath,
-              "-e",
-              `require('node:fs').writeFileSync(${JSON.stringify(effect)},String(process.pid));`,
-            ],
+            [nodeExecPath, ...effectArgs(effect, "String(process.pid)")],
             { baseEnv: preload.env, env: { NODE_NO_WARNINGS: "1" }, timeoutMs: 10000 },
           );
-          expect(result.code).toBe(released ? 0 : 1);
-          expect(result.stderr).toBe("");
+          expect(result).toMatchObject({ code: released ? 0 : 1, stderr: "" });
         },
       );
-    });
-    expect(fs.existsSync(effect)).toBe(released);
-    expect(fs.existsSync(preload.marker)).toBe(released);
+    }, false);
+    expect([effect, preload.marker].map(fs.existsSync)).toEqual([released, released]);
     if (released) {
       expect(fs.readFileSync(preload.marker, "utf8")).toBe(`${fs.readFileSync(effect, "utf8")}\n`);
     }
-    for (const key of [root, serviceRoot]) {
-      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
-    }
+    expectReleased();
   },
 );
 
@@ -531,16 +526,8 @@ it.each([
 it.each(["before-launch", "at-input"] as const)(
   "refuses Node provisioning after requester revocation at %s",
   async (boundary) => {
-    const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
     let requesterCurrent = true;
-    const opts: UpdateCommandOptions = {
-      run: {
-        runId,
-        env: process.env,
-        requesterAuthority: { requester: {}, isCurrent: () => requesterCurrent },
-      },
-    };
     const revoke = () => {
       requesterCurrent = false;
     };
@@ -559,24 +546,17 @@ it.each(["before-launch", "at-input"] as const)(
           },
         });
       });
-    const work = withUpdateCommandExecutor(runId, async (executor) => {
-      assert(opts.run);
-      opts.run.executorFence = await executor.enter(root, { serviceRoot, preflight: true });
-      const install = installer({ opts });
+    const work = withOwner(async () => {
+      run.requesterAuthority = { requester: {}, isCurrent: () => requesterCurrent };
+      const install = installer({ opts: { run } });
       if (boundary === "before-launch") {
         revoke();
       }
-      await install(
-        nodeExecPath,
-        ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
-        process.env,
-      );
+      await install(nodeExecPath, effectArgs(effect), process.env);
     });
     await expect(work).rejects.toThrow("requester-revoked");
     expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
     expect(fs.existsSync(effect)).toBe(false);
-    for (const key of [root, serviceRoot]) {
-      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
-    }
+    expectReleased();
   },
 );

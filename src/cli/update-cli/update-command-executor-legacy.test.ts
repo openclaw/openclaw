@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { waitForDead } from "../../../test/helpers/process-wait.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -170,40 +171,28 @@ it.skipIf(process.platform === "win32").each([
     expectDefined(child.stderr, "Legacy fixture stderr").on("data", (chunk) => {
       output += String(chunk);
     });
-    const closed = new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", () => resolve());
-    });
-    let parentExitCode: number | null | undefined;
-    let parentExitSignal: NodeJS.Signals | null | undefined;
-    const exited = new Promise<void>((resolve) => {
-      child.once("exit", (code, signal) => {
-        parentExitCode = code;
-        parentExitSignal = signal;
-        resolve();
-      });
-    });
+    const closed = once(child, "close");
+    const exited = once(child, "exit");
+    void exited.catch(() => {}); // Admission can fail before the exit join.
     let termination: ReturnType<typeof killProcessTree>;
     const killGroup = () => {
       if (child.pid && !termination) {
         termination = killProcessTree(child.pid, { detached: true });
       }
     };
-    const deadlineFailure = createDeferred<never>();
-    const deadline = setTimeout(() => {
-      deadlineFailure.reject(new Error(`Legacy descendant did not settle: ${output}`));
-      killGroup();
-    }, 20_000);
+    const signal = AbortSignal.timeout(20_000);
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     try {
-      await Promise.race([
-        deadlineFailure.promise,
-        managed && lifetime === "live"
-          ? Promise.all([ready.promise, secondReady.promise])
-          : ready.promise,
-        closed.then(() => {
-          throw new Error(`Legacy descendant exited before admission: ${output}`);
-        }),
-      ]);
+      await wait(
+        Promise.race([
+          managed && lifetime === "live"
+            ? Promise.all([ready.promise, secondReady.promise])
+            : ready.promise,
+          closed.then(() => {
+            throw new Error(`Legacy descendant exited before admission: ${output}`);
+          }),
+        ]),
+      );
       if (!child.pid) {
         throw new Error("Missing fixture parent PID");
       }
@@ -214,10 +203,11 @@ it.skipIf(process.platform === "win32").each([
       }
       if (managed && lifetime === "live") {
         child.send("probe");
-        expect(
-          await Promise.race([deadlineFailure.promise, secondExited.promise, closed]),
-          output,
-        ).toEqual({ event: "second-exit", code: 1, signal: null });
+        expect(await wait(Promise.race([secondExited.promise, closed])), output).toEqual({
+          event: "second-exit",
+          code: 1,
+          signal: null,
+        });
         // Process exit does not order delivery across stdout and stderr pipes.
         expect(JSON.parse(read("second-error.json"))).toEqual({
           name: "UpdateCommandRecoveryPendingError",
@@ -226,9 +216,7 @@ it.skipIf(process.platform === "win32").each([
       }
       if (lifetime === "exited") {
         child.kill("SIGKILL");
-        await Promise.race([deadlineFailure.promise, exited]);
-        expect(parentExitCode, output).toBeNull();
-        expect(parentExitSignal, output).toBe("SIGKILL");
+        expect(await wait(exited), output).toEqual([null, "SIGKILL"]);
         expect(contender().acquire(root, "successor", { kind: "update" }).kind).toBe("busy");
       }
       if (lifetime === "replaced row") {
@@ -243,7 +231,7 @@ it.skipIf(process.platform === "win32").each([
         fs.renameSync(`${leasePath}.replacement`, leasePath);
       }
       fs.writeFileSync(file("proceed"), "go");
-      await Promise.race([deadlineFailure.promise, closed]);
+      await wait(closed);
       expect(
         fs.existsSync(file("continuation-exit.json")),
         `Legacy continuation did not exit: ${output}`,
@@ -252,7 +240,7 @@ it.skipIf(process.platform === "win32").each([
         code: lifetime === "live" ? 0 : 1,
       });
       if (lifetime === "live") {
-        expect(parentExitCode, output).toBe(0);
+        expect((await exited)[0], output).toBe(0);
       }
       expect(JSON.parse(read("observation.json"))).toEqual({
         current: lifetime === "live",
@@ -260,8 +248,8 @@ it.skipIf(process.platform === "win32").each([
         ...(managed ? { helperPid: child.pid } : {}),
       });
       expect(fs.existsSync(file("effect"))).toBe(lifetime === "live");
-      const database = new DatabaseSync(leasePath, { readOnly: true });
-      try {
+      {
+        using database = new DatabaseSync(leasePath, { readOnly: true });
         if (managed) {
           const originalRow = JSON.parse(read("original-row.json"));
           expect(
@@ -278,8 +266,6 @@ it.skipIf(process.platform === "win32").each([
             database.prepare("SELECT COUNT(*) AS count FROM managed_update_handoffs").get()?.count,
           ).toBe(managed ? 1 : 0);
         }
-      } finally {
-        database.close();
       }
       if (lifetime === "exited") {
         const store = contender();
@@ -290,7 +276,6 @@ it.skipIf(process.platform === "win32").each([
         }
       }
     } finally {
-      clearTimeout(deadline);
       // Failed assertions must also release the independently grouped native leaf.
       fs.writeFileSync(file("proceed"), "go");
       killGroup();

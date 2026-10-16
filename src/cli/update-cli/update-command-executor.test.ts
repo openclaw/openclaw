@@ -71,15 +71,15 @@ function prepareStagedLeaseFixture() {
 }
 
 function replaceOwner(installationRoot = root) {
-  const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
-  try {
-    db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
-      "replacement",
-      installationRoot,
-    );
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
+  db.prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?").run(
+    "replacement",
+    installationRoot,
+  );
+}
+
+function runNode(source: string, timeout = 15_000) {
+  return spawnSync(process.execPath, ["-e", source], { encoding: "utf8", timeout });
 }
 
 describe("live update executor", () => {
@@ -144,17 +144,13 @@ describe("live update executor", () => {
 
   it("reclaims a dead direct executor through the existing process-liveness owner", async () => {
     const { runtimeEntry, options } = prepareStagedLeaseFixture();
-    const result = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `
+    const result = runNode(
+      `
       const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
       const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
       if(store.acquire(${JSON.stringify(root)},"dead-executor",{kind:"update"}).kind!=="acquired")throw new Error("admission failed");
     `,
-      ],
-      { encoding: "utf8", timeout: 10_000 },
+      10_000,
     );
     expect(result.status, result.stderr).toBe(0);
     expect(createManagedHandoffLeaseStore().read(root).kind).toBe("current");
@@ -271,11 +267,13 @@ describe("live update executor", () => {
             { auxiliaryPreflight: true },
           );
           if (childMetadataRoot === "unrelated") {
-            expect(result.code).toBe(1);
-            expect(result.stderr).toContain(
-              "Requester continuation requires its admitted Gateway update owner.",
-            );
-            expect(result.stdout).toBe("");
+            expect(result).toMatchObject({
+              code: 1,
+              stderr: expect.stringContaining(
+                "Requester continuation requires its admitted Gateway update owner.",
+              ),
+              stdout: "",
+            });
           } else {
             expect(result.code, result.stderr).toBe(0);
             expect(JSON.parse(result.stdout)).toEqual(captureUpdateCommandExecutorAuthority(fence));
@@ -431,8 +429,8 @@ describe("candidate executor delegation", () => {
           ? createManagedHandoffLeaseStore().processIdentity()
           : { pid: foreign ? 424243 : process.pid, startIdentity: String(receiverStart) };
       const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
-      const db = new DatabaseSync(databasePath);
-      try {
+      {
+        using db = new DatabaseSync(databasePath);
         // Reproduce the rows already bound by the parent before releasing private stdin.
         const update = db.prepare(
           "UPDATE managed_update_handoffs SET payload_json = ? WHERE install_root = ?",
@@ -451,8 +449,6 @@ describe("candidate executor delegation", () => {
             key,
           );
         }
-      } finally {
-        db.close();
       }
       const parent = store.read(root);
       assert(parent.kind === "current");
@@ -655,10 +651,7 @@ describe("candidate executor delegation", () => {
           expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
           const store = createManagedHandoffLeaseStore();
           const primary = store.read(root);
-          expect(primary.kind).toBe("current");
-          if (primary.kind !== "current") {
-            throw new Error("missing primary owner");
-          }
+          assert(primary.kind === "current", "missing primary owner");
           expect(store.release(primary.lease)).toBe(false);
           expect(store.bind(primary.lease, process.pid)).toBeNull();
           expect(store.acquire(candidateRoot, "other-candidate", { kind: "update" }).kind).toBe(
@@ -818,11 +811,7 @@ describe("candidate executor delegation", () => {
           leaf.once('message',()=>{process.stdout.write(String(leaf.pid));leaf.disconnect();leaf.unref();});
         });
       `;
-      const parent = spawnSync(
-        process.execPath,
-        [
-          "-e",
-          `
+      const parent = runNode(`
         const {spawn}=require('node:child_process');
         const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
         const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
@@ -832,10 +821,7 @@ describe("candidate executor delegation", () => {
         const child=spawn(process.execPath,['-e',${JSON.stringify(command)}],{detached:true,stdio:['pipe','pipe','inherit']});
         if(!store.bind(delegation.lease,child.pid))throw new Error('bind failed');
         child.stdout.pipe(process.stdout);child.stdin.end('start');
-      `,
-        ],
-        { encoding: "utf8", timeout: 15_000 },
-      );
+      `);
       expect(parent.status, parent.stderr).toBe(0);
       const descendant = Number(parent.stdout);
       expect(Number.isSafeInteger(descendant) && descendant > 0).toBe(true);
@@ -862,11 +848,7 @@ describe("candidate executor delegation", () => {
 
   it("does not reclaim a dead parent while its delegated child is alive", async () => {
     const { runtimeEntry, options } = prepareStagedLeaseFixture();
-    const parent = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `
+    const parent = runNode(`
       const {spawn}=require("node:child_process");
       const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
       const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
@@ -877,10 +859,7 @@ describe("candidate executor delegation", () => {
       child.unref();
       if(!store.bind(delegated.lease,child.pid))throw new Error("bind failed");
       process.stdout.write(String(child.pid));
-    `,
-      ],
-      { encoding: "utf8", timeout: 15_000 },
-    );
+    `);
     expect(parent.status, parent.stderr).toBe(0);
     const pid = Number(parent.stdout);
     expect(Number.isInteger(pid) && pid > 0).toBe(true);
