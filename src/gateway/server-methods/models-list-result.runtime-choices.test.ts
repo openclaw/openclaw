@@ -60,7 +60,14 @@ function projectorFor(
     ...extra,
   });
 }
-function registryFor(harness: AgentHarnessV2) {
+function registryFor(id: string, overrides: Partial<AgentHarnessV2> = {}) {
+  const harness: AgentHarnessV2 = {
+    id,
+    label: "Native fixture",
+    supports: () => ({ supported: true }),
+    runAttempt: vi.fn(),
+    ...overrides,
+  };
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({ pluginId: harness.id, source: "test", harness });
   return registry;
@@ -101,7 +108,8 @@ function pickerConfig(
 function preparePicker(
   cfg: OpenClawConfig,
   snapshot: ModelCatalogSnapshot,
-  projector: ReturnType<typeof createModelCatalogDecisions>,
+  extra: Partial<Parameters<typeof createModelCatalogDecisions>[0]>,
+  provider?: string,
 ) {
   const loadGatewayModelCatalogSnapshot = vi.fn();
   const params = {
@@ -117,7 +125,7 @@ function preparePicker(
     params: { view: "configured", includeDetails: true },
     preloadedCatalog: { agentId: "main", config: cfg, snapshot },
     preloadedOnly: true,
-    catalogProjector: projector,
+    catalogProjector: projectorFor(cfg, snapshot, extra, provider),
   } satisfies Parameters<typeof prepareModelsListResult>[0];
   return { params, loadGatewayModelCatalogSnapshot };
 }
@@ -257,7 +265,9 @@ it.each([true, false])(
           `${provider}/model`,
           nativeRuntime,
           ["openclaw"],
-          { allow: [`${provider}/manual`] },
+          {
+            allow: [`${provider}/manual`],
+          },
         );
         const host = modelEntry(provider);
         const native = nativeModel(host, nativeRuntime, "native-only");
@@ -265,17 +275,12 @@ it.each([true, false])(
           entries: [native],
           routeVariants: [native, ...(hostDonor ? [host] : [])],
         };
-        const pluginRegistry = registryFor({
-          id: nativeRuntime,
-          label: "Native fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-        });
-        const projector = projectorFor(cfg, snapshot, { pluginRegistry }, provider);
+        const pluginRegistry = registryFor(nativeRuntime);
         const { params: listParams, loadGatewayModelCatalogSnapshot } = preparePicker(
           cfg,
           snapshot,
-          projector,
+          { pluginRegistry },
+          provider,
         );
         const prepared = await prepareModelsListResult(listParams);
         const row = prepared.read().models.find((entry) => entry.id === "model");
@@ -364,20 +369,12 @@ it.each([
         };
         let readiness = initialReadiness;
         const loadModelCatalog = vi.fn(async () => [native]);
-        const harness: AgentHarnessV2 = {
-          id: runtime,
-          label: "Native fixture",
-          ...(runtime === "agentsapi"
-            ? {
-                workspaceEnvironment: {
-                  kind: "provider-hosted" as const,
-                  label: "Hosted fixture",
-                },
-              }
-            : {}),
+        const pluginRegistry = registryFor(runtime, {
+          workspaceEnvironment:
+            runtime === "agentsapi"
+              ? { kind: "provider-hosted", label: "Hosted fixture" }
+              : undefined,
           authBootstrap: "harness",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
           loadModelCatalog,
           readModelCatalogReadiness: () => {
             if (readiness === "throws") {
@@ -385,12 +382,11 @@ it.each([
             }
             return readiness === "ready" ? { accountType: "chatgpt" } : undefined;
           },
-        };
-        const projector = projectorFor(cfg, snapshot, {
-          pluginRegistry: registryFor(harness),
+        });
+        const { params, loadGatewayModelCatalogSnapshot } = preparePicker(cfg, snapshot, {
+          pluginRegistry,
           ...(runtimeOverride ? { runtimeOverride, profileProvider: provider } : {}),
         });
-        const { params, loadGatewayModelCatalogSnapshot } = preparePicker(cfg, snapshot, projector);
         const prepared = await prepareModelsListResult(params);
         const rows = prepared.read().models;
         expect(rows).toHaveLength(1);

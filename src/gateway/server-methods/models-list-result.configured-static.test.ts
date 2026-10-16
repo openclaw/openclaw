@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createOAuthRefreshCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
@@ -33,7 +34,11 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
-import type { GatewayRequestHandler, RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
+
+const luna = "gpt-5.6-luna";
+const sol = "gpt-5.6-sol";
+const sonnet = "claude-sonnet-4-6";
 
 const withState = (run: (state: OpenClawTestState) => Promise<void>, withoutAuth = false) =>
   withOpenClawTestState(
@@ -55,7 +60,7 @@ const configuredList = (state: OpenClawTestState, params: Parameters<typeof list
 async function requestModels(
   context: ReturnType<typeof createModelsListTestContext>,
   params: Record<string, unknown>,
-  client: Parameters<GatewayRequestHandler>[0]["client"] = null,
+  client: GatewayClient | null = null,
 ) {
   const respond = vi.fn<RespondFn>();
   await modelsHandlers["models.list"]!({
@@ -68,18 +73,39 @@ async function requestModels(
   });
   return respond;
 }
-const providerConfig = (api: "openai-responses" | "openai-completions", baseUrl: string) => ({
-  api,
-  baseUrl,
-  apiKey: "synthetic-key",
-  models: [],
-});
 function agentConfig(
   defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
   rest: Omit<OpenClawConfig, "agents"> = {},
   entries?: NonNullable<OpenClawConfig["agents"]>["entries"],
 ): OpenClawConfig {
   return { ...rest, agents: { defaults, ...(entries ? { entries } : {}) } };
+}
+function utilityConfig(
+  provider: string,
+  model: string,
+  runtime: string,
+  primary = model,
+): OpenClawConfig {
+  const ref = `${provider}/${model}`;
+  return agentConfig(
+    {
+      model: `${provider}/${primary}`,
+      utilityModel: ref,
+      models: { [ref]: { agentRuntime: { id: runtime } } },
+    },
+    {
+      models: {
+        providers: {
+          [provider]: {
+            api: provider === "openai" ? "openai-responses" : "openai-completions",
+            baseUrl: `https://${provider === "openai" ? "api.openai.com" : "custom.example"}/v1`,
+            apiKey: "synthetic-key",
+            models: [],
+          },
+        },
+      },
+    },
+  );
 }
 
 afterEach(() => {
@@ -105,20 +131,7 @@ it("keeps the utility runtime on the prepared catalog's plugin generation", asyn
       return registry;
     });
     const [preparedRegistry, ambientRegistry] = registries;
-    const cfg = agentConfig(
-      {
-        model: "custom/primary",
-        utilityModel: "custom/small",
-        models: { "custom/small": { agentRuntime: { id: "utility-runtime" } } },
-      },
-      {
-        models: {
-          providers: {
-            custom: providerConfig("openai-completions", "https://custom.example/v1"),
-          },
-        },
-      },
-    );
+    const cfg = utilityConfig("custom", "small", "utility-runtime", "primary");
     const result = await withPluginRuntimeRegistryScope(ambientRegistry, () =>
       configuredList(state, {
         cfg,
@@ -126,10 +139,7 @@ it("keeps the utility runtime on the prepared catalog's plugin generation", asyn
         metadataSnapshot: createPluginMetadataSnapshotFixture({
           plugins: [{ id: "custom", providers: ["custom"], syntheticAuthRefs: ["custom"] }],
         }),
-        catalog: [
-          providerCatalogEntry("custom", "primary"),
-          providerCatalogEntry("custom", "small"),
-        ],
+        catalog: ["primary", "small"].map((id) => providerCatalogEntry("custom", id)),
       }),
     );
 
@@ -143,21 +153,8 @@ it("keeps the utility runtime on the prepared catalog's plugin generation", asyn
 
 it("projects utility runtimes for API, subscription, unavailable, and disabled selections", async () => {
   await withState(async (state) => {
-    const cfg = agentConfig(
-      {
-        model: "openai/gpt-5.5",
-        utilityModel: "openai/gpt-5.5",
-        models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-      },
-      {
-        plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
-        models: {
-          providers: {
-            openai: providerConfig("openai-responses", "https://api.openai.com/v1"),
-          },
-        },
-      },
-    );
+    const cfg = utilityConfig("openai", "gpt-5.5", "codex");
+    cfg.plugins = { allow: ["codex"], entries: { codex: { enabled: true } } };
     setRuntimeConfigSnapshot(cfg);
     const pluginRegistry = loadOpenClawPlugins({
       config: cfg,
@@ -175,7 +172,7 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
       }),
     );
     expect(result.defaultModels).toEqual({
-      automaticUtilityModel: "openai/gpt-5.6-luna",
+      automaticUtilityModel: `openai/${luna}`,
       utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
     });
     const pinnedConfig = agentConfig(
@@ -185,13 +182,11 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
     const subscription: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:utility": {
-          type: "oauth",
-          provider: "openai",
+        "openai:utility": createOAuthRefreshCredential({
           access: "synthetic-access",
           refresh: "synthetic-refresh",
           expires: Date.now() + 3_600_000,
-        },
+        }),
       },
     };
     for (const [name, authStore, expected] of [
@@ -217,7 +212,7 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
         catalog: [catalogEntry("gpt-5.5", "openai-chatgpt-responses")],
       });
       expect(projected.defaultModels, name).toEqual({
-        automaticUtilityModel: "openai/gpt-5.6-luna",
+        automaticUtilityModel: `openai/${luna}`,
         ...(expected ? { utilityRuntime: expected } : {}),
       });
     }
@@ -232,7 +227,6 @@ it.each(["small", undefined])(
         {
           model: "global-primary@work",
           models: { "custom/primary": { alias: "global-primary" } },
-          utilityModel: undefined,
         },
         {},
         {
@@ -263,10 +257,7 @@ it.each(["small", undefined])(
         agentId: "worker",
         agentDir: state.agentDir("worker"),
         workspaceDir: state.workspaceDir,
-        catalog: [
-          providerCatalogEntry("custom", "primary"),
-          providerCatalogEntry("other", "primary"),
-        ],
+        catalog: ["custom", "other"].map((provider) => providerCatalogEntry(provider, "primary")),
         metadataSnapshot,
       });
       const respond = await requestModels(context, {
@@ -306,7 +297,7 @@ it("projects personal-only models for the authenticated requester without publis
       workspaceDir: state.workspaceDir,
       cfg: { agents: { defaults: { model: { primary: "test/default" } } } },
       catalog: [],
-      staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
+      staticEntries: [catalogEntry(luna, "openai-chatgpt-responses")],
       pluginRegistry,
     });
     const published = await readPreparedCatalog(context, "main");
@@ -354,13 +345,11 @@ it("projects personal-only models for the authenticated requester without publis
     expect(await read(alice.id)).toEqual(unconfiguredPersonal);
     const { authProfileId } = connectUserModelAccount({
       ownerProfileId: alice.id,
-      credential: {
-        type: "oauth",
-        provider: "openai",
+      credential: createOAuthRefreshCredential({
         access: "synthetic-personal-access",
         refresh: "synthetic-personal-refresh",
         expires: Date.now() + 600_000,
-      },
+      }),
       assertCurrent() {},
     });
 
@@ -373,9 +362,7 @@ it("projects personal-only models for the authenticated requester without publis
     }
     expect(sql.queries.filter((query) => /\bsecret_store_entries\b/i.test(query))).toEqual([]);
     expect(connected).toMatchObject({
-      models: expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
-      ]),
+      models: expect.arrayContaining([expect.objectContaining({ id: luna, available: true })]),
     });
     expect(await read(bob.id)).toEqual(unconfiguredPersonal);
     expect(await read()).toEqual(shared);
@@ -415,8 +402,8 @@ it.each([true, false])(
       name: `${refresh ? "Refreshed" : "Published"} ${name}`,
     }));
     const config = agentConfig({
-      model: { primary: "openai/gpt-5.6-luna" },
-      models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+      model: { primary: `openai/${luna}` },
+      models: { [`openai/${luna}`]: {}, [`openai/${sol}`]: {} },
     });
 
     const result = listModels({
@@ -440,8 +427,8 @@ it.each([true, false])(
     }
 
     expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "gpt-5.6-luna", name: `${refresh ? "Refreshed" : "Published"} Luna` },
-      { id: "gpt-5.6-sol", name: `${refresh ? "Refreshed" : "Published"} Sol` },
+      { id: luna, name: `${refresh ? "Refreshed" : "Published"} Luna` },
+      { id: sol, name: `${refresh ? "Refreshed" : "Published"} Sol` },
     ]);
   },
 );
@@ -450,13 +437,10 @@ it("projects agent aliases onto inherited default and fallback catalog rows", as
   await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
     const cfg = agentConfig(
       {
-        model: {
-          primary: "gpt-5.6-luna",
-          fallbacks: ["claude-sonnet-4-6"],
-        },
+        model: { primary: luna, fallbacks: [sonnet] },
         models: {
-          "openai/gpt-5.6-luna": { alias: "global-luna" },
-          "anthropic/claude-sonnet-4-6": { alias: "global-sonnet" },
+          [`openai/${luna}`]: { alias: "global-luna" },
+          [`anthropic/${sonnet}`]: { alias: "global-sonnet" },
         },
       },
       {},
@@ -464,8 +448,8 @@ it("projects agent aliases onto inherited default and fallback catalog rows", as
         main: {},
         worker: {
           models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
-            "anthropic/claude-sonnet-4-6": { alias: "worker-sonnet" },
+            [`openai/${luna}`]: { agentRuntime: { id: "codex" } },
+            [`anthropic/${sonnet}`]: { alias: "worker-sonnet" },
           },
         },
       },
@@ -475,24 +459,15 @@ it("projects agent aliases onto inherited default and fallback catalog rows", as
       agentId: "worker",
       cfg,
       view: "configured",
-      catalog: [
-        catalogEntry("gpt-5.6-luna", "openai-responses"),
-        providerCatalogEntry("anthropic", "claude-sonnet-4-6"),
-      ],
+      catalog: [catalogEntry(luna, "openai-responses"), providerCatalogEntry("anthropic", sonnet)],
     });
 
     const projected = Object.fromEntries(
       result.models.map((model) => [model.id, { alias: model.alias, tags: model.tags }]),
     );
     expect(projected).toMatchObject({
-      "gpt-5.6-luna": {
-        alias: "global-luna",
-        tags: ["default", "configured"],
-      },
-      "claude-sonnet-4-6": {
-        alias: "worker-sonnet",
-        tags: ["fallback#1", "configured"],
-      },
+      [luna]: { alias: "global-luna", tags: ["default", "configured"] },
+      [sonnet]: { alias: "worker-sonnet", tags: ["fallback#1", "configured"] },
     });
   });
 });

@@ -91,7 +91,6 @@ async function listPrepared(
 
 beforeEach(() => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
-  // Prepared runtime metadata must not cold-load the plugin's executable setup entry.
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [
       {
@@ -218,47 +217,33 @@ it.each([
   ["CLI pin", api, cli, api, true, false, false, undefined],
 ] as const)(
   "uses the selected execution owner for %s",
-  async ([
-    _name,
-    provider,
-    pinProvider,
-    sharedProvider,
-    expired,
-    unrefreshable,
-    available,
-    reason,
-  ]) => {
-    return withOpenClawTestState(
-      { layout: "state-only", prefix: "cli-pin-identity-" },
-      async (state) => {
-        const modelId = "claude-haiku-4-5";
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: { model: { primary: `${provider}/${modelId}` } },
-            entries: { main: {} },
-          },
-          auth: {
-            profiles: {
-              selected: { provider: pinProvider, mode: "oauth" },
-              shared: { provider: sharedProvider, mode: "token" },
-            },
-            order: { [provider]: ["shared"] },
-          },
-        };
-        await state.writeAuthProfiles({
-          version: 1,
+  async ([, provider, pinProvider, sharedProvider, expired, noRefresh, available, reason]) =>
+    withOpenClawTestState({ layout: "state-only", prefix: "cli-pin-identity-" }, async (state) => {
+      const modelId = "claude-haiku-4-5";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: `${provider}/${modelId}` } },
+          entries: { main: {} },
+        },
+        auth: {
           profiles: {
-            selected: oauthCredential(pinProvider, expired, unrefreshable),
-            shared: token(sharedProvider),
+            selected: { provider: pinProvider, mode: "oauth" },
+            shared: { provider: sharedProvider, mode: "token" },
           },
-        });
-        const model = await listPrepared(cfg, state, provider, modelId, true, {
-          preferredProfileId: "selected",
-          pinnedProfileId: "selected",
-        });
-        expect(model).toMatchObject({ available });
-        expect(model?.unavailableReason).toBe(reason);
-      },
-    );
-  },
+          order: { [provider]: ["shared"] },
+        },
+      };
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          selected: oauthCredential(pinProvider, expired, noRefresh),
+          shared: token(sharedProvider),
+        },
+      });
+      const model = await listPrepared(cfg, state, provider, modelId, true, {
+        preferredProfileId: "selected",
+        pinnedProfileId: "selected",
+      });
+      expect([model?.available, model?.unavailableReason]).toEqual([available, reason]);
+    }),
 );

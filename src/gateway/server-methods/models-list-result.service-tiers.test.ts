@@ -33,12 +33,7 @@ const apiCredential = { type: "api_key" as const, provider: "openai", key: "synt
 const catalogModel = (
   id: string,
   route: Pick<ModelCatalogEntry, "api" | "baseUrl"> = platformRoute,
-): ModelCatalogEntry => ({
-  id,
-  name: id,
-  provider: "openai",
-  ...route,
-});
+): ModelCatalogEntry => ({ id, name: id, provider: "openai", ...route });
 
 function modelConfig(
   ids: string[],
@@ -50,10 +45,7 @@ function modelConfig(
       defaults: {
         model: "openai/" + ids[0],
         models: Object.fromEntries(
-          ids.map((id) => [
-            "openai/" + id,
-            { agentRuntime: { id: runtime }, ...(pickerRuntimes ? { pickerRuntimes } : {}) },
-          ]),
+          ids.map((id) => ["openai/" + id, { agentRuntime: { id: runtime }, pickerRuntimes }]),
         ),
       },
     },
@@ -93,7 +85,6 @@ it.each(["profile", "direct"] as const)(
   async (source) => {
     const model = catalogModel("synthetic-api-model");
     const profileId = source === "profile" ? "openai:api-fixture" : undefined;
-    const credential = apiCredential;
     const cfg = modelConfig([model.id]);
     if (source === "direct") {
       cfg.models = {
@@ -101,7 +92,7 @@ it.each(["profile", "direct"] as const)(
           openai: {
             ...platformRoute,
             auth: "api-key",
-            apiKey: credential.key,
+            apiKey: apiCredential.key,
             models: [],
           },
         },
@@ -110,11 +101,10 @@ it.each(["profile", "direct"] as const)(
     const context = createModelsListTestContext({
       cfg,
       catalog: [model],
-      preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: credential } : {} },
+      preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: apiCredential } : {} },
     });
     const accountCatalog = await installAccountCatalog(context, () => true, true);
-    const prepare = () => preparePublic(context);
-    const first = await prepare();
+    const first = await preparePublic(context);
     expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
       available: true,
       serviceTiers: advertisedTiers,
@@ -125,7 +115,7 @@ it.each(["profile", "direct"] as const)(
     );
     const record = accountCatalog.prepareServiceTierObserver({
       selectedCredential,
-      credential,
+      credential: apiCredential,
     });
     const observation = {
       modelId: model.id,
@@ -136,8 +126,7 @@ it.each(["profile", "direct"] as const)(
       responseTier: "priority",
     };
     record(observation);
-    const next = await prepare();
-    for (const projection of [first, next]) {
+    for (const projection of [first, await preparePublic(context)]) {
       expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
         serviceTiers: advertisedTiers,
         supportsServiceTierRecovery: true,
@@ -152,8 +141,8 @@ it.each(["profile", "direct"] as const)(
 );
 it.for(["codex", "openclaw"] as const)(
   "filters Codex tiers with %s selected while retaining account scope",
-  async (selectedRuntime, { signal }) => {
-    await withOpenClawTestState(
+  async (selectedRuntime, { signal }) =>
+    withOpenClawTestState(
       {
         layout: "state-only",
         prefix: "model-tiers-",
@@ -191,20 +180,20 @@ it.for(["codex", "openclaw"] as const)(
         });
         const discover = vi.fn(
           async (ctx: import("../../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
-            const auth = ctx.resolveProviderAuth("openai");
+            const { profileId } = ctx.resolveProviderAuth("openai");
             return {
               provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
               outcomes: [
                 {
                   provider: "openai",
-                  profileId: auth.profileId,
+                  profileId,
                   status: "ready" as const,
                   modelServiceTiers: [
                     {
                       modelId: model.id,
                       runtimeId: "codex",
                       ...subscriptionFields,
-                      serviceTiers: auth.profileId === accountA ? [...advertisedTiers] : [],
+                      serviceTiers: profileId === accountA ? [...advertisedTiers] : [],
                     },
                   ],
                 },
@@ -250,8 +239,7 @@ it.for(["codex", "openclaw"] as const)(
             ? row
             : row?.runtimeChoices?.find((choice) => choice.agentRuntime.id === runtimeId);
         };
-        const selected = a.read().models.find((row) => row.id === model.id);
-        expect(selected).toMatchObject({
+        expect(a.read().models.find((row) => row.id === model.id)).toMatchObject({
           available: true,
           agentRuntime: { id: selectedRuntime },
         });
@@ -310,8 +298,7 @@ it.for(["codex", "openclaw"] as const)(
           PreparedModelRuntimePublicationSupersededError,
         );
       },
-    );
-  },
+    ),
 );
 
 it("publishes provider tier restrictions through the model catalog projection", async () => {

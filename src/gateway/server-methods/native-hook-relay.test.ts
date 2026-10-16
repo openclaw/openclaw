@@ -173,8 +173,8 @@ it(
 
 it.each([false, true])(
   "waits for stored policy after listener failure (legacy policy: %s)",
-  async (legacy) => {
-    await withOpenClawTestState({ label: "relay-policy-gateway-fallback" }, async () => {
+  (legacy) =>
+    withOpenClawTestState({ label: "relay-policy-gateway-fallback" }, async () => {
       const legacyPath = resolveExecApprovalsPath();
       const legacyPolicy = JSON.stringify({ version: 1, agents: {} });
       if (legacy) {
@@ -195,8 +195,7 @@ it.each([false, true])(
         await expect(relay.ready).rejects.toBe(listenerFailure);
         await paused.entered.promise;
         await setImmediate();
-        expect(preparationSettled()).toBe(false);
-        expect(invocationSettled()).toBe(false);
+        expect([preparationSettled(), invocationSettled()]).toEqual([false, false]);
         expect(requester).not.toHaveBeenCalled();
         expect(relay.deferMcpToolApprovals).toBeUndefined();
         paused.resume.resolve();
@@ -223,8 +222,7 @@ it.each([false, true])(
           await relay.drain();
         }
       }
-    });
-  },
+    }),
 );
 
 it(
@@ -232,10 +230,7 @@ it(
   withState(async () => {
     const requester = vi.fn(async () => "deny" as const);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(requester);
-    const params: Parameters<typeof registerNativeHookRelay>[0] = {
-      ...relayParams("policy-options"),
-      autoApproveMcpTools: false,
-    };
+    const params = { ...relayParams("policy-options"), autoApproveMcpTools: false };
     const relay = registerNativeHookRelay(params);
     params.autoApproveMcpTools = true;
     try {
@@ -276,8 +271,8 @@ it(
 
 it.each(["unregister", "owner-close", "abort"] as const)(
   "revalidates native authority after policy readiness during %s",
-  async (closure) => {
-    await withOpenClawTestState({ label: `relay-policy-${closure}` }, async () => {
+  (closure) =>
+    withOpenClawTestState({ label: `relay-policy-${closure}` }, async () => {
       const paused = pauseMcpPolicyRead();
       const listenerFailure = failListener();
       const requester = vi.fn(async () => "deny" as const);
@@ -311,9 +306,8 @@ it.each(["unregister", "owner-close", "abort"] as const)(
         const expectedError =
           closure === "owner-close" ? "fixture native owner closed" : "registration is inactive";
         await expect(preparation).rejects.toThrow(expectedError);
-        const respond = await invocation;
         // Invocation cancellation stops its wait before preparation rechecks the owner.
-        expectInvalidRequest(respond, closure === "abort" ? "aborted" : expectedError);
+        expectInvalidRequest(await invocation, closure === "abort" ? "aborted" : expectedError);
         expect(requester.mock.calls.length).toBe(0);
       } finally {
         paused.resume.resolve();
@@ -322,8 +316,7 @@ it.each(["unregister", "owner-close", "abort"] as const)(
         relay.unregister();
         await relay.drain();
       }
-    });
-  },
+    }),
 );
 
 it(
@@ -331,6 +324,7 @@ it(
   withState(async (state) => {
     allowStoredTool();
     const foreign = path.join(state.root, "foreign");
+    const foreignDb = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: foreign });
     fs.mkdirSync(foreign);
     fs.writeFileSync(resolveExecApprovalsPath({ OPENCLAW_STATE_DIR: foreign }), "{}");
     const relay = registerRelay("policy-state-owner");
@@ -339,9 +333,7 @@ it(
       await relay.ready;
       expectSuccess(await requestPermission(relay, "policy-state-owner-call"));
       expect(relay.deferMcpToolApprovals).toBe(true);
-      expect(fs.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: foreign }))).toBe(
-        false,
-      );
+      expect(fs.existsSync(foreignDb)).toBe(false);
     } finally {
       relay.unregister();
       vi.unstubAllEnvs();

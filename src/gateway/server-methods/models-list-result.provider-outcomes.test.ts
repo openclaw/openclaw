@@ -34,6 +34,11 @@ function oauth(label: string): AuthProfileStore["profiles"][string] {
   };
 }
 const emptyAuthStore = { version: 1, profiles: {} } as const;
+const authStore = (
+  profiles: AuthProfileStore["profiles"],
+  usageStats?: AuthProfileStore["usageStats"],
+): AuthProfileStore => ({ version: 1, profiles, ...(usageStats ? { usageStats } : {}) });
+const rejectedKey = { type: "api_key" as const, provider: "openai", key: "rejected-api-key" };
 const rejected = (profileId: string) => ({
   provider: "openai",
   profileId,
@@ -79,8 +84,7 @@ function preloaded(
   };
 }
 
-it.each([false, true])("preserves auth rejection with refresh failure=%s", async (unavailable) => {
-  const config = {} as OpenClawConfig;
+it.each([false, true])("preserves rejection on refresh failure=%s", async (unavailable) => {
   const reporter = createCatalogAttemptReporter(
     {},
     { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
@@ -92,7 +96,7 @@ it.each([false, true])("preserves auth rejection with refresh failure=%s", async
     ...(unavailable ? [{ provider: "unreachable", status: "unavailable" as const }] : []),
   ];
   const context = createModelsListTestContext({
-    cfg: config,
+    cfg: {},
     catalog: [],
     catalogComplete: true,
     preparedAuthStore: emptyAuthStore,
@@ -114,7 +118,7 @@ it.each([false, true])("preserves auth rejection with refresh failure=%s", async
 });
 
 it.each([false, true])(
-  "marks rejected API-key rows unavailable (catalog rejection=%s)",
+  "marks API-key rejection unavailable (catalog=%s)",
   async (catalogRejection) => {
     const config = { ...modelConfig, auth: { order: { openai: ["openai:chatgpt"] } } };
     const snapshot = markPreparedModelCatalogFull({
@@ -129,27 +133,20 @@ it.each([false, true])(
     });
     const projector = decisions(
       snapshot,
-      {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            type: "api_key",
-            provider: "openai",
-            key: "rejected-api-key",
-          },
+      authStore(
+        {
+          "openai:chatgpt": rejectedKey,
           "openai:other": oauth("accepted"),
         },
-        ...(catalogRejection
+        catalogRejection
           ? {
-              usageStats: {
-                "openai:chatgpt": {
-                  disabledUntil: 2_000_000_000_000,
-                  disabledReason: "auth_permanent" as const,
-                },
+              "openai:chatgpt": {
+                disabledUntil: 2_000_000_000_000,
+                disabledReason: "auth_permanent",
               },
             }
-          : {}),
-      },
+          : undefined,
+      ),
       config,
       "openai:chatgpt",
     );
@@ -169,7 +166,6 @@ it.each([false, true])(
 );
 
 it("does not apply one profile rejection to a different selected profile", () => {
-  const config = modelConfig;
   const subscriptionModel = {
     ...openaiModel,
     api: "openai-chatgpt-responses" as const,
@@ -182,14 +178,8 @@ it("does not apply one profile rejection to a different selected profile", () =>
   };
   const projector = decisions(
     snapshot,
-    {
-      version: 1,
-      profiles: {
-        "openai:rejected": oauth("rejected"),
-        "openai:accepted": oauth("accepted"),
-      },
-    },
-    config,
+    authStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
+    modelConfig,
     "openai:accepted",
   );
 
@@ -199,35 +189,32 @@ it("does not apply one profile rejection to a different selected profile", () =>
   });
 });
 
-it.each([false, true])(
-  "projects cooldown metadata only when unavailable (available=%s)",
-  async (available) => {
-    const cooldown = {
-      unavailableReason: "cooldown" as const,
-      unavailableUntil: 2_000_000_000_000,
-    };
-    const config = {
-      agents: { defaults: { models: { "custom/test-model": {} } } },
-    } as OpenClawConfig;
-    const model = { id: "test-model", name: "Test Model", provider: "custom" };
-    const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-    const projector = decisions(snapshot, emptyAuthStore, config);
-    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockReturnValue({
-      availability: available,
-      ...cooldown,
-      routeResolution: null,
-    });
-    const evaluateNative = vi.spyOn(projector, "evaluateNative");
-    const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
+it.each([false, true])("projects cooldown only when unavailable (%s)", async (available) => {
+  const cooldown = {
+    unavailableReason: "cooldown" as const,
+    unavailableUntil: 2_000_000_000_000,
+  };
+  const config = {
+    agents: { defaults: { models: { "custom/test-model": {} } } },
+  } as OpenClawConfig;
+  const model = { id: "test-model", name: "Test Model", provider: "custom" };
+  const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
+  const projector = decisions(snapshot, emptyAuthStore, config);
+  const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockReturnValue({
+    availability: available,
+    ...cooldown,
+    routeResolution: null,
+  });
+  const evaluateNative = vi.spyOn(projector, "evaluateNative");
+  const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
 
-    expect(prepared.read().models).toEqual([
-      { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
-    ]);
-    const hostEvaluations = evaluateEntry.mock.calls.length;
-    evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
-    evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
-    expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
-  },
-);
+  expect(prepared.read().models).toEqual([
+    { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
+  ]);
+  const hostEvaluations = evaluateEntry.mock.calls.length;
+  evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
+  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+  evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
+  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+  expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
+});
