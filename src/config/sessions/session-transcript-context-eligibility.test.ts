@@ -62,6 +62,17 @@ const entries = [
   },
 ] as const;
 
+function fixture(env: NodeJS.ProcessEnv) {
+  const scope = { agentId: "main", env, sessionId, sessionKey: "agent:main:eligibility" };
+  const db = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+  const rewrite = (excludeFromContext: boolean) => ({
+    seq: 2,
+    expectedEventJson: JSON.stringify(entries[2]),
+    event: { ...entries[2], message: { ...entries[2].message, excludeFromContext } },
+  });
+  return { scope, db, rewrite };
+}
+
 function projectionRows(db: DatabaseSync) {
   return db
     .prepare(
@@ -80,16 +91,11 @@ function rawRows(db: DatabaseSync) {
 
 it("converges an older current-watermark rebuild and a following append without changing history", async () => {
   await withOpenClawTestState({ label: "transcript-eligibility" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId,
-      sessionKey: "agent:main:eligibility",
-    };
+    const { scope, db: open } = fixture(state.env);
     runOpenClawAgentWriteTransaction((database) => {
       expect(appendTranscriptEventsInTransaction(database, scope, entries)).toBe(entries.length);
     }, scope);
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+    const db = open();
     const expectedRows = projectionRows(db);
     expect(expectedRows.map((row) => row.context_eligible)).toEqual([1, 1, 0, 1]);
     expect(readRecentSessionTranscriptActiveEvents(scope, 3)).toEqual([
@@ -147,14 +153,9 @@ it("converges an older current-watermark rebuild and a following append without 
 
 it("reclassifies exact rewrites in both directions and deletes eligibility with the transcript", async () => {
   await withOpenClawTestState({ label: "transcript-eligibility-rewrite" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId,
-      sessionKey: "agent:main:eligibility",
-    };
+    const { scope, db: open } = fixture(state.env);
     await replaceTranscriptEvents(scope, [...entries]);
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+    const db = open();
     for (const excludeFromContext of [false, true]) {
       const before = rawRows(db);
       const row = before[2];
@@ -186,26 +187,15 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
 
 it("keeps a prepared projection unpublished after a same-sequence rewrite", async () => {
   await withOpenClawTestState({ label: "transcript-eligibility-stale" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId,
-      sessionKey: "agent:main:eligibility",
-    };
+    const { scope, db: open, rewrite } = fixture(state.env);
     await replaceTranscriptEvents(scope, [...entries]);
-    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+    const db = open();
     const plan = prepareSessionTranscriptProjection(db, sessionId);
     if (!plan) {
       throw new Error("missing prepared projection");
     }
     runOpenClawAgentWriteTransaction((database) => {
-      rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-        {
-          seq: 2,
-          expectedEventJson: JSON.stringify(entries[2]),
-          event: { ...entries[2], message: { ...entries[2].message, excludeFromContext: false } },
-        },
-      ]);
+      rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [rewrite(false)]);
       const claimId = -1;
       expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(true);
       deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
@@ -233,14 +223,9 @@ it.each(["interrupted", "rewrite", "delete"])(
   "fences partial eligibility publication after %s work",
   async (change) => {
     await withOpenClawTestState({ label: "transcript-eligibility-claim" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionId,
-        sessionKey: "agent:main:eligibility",
-      };
+      const { scope, db: open, rewrite } = fixture(state.env);
       await replaceTranscriptEvents(scope, [...entries]);
-      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
+      const db = open();
       db.prepare(
         "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
       ).run(sessionId);
@@ -271,16 +256,7 @@ it.each(["interrupted", "rewrite", "delete"])(
       if (change !== "interrupted") {
         runOpenClawAgentWriteTransaction((database) => {
           if (change === "rewrite") {
-            rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-              {
-                seq: 2,
-                expectedEventJson: JSON.stringify(entries[2]),
-                event: {
-                  ...entries[2],
-                  message: { ...entries[2].message, excludeFromContext: false },
-                },
-              },
-            ]);
+            rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [rewrite(false)]);
           } else {
             replaceSqliteTranscriptEventsInTransaction(database, scope, []);
           }

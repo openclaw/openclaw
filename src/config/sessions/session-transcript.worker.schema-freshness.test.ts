@@ -19,6 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
+import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import type {
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerRequest,
@@ -134,12 +135,9 @@ it("borrows canonical writer proof without a native reader and still fences fore
 it.for([0, 1])(
   "transfers bounded history JSON at offset %i without retaining the worker buffer",
   async (offset) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentId = "main";
-      const sessionKey = "agent:main:history-transfer";
-      const sessionId = "history-transfer";
-      const { path } = openOpenClawAgentDatabase({ agentId, env: state.env });
-      const scope = { agentId, sessionKey, sessionId, storePath: path, env: state.env };
+    await withTranscriptDatabase("history-transfer", async ({ state, database, scope }) => {
+      const { agentId, sessionKey, sessionId } = scope;
+      const { path } = database;
       replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
       for (const [index, length] of [64, 200_000].entries()) {
         appendTranscriptMessageSync(scope, {
@@ -326,13 +324,9 @@ it.for([
 );
 
 it("transfers only owned artifact response bytes and leaves HEAD replies payload-free", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "main";
-    const sessionKey = "agent:main:artifact-transfer";
-    const sessionId = "artifact-transfer";
-    const options = { agentId, env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    const scope = { ...options, sessionKey, sessionId, storePath: path };
+  await withTranscriptDatabase("artifact-transfer", async ({ database, scope }) => {
+    const { agentId, sessionKey, sessionId } = scope;
+    const { path } = database;
     replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
     appendTranscriptMessageSync(scope, {
       eventId: "artifact-message",

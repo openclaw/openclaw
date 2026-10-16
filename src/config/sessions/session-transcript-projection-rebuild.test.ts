@@ -14,6 +14,30 @@ function row(
   return { createdAt, event, seq };
 }
 
+function message(
+  seq: number,
+  id: string,
+  parentId: string | null | undefined,
+  role: string,
+  content: unknown,
+  overrides: Record<string, unknown> = {},
+  createdAt?: number,
+) {
+  return row(
+    seq,
+    {
+      type: "message",
+      id,
+      ...(parentId !== undefined ? { parentId } : {}),
+      message: { role, content },
+      ...overrides,
+    },
+    createdAt,
+  );
+}
+
+const header = (version = 3) => row(0, { id: SESSION_ID, type: "session", version });
+
 function projection(rows: SessionTranscriptProjectionSourceRow[]) {
   const db = openNodeSqliteDatabase(":memory:");
   try {
@@ -42,25 +66,10 @@ function projection(rows: SessionTranscriptProjectionSourceRow[]) {
 describe("canonical SQLite session transcript projection", () => {
   it("projects one deterministic active branch", () => {
     const result = projection([
-      row(0, { id: SESSION_ID, type: "session", version: 3 }),
-      row(1, {
-        id: "root",
-        message: { content: "root text", role: "user" },
-        parentId: null,
-        type: "message",
-      }),
-      row(2, {
-        id: "abandoned",
-        message: { content: "abandoned text", role: "assistant" },
-        parentId: "root",
-        type: "message",
-      }),
-      row(3, {
-        id: "active",
-        message: { content: "active text", role: "assistant" },
-        parentId: "root",
-        type: "message",
-      }),
+      header(),
+      message(1, "root", null, "user", "root text"),
+      message(2, "abandoned", "root", "assistant", "abandoned text"),
+      message(3, "active", "root", "assistant", "active text"),
     ]);
 
     expect(result).toMatchObject({
@@ -83,26 +92,23 @@ describe("canonical SQLite session transcript projection", () => {
 
   it("keeps persisted row timestamps for timestamp-less and invalid-timestamp messages", () => {
     const result = projection([
-      row(0, { id: SESSION_ID, type: "session", version: 3 }),
-      row(
+      header(),
+      message(
         1,
-        {
-          id: "old-user",
-          message: { content: [{ text: "old content", type: "text" }], role: "user" },
-          parentId: null,
-          type: "message",
-        },
+        "old-user",
+        null,
+        "user",
+        [{ text: "old content", type: "text" }],
+        {},
         1_700_000_000_000,
       ),
-      row(
+      message(
         2,
-        {
-          id: "invalid-timestamp",
-          message: { content: "still old", role: "assistant" },
-          parentId: "old-user",
-          timestamp: "not a date",
-          type: "message",
-        },
+        "invalid-timestamp",
+        "old-user",
+        "assistant",
+        "still old",
+        { timestamp: "not a date" },
         1_700_000_001_000,
       ),
     ]);
@@ -115,19 +121,11 @@ describe("canonical SQLite session transcript projection", () => {
 
   it("skips malformed content-block types without dropping neighboring text", () => {
     const result = projection([
-      row(0, { id: SESSION_ID, type: "session", version: 3 }),
-      row(1, {
-        id: "mixed-content",
-        message: {
-          content: [
-            { text: "ignored", type: { toString: null } },
-            { text: "kept", type: "text" },
-          ],
-          role: "assistant",
-        },
-        parentId: null,
-        type: "message",
-      }),
+      header(),
+      message(1, "mixed-content", null, "assistant", [
+        { text: "ignored", type: { toString: null } },
+        { text: "kept", type: "text" },
+      ]),
     ]);
 
     expect(result.ftsRows).toEqual([
@@ -137,19 +135,9 @@ describe("canonical SQLite session transcript projection", () => {
 
   it("respects a leaf-control rewind without indexing the abandoned continuation", () => {
     const result = projection([
-      row(0, { id: SESSION_ID, type: "session", version: 3 }),
-      row(1, {
-        id: "root",
-        message: { content: "keep", role: "user" },
-        parentId: null,
-        type: "message",
-      }),
-      row(2, {
-        id: "abandoned",
-        message: { content: "remove", role: "assistant" },
-        parentId: "root",
-        type: "message",
-      }),
+      header(),
+      message(1, "root", null, "user", "keep"),
+      message(2, "abandoned", "root", "assistant", "remove"),
       row(3, {
         appendParentId: "root",
         id: "rewind",
@@ -168,17 +156,9 @@ describe("canonical SQLite session transcript projection", () => {
 
   it("keeps legacy flat-message ordering and searchable identities", () => {
     const result = projection([
-      row(0, { id: SESSION_ID, type: "session", version: 1 }),
-      row(1, {
-        id: "legacy-user",
-        message: { content: "first", role: "user" },
-        type: "message",
-      }),
-      row(2, {
-        id: "legacy-assistant",
-        message: { content: "second", role: "assistant" },
-        type: "message",
-      }),
+      header(1),
+      message(1, "legacy-user", undefined, "user", "first"),
+      message(2, "legacy-assistant", undefined, "assistant", "second"),
     ]);
 
     expect(result.activeRows).toEqual([

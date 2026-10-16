@@ -14,11 +14,12 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { findTranscriptEvent } from "./session-transcript-match.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
-it("keeps incognito matching in its process-owned store without creating disk state", async () => {
+it("keeps incognito matching and raw reads in their memory owner without creating disk state", async () => {
   await withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -57,6 +58,7 @@ it("keeps incognito matching in its process-owned store without creating disk st
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
       event: unrelated,
     });
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([answer, unrelated]);
     await expect(
       findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
     ).resolves.toBeUndefined();
@@ -64,6 +66,7 @@ it("keeps incognito matching in its process-owned store without creating disk st
 
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([]);
     await expect(
       findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
     ).resolves.toBeUndefined();

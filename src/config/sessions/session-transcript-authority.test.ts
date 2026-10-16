@@ -9,12 +9,8 @@ import {
   type SessionIdentityMutation,
 } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -24,6 +20,7 @@ import {
   publishUnchangedSessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
+import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 
 const rollbackFault = useSqliteWorkerFault([
   {
@@ -68,15 +65,7 @@ function observe(sessionKey: string) {
 it.each(["native", "worker"] as const)(
   "publishes the committed context through SessionManager %s persistence before completion",
   async (realm) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const scope = {
-        agentId: "main",
-        sessionKey: `agent:main:authority-${realm}`,
-        sessionId: `authority-${realm}`,
-        storePath: database.path,
-        env: state.env,
-      };
+    await withTranscriptDatabase(`authority-${realm}`, async ({ database, scope }) => {
       replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const manager =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
@@ -89,11 +78,10 @@ it.each(["native", "worker"] as const)(
         const count = values.length;
         if (realm === "native") {
           native();
-          expect(values.length).toBeGreaterThan(count);
         } else {
           await worker();
-          expect(values.length).toBeGreaterThan(count);
         }
+        expect(values.length).toBeGreaterThan(count);
         expect(values.at(-1)).toMatchObject({
           ...readTranscriptContextVersionInTransaction(database, scope.sessionId),
           sessionId: scope.sessionId,
@@ -210,15 +198,7 @@ it.each(["native", "worker"] as const)(
 );
 
 it("publishes bounded worker previews and clears them for nonprojectable and side appends", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-preview",
-      sessionId: "authority-preview",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-preview", async ({ scope }) => {
     const manager = await SessionManager.openAsync(scope);
     const values = observe(scope.sessionKey);
     const atLimit = {
@@ -266,15 +246,7 @@ it("publishes bounded worker previews and clears them for nonprojectable and sid
 });
 
 it("installs final transcript facts before entry observers and discards nested rollback contributions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-rollback",
-      sessionId: "authority-rollback",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-rollback", async ({ database, scope, state }) => {
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
     manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
@@ -324,15 +296,7 @@ it("installs final transcript facts before entry observers and discards nested r
 });
 
 it("does not publish a tentative typed write inside an unmanaged raw outer transaction", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-raw-outer",
-      sessionId: "authority-raw-outer",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-raw-outer", async ({ database, scope }) => {
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
     manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
@@ -351,15 +315,7 @@ it("does not publish a tentative typed write inside an unmanaged raw outer trans
 });
 
 it("publishes worker initialization and branched entry metadata with the transcript before observers", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-companion",
-      sessionId: "authority-companion",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-companion", async ({ scope }) => {
     const manager = await SessionManager.openAsync(scope);
     const contexts = observe(scope.sessionKey);
     const identities: SessionIdentityMutation[] = [];
@@ -406,15 +362,7 @@ it("publishes worker initialization and branched entry metadata with the transcr
 });
 
 it("keeps a delayed worker mutation postimage after native content-preserving publication and profile notification", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-delayed",
-      sessionId: "authority-delayed",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-delayed", async ({ database, scope, state }) => {
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(scope);
     await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
@@ -454,15 +402,7 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
 });
 
 it("publishes the committed branch identity when its ordinary reply is lost", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-lost-reply",
-      sessionId: "authority-lost-reply",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-lost-reply", async ({ database, scope }) => {
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(scope);
     const seed = await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
@@ -522,15 +462,7 @@ it("publishes the committed branch identity when its ordinary reply is lost", as
   });
 });
 it("keeps captured context current after a granted worker append rolls back at COMMIT", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:authority-commit-rollback",
-      sessionId: "authority-commit-rollback",
-      storePath: database.path,
-      env: state.env,
-    };
+  await withTranscriptDatabase("authority-commit-rollback", async ({ database, scope }) => {
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(scope);
     await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });

@@ -43,6 +43,27 @@ vi.mock("node:worker_threads", async () =>
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function seed(
+  options: { agentId: string; env: NodeJS.ProcessEnv },
+  sessionId: string,
+  content: string,
+  eventId = "seed",
+  sessionKey = `agent:${options.agentId}:${sessionId}`,
+) {
+  await persistSessionTranscriptTurn(
+    { ...options, sessionId, sessionKey },
+    { messages: [{ eventId, message: { role: "user", content } }], touchSessionEntry: false },
+  );
+  await waitForSessionTranscriptIndexReconcile(options);
+}
+
+async function cleanup(stateDir: string) {
+  await closeSessionTranscriptReconcileWorkerPool();
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
+}
+
 it("closes a queued admission without dispatching it after shutdown", async () => {
   const stateDir = tempDirs.make("openclaw-reconcile-queued-admission-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -99,10 +120,7 @@ it("closes a queued admission without dispatching it after shutdown", async () =
     await outcome;
     await closing;
     admissionSpy.mockRestore();
-    await closeSessionTranscriptReconcileWorkerPool();
-    await closeOpenClawAgentDatabasesAsync(stateDir);
-    closeOpenClawStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
+    await cleanup(stateDir);
   }
 });
 
@@ -140,14 +158,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
     setRuntimeConfigSnapshot({});
-    await persistSessionTranscriptTurn(
-      { ...options, sessionId: "parent-owner", sessionKey: "agent:main:parent-owner" },
-      {
-        messages: [{ eventId: "seed", message: { role: "user", content: "synthetic ownership" } }],
-        touchSessionEntry: false,
-      },
-    );
-    await waitForSessionTranscriptIndexReconcile(options);
+    await seed(options, "parent-owner", "synthetic ownership");
     // Seeding may retain a worker writer; this fixture starts with only its native handle.
     await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
     const database = openOpenClawAgentDatabase(options);
@@ -190,10 +201,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
   } finally {
     canonical.restore();
     try {
-      await closeSessionTranscriptReconcileWorkerPool();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
+      await cleanup(stateDir);
     } finally {
       owner?.release();
     }
@@ -218,16 +226,13 @@ it.each(["complete", "native-exit"] as const)(
     try {
       setRuntimeConfigSnapshot({});
       for (const options of targets) {
-        await persistSessionTranscriptTurn(
-          { ...options, sessionId, sessionKey: `agent:${options.agentId}:lifecycle` },
-          {
-            messages: [
-              { eventId: options.agentId, message: { role: "user", content: options.agentId } },
-            ],
-            touchSessionEntry: false,
-          },
+        await seed(
+          options,
+          sessionId,
+          options.agentId,
+          options.agentId,
+          `agent:${options.agentId}:lifecycle`,
         );
-        await waitForSessionTranscriptIndexReconcile(options);
         await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         const baseline = readAgentDatabaseLeaseIds(database.path, env);
@@ -352,10 +357,7 @@ it.each(["complete", "native-exit"] as const)(
       canonical.restore();
       releaseAcknowledgement?.();
       await operations;
-      await closeSessionTranscriptReconcileWorkerPool();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
+      await cleanup(stateDir);
     }
   },
   30_000,
@@ -378,24 +380,10 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
     let closeSpy: { mockRestore(): void } | undefined;
     try {
       setRuntimeConfigSnapshot({});
-      await persistSessionTranscriptTurn(
-        { ...options, sessionId: "settlement", sessionKey: "agent:main:settlement" },
-        {
-          messages: [{ eventId: "seed", message: { role: "user", content: "retained bytes" } }],
-          touchSessionEntry: false,
-        },
-      );
-      await waitForSessionTranscriptIndexReconcile(options);
+      await seed(options, "settlement", "retained bytes");
       const orphanSessionId = "deferred-orphan";
       if (ending === "complete") {
-        await persistSessionTranscriptTurn(
-          { ...options, sessionId: orphanSessionId, sessionKey: "agent:main:deferred-orphan" },
-          {
-            messages: [{ eventId: "orphan-message", message: { role: "user", content: "orphan" } }],
-            touchSessionEntry: false,
-          },
-        );
-        await waitForSessionTranscriptIndexReconcile(options);
+        await seed(options, orphanSessionId, "orphan", "orphan-message");
       }
       await closeSessionTranscriptReconcileWorkerPool();
       await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
@@ -512,20 +500,14 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
           .all("settlement"),
       ).toEqual(original);
       if (ending === "complete") {
+        const count = (table: string) =>
+          reopened.db
+            .prepare(`SELECT count(*) AS count FROM ${table} WHERE session_id = ?`)
+            .get(orphanSessionId);
         const orphanRows = () => ({
-          index: reopened.db
-            .prepare(
-              "SELECT count(*) AS count FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(orphanSessionId),
-          identities: reopened.db
-            .prepare(
-              "SELECT count(*) AS count FROM session_transcript_fts_rows WHERE session_id = ?",
-            )
-            .get(orphanSessionId),
-          content: reopened.db
-            .prepare("SELECT count(*) AS count FROM session_transcript_fts WHERE session_id = ?")
-            .get(orphanSessionId),
+          index: count("session_transcript_index_state"),
+          identities: count("session_transcript_fts_rows"),
+          content: count("session_transcript_fts"),
         });
         expect(orphanRows()).toEqual({
           index: { count: 1 },
@@ -549,10 +531,7 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
       await reconciliation;
       await closing?.catch(() => {});
       closeSpy?.mockRestore();
-      await closeSessionTranscriptReconcileWorkerPool();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      closeOpenClawStateDatabaseForTest();
-      clearRuntimeConfigSnapshot();
+      await cleanup(stateDir);
     }
   },
 );
@@ -568,14 +547,7 @@ it("revokes scheduled reconciliation before its first disk admission", async () 
   let completion: Promise<void> | undefined;
   try {
     setRuntimeConfigSnapshot({});
-    await persistSessionTranscriptTurn(
-      { ...options, sessionId: "delayed", sessionKey: "agent:main:delayed" },
-      {
-        messages: [{ eventId: "seed", message: { role: "user", content: "retained bytes" } }],
-        touchSessionEntry: false,
-      },
-    );
-    await waitForSessionTranscriptIndexReconcile(options);
+    await seed(options, "delayed", "retained bytes");
     const database = openOpenClawAgentDatabase(options);
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     const task = vi.fn();
@@ -601,9 +573,6 @@ it("revokes scheduled reconciliation before its first disk admission", async () 
     await completion;
     await closing?.catch(() => {});
     vi.restoreAllMocks();
-    await closeSessionTranscriptReconcileWorkerPool();
-    await closeOpenClawAgentDatabasesAsync(stateDir);
-    closeOpenClawStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
+    await cleanup(stateDir);
   }
 });
