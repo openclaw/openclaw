@@ -477,7 +477,10 @@ describe("runHeartbeatOnce", () => {
     ...(options?.getReplyFromConfig ? { getReplyFromConfig: options.getReplyFromConfig } : null),
   });
 
-  async function heartbeatCase(prefix: string, config: string | OpenClawConfig = "whatsapp") {
+  async function heartbeatCase(
+    prefix: string,
+    config: Parameters<typeof heartbeatTestConfig>[1] | OpenClawConfig = "whatsapp",
+  ) {
     const tmpDir = await createCaseDir(prefix);
     const storePath = path.join(tmpDir, "sessions.json");
     const cfg: OpenClawConfig =

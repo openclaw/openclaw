@@ -64,7 +64,7 @@ vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 
-function useConfig(cfg: OpenClawConfig) {
+function useConfig<T extends OpenClawConfig>(cfg: T) {
   config.setRuntimeConfigSnapshot(cfg);
   vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
   return cfg;
