@@ -52,7 +52,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   appendSessionTranscriptReport: io.report,
 }));
-vi.mock("../config/sessions/session-pending-input-withdrawal.js", () => ({
+vi.mock("../config/sessions/session-pending-input-withdrawal.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../config/sessions/session-pending-input-withdrawal.js")
+  >()),
   discardSessionPendingInput: io.withdraw,
 }));
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({

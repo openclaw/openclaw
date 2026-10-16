@@ -313,9 +313,13 @@ it(
           { sessionKey: target },
           { signal },
         );
-        // Reset sources are terminal; permission failures remain retryable.
-        expect(after.pendingInputs.items.map((item) => item.state)).toEqual(["interrupted"]);
+        // History retains the cancelled receipt; only permission failures can replay.
+        expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
+          "cancelled",
+          "interrupted",
+        ]);
         expect(after.pendingInputs.items.map((item) => item.runId)).toEqual([
+          accepted.get("RESET_SOURCE_UPDATE"),
           accepted.get("REVOKED_UPDATE"),
         ]);
         await client.stopAndWait();
