@@ -54,14 +54,14 @@ export function ShellLazyOverlays(props: {
   nativeEmbed: boolean;
 }): SolidJSX.Element {
   const state = createMemo(() => {
+    void props.revision;
     return {
-      revision: props.revision,
       lazy: props.host.lazyCustomElements.visibleState,
-      paletteLoading: props.host.commandPaletteLoading.active,
+      paletteLoading: props.host.commandPaletteLoading.active(),
       paletteDefined: isOptionalElementDefined(props.host.commandPaletteElement),
       debugDefined: isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT),
-      debugRenderer: props.host.debugOverlayFrame.renderer,
-      debugFrameFailed: props.host.debugOverlayFrame.failed,
+      debugRenderer: props.host.debugOverlayFrame.renderer(),
+      debugFrameFailed: props.host.debugOverlayFrame.failed(),
       debugMode: props.host.pendingDebugOverlayMode,
       shortcutsDefined: isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT),
       sendShortcut: normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut),
@@ -124,11 +124,7 @@ export function ShellLazyOverlays(props: {
           </Show>
         }
       >
-        <CommandPaletteLoading
-          state={props.host.commandPaletteLoading}
-          revision={state().revision}
-          onClose={onClose}
-        />
+        <CommandPaletteLoading state={props.host.commandPaletteLoading} onClose={onClose} />
       </Show>
       <Show when={state().paletteDefined}>
         <openclaw-command-palette

@@ -2,11 +2,14 @@ import { beforeEach, expect, test, vi } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-// Install the mocked reader before the Gateway loads its accessor graph.
+// Install the mocked readers before the Gateway loads its accessor graph.
+import "../config/sessions/session-transcript-events.js";
 import "../config/sessions/session-transcript-stats.js";
-import { rpcReq } from "./test-helpers.js";
+import * as settlementOwner from "./server-methods/session-run-settlement.js";
+import { embeddedRunMock, rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
@@ -19,12 +22,25 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
+type ReadTranscriptEvents =
+  (typeof import("../config/sessions/session-transcript-events.js"))["loadSessionTranscriptEvents"];
+
 type ReadTranscriptStats =
   (typeof import("../config/sessions/session-transcript-stats.js"))["readTranscriptStatsAsync"];
 
 const transcriptReads = vi.hoisted(() => ({
+  events: vi.fn<ReadTranscriptEvents>(),
   stats: vi.fn<ReadTranscriptStats>(),
 }));
+
+vi.mock("../config/sessions/session-transcript-events.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-transcript-events.js")>();
+  return {
+    ...actual,
+    loadSessionTranscriptEvents: transcriptReads.events,
+  };
+});
 
 vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal) => {
   const actual =
@@ -37,14 +53,23 @@ vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal)
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
+let realTranscriptEventsReader: ReadTranscriptEvents;
 let realTranscriptStatsReader: ReadTranscriptStats;
 
 beforeEach(async () => {
+  transcriptReads.events.mockReset();
   transcriptReads.stats.mockReset();
-  const actual = await vi.importActual<
-    typeof import("../config/sessions/session-transcript-stats.js")
-  >("../config/sessions/session-transcript-stats.js");
-  realTranscriptStatsReader = actual.readTranscriptStatsAsync;
+  const [events, stats] = await Promise.all([
+    vi.importActual<typeof import("../config/sessions/session-transcript-events.js")>(
+      "../config/sessions/session-transcript-events.js",
+    ),
+    vi.importActual<typeof import("../config/sessions/session-transcript-stats.js")>(
+      "../config/sessions/session-transcript-stats.js",
+    ),
+  ]);
+  realTranscriptEventsReader = events.loadSessionTranscriptEvents;
+  realTranscriptStatsReader = stats.readTranscriptStatsAsync;
+  transcriptReads.events.mockImplementation(realTranscriptEventsReader);
   transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
 });
 
@@ -95,24 +120,44 @@ const transcriptReadError = () =>
   new Error("SQLITE_IOERR: failed to read session transcript storage");
 
 // Background reads must not consume the failure intended for the compaction RPC.
-function failTranscriptStatsForSession(sessionId: string): void {
-  transcriptReads.stats.mockImplementation(async (scope) => {
-    if (scope.sessionId !== sessionId) {
-      return realTranscriptStatsReader(scope);
-    }
-    throw transcriptReadError();
-  });
+function failTranscriptReadForSession(sessionId: string, reader: "events" | "stats"): void {
+  if (reader === "events") {
+    transcriptReads.events.mockImplementation(async (scope) => {
+      if (scope.sessionId !== sessionId) {
+        return realTranscriptEventsReader(scope);
+      }
+      throw transcriptReadError();
+    });
+  } else {
+    transcriptReads.stats.mockImplementation(async (scope) => {
+      if (scope.sessionId !== sessionId) {
+        return realTranscriptStatsReader(scope);
+      }
+      throw transcriptReadError();
+    });
+  }
 }
 
 test.each([
-  { stage: "initial", sessionId: "sess-read-failure" },
-  { stage: "maxLines preflight", sessionId: "sess-max-lines-read-failure", maxLines: 50 },
+  { stage: "legacy preflight", sessionId: "sess-read-failure", reader: "events" as const },
+  {
+    stage: "native preflight",
+    sessionId: "sess-native-read-failure",
+    reader: "stats" as const,
+    nativeHarness: true,
+  },
+  {
+    stage: "maxLines preflight",
+    sessionId: "sess-max-lines-read-failure",
+    reader: "stats" as const,
+    maxLines: 50,
+  },
 ])(
   "sessions.compact reports $stage transcript read failures as unavailable",
-  async ({ sessionId, maxLines }) => {
+  async ({ sessionId, maxLines, nativeHarness, reader }) => {
     const { storePath } = await createSessionStoreDir();
-    await seedCompactionSession({ sessionId, storePath });
-    failTranscriptStatsForSession(sessionId);
+    await seedCompactionSession({ sessionId, storePath, nativeHarness });
+    failTranscriptReadForSession(sessionId, reader);
 
     const { ws } = await openClient();
     try {
@@ -180,6 +225,59 @@ test.each([undefined, 2])(
         message: expect.stringContaining("Session agent:main:missing not found"),
       });
     } finally {
+      ws.close();
+    }
+  },
+);
+
+test.each([false, true])(
+  "sessions.compact reads settled facts (native harness: %s)",
+  async (nativeHarness) => {
+    const { storePath } = await createSessionStoreDir();
+    const scope = await seedCompactionSession({
+      sessionId: "sess-compact-settled",
+      storePath,
+      nativeHarness,
+      withTranscript: false,
+    });
+    const settle = settlementOwner.waitForTerminalSessionRunSettlement;
+    const settlement = vi
+      .spyOn(settlementOwner, "waitForTerminalSessionRunSettlement")
+      .mockImplementationOnce(async (params) => {
+        const settled = await settle(params);
+        await upsertSessionEntryCore(scope, {
+          ...loadSessionEntry({ ...scope, readConsistency: "latest" }),
+          sessionId: scope.sessionId,
+          updatedAt: 2,
+          spawnedCwd: "/tmp/after-settlement",
+        });
+        await appendTranscriptMessage(scope, {
+          message: { role: "user", content: "first settled message", timestamp: 1 },
+        });
+        await appendTranscriptMessage(scope, {
+          message: { role: "user", content: "final settled message", timestamp: 2 },
+        });
+        return settled;
+      });
+    embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+    });
+    const { ws } = await openClient();
+    try {
+      expect(await rpcReq(ws, "sessions.compact", { key: "main" })).toMatchObject({
+        ok: true,
+        payload: { key: "agent:main:main", compacted: true },
+      });
+      expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/tmp/after-settlement",
+          sessionEntry: expect.objectContaining({ spawnedCwd: "/tmp/after-settlement" }),
+        }),
+        expect.anything(),
+      );
+    } finally {
+      settlement.mockRestore();
       ws.close();
     }
   },

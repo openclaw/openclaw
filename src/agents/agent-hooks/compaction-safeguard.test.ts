@@ -530,20 +530,22 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each(["copilot-headers", "keyless-sdk-auth"] as const)(
+  it.each(["cap-staged-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
     "summarizes with provider-prepared model settings: %s",
     async (mode) => {
       mockSummarizeCompactionHistory.mockResolvedValue("mock summary");
       const model = createAnthropicModelFixture(
-        mode === "copilot-headers"
-          ? {
-              id: "gpt-5.4",
-              name: "gpt-5.4",
-              provider: "github-copilot",
-              api: "openai-responses",
-              baseUrl: "https://api.githubcopilot.com",
-            }
-          : { provider: "amazon-bedrock" },
+        mode === "cap-staged-limit"
+          ? { contextWindow: 1_000_000, maxTokens: 128_000 }
+          : mode === "copilot-headers"
+            ? {
+                id: "gpt-5.4",
+                name: "gpt-5.4",
+                provider: "github-copilot",
+                api: "openai-responses",
+                baseUrl: "https://api.githubcopilot.com",
+              }
+            : { provider: "amazon-bedrock" },
       );
       const sessionManager = configuredSession({ model, recentTurnsPreserve: 0 });
       const headers = {
@@ -562,14 +564,26 @@ describe("compaction-safeguard recent-turn preservation", () => {
               ...(mode === "copilot-headers" ? { headers: { ...headers } } : {}),
             },
       );
-      const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1000 });
+      const event = createCompactionEvent(
+        mode === "cap-staged-limit"
+          ? {
+              preparation: {
+                messagesToSummarize: [userMessage("large history", 1)],
+                tokensBefore: 250_000,
+                settings: { reserveTokens: 80_000 },
+              },
+            }
+          : { messageText: "summarize me", tokensBefore: 1000 },
+      );
       const result = await createCompactionHandler()(
         event,
         createCompactionContext({ sessionManager, getApiKeyAndHeadersMock }),
       );
       expect(requireRecord(result).cancel).not.toBe(true);
       const call = mockSummarizeCompactionHistory.mock.lastCall?.[0];
-      if (mode === "copilot-headers") {
+      if (mode === "cap-staged-limit") {
+        expect(call?.reserveTokens).toBe(20_000);
+      } else if (mode === "copilot-headers") {
         for (const [name, value] of Object.entries(headers)) {
           expect(call?.headers?.[name]).toBe(value);
         }

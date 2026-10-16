@@ -33,6 +33,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
@@ -284,17 +285,17 @@ describe("historical transcript directive migration", () => {
           event.fixturePadding = "compression fixture ".repeat(256);
         }
       }
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [tagged, user, tool],
         generation: "tagged-before",
         sessionId: "tagged-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [code],
         generation: "code-before",
         sessionId: "code-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [reaction],
         generation: "reaction-before",
         sessionId: "reaction-session",
@@ -705,7 +706,7 @@ describe("historical transcript directive migration", () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    insertSession(opened.db, {
+    insertSession(requireNativeSqliteDatabase(opened.db), {
       events: [
         messageEvent({
           content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
@@ -879,7 +880,7 @@ describe("historical transcript directive migration", () => {
     const sessionIdAt = (index: number) =>
       `session-${String(index).padStart(String(batchSize).length, "0")}`;
     for (let index = 0; index <= batchSize; index += 1) {
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [
           messageEvent({
             content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],

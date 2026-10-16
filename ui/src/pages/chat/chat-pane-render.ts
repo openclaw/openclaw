@@ -22,7 +22,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
@@ -551,7 +551,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
-      composerControls: composerControls?.composerControls ?? emptyLegacyContent,
+      composerControls: composerControls?.composerControls,
       permissionPicker: composerControls?.permissionPicker,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       messageReactions: this.messageReactions,
@@ -621,7 +621,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalkInputNotice = null;
         state.requestUpdate?.();
       },
-      onAbort: sessionActionCallbacks.onAbort,
+      ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
@@ -651,7 +651,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
-      onForkMessage: sessionActionCallbacks.onForkMessage,
       agentsList: state.agentsList,
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,

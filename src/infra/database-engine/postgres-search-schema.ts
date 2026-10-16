@@ -4,6 +4,7 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
+import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -58,7 +59,8 @@ export function admitPostgresSearch(
         : found.extname
           ? `Configure the store's extensionSchema as ${String(found.nspname)}, or have a database administrator relocate the extension; installation SQL is`
           : "Have a database administrator run";
-      throw new Error(
+      throw new DatabaseSearchCapabilityUnavailableError(
+        name === "vector" ? "vector" : "fullText",
         `PostgreSQL ${name} capability unavailable. ${action}: CREATE EXTENSION IF NOT EXISTS ${pgSearchName(name)} WITH SCHEMA ${pgSearchName(extensionSchema)};${name === "vector" ? ' For keyword-only memory explicitly set memory.search.provider to "none".' : ""}`,
       );
     }
@@ -88,15 +90,14 @@ export function assertPostgresSearchAdmitted(
 }
 
 /** Deterministic derived DDL joins the store's generated DDL hash and exact catalog seal. */
-export function postgresSearchSql(schema?: SearchSchema): string {
-  if (!schema) {
-    return "";
-  }
+export function postgresSearchSql(schema: SearchSchema, namespace: string): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
+  const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
+  const configLiteral = `'${config.replaceAll("'", "''")}'`;
   const statements: string[] = [];
   if (Object.keys(schema.text ?? {}).length) {
-    statements.push(`CREATE TEXT SEARCH CONFIGURATION ${searchConfig} (COPY = pg_catalog.simple);
-ALTER TEXT SEARCH CONFIGURATION ${searchConfig} ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart WITH ${ext}.unaccent, pg_catalog.simple;`);
+    statements.push(`CREATE TEXT SEARCH CONFIGURATION ${config} (COPY = pg_catalog.simple);
+ALTER TEXT SEARCH CONFIGURATION ${config} ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart WITH ${ext}.unaccent, pg_catalog.simple;`);
   }
   for (const index of Object.values(schema.text ?? {})) {
     if (!index.postgres || index.fields.length !== 1) {
@@ -104,7 +105,7 @@ ALTER TEXT SEARCH CONFIGURATION ${searchConfig} ALTER MAPPING FOR hword, hword_p
     }
     const table = pgSearchName(index.table),
       field = pgSearchName(index.fields[0]!);
-    statements.push(`ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (to_tsvector('${searchConfig}'::regconfig, coalesce(${field}, ''))) STORED;
+    statements.push(`ALTER TABLE ${table} ADD COLUMN openclaw_search tsvector GENERATED ALWAYS AS (to_tsvector(${configLiteral}::regconfig, coalesce(${field}, ''))) STORED;
 CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(openclaw_search);`);
     if (index.postgres.mode === "trigram") {
       statements.push(

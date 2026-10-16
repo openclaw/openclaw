@@ -13,16 +13,10 @@ import {
   runWithOwner,
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { LitContent as LegacyOutlet } from "./solid-bridge.ts";
-import {
-  LitContent,
-  mountLitContent,
-  renderLegacyTemplate,
-  solidContent,
-  SolidContentPresentation,
-} from "./solid-content.tsx";
+import { LitContent, mountLitContent, solidContent } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
   it("settles parent refs after mounting nested Solid content through Lit", () => {
@@ -33,7 +27,7 @@ describe("Lit and Solid content boundaries", () => {
       onSettled(() => settled(sibling?.isConnected));
       return (
         <section>
-          <LegacyOutlet render={() => html`${solidContent(Nested, {})}`} />
+          <LitContent value={html`${solidContent(Nested, {})}`} />
           <button ref={(element) => (sibling = element)}>Next</button>
         </section>
       );
@@ -65,8 +59,8 @@ describe("Lit and Solid content boundaries", () => {
       expect(button.textContent).toBe("Second");
       expect(disconnected).not.toHaveBeenCalled();
 
-      renderLegacyTemplate(undefined, container);
-      renderLegacyTemplate(undefined, container);
+      mounted.dispose();
+      mounted.dispose();
       expect(container.childNodes).toHaveLength(0);
       expect(disconnected).toHaveBeenCalledOnce();
 
@@ -435,9 +429,9 @@ it("updates an isolated Lit outlet and retires its directives without replacing 
     () => (
       <section>
         <input aria-label="Solid sibling" />
-        <LegacyOutlet
-          render={() => html`<button @click=${onClick}>${observeRemoval(label())}</button>`}
-        />
+        <span class="lit-content" style={{ display: "contents" }}>
+          <LitContent value={html`<button @click=${onClick}>${observeRemoval(label())}</button>`} />
+        </span>
       </section>
     ),
     { container },

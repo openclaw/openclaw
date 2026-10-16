@@ -13,7 +13,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([1, 2])("keeps phone setup selectors on one row with %s agents", async (agentCount) => {
+  it.each([1, 2])("keeps phone setup compact with %s agents", async (agentCount) => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -99,7 +99,11 @@ suite.define(() => {
               };
             }),
           );
-          expect(new Set(layout.map((box) => box.row)).size).toBe(1);
+          expect(new Set(layout.map((box) => box.row)).size).toBeLessThanOrEqual(mobile ? 2 : 1);
+          if (mobile) {
+            const local = page.locator("#new-session-where-trigger");
+            expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+          }
           for (const [index, box] of layout.entries()) {
             expect(box.left).toBeGreaterThanOrEqual(0);
             expect(box.right).toBeLessThanOrEqual(width);
@@ -117,6 +121,13 @@ suite.define(() => {
         for (const selector of await selectors.all()) {
           await selector.click();
           await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("true");
+          const panelSelector =
+            ".oc-popover.new-session-page__picker-popover:popover-open, .agent-select__menu:popover-open";
+          await waitForLayoutSettled(page, panelSelector);
+          const panelBox = await page.locator(panelSelector).boundingBox();
+          expect(panelBox!.x).toBeGreaterThanOrEqual(0);
+          expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(320);
+          expect(await page.evaluate(() => window.scrollX)).toBe(0);
           await page.keyboard.press("Escape");
           await expect.poll(() => selector.getAttribute("aria-expanded")).toBe("false");
           await selector.focus();
@@ -259,7 +270,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps the mobile composer within reach and lets long prompts scroll", async () => {
+  it("centers the mobile composer and scrolls long prompts inside the editor", async () => {
     await suite.withPage({ viewport: { width: 320, height: 568 } }, async ({ page }) => {
       await installMockGateway(page, {
         methodResponses: {
@@ -290,16 +301,18 @@ suite.define(() => {
       expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(
         0,
       );
-      const bottomGap = await composer.evaluate(
-        (element) => innerHeight - element.getBoundingClientRect().bottom,
-      );
-      expect(bottomGap).toBeGreaterThanOrEqual(0);
-      expect(bottomGap).toBeLessThanOrEqual(16);
+      const composerBox = await composer.boundingBox();
+      expect(composerBox!.y).toBeGreaterThan(58);
+      expect(composerBox!.y + composerBox!.height).toBeLessThan(568);
 
       await textarea.fill("A line of a longer first prompt.\n".repeat(20));
       await waitForLayoutSettled(page, ".new-session-page__composer");
       await composer.scrollIntoViewIfNeeded();
-      expect(await scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(
+        await textarea.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      const sendBox = await page.locator(".new-session-page__start-submit").boundingBox();
+      expect(sendBox!.y + sendBox!.height).toBeLessThanOrEqual(568);
       await textarea.fill("");
       await waitForLayoutSettled(page, ".new-session-page__composer");
       expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(

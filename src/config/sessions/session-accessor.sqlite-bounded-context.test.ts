@@ -6,6 +6,7 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
@@ -89,10 +90,11 @@ function readHistory(
 }
 
 function countAcquiredTranscriptPayloadBytes(
-  db: ReturnType<typeof openOpenClawAgentDatabase>["db"],
+  connection: ReturnType<typeof openOpenClawAgentDatabase>["db"],
   marker: string,
   read: () => void,
 ): number {
+  const db = requireNativeSqliteDatabase(connection);
   clearNodeSqliteKyselyCacheForDatabase(db);
   const prepare = db.prepare.bind(db);
   const restoreStatements: Array<() => void> = [];
@@ -129,12 +131,16 @@ function countAcquiredTranscriptPayloadBytes(
 it("skips sizing an empty transcript and reads its first committed turn", async () => {
   await withBoundedContextScope(async (scope) => {
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const counter = trackSqliteStatementExecutions(db, ["sizing", "prefix"], (sql) => {
-      if (sql.includes('"active"."active_position" <')) {
-        return "prefix";
-      }
-      return sql.includes("serialized_bytes") ? "sizing" : null;
-    });
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["sizing", "prefix"],
+      (sql) => {
+        if (sql.includes('"active"."active_position" <')) {
+          return "prefix";
+        }
+        return sql.includes("serialized_bytes") ? "sizing" : null;
+      },
+    );
     const onRead = vi.fn();
     try {
       const empty = readSessionTranscriptBoundedActiveContextCore(scope, {
@@ -207,8 +213,10 @@ it("enforces context count and byte budgets and releases rejected reads for late
     expect(read(16_384, 3).truncated).toBe(false);
     const headerBytes = Buffer.byteLength(JSON.stringify(counted.events[0])) + 1;
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
-      sql.includes("serialized_bytes") ? "sizing" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["sizing"],
+      (sql) => (sql.includes("serialized_bytes") ? "sizing" : null),
     );
     const bounded = (maxBytes: number, maxRows: number) => {
       const before = counter.rowCounts.sizing;

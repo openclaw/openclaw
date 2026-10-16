@@ -31,12 +31,10 @@ import {
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { PaneHeaderPresence, PaneHeaderSessionMenu } from "./chat-pane-header-view.tsx";
 import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
@@ -54,18 +52,15 @@ import type {
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
-  renderChatPaneHeader,
+  type ChatPaneHeaderPresentation,
+  type ChatPaneHeaderProps,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspaceIcon,
 } from "./components/chat-pane-header.ts";
-import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 import {
   canManageChatSessionSharing,
-  renderChatSessionPublicIndicator,
-  renderChatSessionSharing,
   type ChatSessionSharingProps,
 } from "./components/chat-session-sharing.ts";
-import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
@@ -105,6 +100,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       );
     }
   };
+  private readonly onHeaderDetails = (source: HTMLElement) =>
+    this.headerDetailsRef.value?.open(source);
   private readonly onHeaderCommandPalette = () =>
     window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
   private readonly onHeaderSettingsChange = (patch: Partial<UiSettings>) =>
@@ -134,13 +131,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
-    subagentStop: unknown = emptyLegacyContent,
+    subagentStop?: ChatPaneHeaderProps["runAction"],
     detailsControl?: PaneDetailsProps,
     panelControls?: {
       openPanelSlot: (slot: SidebarSlotId) => void;
       closePanelSlot: (slot: SidebarSlotId) => void;
     },
-  ) {
+  ): ChatPaneHeaderPresentation {
     this.headerPanelControls = panelControls;
     this.headerMenuRow = row;
     this.headerWorkspace = sessionWorkspace;
@@ -533,7 +530,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       () => this.headerBoardMenu && { ...this.headerBoardMenu, onSelect: this.onHeaderBoardSelect },
     );
     const parentSession = this.observedParentSessionRow();
-    const header = renderChatPaneHeader({
+    const header: ChatPaneHeaderProps = {
       paneId: this.paneId,
       presented: { owner: this, isPresented: () => this.presented },
       narrow: this.narrow,
@@ -581,23 +578,23 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
-      onOpenDetails:
-        detailsControl === undefined
-          ? undefined
-          : (source) => this.headerDetailsRef.value?.open(source),
+      onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,
+      conversationVisible: detailsControl?.conversationVisible,
+      onToggleConversation:
+        currentLayout && detailsControl?.externalTrigger
+          ? () => this.toggleConversationPanel(currentLayout)
+          : undefined,
       runAction: subagentStop,
-      presence: viewers?.length
-        ? solidContent(PaneHeaderPresence, { staticUsers: viewers, personActivity })
-        : emptyLegacyContent,
+      presence: viewers?.length ? { staticUsers: viewers, personActivity } : undefined,
       sharingControl:
         sharing &&
-        (!canManageChatSessionSharing(sharing.session) || !sharing.openDisabledReason) &&
-        (!this.narrow || !canManageChatSessionSharing(sharing.session))
-          ? renderChatSessionSharing(sharing)
-          : emptyLegacyContent,
-      publicAccessIndicator:
-        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : emptyLegacyContent,
-      placementControl: renderChatPanePlacement({
+        (canManageChatSessionSharing(sharing.session)
+          ? !this.narrow && !sharing.openDisabledReason
+          : sharing.session.visibility === "draft")
+          ? sharing
+          : undefined,
+      publicAccessIndicator: this.narrow ? (sharing ?? undefined) : undefined,
+      placementControl: {
         session: row,
         placementStartupStatus,
         placementMoving: placement.moving,
@@ -608,10 +605,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onPlacementMove: () => row && void this.changeHeaderPlacement(row, "move"),
         onPlacementReclaim: () => row && void this.changeHeaderPlacement(row, "reclaim"),
         onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
-      }),
+      },
       sessionMenuAction:
         row && this.state
-          ? solidContent(PaneHeaderSessionMenu, {
+          ? {
               session: this.headerSessionMenuData(row, pinnable),
               worktreePath:
                 row.execNode || !isNativeLocalGateway() ? null : (workspace.root ?? null),
@@ -646,10 +643,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,
               onOpenCommandPalette: this.onHeaderCommandPalette,
+              onOpenDetails: detailsControl === undefined ? undefined : this.onHeaderDetails,
               onSettingsChange: this.onHeaderSettingsChange,
               onAction: this.onHeaderAction,
-            })
-          : emptyLegacyContent,
+            }
+          : undefined,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
@@ -684,16 +682,16 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onSplitDown: this.onSplitDown,
       onSplitRight: this.onSplitRight,
       onClosePane: this.onClosePane,
-    });
+    };
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return [
+    return {
       header,
-      continueCommand
-        ? renderContinueInTerminalDialog({
+      continueInTerminal: continueCommand
+        ? {
             command: continueCommand,
             onClose: () => this.closeContinueInTerminalDialog(),
-          })
-        : emptyLegacyContent,
-    ];
+          }
+        : undefined,
+    };
   }
 }

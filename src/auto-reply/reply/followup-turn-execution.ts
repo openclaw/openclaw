@@ -348,6 +348,9 @@ export async function executeFollowupTurn(params: {
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
   try {
+    // A session event rejected for stale policy is re-admitted by its owner under the
+    // same durable source id; reject it before admission records that source claim.
+    turn.queued.run.internalEventExecution?.assertCurrent?.();
     const admission = await recovery.admitUserTurn(recorder);
     accepted = true;
     await admitFollowupRunLifecycle(turn.queued);

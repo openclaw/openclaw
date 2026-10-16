@@ -6,13 +6,13 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 
 describe("chat pane session access", () => {
   it("refuses ordinary session creation for read-only operators", async () => {
@@ -212,7 +212,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
 
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -248,7 +248,7 @@ describe("chat pane session access", () => {
     document.body.append(container);
     onTestFinished(() => container.remove());
 
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,

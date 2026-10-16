@@ -8,6 +8,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 
+type DiscoveredRepairFacts = ManagedHandoffRepairFacts & {
+  windowsUserSid?: string;
+  drivers?: ManagedHandoffLease["helper"][];
+};
+
 /** v1 shipped in 2026.8.2. This proves cleanup eligibility, never v2 authority. */
 export function canCleanupLegacyManagedHandoff(
   payload: string,
@@ -73,7 +78,7 @@ export async function cleanupStaleManagedServiceUpdateHandoffs(params?: {
 
 export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
-  discovered: ManagedHandoffRepairFacts,
+  discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
@@ -89,7 +94,12 @@ export async function inspectManagedHandoffRepairFacts(
   }
   const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
   for (const runId of facts.runIds) {
-    const census = inspectOtherOpenClawProcesses({ runId, artifactPaths: facts.artifactPaths });
+    const census = inspectOtherOpenClawProcesses({
+      runId,
+      artifactPaths: facts.artifactPaths,
+      windowsUserSid: discovered.windowsUserSid,
+      drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
+    });
     const pids = [...new Set([...census.matchingPids, ...census.unverifiedPids])];
     if (pids.length || census.error) {
       throw new Error(
@@ -104,7 +114,7 @@ export async function readManagedHandoffRepairFacts(
   lease: ManagedHandoffLease,
   env: NodeJS.ProcessEnv,
   boundRunId?: string,
-): Promise<ManagedHandoffRepairFacts> {
+): Promise<DiscoveredRepairFacts> {
   const { readSecureFile } = await import("./fs-safe.js");
   const { listUpdateRunsAsync } = await import("./update-run-reader.js");
   const { recordedUpdateRunDrivers } = await import("./update-run-activity.js");
@@ -252,6 +262,8 @@ export async function readManagedHandoffRepairFacts(
   }
   return {
     runIds: [runId],
+    drivers: [lease.helper, lease.executor, ...recordedUpdateRunDrivers(original)],
+    ...(original.origin.windowsUserSid ? { windowsUserSid: original.origin.windowsUserSid } : {}),
     artifactPaths: artifactPaths.size ? [...artifactPaths] : [lease.key],
     timeoutMs: timeoutMs || null,
   };

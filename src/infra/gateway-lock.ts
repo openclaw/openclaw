@@ -524,7 +524,7 @@ export async function acquireGatewayLock(
           });
           try {
             if (opts.databasePortRecovery) {
-              if (role !== "agent-embedded") {
+              if (role !== "agent-embedded" && role !== "sqlite-maintenance") {
                 throw new Error("Database port recovery requires exclusive offline ownership");
               }
               assertDatabasePortRecoveryAllowed(paths.stateDir, opts.databasePortRecovery);

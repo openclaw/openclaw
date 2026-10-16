@@ -32,9 +32,14 @@ export function warmReloadProbe() {
     }
   });
   // Preserve the native method so each probe call can pass its actual store as this.
-  // oxlint-disable-next-line typescript/unbound-method
-  const get = IDBObjectStore.prototype.get;
-  IDBObjectStore.prototype.get = function (...args) {
+  const storePrototype: {
+    get: (
+      this: IDBObjectStore,
+      query: IDBValidKey | IDBKeyRange,
+    ) => ReturnType<IDBObjectStore["get"]>;
+  } = IDBObjectStore.prototype;
+  const get = storePrototype.get;
+  IDBObjectStore.prototype.get = function (this: IDBObjectStore, ...args) {
     const request = get.apply(this, args);
     const store = this.name;
     request.addEventListener("success", () => {

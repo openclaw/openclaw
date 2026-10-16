@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
@@ -21,6 +20,7 @@ import {
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
@@ -69,17 +69,17 @@ type RollupReadOptions = {
 };
 
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[] | undefined,
   options: RollupReadOptions & { includeBody: true },
 ): Array<SessionCostUsageRollupRow & { blob: Uint8Array | null }>;
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions & { includeBody?: false },
 ): SessionCostUsageRollupRow[];
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions,
 ): Array<SessionCostUsageRollupRow & { blob?: Uint8Array | null }> {
@@ -190,7 +190,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
 }
 
 export function writeSessionCostUsageRollupInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     rollupId: string;
     valueJson: Uint8Array;
@@ -246,7 +246,7 @@ export function writeSessionCostUsageRollupInDatabase(
 
 /** Read one body only while its exact metadata snapshot still owns the row. */
 export function readSessionCostUsageRollupBodyInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: SessionCostUsageRollupSnapshot,
 ): { blob: Uint8Array | null } | undefined {
   return executeSqliteQuerySync(
@@ -262,7 +262,7 @@ export function readSessionCostUsageRollupBodyInDatabase(
 }
 
 export function pruneSessionCostUsageRollupsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly SessionCostUsageRollupSnapshot[],
 ): void {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
@@ -299,7 +299,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
 }
 
 /** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
-export function retireLegacySessionCostUsageCacheInDatabase(db: DatabaseSync): void {
+export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
   return withSqliteDatabaseWriteScope(db, [], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
     executeSqliteQuerySync(

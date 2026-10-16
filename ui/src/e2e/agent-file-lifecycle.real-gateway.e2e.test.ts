@@ -16,7 +16,7 @@ import {
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   captureAgentFileScreenshot,
   selectAgentFileWorkspace,
@@ -248,6 +248,7 @@ catalogSuite.define(() => {
           const picker = editor.locator(
             'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
           );
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
@@ -256,7 +257,7 @@ catalogSuite.define(() => {
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
           await identityName.fill("Keep this identity draft");
           expect(await identityName.inputValue()).toBe("Keep this identity draft");
-          await picker.locator(".picker-select__trigger").click();
+          await openPicker(picker);
           await picker.locator('[role="option"][data-value="fixture/selected"]').click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
@@ -276,11 +277,20 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
+          // Opening refreshes the catalog; verify publication updates closed choices first.
+          const choices = () =>
+            picker.evaluate((element) =>
+              element
+                .closest("openclaw-select-picker")
+                ?.params.options.map((option) => option.value),
+            );
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
 
           await publish("published");
+          await expect.poll(choices).toContain("fixture/published");
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
@@ -354,6 +364,8 @@ catalogSuite.define(() => {
 
           rejectCatalog = false;
           await publish("recovered");
+          await expect.poll(choices).toContain("fixture/recovered");
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);

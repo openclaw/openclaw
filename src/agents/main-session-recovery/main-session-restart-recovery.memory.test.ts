@@ -5,6 +5,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { CommandLane } from "../../process/lanes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resumeMainSession } from "./main-session-restart-dispatch.js";
 import {
@@ -156,6 +157,7 @@ describe("memory restart recovery adapters", () => {
         ...params,
         recoveryAdmission: {
           handoffId: "synthetic-admission",
+          lane: CommandLane.Background,
           shouldContinue: () => true,
           beginDispatch: () => true,
         },

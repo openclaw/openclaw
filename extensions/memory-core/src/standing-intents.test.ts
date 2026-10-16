@@ -8,6 +8,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
@@ -81,7 +82,7 @@ describe("standing intents", () => {
     });
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     let refuseCommit = false;
     const context = {
       database: db,
@@ -182,7 +183,7 @@ describe("standing intents", () => {
     await listStandingIntents({ agentId: "main", nowMs: 1_000 });
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     let refuseCommit = false;
     const context = {
       database: db,
@@ -249,7 +250,7 @@ describe("standing intents", () => {
 
   it("retains first-use schema after a failed create and retries without duplicate intents", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     db.exec("DROP TABLE standing_intents; DROP TABLE standing_intents_fts");
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name GLOB '*standing_intents*'").all(),
@@ -385,7 +386,7 @@ describe("standing intents", () => {
       ).map((intent) => intent.id),
     ).toEqual([created.id]);
 
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const insertUnknownCreator = db.prepare(
       `INSERT INTO standing_intents (
         id, description, trigger_keywords, trigger_embedding, channel_scope, sender_scope,
@@ -586,7 +587,7 @@ describe("standing intents", () => {
     // Reopen so cached statements from setup cannot bypass the execution counter.
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const prepare = db.prepare.bind(db);
     let reads = 0;
     const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {

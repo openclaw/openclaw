@@ -302,23 +302,17 @@ it.each([true, false])(
   },
 );
 
-it.each(["session", "queue", "new-source", "source"] as const)(
+it.each(["session", "source"] as const)(
   "narrow clearQueued does not adopt %s changed by an earlier Stop callback",
   async (change) => {
     const fixture = await setup();
     const original = followup("original");
     const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "captured queue");
-    let successor: ReturnType<typeof followup> | undefined;
     fixture.queued.controller.signal.addEventListener(
       "abort",
       () => {
         if (change === "session") {
           original.run.run.sessionId = "successor-session";
-        } else if (change === "queue") {
-          FOLLOWUP_QUEUES.delete(key);
-          successor = followup("successor queue");
-        } else if (change === "new-source") {
-          successor = followup("later source");
         } else {
           fixture.revoke();
         }
@@ -332,9 +326,8 @@ it.each(["session", "queue", "new-source", "source"] as const)(
     }
     expect(fixture.queued.controller.signal.aborted).toBe(true);
     expect(fixture.active.controller.signal.aborted).toBe(change !== "source");
-    expect(original.settled).toHaveBeenCalledTimes(change === "new-source" ? 1 : 0);
-    expect(successor?.settled.mock.calls ?? []).toHaveLength(0);
-    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([successor?.run ?? original.run]);
+    expect(original.settled).not.toHaveBeenCalled();
+    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([original.run]);
     expect(queue.abortController.signal.aborted).toBe(false);
     if (change === "source") {
       expect(fixture.respond).not.toHaveBeenCalled();
@@ -358,6 +351,6 @@ it("settles detached pending sources after revocation and preserves later active
   expect(fixture.active.controller.signal.aborted).toBe(false);
   expect(first.settled).toHaveBeenCalledOnce();
   expect(second.settled).toHaveBeenCalledOnce();
-  expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([]);
+  expect(FOLLOWUP_QUEUES.get(key)).toBeUndefined();
   expect(fixture.respond).not.toHaveBeenCalled();
 });

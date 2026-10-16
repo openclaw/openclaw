@@ -68,6 +68,29 @@ function model(id: string): ModelDefinitionConfig {
   };
 }
 
+const providerConfig = (provider: ModelProviderConfig): OpenClawConfig => ({
+  models: { providers: { [providerId]: provider } },
+});
+const catalogJson = (provider: ModelProviderConfig, generated = false) =>
+  JSON.stringify({
+    ...(generated ? { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY } : {}),
+    providers: { [providerId]: provider },
+  });
+const registryFrom = (options: Parameters<typeof ModelRegistry.create>[2]) =>
+  ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+    pluginCatalogs: [],
+    pluginMetadataSnapshot: metadata,
+    ...options,
+  });
+const runtimeModel = (id: string) => ({
+  ...model(id),
+  provider: providerId,
+  api: "openai-completions" as const,
+  baseUrl: endpoint,
+  input: ["text" as const],
+  contextWindow: 32000,
+});
+
 function fixture(mode: "merge" | "replace" = "merge") {
   const agentDir = tempDirs.make("openclaw-prepared-sources-");
   const configured: ModelProviderConfig = {
@@ -110,8 +133,10 @@ function fixture(mode: "merge" | "replace" = "merge") {
     runtimeCapabilityModels: [],
     configuredGeneratedCatalogPluginIds: [],
   };
-  const rootProvider = { ...configured, models: [model("authored-only"), model("shared")] };
-  const modelsJsonContents = JSON.stringify({ providers: { [providerId]: rootProvider } });
+  const modelsJsonContents = catalogJson({
+    ...configured,
+    models: [model("authored-only"), model("shared")],
+  });
   fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
   return { facts, generation, configured, staticConfig, modelsJsonContents };
 }
@@ -131,10 +156,7 @@ function persistedFixture() {
   const catalogs = [
     {
       pluginId,
-      contents: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: { [providerId]: { ...configured, models: [model("persisted-only")] } },
-      }),
+      contents: catalogJson({ ...configured, models: [model("persisted-only")] }, true),
     },
   ];
   const database = new DatabaseSync(databasePath);
@@ -385,11 +407,9 @@ describe("prepared catalog source composition", () => {
     const snapshot = await createConfigIO({ configPath }).readConfigFileSnapshot();
     expect(snapshot.valid).toBe(true);
     expect(snapshot.sourceConfig.models?.providers?.openai).not.toHaveProperty("models");
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+    const registry = registryFrom({
       config: snapshot.sourceConfig,
       modelsJsonContents: null,
-      pluginCatalogs: [],
-      pluginMetadataSnapshot: metadata,
       staticProviderConfigs: { openai: staticConfig, codex: staticConfig },
     });
     expect(registry.getError()).toBeUndefined();
@@ -421,14 +441,7 @@ describe("prepared catalog source composition", () => {
       {
         provider: providerId,
         modelId: "runtime-only",
-        model: {
-          ...model("runtime-only"),
-          input: ["text"],
-          contextWindow: 32000,
-          provider: providerId,
-          api: "openai-completions",
-          baseUrl: endpoint,
-        },
+        model: runtimeModel("runtime-only"),
       },
     ];
     const startup = (
@@ -528,14 +541,7 @@ describe("prepared catalog source composition", () => {
               events.push("event-loop");
             });
           }
-          return {
-            ...model(modelId),
-            provider: providerId,
-            api: "openai-completions",
-            baseUrl: endpoint,
-            input: ["text"],
-            contextWindow: 32000,
-          };
+          return runtimeModel(modelId);
         },
       },
     });
@@ -558,19 +564,13 @@ describe("prepared catalog source composition", () => {
 
   it("replaces stale root request settings with current configuration", async () => {
     const { facts, configured } = fixture();
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+    const registry = registryFrom({
       config: facts.input.config,
-      pluginCatalogs: [],
-      pluginMetadataSnapshot: metadata,
-      modelsJsonContents: JSON.stringify({
-        providers: {
-          [providerId]: {
-            ...configured,
-            apiKey: "stale-root-key",
-            headers: { "X-Old-Provider": "old" },
-            models: [{ ...model("authored-only"), headers: { "X-Old-Model": "old" } }],
-          },
-        },
+      modelsJsonContents: catalogJson({
+        ...configured,
+        apiKey: "stale-root-key",
+        headers: { "X-Old-Provider": "old" },
+        models: [{ ...model("authored-only"), headers: { "X-Old-Model": "old" } }],
       }),
     });
     const selected = registry.find(providerId, "authored-only")!;
@@ -582,38 +582,28 @@ describe("prepared catalog source composition", () => {
   });
 
   it("uses current configured request authority for accepted routes", async () => {
-    const { facts, configured } = fixture();
-    const config = {
-      ...facts.input.config,
-      models: {
-        providers: {
-          [providerId]: {
-            ...configured,
-            apiKey: "current-config-key",
-            headers: { "X-Current": "current" },
-          },
-        },
-      },
-    };
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+    const { configured } = fixture();
+    const config = providerConfig({
+      ...configured,
+      apiKey: "current-config-key",
+      headers: { "X-Current": "current" },
+    });
+    const registry = registryFrom({
       config,
       modelsJsonContents: null,
-      pluginMetadataSnapshot: metadata,
       pluginCatalogs: [
         {
           pluginId,
-          contents: JSON.stringify({
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              [providerId]: {
-                ...configured,
-                baseUrl: "https://accepted.example.invalid/v1",
-                apiKey: "stale-cache-key",
-                headers: { "X-Stale": "stale" },
-                models: [model("shared"), model("generated-only")],
-              },
+          contents: catalogJson(
+            {
+              ...configured,
+              baseUrl: "https://accepted.example.invalid/v1",
+              apiKey: "stale-cache-key",
+              headers: { "X-Stale": "stale" },
+              models: [model("shared"), model("generated-only")],
             },
-          }),
+            true,
+          ),
         },
       ],
     });

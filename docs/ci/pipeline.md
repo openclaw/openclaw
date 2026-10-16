@@ -111,8 +111,8 @@ the job's uploaded artifacts.
 | `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                               |
 | `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                               |
 | `ios-build`                      | Debug build and Swift lint smoke; hourly main runs native tests; full manual CI also adds a Release device phase                                                                                                                                                                                         | iOS/capture changes and full manual CI               |
-| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-input changes and full manual CI          |
-| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                               | After both screenshot shards                         |
+| `ios-screenshot-capture`         | One simulator build with the locked Ruby/Fastlane bundle, followed by all four iPhone captures, four 13-inch iPad captures, and one Watch capture. Phase timings and hardware diagnostics remain available.                                                                                              | Screenshot-input changes and full manual CI          |
+| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                               | After the combined screenshot capture                |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                             |
 | `android-screenshots`            | Phone and Wear emulator captures using the same script as Play Store releases, with scene readiness and JPEG validation; retains images and synthetic fixture diagnostics                                                                                                                                | Screenshot-input PRs and full manual CI              |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                               |
@@ -146,6 +146,69 @@ Local development and tests now default to the pinned Bun fork; CI keeps its
 planner-selected runtime. Main-only Node lanes, including Control UI tests, are
 a known Bun coverage gap: a change can pass main CI while breaking local Bun
 execution. PR and dual-runtime validation provide the current Bun coverage.
+
+Manual CI dispatches expose an optional `test_runtime_policy` trial switch.
+Leaving it empty preserves every existing default: PRs use `bun-compatible`,
+main uses Node, and full release validation uses `dual`. Selecting `bun-all`
+runs every selected Linux test on Bun except the explicitly named Node-only
+contracts in `scripts/lib/ci-test-runtime.mts`. Selecting `dual-all` runs the
+complete Node selection, then its Bun portion in the same runner slots. Both
+trials cover Control UI Chromium unit shards and extension batches, including
+runtime-build selections. They do not change macOS or Windows runtimes, shard
+counts, or worker limits, and are never selected by automatic events.
+`dual-all` doubles each selected Linux test matrix row's deadline (including the
+default 60-minute budget); `bun-all` keeps the original deadline. Automatic CI and
+ordinary `dual` validation keep their existing deadlines and silence watchdogs.
+
+Unlike qualified `bun-compatible` and `dual` routing, these trials send unknown
+configs, include patterns, and extra Vitest arguments to Bun too. Exact Node-only
+files are filtered out of the Bun portion and retain Node coverage. Native Bun
+test-runner qualification still applies only to its existing verified inventory;
+other files use Vitest on Bun. This intentionally exposes unqualified Bun failures
+so maintainers can compare results before changing daily CI defaults.
+Every selected Bun process in CI checks its revision against
+`scripts/lib/openclaw-bun.json` before launch. Missing or upstream Bun fails with
+the job identity and setup instruction; the test must not silently use a stock
+installation. Trial matrix rows always install the pinned test runtime.
+
+Phase 1 covers the shared shard runner, Control UI Chromium unit shards, and
+plugin prerelease extension batches. These Linux lanes still retain their
+existing Node runtime; setting the trial policy does not migrate their direct
+entrypoints:
+
+| Remaining Node lane                                          | Work needed before a Bun trial                                                                                                   |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin/channel contract shards                               | Route each contract envelope through the runtime owner, retain include files and cleanup admission, and install the pinned fork. |
+| `checks-fast-core`                                           | Separate static/build checks from test envelopes and route those envelopes, preserving sequential failure handling.              |
+| `build-artifacts` dist/core-boundary tests and TUI PTY proof | Route direct build-dependent test commands and install the pinned fork without changing artifact ownership.                      |
+| `checks-node-compat`                                         | Keep its named Node-version compatibility proof; add a separate Bun contract if needed.                                          |
+| `qa-smoke-ci-profile`                                        | Thread runtime selection through the QA harness and its subprocesses, with isolated artifacts and pinned setup.                  |
+| `postgres-conformance`                                       | Teach the database conformance launcher to select and verify the runtime, retaining PostgreSQL service lifecycle.                |
+| `checks-ui-e2e` and `checks-ui-e2e-real-gateway`             | Route browser fixtures and Gateway subprocesses together; prove browser/Gateway lifecycle on both runtimes.                      |
+| Control UI's auxiliary WebKit step                           | Route its direct project invocation through the runtime owner and retain WebKit-only selection.                                  |
+| `docker-seed-e2e`                                            | Install the fork inside the test images and thread selection through container entrypoints.                                      |
+| Plugin prerelease Node/static shards                         | Route test commands individually; keep compiler, package, and static checks with their existing owners.                          |
+| `node-runtime-compat` / `node-runtime-conformance`           | Preserve the intentional Node/Rust compatibility matrix; define separate Bun proof rather than replacing it.                     |
+| `openclaw-performance`                                       | Add runtime identity to benchmark artifacts, isolate runs, and compare matching workloads before changing performance baselines. |
+
+The protected cache warmer continues to publish its existing qualified Node/Bun
+inventory. Trial runs are excluded from timing refit and shard-refresh inputs,
+so partial failures or Bun-only samples cannot prune or overwrite the current
+Node timing model. Phase 2 needs runtime-matching timing keys, per-runtime
+pruning, and separate browser/runtime measurements before trials can become
+defaults.
+
+Compare an existing run without dispatching another one:
+
+```bash
+node scripts/ci-compare-test-runtimes.mjs <run-id>
+```
+
+The comparison downloads logs once and reports each shard's Node and Bun wall
+time, failures, and incomplete measurements. Dual trials add no jobs or runner
+registrations. The explicit `dual-all` deadline multiplier budgets both serial
+runs; a silence-watchdog failure or exhausted budget remains failed or incomplete
+evidence and is never treated as a timing sample.
 
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.

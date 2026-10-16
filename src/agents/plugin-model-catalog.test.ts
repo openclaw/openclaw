@@ -1007,11 +1007,14 @@ describe("SQLite-backed plugin model catalogs", () => {
   it("recognizes unchanged payloads and atomically removes stale provider rows", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
-    const anthropic = catalogContents("anthropic");
-    const both = {
-      [encodePluginModelCatalogRelativePath("zai")]: zai,
-      [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
-    };
+    const catalogRows = (prefix: string) =>
+      Object.fromEntries(
+        Array.from({ length: 70 }, (_, index) => [
+          encodePluginModelCatalogRelativePath(`${prefix}-${index}`),
+          catalogContents(`${prefix}-${index}`),
+        ]),
+      );
+    const both = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("stale") };
 
     expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
       true,
@@ -1019,16 +1022,32 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
       false,
     );
+    const unchanged = readCatalogCacheRow(agentDir, "zai");
+    const refreshed = catalogContents("fresh");
+    const next = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("new") };
+    // Exercise both row and payload batch boundaries without changing JSON semantics.
+    next[encodePluginModelCatalogRelativePath("new-35")] += " ".repeat(1024 * 1024);
+    expect(
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: next,
+      }),
+    ).toBe(true);
+    expect(readCatalogCacheRow(agentDir, "zai")).toEqual(unchanged);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toHaveLength(71);
+    expect(readCatalogCacheRow(agentDir, "new-35").value_json).toBe(
+      next[encodePluginModelCatalogRelativePath("new-35")],
+    );
     expect(
       await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
-          [encodePluginModelCatalogRelativePath("zai")]: zai,
+          [encodePluginModelCatalogRelativePath("zai")]: refreshed,
         },
       }),
     ).toBe(true);
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
-      { pluginId: "zai", contents: zai },
+      { pluginId: "zai", contents: refreshed },
     ]);
   });
 

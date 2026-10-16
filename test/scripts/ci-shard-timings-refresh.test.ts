@@ -97,6 +97,19 @@ function execute(
 }
 
 describe("release shard timing refresh CLI", () => {
+  it.each(["bun-all", "dual-all"])("leaves all timing bytes unchanged for a %s trial", (policy) => {
+    const { result, before, bytes } = execute({
+      jobs: [job, { ...job, id: 2 }],
+      logs: {
+        "1": log("fixture"),
+        "2": `2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${log("trial")}`,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("runtime trial is excluded from timing refresh");
+    expect(bytes).toBe(before);
+  });
+
   it.each([
     { name: "whole owner", files: undefined },
     { name: "explicit files", files: ["test/fixture.test.ts"] },

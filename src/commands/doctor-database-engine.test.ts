@@ -27,7 +27,7 @@ describe("Doctor database engines", () => {
     const cfg = { database: { engine: "postgres" as const } };
     noteDatabaseEngines(cfg);
     expect(note).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Shared state: postgres\nAgent data: sqlite\nWorkboard: postgres"),
+      expect.stringContaining("Shared state: postgres\nAgent data: postgres\nWorkboard: postgres"),
       "Database engines",
     );
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);

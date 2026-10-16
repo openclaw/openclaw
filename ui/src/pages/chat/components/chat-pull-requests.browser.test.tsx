@@ -1,8 +1,8 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
@@ -44,7 +44,7 @@ it.each(["props", "owner", "parked"])(
         updateParked = setActive;
         updateDismissed = setDismissed;
         return (
-          <SolidContentPresentation value={active}>
+          <ContentPresentation value={active}>
             <style>
               {baseStyles}
               {layoutStyles}
@@ -71,7 +71,7 @@ it.each(["props", "owner", "parked"])(
                 onDismiss={() => {}}
               />
             </section>
-          </SolidContentPresentation>
+          </ContentPresentation>
         );
       },
       { container },

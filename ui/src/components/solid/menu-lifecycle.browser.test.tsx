@@ -152,12 +152,25 @@ describe("Solid menu branch lifetime", () => {
   );
 
   it("retires an emptied submenu and allows restored content to open at its current anchor", async () => {
-    const [entries, setEntries] = createSignal(navigationItems);
-    mountMenu({
+    const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
+    const view = mountMenu({
       get items() {
         return entries();
       },
     });
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(surface(), { attributes: true, attributeFilter: ["inert", "data-phase"] });
+    try {
+      view.container.append(document.createElement("span"));
+      await Promise.resolve();
+      mutations.push(...observer.takeRecords());
+      expect(mutations).toHaveLength(0);
+    } finally {
+      observer.disconnect();
+    }
+    setEntries(navigationItems);
+    flush();
     await openMenu();
     await openMenu("people-move");
     const child = surface("people-move");

@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { LEGACY_ACP_MIGRATION_COLUMN_DEFINITION } from "./openclaw-agent-db-additive-columns.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
-const provenanceSchemas = new WeakSet<DatabaseSync>();
+const provenanceSchemas = new WeakSet<EngineConnection>();
 
-export function hasLegacyAcpMigrationProvenanceColumn(database: DatabaseSync): boolean {
+export function hasLegacyAcpMigrationProvenanceColumn(database: EngineConnection): boolean {
   if (provenanceSchemas.has(database)) {
     return true;
   }
@@ -17,7 +17,10 @@ export function hasLegacyAcpMigrationProvenanceColumn(database: DatabaseSync): b
   return exists;
 }
 
-export function ensureLegacyAcpMigrationProvenanceColumn(database: DatabaseSync): void {
+export function ensureLegacyAcpMigrationProvenanceColumn(database: EngineConnection): void {
+  if (isPostgresSqlConnection(database)) {
+    return;
+  }
   if (provenanceSchemas.has(database)) {
     return;
   }

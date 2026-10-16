@@ -1375,6 +1375,10 @@ and at transaction and commit admission; replies and preference-change events
 follow guarded completion. Device subscription mutations keep their deferred
 start after snapshot preparation.
 
+Background upload and removal replies use the asset metadata and preference
+already committed by their worker transaction, without reading either row again.
+The existing profile, expected-value, quota, and commit-authority checks remain.
+
 The shared read-only worker owner retains inherited snapshot and disposable-source
 scopes until the task acknowledges native reader cleanup. Fixed reads share two execution workers
 with the existing pending-task and captured-input byte limits. Successful reads

@@ -1,5 +1,6 @@
 import { html } from "lit";
-import { livePresentation, type PresentationValue } from "../lit/presentation-binding.ts";
+import type { PresentationValue } from "../lib/presentation.ts";
+import { livePresentation } from "../lit/presentation-binding.ts";
 
 export type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
 

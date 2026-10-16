@@ -21,6 +21,12 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
+export function hasVisiblePreparedActivity(message: unknown): boolean {
+  return readPreparedActivity(message).some(
+    (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+  );
+}
+
 type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
   ownSessionLaunches?: ReadonlySet<string>;

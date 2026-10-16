@@ -80,6 +80,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
   let provider: SessionCatalogProvider | undefined;
   const runtimeWithSession = {
     ...runtime,
+    config: runtime.config ?? { current: () => ({}) },
     agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
   } as PluginRuntime;
   registerClaudeSessionCatalog({

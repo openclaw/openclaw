@@ -96,7 +96,6 @@ export function createNativeMcpRuntime(params: {
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 100; page += 1) {
-      params.assertCurrent?.();
       const response = await params.client.request(
         "mcpServerStatus/list",
         {

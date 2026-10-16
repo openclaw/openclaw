@@ -19,8 +19,8 @@ import {
   readDiscordMessage,
   readRetryAfter,
 } from "./internal/rest-errors.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
-import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyMessageId,

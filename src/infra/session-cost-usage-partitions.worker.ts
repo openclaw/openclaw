@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -14,6 +13,7 @@ import {
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 type CacheDatabase = Pick<DB, "cache_entries">;
 
@@ -24,7 +24,7 @@ function assertUsagePartitionWorker(): void {
 }
 
 export function deleteSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     rollupId: string;
     removedDates?: string[];
@@ -55,7 +55,7 @@ export function deleteSessionCostUsagePartitionsInDatabase(
 }
 
 export function readSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[],
   startMs = Number.NEGATIVE_INFINITY,
   endMs = Number.POSITIVE_INFINITY,
@@ -149,7 +149,7 @@ export function readSessionCostUsagePartitionsInDatabase(
 }
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   snapshot: { key: string; updatedAt: number; valueJson: string },
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
@@ -197,7 +197,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
 }
 
 export function pruneSessionCostUsagePartitionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly { key: string; valueJson: string | Uint8Array; updatedAt: number }[],
 ): void {
   assertUsagePartitionWorker();
