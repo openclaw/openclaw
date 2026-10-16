@@ -334,6 +334,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   vi.doMock("../../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
+  // mock-isolation: runner fixtures exercise core preparation without loading installed plugins.
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
