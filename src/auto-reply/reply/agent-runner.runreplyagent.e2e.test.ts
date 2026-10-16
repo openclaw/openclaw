@@ -1613,6 +1613,41 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(kickFollowupDrainIfIdle)).toHaveBeenCalledExactlyOnceWith("main");
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
   });
+  it.each([
+    {
+      label: "prepared silence",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 0,
+          finalAssistantRawText: "NO_REPLY",
+          terminalReply: { disposition: "silent" },
+        },
+      },
+    },
+    {
+      label: "legacy acknowledgment",
+      result: { payloads: [{ text: "HEARTBEAT_OK" }], meta: { durationMs: 0 } },
+    },
+  ] satisfies { label: string; result: EmbeddedAgentRunResult }[])(
+    "keeps a successful heartbeat quiet after $label",
+    async ({ result }) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
+      const runState: ReplyOperationRunState = {};
+      const onAgentRunTerminalOutcome = vi.fn();
+      const { run } = createMinimalRun({
+        opts: {
+          isHeartbeat: true,
+          onAgentRunTerminalOutcome,
+          [REPLY_OPERATION_RUN_STATE]: runState,
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("completed");
+    },
+  );
   it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
     const runState: ReplyOperationRunState = {};
     state.runEmbeddedAgentMock.mockResolvedValueOnce({

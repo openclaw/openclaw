@@ -1,8 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
-export { connectLegacyApplicationContext } from "../lit/solid-bridge.ts";
-
 type RootElementAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
   [key: `prop:${string}`]: unknown;
 };

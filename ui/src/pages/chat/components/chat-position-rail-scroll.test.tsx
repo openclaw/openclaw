@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -30,7 +30,7 @@ type TranscriptHostController = {
 
 class RailScrollTestHost extends HTMLElement {
   readonly transcriptRoot = document.createElement("div");
-  renderTranscript: () => unknown = () => null;
+  renderTranscript: () => JSX.Element = () => null;
   isUpdatePending = false;
   updateComplete = Promise.resolve(true);
   private readonly controllers = new Set<TranscriptHostController>();
@@ -61,7 +61,7 @@ class RailScrollTestHost extends HTMLElement {
           setRevision((value) => value + 1);
           flush();
         };
-        return <LitContent value={content()} />;
+        return <>{content()}</>;
       },
       { container: this.transcriptRoot },
     );
@@ -142,6 +142,13 @@ describe("conversation position rail scroll rendering", () => {
       clientHeight: { configurable: true, get: readHeight },
       scrollHeight: { configurable: true, get: readContentHeight },
     });
+    const rail = document.createElement("div");
+    rail.style.display = "contents";
+    transcript.renderSession("agent:main:rail-notification", (session) => {
+      mountSolid(() => <ChatPositionRail positions={positions} transcript={session} />, {
+        container: rail,
+      });
+    });
     const transcriptView = () =>
       transcript.renderSession("agent:main:rail-notification", (session) => {
         session.syncMessageRows(
@@ -153,7 +160,7 @@ describe("conversation position rail scroll rendering", () => {
           (row) => (row.kind === "content" ? row.content : null),
           null,
           false,
-          solidContent(ChatPositionRail, { positions, transcript: session }),
+          rail,
         );
       });
     host.renderTranscript = transcriptView;

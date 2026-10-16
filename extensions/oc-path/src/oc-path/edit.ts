@@ -71,7 +71,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdEditR
   }
   const key = item.kv.key;
   const offset = sourceLineOffset(ast.raw, item.line);
-  const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:[ \\t]*)`).exec(
+  const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:\\s*)`).exec(
     ast.raw.slice(offset),
   )?.[1];
   if (prefix === undefined) {

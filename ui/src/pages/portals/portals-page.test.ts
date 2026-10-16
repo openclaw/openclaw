@@ -498,6 +498,9 @@ describe("portal presentation receipts", () => {
           presentation: { portalId: portal.id, status, reason },
         }),
       );
+      expect(
+        source.request.mock.calls.filter(([method]) => method === "ui.command.result"),
+      ).toHaveLength(1);
     },
   );
 });

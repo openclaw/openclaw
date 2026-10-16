@@ -5,8 +5,16 @@ import type { SkillsState } from "../../lib/skills/index.ts";
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
+export type SkillsPresentation = {
+  skillsFilter: string;
+  skillsStatusFilter: SkillsStatusFilter;
+  skillsDetailKey: string | null;
+  skillsDetailTab: SkillDetailTab;
+  clawhubSearchQuery: string;
+};
+
 export type SkillsProps = {
-  state: SkillsState;
+  state: SkillsState & SkillsPresentation;
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;

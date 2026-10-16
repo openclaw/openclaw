@@ -29,7 +29,7 @@ for (const platform of ["linux", "windows"]) {
     write(installed, `${core}/openclaw.mjs`, "export {};\n");
     write(installed, `${core}/dist/build-info.json`, { commit });
     write(installed, `${core}/dist/plugin-sdk/index.d.ts`, "export declare const sdk: string;\n");
-    write(installed, "node_modules/openai/package.json", { name: "openai", version: "7.30.0", main: "index.js" });
+    write(installed, "node_modules/openai/package.json", { name: "openai", version: "7.30.1", main: "index.js" });
     write(installed, "node_modules/openai/index.js", "export {};\n");
     write(installed, "node_modules/openai/index.d.ts", "export {};\n");
     write(installed, "node_modules/openai/src/index.ts", "export {};\n");

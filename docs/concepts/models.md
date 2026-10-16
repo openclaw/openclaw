@@ -493,9 +493,13 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 When a saved catalog has a malformed model `cost` block, OpenClaw skips that model
 and records a warning naming it. Other valid models in the same catalog remain
-available. The saved catalog is left unchanged; correct the model's pricing to
-make it available again. Other schema errors and invalid model API or token limits
-still reject the affected catalog, even on a model with malformed pricing.
+available. Normal loading leaves the saved catalog unchanged. For generated
+provider catalogs in agent SQLite, `openclaw doctor --fix` completes missing
+numeric cost rates with zero while preserving supplied rates and pricing metadata.
+Null or non-numeric costs still require correction at the provider source and a
+catalog refresh; correct authored `models.json` pricing directly. Other schema
+errors and invalid model API or token limits still reject the affected catalog,
+even on a model with malformed pricing.
 
 ### Hosted catalog updates
 

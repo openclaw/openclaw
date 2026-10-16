@@ -15,7 +15,11 @@ import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
 import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import type { ChatDetails } from "./chat-details.tsx";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import {
+  chatPaneHeaderSharing,
+  chatPaneHeaderSessionMenu,
+  mountChatPaneHeader,
+} from "./chat-pane-header.test-support.ts";
 import "./chat-details.tsx";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
@@ -97,7 +101,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     });
 
     it.each(["ltr", "rtl"])(
-      "keeps mobile panel choices first and opens Details from the native trigger in %s",
+      "keeps mobile tool choices separate from session details in %s",
       async (direction) => {
         await page.viewport(390, 844);
         const originalDirection = document.documentElement.dir;
@@ -105,18 +109,17 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           document.documentElement.dir = originalDirection;
         });
         document.documentElement.dir = direction;
-        const onOpenDetails = vi.fn();
+        const onTerminal = vi.fn();
         const { container } = mountChatPaneHeader(containers, {
           mergedChrome: true,
           narrow: true,
-          onOpenDetails,
           panelMenuActions: [
             {
               id: "terminal",
               label: "Terminal",
               icon: icons.copy,
               shortcut: KEYBOARD_SHORTCUT_COMBOS.terminalPanel,
-              onActivate: vi.fn(),
+              onActivate: onTerminal,
             },
             ...Array.from({ length: 7 }, (_, index) => ({
               id: `panel-${index + 1}`,
@@ -140,7 +143,6 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             item.getAttribute("data-value"),
           ),
         ).toEqual([
-          "details",
           "terminal",
           "panel-1",
           "panel-2",
@@ -166,11 +168,27 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         )!;
         expect(terminalDetails.querySelector("kbd")).not.toBeNull();
         expect(getComputedStyle(terminalDetails).display).toBe("none");
-        await selectChatLayoutAction(scope, t("chat.sessionDetails.title"));
-        expect(onOpenDetails).toHaveBeenCalledExactlyOnceWith(trigger);
+        await selectChatLayoutAction(scope, "Terminal");
+        expect(onTerminal).toHaveBeenCalledOnce();
         expect(trigger.getAttribute("aria-expanded")).toBe("false");
       },
     );
+
+    it("keeps local Details reachable when the mobile session menu is unavailable", async () => {
+      await page.viewport(390, 844);
+      const onOpenDetails = vi.fn();
+      const fixture = mountChatPaneHeader(containers, {
+        mergedChrome: true,
+        narrow: true,
+        session: undefined,
+        onOpenDetails,
+      });
+      const trigger = fixture.container.querySelector<HTMLButtonElement>(".chat-details-toggle")!;
+      await page.elementLocator(trigger).click();
+      expect(onOpenDetails).toHaveBeenCalledWith(trigger);
+      fixture.update({ session: { key: "agent:main:main", kind: "direct", updatedAt: 0 } });
+      expect(fixture.container.querySelector(".chat-details-toggle")).toBeNull();
+    });
 
     it("closes Layout before changing its contents and restores focus on selection and Escape", async () => {
       const observations: Array<{ open: boolean; focused: boolean }> = [];
@@ -270,16 +288,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),
-          sharingControl: (
-            <button class="btn btn--ghost chat-pane__sharing-trigger" aria-label="Share">
-              Share
-            </button>
-          ),
-          sessionMenuAction: (
-            <button class="btn btn--ghost chat-icon-btn" aria-label="Session actions">
-              …
-            </button>
-          ),
+          sharingControl: chatPaneHeaderSharing(),
+          sessionMenuAction: chatPaneHeaderSessionMenu(),
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
@@ -289,9 +299,9 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const bounds = header.getBoundingClientRect();
         for (const selector of [
           ".chat-details-toggle",
-          '[aria-label="Share"]',
+          ".chat-pane__sharing-trigger",
           ".chat-pane__layout-trigger",
-          '[aria-label="Session actions"]',
+          ".chat-header-session-menu__trigger",
         ]) {
           const button = container.querySelector<HTMLElement>(selector)!;
           expect(button.checkVisibility()).toBe(true);

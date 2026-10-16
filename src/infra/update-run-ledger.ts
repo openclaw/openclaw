@@ -55,6 +55,7 @@ import {
   updateRunLedgerSchema as schema,
   upsertStep,
 } from "./update-run-write.js";
+import { readWindowsUserSid } from "./windows-user-sid.js";
 
 export {
   findActiveUpdateRun,
@@ -88,7 +89,7 @@ export function createUpdateRun(
     phase: "requested",
     status: "running",
     reason: null,
-    origin: input.origin ?? {},
+    origin: { ...input.origin, windowsUserSid: readWindowsUserSid() },
     target: input.target ?? {},
     before: input.before ?? {},
     after: {},

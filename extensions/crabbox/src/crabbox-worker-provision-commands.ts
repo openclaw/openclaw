@@ -129,7 +129,18 @@ export async function inspectWithContext(
     }
     return inspect;
   }
-  if (isUnrecognizedLease(result, params.id, "inspect")) {
+  // Crabbox emits only text for these exact-ID lookups. Treat them as unknown, not
+  // stop proof: Gateway teardown still calls stop, which verifies complete absence.
+  const unavailableResource =
+    result.termination === "exit" &&
+    result.stdout.trim() === "" &&
+    ((params.provider === "digitalocean" &&
+      result.code === 4 &&
+      result.stderr.trim() === "DigitalOcean fixed lease is terminal") ||
+      (params.provider === "ascii-box" &&
+        result.code === 1 &&
+        /^ascii-box bx_[A-Za-z0-9_-]+ not found \(404\)$/u.test(result.stderr.trim())));
+  if (unavailableResource || isUnrecognizedLease(result, params.id, "inspect")) {
     return undefined;
   }
   // An inspect response may contain connection material, even on a failed

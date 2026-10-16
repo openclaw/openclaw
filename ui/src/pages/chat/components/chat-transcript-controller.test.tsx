@@ -411,6 +411,48 @@ describe("chat transcript controller", () => {
     expect(container.textContent).toContain("message 0");
   });
 
+  it("retains history controls while projection snapshots replace their callbacks and loading state", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("history-controls");
+    const first = vi.fn();
+    const next = vi.fn();
+    const draw = async (loading: boolean, onShowEarlier: () => void) => {
+      render(
+        renderChatThread(
+          {
+            ...props,
+            historyPagination: { hasMore: true, loading, onShowEarlier },
+          },
+          transcript,
+        ),
+        container,
+      );
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+    };
+    transcript.hostConnected();
+    await draw(false, first);
+    const button = expectDefined(
+      container.querySelector<HTMLButtonElement>(".chat-history-boundary__action"),
+      "history action",
+    );
+    button.click();
+    expect(first).toHaveBeenCalledOnce();
+
+    await draw(true, next);
+    expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Loading");
+
+    await draw(false, next);
+    expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
+    button.click();
+    expect(next).toHaveBeenCalledOnce();
+    expect(first).toHaveBeenCalledOnce();
+    transcript.hostDisconnected();
+  });
+
   it("renders the history tail immediately after an empty disconnected shell", () => {
     const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();

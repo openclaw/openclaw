@@ -2,7 +2,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiScreenshotFrame,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -145,9 +148,7 @@ suite.define(() => {
     if (captureProof) {
       await writeFile(
         path.join(suite.artifactDir, "02-sidebar-drawer.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".sidebar-rail").first(), [
-          drawerSearch,
-        ]),
+        await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [drawerSearch]),
       );
     }
 
@@ -186,47 +187,62 @@ suite.define(() => {
       const shell = page.locator(".shell");
       await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
 
-      await page.locator(".content").evaluate((content) => {
-        const touch = (clientX: number, clientY: number) =>
-          new Touch({
-            identifier: 1,
-            target: content,
-            clientX,
-            clientY,
-            pageX: clientX,
-            pageY: clientY,
-            screenX: clientX,
-            screenY: clientY,
-          });
-        content.dispatchEvent(
-          new TouchEvent("touchstart", {
-            bubbles: true,
-            composed: true,
-            touches: [touch(24, 180)],
-            changedTouches: [touch(24, 180)],
-          }),
+      const dispatchTouch = async (type: string, x: number, y = 180) => {
+        await page.locator(".content").evaluate(
+          (content, point) => {
+            const touch = new Touch({
+              identifier: 1,
+              target: content,
+              clientX: point.x,
+              clientY: point.y,
+            });
+            content.dispatchEvent(
+              new TouchEvent(point.type, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                touches: point.type === "touchend" ? [] : [touch],
+                changedTouches: [touch],
+              }),
+            );
+          },
+          { type, x, y },
         );
-        content.dispatchEvent(
-          new TouchEvent("touchmove", {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            touches: [touch(210, 184)],
-            changedTouches: [touch(210, 184)],
-          }),
+      };
+      // A short drag and a vertical scroll must leave the chat unobscured.
+      for (const point of [
+        { x: 44, y: 180 },
+        { x: 28, y: 240 },
+      ]) {
+        await dispatchTouch("touchstart", 24);
+        await dispatchTouch("touchmove", point.x, point.y);
+        expect(await shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+        expect(
+          await page.locator(".shell-nav").evaluate((nav) => getComputedStyle(nav).opacity),
+        ).toBe("0");
+        await dispatchTouch("touchend", point.x, point.y);
+      }
+      await dispatchTouch("touchstart", 24);
+      await dispatchTouch("touchmove", 210, 184);
+
+      const drawer = page.locator(".shell-nav.nav-drawer");
+      if (captureProof && width === 393) {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          shell,
+          [page.locator(".chat-pane__header").first()],
+          { animations: "disabled" },
         );
-        content.dispatchEvent(
-          new TouchEvent("touchend", {
-            bubbles: true,
-            composed: true,
-            touches: [],
-            changedTouches: [touch(210, 184)],
-          }),
-        );
-      });
+        await writeFile(path.join(suite.artifactDir, "held-swipe.png"), frame.png);
+      }
+      // A deliberate swipe opens while the finger is still down, rather than
+      // exposing a clipped, non-interactive slice until touchend.
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+
+      await dispatchTouch("touchend", 210, 184);
 
       await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
-      const drawer = page.locator(".shell-nav.nav-drawer");
       await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
       await expect.poll(() => drawer.evaluate((element) => element.style.transform)).toBe("");
       await expect.poll(() => drawer.locator("openclaw-toast-host").count()).toBe(1);

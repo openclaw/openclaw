@@ -438,6 +438,14 @@ settlement queue for read-your-writes. Synchronous authority acceptance, mutatio
 preparation, cold initialization, retirement comparisons, and accepted-write
 barriers retain their ordered reservations.
 
+Board reads share the agent's existing admission queue with prepared transcript-only
+appends using disjoint conflict keys. SQLite WAL snapshots let the read finish
+while the append holds the native writer. Board mutations, session lifecycle
+changes, unknown write commands, and cold preparation still reserve the whole
+database through settlement, preserving current widget grants at consumption.
+All writers remain mutually exclusive and retain FIFO order. Append commands
+that initialize sessions or run reducers are not eligible for concurrent Board reads.
+
 Session actor mutations borrow the connection opened by their transaction owner;
 they do not request a second handle admission before that transaction. Current
 transaction authority and final commit admission remain unchanged. These changes
@@ -5432,9 +5440,12 @@ Released synchronous SDK readers retain their compatibility kernels. These
 changes add no schema, cache, configuration, migration, or update requirements.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
-Its ordered cursor includes the first bounded byte slice of each event; only
-larger events need follow-up slice queries. The cursor and follow-up reads retain
-one SQLite snapshot across transport acknowledgments.
+Its ordered cursor includes the first bounded byte slice of small events and
+identity text. Larger compressed events expand once per event, within the existing
+compressed-payload bound, before streaming 64 KiB frames; oversized identity text
+keeps native slice queries. Large compressed-event frame buffers transfer ownership to the host. The
+cursor and follow-up reads retain one SQLite snapshot across transport
+acknowledgments.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry
