@@ -3,8 +3,9 @@ import { summarizeWorkerEnvironment } from "./environment-summary.js";
 import type { WorkerEnvironmentServiceRecord } from "./service-contract.js";
 
 it.each([
-  ["ready", "lease-1", 2, undefined, "stopping", "destroying"],
-  ["idle", "lease-1", 2, "stop failed", "error", "destroying"],
+  ["ready", "lease-1", 2, undefined, "stopping", "ready"],
+  ["attached", "lease-1", 2, undefined, "stopping", "attached"],
+  ["idle", "lease-1", 2, "stop failed", "error", "idle"],
   ["ready", "lease-1", null, undefined, "available", "ready"],
   ["destroyed", "lease-1", 2, undefined, "unavailable", "destroyed"],
   ["failed", null, 2, "provision failed", "error", "failed"],

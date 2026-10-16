@@ -70,7 +70,7 @@ export function summarizeWorkerEnvironment(
       profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
-      state: cleanupPending ? "destroying" : record.state,
+      state: record.state,
       ...(record.startStatus ? { startStatus: record.startStatus } : {}),
       ...(options.includePreparedDetails && record.destroyRequestedAtMs !== null
         ? { destroyRequestedAtMs: record.destroyRequestedAtMs }

@@ -114,7 +114,7 @@ describe("prepared worker pool projection", () => {
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
-            state: listing ? "destroying" : "attached",
+            state: listing ? "idle" : "attached",
             ageMs: 9_000,
             ...(listing ? { idleMs: 4_000, attachedSessionIds: ["session-a", "session-z"] } : {}),
             tunnelStatus: "stopped",
