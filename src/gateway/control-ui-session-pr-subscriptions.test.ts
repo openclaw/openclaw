@@ -470,8 +470,8 @@ describe("control UI session PR subscriptions", () => {
     resolveFirst(READY);
     await oldReplace;
 
-    expect(broadcastToConnIds.mock.calls.flatMap((call) => Object.keys(call[1].sessions))).toEqual([
-      "current",
+    expect(broadcastToConnIds.mock.calls.map((call) => call[1])).toEqual([
+      { sessions: { current: { ...READY, status: "ready" } } },
     ]);
   });
 
@@ -519,19 +519,21 @@ describe("control UI session PR subscriptions", () => {
 
     await active.replace("conn-a", ["limited", "failed", "repository-only"]);
     expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
-    const sessions = Object.assign(
-      {},
-      ...broadcastToConnIds.mock.calls.map((call) => call[1].sessions),
+    expect(broadcastToConnIds.mock.calls.map((call) => call[1])).toEqual(
+      expect.arrayContaining([
+        { sessions: { limited: { pullRequests: [], rateLimited: true, status: "rate-limited" } } },
+        { sessions: { failed: { pullRequests: [], rateLimited: false, status: "unavailable" } } },
+        {
+          sessions: {
+            "repository-only": {
+              pullRequests: [],
+              repository: { owner: "openclaw", repo: "openclaw" },
+              rateLimited: false,
+              status: "unavailable",
+            },
+          },
+        },
+      ]),
     );
-    expect(sessions).toEqual({
-      limited: { pullRequests: [], rateLimited: true, status: "rate-limited" },
-      failed: { pullRequests: [], rateLimited: false, status: "unavailable" },
-      "repository-only": {
-        pullRequests: [],
-        repository: { owner: "openclaw", repo: "openclaw" },
-        rateLimited: false,
-        status: "unavailable",
-      },
-    });
   });
 });

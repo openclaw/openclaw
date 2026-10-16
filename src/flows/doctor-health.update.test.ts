@@ -71,10 +71,12 @@ vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
   readDeferredPluginMigrationsAsync: mocks.pendingPluginMigrations,
 }));
 
+// mock-isolation: Doctor dispatch must not execute the real installation updater.
 vi.mock("../cli/update-cli/update-command.js", () => ({ updateCommand: mocks.updateCommand }));
 vi.mock("../commands/doctor-update.js", () => ({
   maybeOfferUpdateBeforeDoctor: mocks.offerUpdate,
 }));
+// mock-isolation: Recovery dispatch is observed without launching external triage agents.
 vi.mock("../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({

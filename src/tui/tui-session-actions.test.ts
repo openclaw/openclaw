@@ -1272,7 +1272,7 @@ describe("tui session actions", () => {
           expect.stringContaining("session description failed"),
         );
       } else {
-        const systemMessages = addSystem.mock.calls.map((call) => String(call[0]));
+        const systemMessages = addSystem.mock.calls.map((call) => call[0]);
         expect(systemMessages.some((message) => message.includes("history failed"))).toBe(false);
       }
     },

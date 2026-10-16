@@ -43,6 +43,7 @@ import {
 } from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+// mock-isolation: Handler fixtures control custody without loading live channel plugins or sessions.
 vi.mock("../approval-channel-custody.js", () => ({ prepareApprovalChannelCustody: vi.fn() }));
 
 function createForwarder(overrides: Partial<ExecApprovalForwarder>): ExecApprovalForwarder {

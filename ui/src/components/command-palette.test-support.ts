@@ -158,10 +158,8 @@ export async function mountPalette(context = createContext(createGateway(true).g
   provider.append(palette);
   document.body.append(provider);
   await palette.updateComplete;
-  const query = <E extends Element = Element>(selector: string) =>
-    palette.querySelector<E>(selector);
-  const queryAll = <E extends Element = Element>(selector: string) =>
-    palette.querySelectorAll<E>(selector);
+  const query = palette.querySelector.bind(palette);
+  const queryAll = palette.querySelectorAll.bind(palette);
   return { palette, provider, query, queryAll };
 }
 
