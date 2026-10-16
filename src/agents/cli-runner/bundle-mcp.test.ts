@@ -1,7 +1,7 @@
 /** Tests Claude-style bundle-MCP config-file overlays for CLI backends. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -11,11 +11,14 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
-import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import {
+  prepareCliBundleMcpCaptureAttempt,
+  prepareCliBundleMcpConfig as prepareConfig,
+} from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
-  prepareBundleProbeCliConfig,
+  prepareBundleProbeCliConfig as prepareProbe,
   requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
   writeCliMcpPolicyProbeServer,
@@ -23,7 +26,15 @@ import {
 
 setupCliBundleMcpTestHarness();
 
-type CliMcpParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
+type CliMcpParams = Parameters<typeof prepareConfig>[0];
+async function trackPreparation(preparation: ReturnType<typeof prepareConfig>) {
+  const prepared = await preparation;
+  onTestFinished(() => prepared.cleanup?.());
+  return prepared;
+}
+const prepareCliBundleMcpConfig = (params: CliMcpParams) => trackPreparation(prepareConfig(params));
+const prepareBundleProbeCliConfig = (params: Parameters<typeof prepareProbe>[0]) =>
+  trackPreparation(prepareProbe(params));
 
 function prepareClaudeConfig(params: Partial<CliMcpParams>) {
   return prepareCliBundleMcpConfig({
@@ -122,8 +133,6 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
     expect(raw.mcpServers?.openclaw?.args).toEqual(["openclaw.mjs"]);
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
-
-    await prepared.cleanup?.();
   });
 
   it("carries Agent Plugins data-dir and transport contracts into external projections", async () => {
@@ -189,7 +198,6 @@ describe("prepareCliBundleMcpConfig", () => {
     });
     expect(raw.mcpServers?.remote?.transport).toBeUndefined();
     expect(raw.mcpServers?.legacy?.transport).toBeUndefined();
-    await prepared.cleanup?.();
     await fs.rm(pluginRoot, { recursive: true, force: true });
     clearPluginMetadataLifecycleCaches();
   });
@@ -222,7 +230,6 @@ describe("prepareCliBundleMcpConfig", () => {
       "Bash(rm *),WebSearch,mcp__docs_prod__read_value",
     ]);
     expect(prepared.backend.resumeArgs).toEqual(prepared.backend.args);
-    await prepared.cleanup?.();
   });
 
   it("projects durable policy into the first Claude process config and argv", async () => {
@@ -239,47 +246,30 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = await readConfig(prepared);
     expect(Object.keys(raw.mcpServers ?? {})).toEqual(["docs", "openclaw"]);
     expect(raw.mcpServers?.docs?.toolFilter).toBeUndefined();
-    await prepared.cleanup?.();
   });
 
-  it("projects configured MCP filters into Claude denials without a global tool policy", async () => {
-    const prepared = await preparePolicy("claude-configured-filter", {
-      server: { toolFilter: { include: ["read_*"] } },
-    });
-
+  it.each<[string, NonNullable<Parameters<typeof preparePolicy>[1]>]>([
+    ["claude-configured-filter", { server: { toolFilter: { include: ["read_*"] } } }],
+    ["claude-runtime-cap", { runtimeToolsAllow: ["docs__read_docs"] }],
+  ])("projects restrictive Claude tool visibility (%s)", async (sessionId, options) => {
+    const prepared = await preparePolicy(sessionId, options);
     expectDocsDenied(prepared.backend.args);
     expect(prepared.backend.args?.join(",")).not.toContain("mcp__docs__read_docs");
-    await prepared.cleanup?.();
   });
 
-  it("projects an exact runtime cap into Claude before spawn", async () => {
-    const prepared = await preparePolicy("claude-runtime-cap", {
-      runtimeToolsAllow: ["docs__read_docs"],
-    });
-
-    expectDocsDenied(prepared.backend.args);
-    expect(prepared.backend.args?.join(",")).not.toContain("mcp__docs__read_docs");
-    await prepared.cleanup?.();
-  });
-
-  it("omits every configured MCP server removed by durable policy", async () => {
-    const prepared = await preparePolicy("claude-policy-empty", {
-      tools: { allow: ["missing__tool"] },
-    });
-    const raw = await readConfig(prepared);
-    expect(raw.mcpServers).toEqual({});
-    await prepared.cleanup?.();
-  });
-
-  it("omits a server whose restrictive policy catalog cannot be established", async () => {
-    const prepared = await preparePolicy("claude-policy-catalog-failure", {
-      tools: { deny: ["docs__delete_docs"] },
-      server: { args: ["-e", "process.exit(1)"] },
-    });
-    const raw = await readConfig(prepared);
-    expect(raw.mcpServers).toEqual({});
-    await prepared.cleanup?.();
-  });
+  it.each<[string, NonNullable<Parameters<typeof preparePolicy>[1]>]>([
+    ["claude-policy-empty", { tools: { allow: ["missing__tool"] } }],
+    [
+      "claude-policy-catalog-failure",
+      { tools: { deny: ["docs__delete_docs"] }, server: { args: ["-e", "process.exit(1)"] } },
+    ],
+  ])(
+    "omits Claude servers denied by policy or missing a catalog (%s)",
+    async (sessionId, options) => {
+      const prepared = await preparePolicy(sessionId, options);
+      expect((await readConfig(prepared)).mcpServers).toEqual({});
+    },
+  );
 
   it("applies server disables to exclusive CLI MCP configs", async () => {
     const prepared = await prepareClaudeConfig({
@@ -291,7 +281,6 @@ describe("prepareCliBundleMcpConfig", () => {
 
     const raw = await readConfig(prepared);
     expect(raw.mcpServers).toEqual({});
-    await prepared.cleanup?.();
   });
 
   it("strips variadic Claude --mcp-config values and merges every listed config", async () => {
@@ -331,8 +320,6 @@ describe("prepareCliBundleMcpConfig", () => {
       second: { args: ["second.mjs"] },
       shared: { args: ["new.mjs"] },
     });
-
-    await prepared.cleanup?.();
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {
@@ -385,9 +372,6 @@ describe("prepareCliBundleMcpConfig", () => {
     );
     expect(prepared.mcpConfigHash).toBe(otherEnvPrepared.mcpConfigHash);
     expect(prepared.mcpResumeHash).toBe(otherEnvPrepared.mcpResumeHash);
-
-    await prepared.cleanup?.();
-    await otherEnvPrepared.cleanup?.();
   });
 
   it("leaves args untouched when bundle MCP is disabled", async () => {
@@ -406,10 +390,6 @@ describe("prepareCliBundleMcpConfig", () => {
 });
 
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
-const searchCleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  await Promise.all(searchCleanups.splice(0).map((cleanup) => cleanup()));
-});
 
 async function prepareSearchConfig(
   mode: "claude-config-file" | "codex-config-overrides",
@@ -427,9 +407,6 @@ async function prepareSearchConfig(
     },
     env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: "" },
   });
-  if (prepared.cleanup) {
-    searchCleanups.push(prepared.cleanup);
-  }
   return prepared;
 }
 
@@ -479,9 +456,6 @@ it("adapts opted-in bundle MCP to Claude by default", async () => {
     config: { tools: { web: { search: { provider: "brave" } } } },
     exclusiveConfig: { mcpServers: {} },
   });
-  if (prepared.cleanup) {
-    searchCleanups.push(prepared.cleanup);
-  }
   const args = prepared.backend.args ?? [];
   expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
 });

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import type {
+  SessionTranscriptRuntimeTarget,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { publishRetainedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
@@ -151,16 +154,7 @@ beforeEach(() => {
   mocks.open.mockImplementation(async () => SessionManager.inMemory());
   mocks.admit.mockImplementation(async (write) => write());
   mocks.patch.mockImplementation(
-    async (
-      _target,
-      _update,
-      options: {
-        onCommittedSource?: (
-          source: CapturedSessionEntryReadSource,
-          entry: InternalSessionEntry,
-        ) => void;
-      },
-    ) => {
+    async (_target, _update, options: NonNullable<Parameters<typeof patchSessionEntryCore>[2]>) => {
       if (!current) {
         return null;
       }
@@ -191,51 +185,46 @@ function run(branch: "native" | "supplied") {
   };
 }
 
-function deferOperation() {
+async function during(
+  branch: "native" | "supplied",
+  action: (params: RunCliAgentParams) => void,
+  phase: "admission" | "restoration" = "admission",
+) {
   const queued = createDeferredCore();
   const released = createDeferredCore();
   let didQueue = false;
-  return {
-    enter: async () => {
-      didQueue = true;
-      queued.resolve();
-      await released.promise;
-    },
-    async during(result: Promise<void>, action: () => void) {
-      try {
-        await Promise.race([queued.promise, result]);
-        expect(didQueue).toBe(true);
-        action();
-      } finally {
-        released.resolve();
-        await result;
-      }
-    },
+  const enter = async () => {
+    didQueue = true;
+    queued.resolve();
+    await released.promise;
   };
-}
-
-function deferAdmission() {
-  const admission = deferOperation();
-  mocks.admit.mockImplementation(async (write) => {
-    await admission.enter();
-    await write();
-  });
-  return admission;
-}
-
-function deferRestoration() {
-  const restoration = deferOperation();
-  mocks.restore.mockImplementation(
-    async (scope: { env?: NodeJS.ProcessEnv }, assertCurrent?: () => void) => {
-      await restoration.enter();
-      if (scope.env !== capturedEnv) {
-        throw new Error("Cold restoration lost its captured environment");
-      }
-      assertCurrent?.();
-      mocks.restoreCommit();
-    },
-  );
-  return restoration;
+  if (phase === "admission") {
+    mocks.admit.mockImplementation(async (write) => {
+      await enter();
+      await write();
+    });
+  } else {
+    mocks.restore.mockImplementation(
+      async (scope: { env?: NodeJS.ProcessEnv }, assertCurrent?: () => void) => {
+        await enter();
+        if (scope.env !== capturedEnv) {
+          throw new Error("Cold restoration lost its captured environment");
+        }
+        assertCurrent?.();
+        mocks.restoreCommit();
+      },
+    );
+  }
+  const { params, result } = run(branch);
+  try {
+    await Promise.race([queued.promise, result]);
+    expect(didQueue).toBe(true);
+    action(params);
+  } finally {
+    released.resolve();
+    await result;
+  }
+  return params;
 }
 
 function expectNoWrite() {
@@ -252,11 +241,7 @@ function retireSource(message = "Retired source") {
 it.each(["native", "supplied"] as const)(
   "waits for %s admission before appending",
   async (branch) => {
-    const admission = deferAdmission();
-    const { params, result } = run(branch);
-    await admission.during(result, () => {
-      expectNoWrite();
-    });
+    const params = await during(branch, expectNoWrite);
     expect(mocks.append).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         role: "user",
@@ -267,42 +252,32 @@ it.each(["native", "supplied"] as const)(
   },
 );
 
-it.each(["missing", "session", "lifecycle", "writer"] as const)(
-  "refuses a %s native target after waiting",
-  async (change) => {
-    const admission = deferAdmission();
-    const { result } = run("native");
-    await admission.during(result, () => {
-      if (change === "missing") {
-        current = undefined;
-      } else if (change === "session") {
-        current!.sessionId = "successor-session";
-      } else if (change === "lifecycle") {
-        current!.lifecycleRevision = "successor-lifecycle";
-      } else {
-        current!.activeWriterRunId = "successor-writer";
-      }
-      publishRetainedSessionEntryChange(
-        source.databaseIdentity,
-        target.sessionKey,
-        current ? projectSessionSharingEntry(current) : undefined,
-        undefined,
-        true,
-        current,
-      );
-    });
-    expectNoWrite();
-    expect(mocks.warn).toHaveBeenCalledOnce();
-  },
-);
+it.each([
+  ["missing", undefined],
+  ["session", { sessionId: "successor-session" }],
+  ["lifecycle", { lifecycleRevision: "successor-lifecycle" }],
+  ["writer", { activeWriterRunId: "successor-writer" }],
+] as const)("refuses a %s native target after waiting", async (_change, replacement) => {
+  await during("native", () => {
+    current = replacement && { ...current!, ...replacement };
+    publishRetainedSessionEntryChange(
+      source.databaseIdentity,
+      target.sessionKey,
+      current ? projectSessionSharingEntry(current) : undefined,
+      undefined,
+      true,
+      current,
+    );
+  });
+  expectNoWrite();
+  expect(mocks.warn).toHaveBeenCalledOnce();
+});
 
 it.each(["native", "supplied"] as const)(
   "rechecks captured %s source and CLI writer after waiting",
   async (branch) => {
     for (const authority of [mocks.owned, mocks.writer]) {
-      const admission = deferAdmission();
-      const { result } = run(branch);
-      await admission.during(result, () => {
+      await during(branch, () => {
         authority.mockImplementationOnce(() => {
           throw new Error("Retired source");
         });
@@ -323,9 +298,7 @@ it("keeps a supplied detached manager targetless", async () => {
 });
 
 it("keeps the native target captured before the caller changes its request", async () => {
-  const admission = deferAdmission();
-  const { params, result } = run("native");
-  await admission.during(result, () => {
+  await during("native", (params) => {
     params.sessionTarget = {
       ...target,
       sessionId: "successor-session",
@@ -336,29 +309,32 @@ it("keeps the native target captured before the caller changes its request", asy
   expect(mocks.append).toHaveBeenCalledOnce();
 });
 
-it("refuses retired write ownership before deferred cold restoration mutates it", async () => {
-  const restoration = deferRestoration();
-  const { result } = run("native");
-  await restoration.during(result, () => {
-    expect(mocks.restoreCommit).not.toHaveBeenCalled();
-    retireSource();
-  });
-  expect(mocks.restoreCommit).not.toHaveBeenCalled();
-  expectNoWrite();
-  expect(mocks.warn).toHaveBeenCalledOnce();
-});
-
-it("retains the captured environment through cold restoration and admitted native writes", async () => {
-  const restoration = deferRestoration();
-  const { result } = run("native");
-  await restoration.during(result, () => {
-    mocks.cloneEnv.mockReturnValue({ OPENCLAW_STATE_DIR: "/synthetic/ambient-successor" });
-  });
-  expect(mocks.restoreCommit).toHaveBeenCalledOnce();
-  expect(mocks.open).toHaveBeenCalledExactlyOnceWith({ ...target, env: capturedEnv });
-  expect(mocks.append).toHaveBeenCalledOnce();
-  expect(mocks.warn).not.toHaveBeenCalled();
-});
+it.each(["retired ownership", "changed ambient environment"])(
+  "honors captured authority and environment during cold restoration: %s",
+  async (change) => {
+    const retired = change === "retired ownership";
+    await during(
+      "native",
+      () => {
+        expect(mocks.restoreCommit).not.toHaveBeenCalled();
+        if (retired) {
+          retireSource();
+        } else {
+          mocks.cloneEnv.mockReturnValue({ OPENCLAW_STATE_DIR: "/synthetic/ambient-successor" });
+        }
+      },
+      "restoration",
+    );
+    expect(mocks.restoreCommit).toHaveBeenCalledTimes(retired ? 0 : 1);
+    expect(mocks.warn).toHaveBeenCalledTimes(retired ? 1 : 0);
+    if (retired) {
+      expectNoWrite();
+    } else {
+      expect(mocks.open).toHaveBeenCalledExactlyOnceWith({ ...target, env: capturedEnv });
+      expect(mocks.append).toHaveBeenCalledOnce();
+    }
+  },
+);
 
 it.each(["current", "lifecycle", "writer"] as const)(
   "honors a %s inherited fence independently of the captured native row",

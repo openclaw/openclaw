@@ -32,9 +32,7 @@ describe("prepareCliBundleMcpConfig codex", () => {
       const sessionId = "codex-independent-policy-owner";
       const config: OpenClawConfig = {
         plugins: { enabled: false },
-        agents: {
-          entries: { main: {}, worker: { tools: { deny: ["docs__delete_docs"] } } },
-        },
+        agents: { entries: { main: {}, worker: { tools: { deny: ["docs__delete_docs"] } } } },
         mcp: {
           servers: {
             docs: { command: process.execPath, args: [serverPath], codex: { agents: ["main"] } },
@@ -233,45 +231,33 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
         workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
         exclusiveConfig: buildSystemAgentToolsMcpServerConfig(options),
       });
-    const proposed = "proposal-sha256";
+    const proposalRef = { current: "proposal-sha256" };
+    const armed = { approvalArmed: true, proposalRef };
     const first = await prepare({ surface: "cli", proposalRef: {} });
-    const approval = await prepare({
-      surface: "cli",
-      approvalArmed: true,
-      proposalRef: { current: proposed },
-    });
-    const otherSurface = await prepare({
-      surface: "gateway",
-      approvalArmed: true,
-      proposalRef: { current: proposed },
-    });
+    const approval = await prepare({ surface: "cli", ...armed });
+    const otherSurface = await prepare({ surface: "gateway", ...armed });
 
     expect(first.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(first.mcpResumeHash).toBe(approval.mcpResumeHash);
     expect(approval.mcpResumeHash).not.toBe(otherSurface.mcpResumeHash);
-    const delegated = await prepare({
-      surface: "cli",
-      operatorApprovalOnly: true,
-      approvalArmed: true,
-      proposalRef: { current: proposed },
-    });
+    const delegated = await prepare({ surface: "cli", operatorApprovalOnly: true, ...armed });
     expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
-    const binding = {
-      sessionId: "native-cli-session",
+    const identity = {
       authProfileId: "claude-cli:ops",
       authEpoch: "auth-epoch",
       authEpochVersion: 1,
       cwdHash: "cwd-hash",
+    };
+    const binding = {
+      ...identity,
+      sessionId: "native-cli-session",
       mcpConfigHash: first.mcpConfigHash,
       mcpResumeHash: first.mcpResumeHash,
     };
     const reuseParams = {
+      ...identity,
       binding,
-      authProfileId: binding.authProfileId,
-      authEpoch: binding.authEpoch,
-      authEpochVersion: binding.authEpochVersion,
-      cwdHash: binding.cwdHash,
       mcpConfigHash: approval.mcpConfigHash,
       mcpResumeHash: approval.mcpResumeHash,
     };

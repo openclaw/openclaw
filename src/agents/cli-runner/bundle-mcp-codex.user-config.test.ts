@@ -12,6 +12,12 @@ const http = (url: string, options: Partial<McpServerConfig> = {}): McpServerCon
   url,
   ...options,
 });
+function expectProjection(
+  patch: Awaited<ReturnType<typeof project>>,
+  mcp_servers: NonNullable<Awaited<ReturnType<typeof project>>>["mcp_servers"],
+) {
+  expect(patch).toStrictEqual({ mcp_servers });
+}
 
 const authMocks = vi.hoisted(() => ({
   loadExecApprovalsReadOnlyAsync: vi.fn(),
@@ -70,25 +76,20 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     } satisfies Record<string, McpServerConfig>;
     const patch = await project(servers, { agentId: "main" });
 
-    expect(patch?.mcp_servers.auto).toEqual({
-      command: "mcp",
-      default_tools_approval_mode: "auto",
-      tools: { "write.raw_tool": { approval_mode: "approve" } },
+    expect(patch?.mcp_servers).toEqual({
+      auto: {
+        command: "mcp",
+        default_tools_approval_mode: "auto",
+        tools: { "write.raw_tool": { approval_mode: "approve" } },
+      },
+      unspecified: {
+        command: "mcp",
+        disabled_tools: ["write.raw_tool"],
+        tools: { "write.raw_tool": { approval_mode: "approve" } },
+      },
+      prompt: { command: "mcp", default_tools_approval_mode: "prompt" },
+      approve: { command: "mcp", default_tools_approval_mode: "approve" },
     });
-    expect(patch?.mcp_servers.unspecified).toEqual({
-      command: "mcp",
-      disabled_tools: ["write.raw_tool"],
-      tools: { "write.raw_tool": { approval_mode: "approve" } },
-    });
-    expect(patch?.mcp_servers.prompt).toEqual({
-      command: "mcp",
-      default_tools_approval_mode: "prompt",
-    });
-    expect(patch?.mcp_servers.approve).toEqual({
-      command: "mcp",
-      default_tools_approval_mode: "approve",
-    });
-    expect(patch?.mcp_servers.missing).toBeUndefined();
     expect(authMocks.loadExecApprovalsReadOnlyAsync).toHaveBeenCalledTimes(1);
     expect((await project(servers))?.mcp_servers.auto).not.toHaveProperty("tools");
   });
@@ -130,13 +131,11 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
         env: { OUTLOOK_USER: "alice@example.org" },
       },
     });
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        outlook: {
-          command: "node",
-          args: ["/opt/outlook-mcp/dist/index.js"],
-          env: { OUTLOOK_USER: "alice@example.org" },
-        },
+    expectProjection(patch, {
+      outlook: {
+        command: "node",
+        args: ["/opt/outlook-mcp/dist/index.js"],
+        env: { OUTLOOK_USER: "alice@example.org" },
       },
     });
   });
@@ -147,13 +146,11 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
         headers: { Authorization: "Bearer ${NOTES_TOKEN}", "x-tenant": "${NOTES_TENANT}" },
       }),
     });
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        notes: {
-          url: "https://notes.example.org/mcp",
-          bearer_token_env_var: "NOTES_TOKEN",
-          env_http_headers: { "x-tenant": "NOTES_TENANT" },
-        },
+    expectProjection(patch, {
+      notes: {
+        url: "https://notes.example.org/mcp",
+        bearer_token_env_var: "NOTES_TOKEN",
+        env_http_headers: { "x-tenant": "NOTES_TENANT" },
       },
     });
   });
@@ -233,14 +230,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       },
       { agentId: "atlas" },
     );
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        global: {
-          command: "node",
-          args: ["global-mcp.js"],
-        },
-      },
-    });
+    expectProjection(patch, { global: { command: "node", args: ["global-mcp.js"] } });
   });
 
   it("omits scoped Codex MCP servers when no OpenClaw agent id is available", async () => {
@@ -260,12 +250,10 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       }),
     });
 
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        docs: {
-          url: "https://mcp.example.com/mcp",
-          http_headers: { Authorization: "Bearer native-access-token" },
-        },
+    expectProjection(patch, {
+      docs: {
+        url: "https://mcp.example.com/mcp",
+        http_headers: { Authorization: "Bearer native-access-token" },
       },
     });
   });
@@ -284,11 +272,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       { onServerUnavailable },
     );
 
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        localTools: { command: "local-tools" },
-      },
-    });
+    expectProjection(patch, { localTools: { command: "local-tools" } });
     expect(onServerUnavailable).toHaveBeenCalledWith("gbrain", expect.any(Error));
   });
 
@@ -305,17 +289,16 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
   });
 
   it("preserves tool filters while projecting auth-profile backed MCP bearers at runtime", async () => {
+    const credential = {
+      type: "oauth",
+      provider: "ducktape",
+      access: "expired-access",
+      refresh: "refresh-token-must-not-project",
+      expires: 1,
+    };
     authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce({
       version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
+      profiles: { "ducktape:mcp": credential },
     });
     authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
       apiKey: "fresh-access-token",
@@ -323,10 +306,8 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       profileId: "ducktape:mcp",
       profileType: "oauth",
       credential: {
-        type: "oauth",
-        provider: "ducktape",
+        ...credential,
         access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
         expires: Date.now() + 60_000,
       },
     });
@@ -340,17 +321,12 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
       }),
     });
 
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        ducktape: {
-          url: "https://agents.ducktape.xyz/mcp",
-          http_headers: {
-            Authorization: "Bearer fresh-access-token",
-            "x-tenant": "keep",
-          },
-          enabled_tools: ["proof_echo", "proof_search"],
-          disabled_tools: ["admin_delete"],
-        },
+    expectProjection(patch, {
+      ducktape: {
+        url: "https://agents.ducktape.xyz/mcp",
+        http_headers: { Authorization: "Bearer fresh-access-token", "x-tenant": "keep" },
+        enabled_tools: ["proof_echo", "proof_search"],
+        disabled_tools: ["admin_delete"],
       },
     });
     expect(JSON.stringify(patch)).not.toContain("refresh-token-must-not-project");
