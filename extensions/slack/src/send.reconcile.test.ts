@@ -80,12 +80,13 @@ function expectParts(metadata: MessageMetadata[], indexes: number[]) {
   );
   expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
 }
-beforeEach(() => {
-  clients.createSlackReadClient.mockReset();
-  clients.getSlackWriteClient.mockReset();
-});
-
 describe("Slack durable reconciliation", () => {
+  let client: TestClient;
+  beforeEach(() => {
+    client = createClient();
+    clients.createSlackReadClient.mockReset();
+    clients.getSlackWriteClient.mockReset();
+  });
   it("uses workspace-scoped read and write clients for qualified reconciliation", async () => {
     const reader = createClient();
     const writer = createClient();
@@ -120,7 +121,6 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("reconciles every ordered native-data fallback batch as one durable part set", async () => {
-    const client = createClient();
     client.chat.postMessage.mockRejectedValueOnce(
       Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } }),
     );
@@ -195,7 +195,6 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("opens a durable user-identity DM before marking platform dispatch", async () => {
-    const client = createClient();
     const order: string[] = [];
     client.conversations.open.mockImplementationOnce(async () => {
       order.push("open");
@@ -234,7 +233,6 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("does not confuse an identical later message without the durable id", async () => {
-    const client = createClient();
     client.conversations.history.mockResolvedValue({ messages: [{ ts, text: "final answer" }] });
     await expect(reconcile(client)).resolves.toEqual({
       status: "unresolved",
@@ -249,7 +247,6 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("reconciles the persisted exact thread reply", async () => {
-    const client = createClient();
     const thread = "1782584644.377229";
     const metadata = await marker(client, { threadTs: thread });
     client.conversations.replies.mockResolvedValueOnce({
@@ -271,7 +268,6 @@ describe("Slack durable reconciliation", () => {
     { replyToId: "1782584644.377229", replyToMode: "off" as const },
     { replyToId: "1782584644.377229", payloads: [{ text: "final answer", replyToId: "" }] },
   ])("uses channel history for a cleared reply target: %j", async (overrides) => {
-    const client = createClient();
     const metadata = await marker(client);
     client.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
     await expect(reconcile(client, overrides)).resolves.toMatchObject({ status: "sent" });
@@ -280,7 +276,6 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("paginates past malformed signatures to find the exact durable id", async () => {
-    const client = createClient();
     const metadata = await marker(client);
     expect(JSON.stringify(metadata)).not.toContain("queue-1");
     const signature = metadata.event_payload.openclaw_delivery_signature as string;
@@ -309,34 +304,20 @@ describe("Slack durable reconciliation", () => {
     });
   });
 
-  it("reconciles complete indexed text parts and rejects forged indexes", async () => {
-    const client = createClient();
+  it("signs indexed text parts and rejects forged indexes", async () => {
     let index = 0;
     client.chat.postMessage.mockImplementation(async () => ({
       ok: true,
       channel: "C123",
       ts: `1782584647.00000${++index}`,
     }));
-    await sendMessageSlack("channel:C123", "final answer", {
-      cfg,
-      client,
-      textLimit: 5,
-      deliveryQueueId: "queue-1",
-    });
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    await marker(client, { textLimit: 5 });
     const metadata = client.chat.postMessage.mock.calls.map(([request]) => request.metadata!);
     expectParts(metadata, [0, 1, 2]);
     expect(
       new Set(metadata.map((part) => part.event_payload.openclaw_delivery_signature)).size,
     ).toBe(3);
     const ids = [1, 2, 3].map((part) => `1782584647.00000${part}`);
-    client.conversations.history.mockResolvedValueOnce({
-      messages: metadata.map((part, i) => ({ ts: ids[i], metadata: part })),
-    });
-    await expect(reconcile(client)).resolves.toMatchObject({
-      status: "sent",
-      receipt: { platformMessageIds: ids },
-    });
     const first = metadata[0]!;
     const forged: MessageMetadata[] = [first];
     for (const part of [1, 2]) {

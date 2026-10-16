@@ -153,6 +153,13 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
     return { error, onPlatformSendDispatch };
   }
+  async function expectTransferFailure(cause: Record<string, unknown>) {
+    const { error, onPlatformSendDispatch } = await captureFailure();
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ cause });
+    expectNoCompletion(onPlatformSendDispatch);
+    return error;
+  }
   function expectNoCompletion(onPlatformSendDispatch: ReturnType<typeof vi.fn>) {
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
@@ -177,37 +184,33 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("records an accepted batched upload when its remaining caption post fails", async () => {
     const { handleSlackAction, slackActionRuntime } = await import("./action-runtime.js");
     const { sendSlackMessage: sendSlackMessageThroughPublicOwner } = await import("./actions.js");
-    const originalSender = slackActionRuntime.sendSlackMessage;
     const hasRepliedRef = { value: false };
     client.chat.postMessage.mockRejectedValueOnce(new Error("Remaining Slack caption failed"));
-    slackActionRuntime.sendSlackMessage = async (target, content, options) =>
-      await sendSlackMessageThroughPublicOwner(target, content, { ...options, client });
+    vi.spyOn(slackActionRuntime, "sendSlackMessage").mockImplementation(
+      async (target, content, options) =>
+        await sendSlackMessageThroughPublicOwner(target, content, { ...options, client }),
+    );
+    await expect(
+      handleSlackAction(
+        {
+          action: "uploadFile",
+          to: "channel:C123CHAN",
+          filePath: "/tmp/report.txt",
+          initialComment: "a".repeat(8500),
+        },
+        SLACK_TEST_CFG,
+        {
+          currentChannelId: "C123CHAN",
+          currentThreadTs: "1111111111.111111",
+          replyToMode: "batched",
+          hasRepliedRef,
+        },
+      ),
+    ).rejects.toThrow("Remaining Slack caption failed");
 
-    try {
-      await expect(
-        handleSlackAction(
-          {
-            action: "uploadFile",
-            to: "channel:C123CHAN",
-            filePath: "/tmp/report.txt",
-            initialComment: "a".repeat(8500),
-          },
-          SLACK_TEST_CFG,
-          {
-            currentChannelId: "C123CHAN",
-            currentThreadTs: "1111111111.111111",
-            replyToMode: "batched",
-            hasRepliedRef,
-          },
-        ),
-      ).rejects.toThrow("Remaining Slack caption failed");
-
-      expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
-      expect(client.chat.postMessage).toHaveBeenCalledOnce();
-      expect(hasRepliedRef.value).toBe(true);
-    } finally {
-      slackActionRuntime.sendSlackMessage = originalSender;
-    }
+    expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+    expect(hasRepliedRef.value).toBe(true);
   });
 
   it("marks account_inactive from files.getUploadURLExternal as a permanent non-dispatch", async () => {
@@ -232,15 +235,11 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("scopes DM channel resolution cache by token identity", async () => {
     await sendUpload(client, {
       target: "UABC123",
-      message: "first",
       token: "xoxb-test-a",
-      mediaUrl: "/tmp/first.png",
     });
     await sendUpload(client, {
       target: "user:UABC123",
-      message: "second",
       token: "xoxb-test-b",
-      mediaUrl: "/tmp/second.png",
     });
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
@@ -291,63 +290,57 @@ describe("sendMessageSlack file upload with user IDs", () => {
     await completionStarted.promise;
     expect(cancelUploadBody).toHaveBeenCalledOnce();
     expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
-    await expect(
-      Promise.race([
-        sendPromise.then(
-          () => "settled",
-          () => "settled",
-        ),
-        Promise.resolve("pending"),
-      ]),
-    ).resolves.toBe("pending");
+    await expect(Promise.race([sendPromise, Promise.resolve("pending")])).resolves.toBe("pending");
     completionResult.resolve({ ok: true });
     const result = await sendPromise;
 
-    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
-      "/tmp/threaded.png",
-      expect.objectContaining({ optimizeImages: false }),
-    );
+    expect(loadOutboundMediaFromUrlMock.mock.calls).toMatchObject([
+      ["/tmp/threaded.png", { optimizeImages: false }],
+    ]);
     expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
       filename: "custom-name.bin",
       length: Buffer.from("fake-image").length,
     });
-    expect(globalThis.fetch).toHaveBeenCalledExactlyOnceWith(
-      "https://files.slack.com/upload",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(buildTimeoutAbortSignal).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        url: "https://files.slack.com",
-      }),
-    );
-    expect(fetchWithSsrFGuard).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        timeoutMs: 120_000,
-        signal: expect.any(AbortSignal),
-        capture: false,
-      }),
-    );
+    expect(vi.mocked(globalThis.fetch).mock.calls).toMatchObject([
+      ["https://files.slack.com/upload", { method: "POST" }],
+    ]);
+    expect(buildTimeoutAbortSignal.mock.calls).toMatchObject([
+      [
+        {
+          timeoutMs: 120_000,
+          url: "https://files.slack.com",
+        },
+      ],
+    ]);
+    expect(fetchWithSsrFGuard.mock.calls).toMatchObject([
+      [
+        {
+          timeoutMs: 120_000,
+          signal: expect.any(AbortSignal),
+          capture: false,
+        },
+      ],
+    ]);
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expect(events).toEqual(["byte-upload", "dispatch-start", "dispatch-end", "completion"]);
-    expect(client.files.completeUploadExternal).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        channel_id: "C123CHAN",
-        initial_comment: "caption",
-        thread_ts: "171.222",
-        files: [{ id: "F001", title: "Custom Title" }],
-      }),
-    );
+    expect(client.files.completeUploadExternal.mock.calls).toMatchObject([
+      [
+        {
+          channel_id: "C123CHAN",
+          initial_comment: "caption",
+          thread_ts: "171.222",
+          files: [{ id: "F001", title: "Custom Title" }],
+        },
+      ],
+    ]);
     expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
-    expect(result.receipt.threadId).toBe("171.222");
-    expect(result.messageId).toBe("F001");
+    expect(result).toMatchObject({ messageId: "F001", receipt: { threadId: "171.222" } });
   });
 
   it("preserves HTTP upload URLs on an alternate Slack API origin", async () => {
     await withServer(
       (req, res) => {
-        expect(req.method).toBe("POST");
-        expect(req.url).toBe("/upload/v1/capability");
+        expect(req).toMatchObject({ method: "POST", url: "/upload/v1/capability" });
         req.resume();
         res.end("ok");
       },
@@ -381,88 +374,60 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it.each([
+  it.each<
     [
-      "custom API root",
-      "https://slack-relay.example/api/",
-      "https://files.slack.com/upload/v1/relayed-capability",
-      "93.184.216.34",
-    ],
-    [
-      "GovSlack",
-      "https://slack-gov.com/api/",
-      "https://files.slack-gov.com/upload/v1/gov-capability",
-      undefined,
-    ],
-    ["RFC2544 fake-IP", undefined, undefined, "198.18.0.10"],
+      string | undefined,
+      string | undefined,
+      string | undefined,
+      "private" | "Error" | "host" | "origin" | undefined,
+    ]
+  >([
+    ["https://slack-relay.example", undefined, "93.184.216.34", undefined],
+    ["https://slack-gov.com", "https://files.slack-gov.com", undefined, undefined],
+    [undefined, undefined, "198.18.0.10", undefined],
+    [undefined, undefined, "10.0.0.1", "private"],
+    [undefined, "http://files.slack.com", undefined, "Error"],
+    ["https://slack.com.", "https://files.slack-gov.com", undefined, "host"],
+    [undefined, "https://future-upload.slack.com", undefined, "host"],
+    ["http://api.example", "http://other.example", undefined, "origin"],
   ])(
-    "allows %s through the real hostname guard",
-    async (_label, apiUrl, uploadUrl, lookupAddress) => {
-      const caseClient = createUploadTestClient(apiUrl);
-      if (uploadUrl) {
-        mockUploadDestination(caseClient, uploadUrl);
+    "enforces destination policy (API %s, upload %s, DNS %s): %s",
+    async (api, upload, lookup, failure) => {
+      const caseClient = createUploadTestClient(api);
+      if (upload) {
+        mockUploadDestination(caseClient, upload);
       }
-      const networkFetch = vi.fn(async () => new Response("ok", { status: 200 }));
-      await useRealUploadGuard(networkFetch, lookupAddress);
-
-      await sendUpload(caseClient);
-
-      expect(networkFetch).toHaveBeenCalledOnce();
-      expect(caseClient.files.completeUploadExternal).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ channel_id: "C123CHAN" }),
-      );
+      const networkFetch = vi.fn(async () => new Response("ok"));
+      if (failure !== "origin") {
+        await useRealUploadGuard(networkFetch, lookup);
+      }
+      const result = sendUpload(caseClient);
+      if (!failure) {
+        await result;
+        expect(networkFetch).toHaveBeenCalledOnce();
+        expect(caseClient.files.completeUploadExternal).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ channel_id: "C123CHAN" }),
+        );
+        return;
+      }
+      if (failure === "origin") {
+        await expect(result).rejects.toThrow("must match the configured Slack API origin");
+        expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+      } else {
+        const error = await result.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+        if (failure !== "private") {
+          expect(error).toMatchObject({
+            cause: expect.objectContaining({
+              name: failure === "host" ? "SsrFBlockedError" : failure,
+            }),
+          });
+        }
+      }
+      expect(networkFetch).not.toHaveBeenCalled();
+      expect(caseClient.files.completeUploadExternal).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects exact Slack upload hosts resolving to a private address", async () => {
-    const networkFetch = vi.fn(async () => new Response("unexpected"));
-    await useRealUploadGuard(networkFetch, "10.0.0.1");
-
-    await expect(sendUpload(client)).rejects.toThrow();
-
-    expect(networkFetch).not.toHaveBeenCalled();
-    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["plaintext Slack", "https://slack.com/api/", "http://files.slack.com/upload/v1/plaintext"],
-    [
-      "trailing-dot commercial Slack to GovSlack",
-      "https://slack.com./api/",
-      "https://files.slack-gov.com/upload/v1/cross-plane",
-    ],
-    [
-      "undocumented commercial subdomain",
-      "https://slack.com/api/",
-      "https://future-upload.slack.com/upload/v1/capability",
-    ],
-  ])("rejects %s upload destinations before network access", async (label, apiUrl, uploadUrl) => {
-    const rejectedClient = createUploadTestClient(apiUrl);
-    mockUploadDestination(rejectedClient, uploadUrl);
-    const networkFetch = vi.fn(async () => new Response("unexpected"));
-    const errorName = uploadUrl.startsWith("http:") ? "Error" : "SsrFBlockedError";
-    await useRealUploadGuard(networkFetch);
-
-    const rejection = await sendUpload(rejectedClient).catch((cause: unknown) => cause);
-
-    expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(rejection).toMatchObject({ cause: expect.objectContaining({ name: errorName }) });
-
-    expect(networkFetch).not.toHaveBeenCalled();
-    expect(rejectedClient.files.completeUploadExternal).not.toHaveBeenCalled();
-  });
-
-  it("rejects upload destinations outside an explicitly configured API origin", async () => {
-    const originClient = createUploadTestClient("http://slack-compatible.example/api/");
-    mockUploadDestination(originClient, "http://other-compatible.example/upload/v1/capability");
-
-    await expect(sendUpload(originClient)).rejects.toThrow(
-      "must match the configured Slack API origin",
-    );
-
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
-    expect(originClient.files.completeUploadExternal).not.toHaveBeenCalled();
-  });
 
   it("times out a hanging presigned URL upload", async () => {
     const closedResponse = createDeferred<void>();
@@ -470,8 +435,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     await withServer(
       (req, res) => {
         req.resume();
-        expect(req.method).toBe("POST");
-        expect(req.url).toBe("/upload");
+        expect(req).toMatchObject({ method: "POST", url: "/upload" });
         res.once("close", closedResponse.resolve);
         // Trigger cancellation only after the request arrives, independent of CI load.
         uploadTimeout.controller.abort(
@@ -482,48 +446,32 @@ describe("sendMessageSlack file upload with user IDs", () => {
         globalThis.fetch = originalFetch;
         mockUploadDestination(client, `${baseUrl}/upload`);
 
-        const { error, onPlatformSendDispatch } = await captureFailure();
-
-        expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-        expect(error).toMatchObject({
-          cause: expect.objectContaining({ name: "TimeoutError" }),
-        });
+        await expectTransferFailure({ name: "TimeoutError" });
 
         await closedResponse.promise;
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
-        expectNoCompletion(onPlatformSendDispatch);
       },
     );
   });
 
   it("rejects a non-200 byte-upload response", async () => {
     globalThis.fetch = vi.fn(async () => new Response(null, { status: 204 }));
-    const { error, onPlatformSendDispatch } = await captureFailure();
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({ cause: { code: "HTTP_204" } });
-    expectNoCompletion(onPlatformSendDispatch);
+    await expectTransferFailure({ code: "HTTP_204" });
   });
 
   it("marks a non-timeout byte-upload transport failure as not dispatched", async () => {
     const transportError = Object.assign(
-      new Error(
-        "socket closed at https://files.slack.com/upload/v1/CAPABILITY_SENTINEL?token=QUERY_SENTINEL",
-      ),
+      new Error("https://files.slack.com/upload/v1/CAPABILITY_SENTINEL?token=QUERY_SENTINEL"),
       { code: "ECONNRESET" },
     );
     globalThis.fetch = vi.fn(async () => {
       throw transportError;
     });
 
-    const { error, onPlatformSendDispatch } = await captureFailure();
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({ cause: { code: "ECONNRESET" } });
+    const error = await expectTransferFailure({ code: "ECONNRESET" });
     expect(formatErrorMessage(error)).not.toContain("CAPABILITY_SENTINEL");
     expect(formatErrorMessage(error)).not.toContain("QUERY_SENTINEL");
     expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
-    expectNoCompletion(onPlatformSendDispatch);
   });
 
   it("keeps completion error responses ambiguous", async () => {
@@ -537,26 +485,22 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
   });
 
-  it.each([[undefined, "upload"]] as const)(
-    "infers the unnamed document filename from MIME %s",
-    async (contentType, fileName) => {
-      loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-        buffer: Buffer.from("fake-image"),
-        contentType,
-        kind: "document",
-      });
+  it("uses a generic filename for a document without MIME or a name", async () => {
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-image"),
+      kind: "document",
+    });
 
-      await sendUpload(client, {
-        mediaUrl: "https://example.com/?attachment=artifact",
-      });
+    await sendUpload(client, {
+      mediaUrl: "https://example.com/?attachment=artifact",
+    });
 
-      expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
-        filename: fileName,
-        length: Buffer.from("fake-image").length,
-      });
-      expect(client.files.completeUploadExternal).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ files: [{ id: "F001", title: fileName }] }),
-      );
-    },
-  );
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "upload",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ files: [{ id: "F001", title: "upload" }] }),
+    );
+  });
 });
