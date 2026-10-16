@@ -18,6 +18,14 @@ type ChannelMessageOutboundBridgeResult = Awaited<
 const cfg = {} as OpenClawConfig;
 const textRequest = { cfg, to: "room-1", text: "hello" };
 const routing = { threadId: "thread-1", replyToId: "parent-1" };
+type AdapterOptions = Parameters<typeof createChannelMessageAdapterFromOutbound<OpenClawConfig>>[0];
+
+function bridge(
+  outbound: AdapterOptions["outbound"],
+  options: Omit<AdapterOptions, "outbound"> = {},
+) {
+  return createChannelMessageAdapterFromOutbound({ outbound, ...options });
+}
 
 function makeReceipt(ids: string[], kind: MessageReceipt["parts"][number]["kind"]): MessageReceipt {
   return {
@@ -31,12 +39,10 @@ function makeReceipt(ids: string[], kind: MessageReceipt["parts"][number]["kind"
 describe("createChannelMessageAdapterFromOutbound", () => {
   it("preserves explicit no-send facts in progress and final results", async () => {
     const notSent = { outcome: "not_sent" as const, messageId: "" };
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendText: async ({ onDeliveryResult }) => {
-          await onDeliveryResult?.(notSent);
-          return notSent;
-        },
+    const adapter = bridge({
+      sendText: async ({ onDeliveryResult }) => {
+        await onDeliveryResult?.(notSent);
+        return notSent;
       },
     });
     const onDeliveryResult = vi.fn();
@@ -55,13 +61,13 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       channel: "demo",
       messageId: "msg-1",
     }));
-    const adapter = createChannelMessageAdapterFromOutbound({
-      id: "demo",
-      outbound: {
+    const adapter = bridge(
+      {
         deliveryCapabilities: { durableFinal: { text: true, replyTo: true } },
         sendText,
       },
-    });
+      { id: "demo" },
+    );
     const result = await adapter.send?.text?.({ ...textRequest, ...routing });
     expect([adapter.id, adapter.durableFinal]).toEqual([
       "demo",
@@ -145,11 +151,7 @@ describe("createChannelMessageAdapterFromOutbound", () => {
 
   it("preserves target-only routing metadata without fabricating delivery identity", async () => {
     const target = { kind: "channel" as const, id: "route-only" };
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendText: vi.fn(async () => ({ target })),
-      },
-    });
+    const adapter = bridge({ sendText: vi.fn(async () => ({ target })) });
     const result = await adapter.send?.text?.(textRequest);
     expect([result?.target, result?.receipt.platformMessageIds, result?.receipt.parts]).toEqual([
       target,
@@ -189,12 +191,10 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       receipt: makeReceipt([messageId], "text"),
     });
     const onDeliveryResult = vi.fn();
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendText: async ({ onDeliveryResult: reportProgress }) => {
-          await reportProgress?.(sourceResult("progress-1"));
-          return sourceResult("final-1");
-        },
+    const adapter = bridge({
+      sendText: async ({ onDeliveryResult: reportProgress }) => {
+        await reportProgress?.(sourceResult("progress-1"));
+        return sourceResult("final-1");
       },
     });
     const result = await adapter.send?.text?.({ ...textRequest, onDeliveryResult });
@@ -213,11 +213,9 @@ describe("createChannelMessageAdapterFromOutbound", () => {
 
   it("preserves an outbound receipt instead of rebuilding it", async () => {
     const receipt = makeReceipt(["receipt-1", "receipt-2"], "media");
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        deliveryCapabilities: { durableFinal: { media: true } },
-        sendMedia: vi.fn(async () => ({ channel: "demo", messageId: "legacy-id", receipt })),
-      },
+    const adapter = bridge({
+      deliveryCapabilities: { durableFinal: { media: true } },
+      sendMedia: vi.fn(async () => ({ channel: "demo", messageId: "legacy-id", receipt })),
     });
     await expect(
       adapter.send?.media?.({
@@ -292,10 +290,8 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     payload: ChannelMessageSendPayloadContext["payload"];
     expected: "card" | "text";
   }>)("classifies $name payloads as $expected", async ({ payload, expected }) => {
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendPayload: vi.fn(async () => ({ channel: "demo", messageId: "msg-1" })),
-      },
+    const adapter = bridge({
+      sendPayload: vi.fn(async () => ({ channel: "demo", messageId: "msg-1" })),
     });
     const result = await adapter.send?.payload?.({
       ...textRequest,
@@ -367,12 +363,10 @@ describe("createChannelMessageAdapterFromOutbound", () => {
 
   it("normalizes existing outbound poll receipts", async () => {
     const receipt = makeReceipt(["card-1"], "card");
-    const adapter = createChannelMessageAdapterFromOutbound({
-      capabilities: { poll: true },
-      outbound: {
-        sendPoll: vi.fn(async () => ({ messageId: "card-1", receipt })),
-      },
-    });
+    const adapter = bridge(
+      { sendPoll: vi.fn(async () => ({ messageId: "card-1", receipt })) },
+      { capabilities: { poll: true } },
+    );
     const result = await adapter.send?.poll?.({
       ...textRequest,
       poll: { question: "Ship?", options: ["Yes", "No"] },
@@ -427,11 +421,7 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       Parameters<typeof createChannelMessageAdapterFromOutbound>[0]["receive"]
     >;
     const expected = structuredClone([live, receive]);
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {},
-      live,
-      receive,
-    });
+    const adapter = bridge({}, { live, receive });
     expect([adapter.live, adapter.receive]).toEqual(expected);
   });
 });
