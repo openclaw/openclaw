@@ -824,8 +824,16 @@ it.each([
             expect(readDatabase(snapshot)).toEqual(file === shared ? before.shared : before.agent);
           }
           const preserved = { shared: readDatabase(shared), agent: readDatabase(agent) };
+          if (preservesMigrated) {
+            expect(execution.result.recovery).toMatchObject({
+              serviceRestartSafe: false,
+              dataAtRisk: "state-migrated-no-rollback",
+            });
+          }
           await expect(finalize()).rejects.toMatchObject({
-            result: { reason: "state-migrated-no-rollback" },
+            result: {
+              reason: preservesMigrated ? "post-update-failed" : "state-migrated-no-rollback",
+            },
           });
           expect({ shared: readDatabase(shared), agent: readDatabase(agent) }).toEqual(preserved);
           const active = JSON.parse(
@@ -853,9 +861,15 @@ it.each([
           if (preservesMigrated) {
             expect(record).toMatchObject({
               status: "failed",
-              reason: "state-migrated-no-rollback",
-              verification: { serviceRunning: true, readyz: true, runningVersion: "2.0.0" },
+              reason: "post-update-failed",
+              verification: {
+                serviceRunning: true,
+                readyz: true,
+                runningVersion: "2.0.0",
+                recovery: { serviceRestartSafe: true, service: "healthy", version: "2.0.0" },
+              },
             });
+            expect(record.verification.recovery).not.toHaveProperty("dataAtRisk");
             expect(renderUpdateRunReport(record).lines.join("\n")).toContain(
               "running on the preserved migrated state",
             );
