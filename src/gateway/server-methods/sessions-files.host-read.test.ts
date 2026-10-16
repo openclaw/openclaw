@@ -14,6 +14,7 @@ import {
   assistantToolCall,
   IMAGE_PREVIEW_FIXTURES,
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createSessionFileDownloadClient,
   fetchSessionFileDownload,
   createVisibleMessagesMock,
@@ -64,7 +65,6 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const listFiles = () => invoke("sessions.files.list", { sessionKey });
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
 const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
 const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
@@ -115,7 +115,17 @@ function prepareHostFileRead(
     withSessionTurnAuthority: async (_target, consume) => consume(entry),
   };
   setRuntimeConfigSnapshot(cfg);
-  return { context, options, entry };
+  return {
+    context,
+    options,
+    entry,
+    files: createSessionFilesClient(
+      invoke,
+      () => sessionKey,
+      () => context,
+      () => options,
+    ),
+  };
 }
 
 describe("sessions.files host read boundary", () => {
@@ -126,14 +136,7 @@ describe("sessions.files host read boundary", () => {
     const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
     bytes.write("PK\x03\x04", "binary");
     fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
-    const download = expectOkPayload(
-      await invoke(
-        "sessions.files.download",
-        { sessionKey, path: filename },
-        fixture.context,
-        connection,
-      ),
-    );
+    const download = await fixture.files.ok("download", filename, undefined, connection);
     expect(download.filename).toBe(filename);
     expect(download.mimeType).toBe("application/zip");
     const fetched = await fetchSessionFileDownload(connection.client, download.url);
@@ -170,14 +173,7 @@ describe("sessions.files host read boundary", () => {
     fs.writeFileSync(outsidePath, "private");
     fs.symlinkSync(outsidePath, path.join(workspaceRoot, "link"));
     for (const filePath of [outsidePath, "../outside", "link"]) {
-      expectError(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: filePath },
-          fixture.context,
-          connection,
-        ),
-      );
+      await fixture.files.error("download", filePath, undefined, connection);
     }
   });
 
@@ -196,14 +192,10 @@ describe("sessions.files host read boundary", () => {
       }
       fs.writeFileSync(outsidePath, bytes);
       const fixture = prepareHostFileRead({ permissionMode: "full" });
-      const download = expectOkPayload(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: outsidePath },
-          fixture.context,
-          { ...fixture.options, ...connection },
-        ),
-      );
+      const download = await fixture.files.ok("download", outsidePath, undefined, {
+        ...fixture.options,
+        ...connection,
+      });
       expect(download.filename).toBe(filename);
       const result = await fetchSessionFileDownload(connection.client, download.url);
       expect(result.response.statusCode).toBe(200);
@@ -212,14 +204,10 @@ describe("sessions.files host read boundary", () => {
       expect(
         (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
       ).toBe(404);
-      expectError(
-        await invoke(
-          "sessions.files.download",
-          { sessionKey, path: outsidePath },
-          fixture.context,
-          { ...fixture.options, ...connection },
-        ),
-      );
+      await fixture.files.error("download", outsidePath, undefined, {
+        ...fixture.options,
+        ...connection,
+      });
     },
   );
 
@@ -254,17 +242,7 @@ describe("sessions.files host read boundary", () => {
         "~/.openclaw-outside-preview.txt",
         `${outsidePath}.missing`,
       ]) {
-        const error = expectError(
-          await invoke(
-            "sessions.files.get",
-            {
-              sessionKey,
-              path: requestedPath,
-            },
-            fixture.context,
-            fixture.options,
-          ),
-        );
+        const error = await fixture.files.error("get", requestedPath);
 
         expect(error.details).toMatchObject({
           path: requestedPath,
@@ -272,17 +250,7 @@ describe("sessions.files host read boundary", () => {
           reason: "outside_session_boundary",
         });
       }
-      const inRoot = expectOkPayload(
-        await invoke(
-          "sessions.files.get",
-          {
-            sessionKey,
-            path: "src/readme.md",
-          },
-          fixture.context,
-          fixture.options,
-        ),
-      );
+      const inRoot = await fixture.files.ok("get", "src/readme.md");
       expect(inRoot.file.content).toBe("# Read me\n");
     },
   );
@@ -291,17 +259,9 @@ describe("sessions.files host read boundary", () => {
     const outsidePath = outsideFile();
     fs.writeFileSync(outsidePath, "outside\n", "utf8");
     const fixture = prepareHostFileRead({ permissionMode: "full" });
-    const error = expectError(
-      await invoke(
-        "sessions.files.get",
-        {
-          sessionKey,
-          path: outsidePath,
-        },
-        { getRuntimeConfig: fixture.context.getRuntimeConfig },
-        fixture.options,
-      ),
-    );
+    const error = await fixture.files.error("get", outsidePath, {
+      getRuntimeConfig: fixture.context.getRuntimeConfig,
+    });
     expect(error.details).toMatchObject({
       type: "session_file_not_found",
       reason: "outside_session_boundary",
@@ -320,17 +280,7 @@ describe("sessions.files host read boundary", () => {
     mockVisibleMessages([assistantToolCall("read", { path: aliasPath })]);
 
     for (const requestedPath of [aliasPath, path.relative(workspaceRoot, aliasPath)]) {
-      const payload = expectOkPayload(
-        await invoke(
-          "sessions.files.get",
-          {
-            sessionKey,
-            path: requestedPath,
-          },
-          fixture.context,
-          fixture.options,
-        ),
-      );
+      const payload = await fixture.files.ok("get", requestedPath);
       expect(payload.file).toMatchObject({
         content: "outside\n",
         contentEncoding: "utf8",
@@ -341,9 +291,7 @@ describe("sessions.files host read boundary", () => {
       });
       expect(payload.file).not.toHaveProperty("hash");
     }
-    const list = expectOkPayload(
-      await invoke("sessions.files.list", { sessionKey }, fixture.context, fixture.options),
-    );
+    const list = await fixture.files.ok("list");
     expect(list.files).toEqual([
       expect.objectContaining({
         path: fs.realpathSync(outsidePath),
@@ -354,18 +302,11 @@ describe("sessions.files host read boundary", () => {
     ]);
     expect(list.files[0]).not.toHaveProperty("content");
     expect(list.files[0]).not.toHaveProperty("hash");
-    const hidden = expectOkPayload(await listFiles());
+    const hidden = expectOkPayload(await invoke("sessions.files.list", { sessionKey }));
     expect(hidden.files).toEqual([]);
     const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
     fs.linkSync(outsidePath, hardlinkedPath);
-    const hardlinked = expectOkPayload(
-      await invoke(
-        "sessions.files.get",
-        { sessionKey, path: hardlinkedPath },
-        fixture.context,
-        fixture.options,
-      ),
-    );
+    const hardlinked = await fixture.files.ok("get", hardlinkedPath);
     expect(hardlinked.file).toMatchObject({ content: "outside\n", missing: false });
   });
 
@@ -379,17 +320,7 @@ describe("sessions.files host read boundary", () => {
       fixture.entry.permissionMode = "workspace";
       return result;
     });
-    const error = expectError(
-      await invoke(
-        "sessions.files.get",
-        {
-          sessionKey,
-          path: outsidePath,
-        },
-        fixture.context,
-        fixture.options,
-      ),
-    );
+    const error = await fixture.files.error("get", outsidePath);
     expect(error.details).toMatchObject({
       type: "session_file_not_found",
       reason: "outside_session_boundary",
@@ -409,12 +340,7 @@ describe("sessions.files host read boundary", () => {
     ];
     for (const { bytes, previewKind } of cases) {
       fs.writeFileSync(outsidePath, bytes);
-      const result = await invoke(
-        "sessions.files.get",
-        { sessionKey, path: outsidePath },
-        fixture.context,
-        fixture.options,
-      );
+      const result = await fixture.files.request("get", outsidePath);
       if (previewKind === "too_large") {
         expect(expectError(result).details).toMatchObject({
           type: "session_file_too_large",
@@ -442,17 +368,7 @@ describe("sessions.files host read boundary", () => {
       const link = outsideFile();
       fs.symlinkSync("/dev/null", link);
       for (const requestedPath of [path.dirname(link), link]) {
-        const error = expectError(
-          await invoke(
-            "sessions.files.get",
-            {
-              sessionKey,
-              path: requestedPath,
-            },
-            fixture.context,
-            fixture.options,
-          ),
-        );
+        const error = await fixture.files.error("get", requestedPath);
         expect(error.details.type).toBe("session_file_not_found");
       }
     },
@@ -468,19 +384,11 @@ describe("sessions.files host read boundary", () => {
     const fixture = prepareHostFileRead({ permissionMode: "full" });
 
     for (const requestedPath of [outsidePath, `../${escapedName}`, "linked.txt"]) {
-      const error = expectError(
-        await invoke(
-          "sessions.files.set",
-          {
-            sessionKey,
-            path: requestedPath,
-            content: "replaced\n",
-            expectedHash: hashContent(outsideContent),
-          },
-          fixture.context,
-          fixture.options,
-        ),
-      );
+      const error = await fixture.files.error("set", {
+        path: requestedPath,
+        content: "replaced\n",
+        expectedHash: hashContent(outsideContent),
+      });
       expect(["session_file_not_found", "session_file_unsafe"]).toContain(error.details.type);
     }
     expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);

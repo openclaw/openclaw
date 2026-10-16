@@ -65,12 +65,11 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createSessionFileDownloadClient,
   fetchSessionFileDownload,
   openSessionFileDownload,
   createWorkspaceFixture,
-  expectError,
-  expectOkPayload,
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
@@ -139,6 +138,11 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 }));
 
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+const files = createSessionFilesClient(
+  invoke,
+  () => sessionKey,
+  () => context,
+);
 let sessionKey = "agent:main:repository";
 const gatewayDeviceId = "repository-gateway";
 const identity = {
@@ -233,9 +237,7 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(workspace, "changed.txt"), "before\n");
   git("add", ".");
   git("commit", "-qm", "base");
-  store = createSessionRepositoryWorkspaceStore({
-    path: path.join(gatewayRoot, "state.sqlite"),
-  });
+  store = createSessionRepositoryWorkspaceStore({ path: path.join(gatewayRoot, "state.sqlite") });
   source = await store.create({
     agentId: "main",
     sessionKey,
@@ -345,10 +347,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
+  const base = await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit });
   const environments = {
     get: (): ReturnType<WorkerEnvironmentService["get"]> => ({
       ...environment(),
@@ -401,12 +400,8 @@ async function withCheckpointAcceptance(failCapture = false) {
           changed: current.manifestRef !== base.manifestRef,
           verifyStable: async () => {
             expect(
-              (
-                await captureWorkspaceManifest({
-                  root: workspace,
-                  baseCommit: source.baseCommit,
-                })
-              ).manifestRef,
+              (await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit }))
+                .manifestRef,
             ).toBe(current.manifestRef);
           },
           verifyLocalStable: () => prepared.verify(),
@@ -433,17 +428,10 @@ async function withCheckpointAcceptance(failCapture = false) {
 it("accepts editor bytes and Git-normalized publication before acknowledging the save", async () => {
   const accepted = await withCheckpointAcceptance();
   fs.writeFileSync(path.join(workspace, ".gitattributes"), "changed.txt text eol=lf\n");
-  expectOkPayload(
-    await invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\r\n",
-        expectedHash: hashContent("before\n"),
-      },
-      accepted.context,
-    ),
+  await files.ok(
+    "set",
+    { path: "changed.txt", content: "saved\r\n", expectedHash: hashContent("before\n") },
+    accepted.context,
   );
   await withSessionRepositoryCheckpoint(
     { store, workspaceId: source.workspaceId, includePublication: true },
@@ -474,14 +462,9 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
 it("reports failed editor checkpoint capture and retains the durable recovery owner", async () => {
   const accepted = await withCheckpointAcceptance(true);
   await expect(
-    invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
+    files.request(
+      "set",
+      { path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
       accepted.context,
     ),
   ).rejects.toThrow("checkpoint capture failed");
@@ -531,9 +514,7 @@ it("keeps incognito repository downloads alive after their RPC planning borrow e
       lifecycleRevision,
     },
   );
-  const download = expectOkPayload(
-    await invoke("sessions.files.download", { sessionKey, path: "README" }, context, connection),
-  );
+  const download = await files.ok("download", "README", undefined, connection);
   const fetched = await fetchSessionFileDownload(connection.client, download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("untouched source\n");
@@ -547,14 +528,7 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   using connection = createSessionFileDownloadClient();
   const bytes = Buffer.alloc(8 * 1024 * 1024 + 3, 0xff);
   fs.writeFileSync(path.join(workspace, "binary.zip"), bytes);
-  const download = expectOkPayload(
-    await invoke(
-      "sessions.files.download",
-      { sessionKey, path: "binary.zip" },
-      context,
-      connection,
-    ),
-  );
+  const download = await files.ok("download", "binary.zip", undefined, connection);
   expect(download.filename).toBe("binary.zip");
   // The RPC prepares metadata without reading any file bytes.
   expect(run.mock.calls.every(([command]) => JSON.parse(command.input!).offset === undefined)).toBe(
@@ -589,9 +563,7 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   const windows = await Promise.all(run.mock.results.map((call) => call.value));
   expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
   for (const filePath of ["../outside", "/etc/passwd"]) {
-    expectError(
-      await invoke("sessions.files.download", { sessionKey, path: filePath }, context, connection),
-    );
+    await files.error("download", filePath, undefined, connection);
   }
   onResult = () => {
     generation++;
@@ -603,36 +575,24 @@ it("downloads original live repository bytes in bounded windows and rejects stal
 });
 
 it("browses, previews, edits and diffs only the live repository without a Gateway checkout", async () => {
-  const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
+  const list = await files.ok("list");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toContain("README");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).not.toContain(
     "package.json",
   );
   expect(list.root).toBeUndefined();
-  const before = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
-  );
+  const before = await files.ok("get", "changed.txt");
   const content = "x".repeat(192 * 1024);
-  expectOkPayload(
-    await invoke(
-      "sessions.files.set",
-      { sessionKey, path: "changed.txt", content, expectedHash: before.file.hash },
-      context,
-    ),
-  );
-  const saved = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
-  );
+  await files.ok("set", { path: "changed.txt", content, expectedHash: before.file.hash });
+  const saved = await files.ok("get", "changed.txt");
   expect(saved.file.content).toBe(content);
   expect(saved.file.hash).toBe(hashContent(content));
   expect(saved.root).toBeUndefined();
-  const stale = expectError(
-    await invoke(
-      "sessions.files.set",
-      { sessionKey, path: "changed.txt", content: "stale", expectedHash: before.file.hash },
-      context,
-    ),
-  );
+  const stale = await files.error("set", {
+    path: "changed.txt",
+    content: "stale",
+    expectedHash: before.file.hash,
+  });
   expect(stale.details.type).toBe("session_file_conflict");
   fs.writeFileSync(path.join(workspace, "changed.txt"), "after\n");
   git("add", ".");
@@ -643,9 +603,7 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   expect(diff.files.map((file) => file.path)).toEqual(["changed.txt", "second.txt"]);
   expect(diff.files[0]?.patch).toContain("+after");
   expect(diff.files[1]?.patch).toContain("+second edit");
-  const reveal = expectOkPayload(
-    await invoke("sessions.files.reveal", { key: sessionKey }, context),
-  );
+  const reveal = await files.ok("reveal");
   expect(reveal).toMatchObject({
     ok: false,
     error: expect.stringContaining("no Gateway checkout"),
@@ -664,9 +622,7 @@ it.each(["tunnel", "result"])("rejects a replaced placement after %s work", asyn
       generation++;
     };
   }
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "README" }, context),
-  ).rejects.toThrow("placement changed");
+  await expect(files.request("get", "README")).rejects.toThrow("placement changed");
   expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
@@ -684,16 +640,11 @@ it.each(["reset", "archive", "lifecycle revision"])(
       await persistSessionEntry();
     };
     await expect(
-      invoke(
-        "sessions.files.set",
-        {
-          sessionKey,
-          path: "changed.txt",
-          content: "unowned",
-          expectedHash: hashContent("before\n"),
-        },
-        context,
-      ),
+      files.request("set", {
+        path: "changed.txt",
+        content: "unowned",
+        expectedHash: hashContent("before\n"),
+      }),
     ).rejects.toThrow("owner changed");
     expect(run).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
@@ -701,10 +652,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
+  const base = await captureWorkspaceManifest({ root: workspace, baseCommit: source.baseCommit });
   fs.writeFileSync(path.join(workspace, "changed.txt"), "retained first\n");
   fs.writeFileSync(path.join(workspace, "second.txt"), "retained second\n");
   fs.writeFileSync(path.join(workspace, "oversized.txt"), Buffer.alloc(8 * 1024 * 1024 + 1, 97));
@@ -728,7 +676,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   const originalGitRead = worktreeGit.runGitBuffered;
   const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
   onTestFinished(() => hostReads.mockRestore());
-  const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
+  const list = await files.ok("list");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
     "changed.txt",
     "oversized.txt",
@@ -741,43 +689,23 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   for (const call of hostReads.mock.calls) {
     expect(call[2]).toMatchObject({ signal: expect.any(AbortSignal), killProcessTree: true });
   }
-  const retained = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  );
+  const retained = await files.ok("get", "second.txt");
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();
   expect(retained.root).toBeUndefined();
   const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
   using connection = createSessionFileDownloadClient();
-  const download = expectOkPayload(
-    await invoke(
-      "sessions.files.download",
-      { sessionKey, path: "oversized.txt" },
-      context,
-      connection,
-    ),
-  );
+  const download = await files.ok("download", "oversized.txt", undefined, connection);
   const fetched = await fetchSessionFileDownload(connection.client, download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(
     Buffer.from(fetched.body as Uint8Array).equals(Buffer.alloc(8 * 1024 * 1024 + 1, 97)),
   ).toBe(true);
-  expectError(
-    await invoke("sessions.files.download", { sessionKey, path: "README" }, context, connection),
-  );
-  expectError(
-    await invoke(
-      "sessions.files.download",
-      { sessionKey, path: "../changed.txt" },
-      context,
-      connection,
-    ),
-  );
+  await files.error("download", "README", undefined, connection);
+  await files.error("download", "../changed.txt", undefined, connection);
   const beforeOversized = blobsRead();
   expect(beforeOversized).toBeGreaterThan(0);
-  const oversized = expectError(
-    await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
-  );
+  const oversized = await files.error("get", "oversized.txt");
   expect(oversized).toEqual({
     code: "INVALID_REQUEST",
     message: "session file is too large to preview",
@@ -789,9 +717,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     },
   });
   expect(blobsRead()).toBe(beforeOversized);
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "README" }, context),
-  ).rejects.toThrow("not a retained changed artifact");
+  await expect(files.request("get", "README")).rejects.toThrow("not a retained changed artifact");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.unavailableReason).toBe("workspace_stopped");
   expect(diff.files.map((file) => file.path)).toEqual([
@@ -812,9 +738,9 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     stdout[contentStart] = stdout[contentStart]! ^ 0xff;
     return { ...result, stdout };
   });
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  ).rejects.toThrow("staged result payload is invalid");
+  await expect(files.request("get", "second.txt")).rejects.toThrow(
+    "staged result payload is invalid",
+  );
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
     if (args[1][1] === "--batch") {
@@ -823,9 +749,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     }
     return result;
   });
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  ).rejects.toThrow("workspace owner changed");
+  await expect(files.request("get", "second.txt")).rejects.toThrow("workspace owner changed");
 });
 
 it.each(["symlink", "hardlink"])(
@@ -838,10 +762,8 @@ it.each(["symlink", "hardlink"])(
     } else {
       fs.linkSync(outside, path.join(workspace, "link.txt"));
     }
-    expectError(await invoke("sessions.files.get", { sessionKey, path: "link.txt" }, context));
-    expectError(
-      await invoke("sessions.files.get", { sessionKey, path: "../outside.txt" }, context),
-    );
+    await files.error("get", "link.txt");
+    await files.error("get", "../outside.txt");
     const diff = await loadSessionDiff({ sessionKey }, context as never);
     expect(JSON.stringify(diff)).not.toContain("outside marker");
   },
@@ -898,10 +820,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     getTransport: () => nodeTransport,
     launchNodeWorker: vi.fn(),
     validateWorkerTurn: () => true,
-    workspaceTransfer: {
-      ...workspaceTransfer(),
-      prepareRepository: vi.fn(async () => {}),
-    },
+    workspaceTransfer: { ...workspaceTransfer(), prepareRepository: vi.fn(async () => {}) },
   });
   manager.bindWorkspaceBindingResolver(async () => ({
     source: {
@@ -928,20 +847,22 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     },
   };
   let saveSettled = false;
-  const saving = invoke(
-    "sessions.files.set",
-    { sessionKey, path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
-    managerContext,
-  ).then(
-    () => {
-      saveSettled = true;
-      return undefined;
-    },
-    (error: unknown) => {
-      saveSettled = true;
-      return error;
-    },
-  );
+  const saving = files
+    .request(
+      "set",
+      { path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
+      managerContext,
+    )
+    .then(
+      () => {
+        saveSettled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        saveSettled = true;
+        return error;
+      },
+    );
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;

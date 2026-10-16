@@ -18,6 +18,7 @@ import {
   useSqliteSession,
   visibleMessageEvent,
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -70,17 +71,7 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-function listFiles(params: Record<string, unknown> = {}) {
-  return invoke("sessions.files.list", { sessionKey, ...params });
-}
-
-function getFile(filePath: string) {
-  return invoke("sessions.files.get", { sessionKey, path: filePath });
-}
-
-function saveFile(params: Record<string, unknown>) {
-  return invoke("sessions.files.set", { sessionKey, ...params });
-}
+const files = createSessionFilesClient(invoke, () => sessionKey);
 
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
 const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
@@ -134,7 +125,7 @@ describe("sessions.files RPC handlers", () => {
                 ? { content: "WRONG HOST", expectedHash: hashContent("GATEWAY") }
                 : {}),
             };
-      const error = expectError(await invoke(`sessions.files.${operation}`, params));
+      const error = await files.error(operation, params);
       expect(error.details).toMatchObject({ type: "device_folder_files_unavailable" });
       expect(fs.readFileSync(path.join(workspaceRoot, "notes.txt"), "utf8")).toBe("GATEWAY");
       expect(fs.readFileSync(path.join(deviceRoot, "notes.txt"), "utf8")).toBe("DEVICE");
@@ -155,12 +146,8 @@ describe("sessions.files RPC handlers", () => {
   }
 
   it("reveals the same workspace root returned by sessions.files.list", async () => {
-    const listPayload = expectOkPayload(await listFiles());
-    const revealPayload = expectOkPayload(
-      await invoke("sessions.files.reveal", {
-        key: sessionKey,
-      }),
-    );
+    const listPayload = await files.ok("list");
+    const revealPayload = await files.ok("reveal");
 
     expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
     // Compare against the resolver's own output so the assertion holds on
@@ -193,12 +180,10 @@ describe("sessions.files RPC handlers", () => {
       agentId === "ops" ? workspaceRoot : path.join(workspaceRoot, "wrong-research"),
     );
 
-    const payload = expectOkPayload(
-      await invoke(
-        "sessions.files.list",
-        { sessionKey: "global" },
-        { getRuntimeConfig: () => cfg },
-      ),
+    const payload = await files.ok(
+      "list",
+      { sessionKey: "global" },
+      { getRuntimeConfig: () => cfg },
     );
 
     expect(payload.root).toBe(workspaceRoot);
@@ -212,18 +197,16 @@ describe("sessions.files RPC handlers", () => {
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
     const cfg = fixedStoreConfig();
 
-    const error = expectError(
-      await invoke(
-        "sessions.files.set",
-        {
-          sessionKey: "global",
-          agentId: "research",
-          path: "ui/chat.ts",
-          content: "foreign write\n",
-          expectedHash: hashContent("export const chat = true;\n"),
-        },
-        { getRuntimeConfig: () => cfg },
-      ),
+    const error = await files.error(
+      "set",
+      {
+        sessionKey: "global",
+        agentId: "research",
+        path: "ui/chat.ts",
+        content: "foreign write\n",
+        expectedHash: hashContent("export const chat = true;\n"),
+      },
+      { getRuntimeConfig: () => cfg },
     );
 
     expect(error).toMatchObject({
@@ -237,16 +220,14 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("refuses to reveal a remote session workspace", async () => {
-    const payload = expectOkPayload(
-      await invoke(
-        "sessions.files.reveal",
-        { key: sessionKey },
-        {
-          workerSessionPlacementService: {
-            getMany: () => new Map([["sess-main", { state: "active" }]]),
-          },
+    const payload = await files.ok(
+      "reveal",
+      {},
+      {
+        workerSessionPlacementService: {
+          getMany: () => new Map([["sess-main", { state: "active" }]]),
         },
-      ),
+      },
     );
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
@@ -262,7 +243,7 @@ describe("sessions.files RPC handlers", () => {
       execNode: "build-mac",
     });
 
-    const payload = expectOkPayload(await invoke("sessions.files.reveal", { key: sessionKey }));
+    const payload = await files.ok("reveal");
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("exec node");
@@ -273,7 +254,7 @@ describe("sessions.files RPC handlers", () => {
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
     mockSession({ sessionId: "sess-main", sessionFile: "sess-main.jsonl" });
 
-    const payload = expectOkPayload(await invoke("sessions.files.reveal", { key: sessionKey }));
+    const payload = await files.ok("reveal");
 
     expect(payload).toEqual({
       ok: false,
@@ -286,9 +267,7 @@ describe("sessions.files RPC handlers", () => {
     const warn = vi.fn();
     hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
 
-    const payload = expectOkPayload(
-      await invoke("sessions.files.reveal", { key: sessionKey }, { logGateway: { warn } }),
-    );
+    const payload = await files.ok("reveal", {}, { logGateway: { warn } });
 
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("headless environment");
@@ -313,18 +292,12 @@ describe("sessions.files RPC handlers", () => {
       assistantToolCall("read", { path: "../shared/config.ts" }),
     ]);
 
-    const payload = expectOkPayload(await listFiles());
+    const payload = await files.ok("list");
 
     expect(payload.root).toBe(workspaceRoot);
     expect(payload.files).toEqual([
-      expect.objectContaining({
-        missing: false,
-        path: "../shared/config.ts",
-      }),
-      expect.objectContaining({
-        missing: false,
-        path: "src/readme.md",
-      }),
+      expect.objectContaining({ missing: false, path: "../shared/config.ts" }),
+      expect.objectContaining({ missing: false, path: "src/readme.md" }),
     ]);
     expect(
       payload.browser.entries.map((entry: Record<string, unknown>) => [
@@ -339,49 +312,45 @@ describe("sessions.files RPC handlers", () => {
       ["package.json", "file", undefined],
     ]);
 
-    const preview = expectOkPayload(await getFile("src/readme.md"));
+    const preview = await files.ok("get", "src/readme.md");
     expect(preview.file.content).toBe("# Nested read me\n");
     expect(preview.file.workspacePath).toBe("packages/app/src/readme.md");
 
-    const workspaceRootPreview = expectOkPayload(
-      await getFile(path.join(workspaceRoot, "src/readme.md")),
-    );
+    const workspaceRootPreview = await files.ok("get", path.join(workspaceRoot, "src/readme.md"));
     expect(workspaceRootPreview.file.content).toBe("# Read me\n");
     expect(workspaceRootPreview.file.workspacePath).toBe("src/readme.md");
 
-    const browserPreview = expectOkPayload(await getFile("packages/app/src/readme.md"));
+    const browserPreview = await files.ok("get", "packages/app/src/readme.md");
     expect(browserPreview.file.content).toBe("# Nested read me\n");
 
-    const aliasedPreview = expectOkPayload(await getFile("packages//app/src/readme.md"));
+    const aliasedPreview = await files.ok("get", "packages//app/src/readme.md");
     expect(aliasedPreview.file.workspacePath).toBe("packages/app/src/readme.md");
 
-    const parentRelativePreview = expectOkPayload(await getFile("../shared/config.ts"));
+    const parentRelativePreview = await files.ok("get", "../shared/config.ts");
     expect(parentRelativePreview.file.content).toBe("export const shared = true;\n");
 
-    const parentRelativeBrowserPreview = expectOkPayload(
-      await getFile("packages/shared/config.ts"),
-    );
+    const parentRelativeBrowserPreview = await files.ok("get", "packages/shared/config.ts");
     expect(parentRelativeBrowserPreview.file.content).toBe("export const shared = true;\n");
   });
 
   it("round-trips listed folders beginning with two dots", async () => {
     writeWorkspaceFile(workspaceRoot, "..notes/readme.md", "# Notes\n");
-    const root = expectOkPayload(await listFiles());
+    const root = await files.ok("list");
     const selected = root.browser.entries.find(
       (entry: Record<string, unknown>) => entry.name === "..notes",
     );
-    const folder = expectOkPayload(await listFiles({ path: selected.path }));
+    const folder = await files.ok("list", { path: selected.path });
     expect(folder.browser).toMatchObject({
       path: "..notes",
       parentPath: "",
       entries: [{ path: "..notes/readme.md", kind: "file" }],
     });
-    const preview = expectOkPayload(await getFile(folder.browser.entries[0].path));
+    const preview = await files.ok("get", folder.browser.entries[0].path);
     expect(preview.file.content).toBe("# Notes\n");
   });
 
   it("browses, searches, and previews files not referenced by the session", async () => {
-    const folderPayload = expectOkPayload(await listFiles({ path: "ui" }));
+    const folderPayload = await files.ok("list", { path: "ui" });
 
     expect(folderPayload.browser.parentPath).toBe("");
     expect(
@@ -395,14 +364,14 @@ describe("sessions.files RPC handlers", () => {
       ["ui/vite.config.ts", "file", undefined],
     ]);
 
-    const searchPayload = expectOkPayload(await listFiles({ search: "vite" }));
+    const searchPayload = await files.ok("list", { search: "vite" });
 
     expect(searchPayload.browser.search).toBe("vite");
     expect(
       searchPayload.browser.entries.map((entry: Record<string, unknown>) => entry.path),
     ).toEqual(["ui/vite.config.ts"]);
 
-    const preview = expectOkPayload(await getFile("ui/vite.config.ts"));
+    const preview = await files.ok("get", "ui/vite.config.ts");
 
     expect(preview.file).toMatchObject({
       content: "export default {};\n",
@@ -422,12 +391,9 @@ describe("sessions.files RPC handlers", () => {
     }
     writeWorkspaceFile(workspaceRoot, "zz-tail-needle.ts", "export const needle = true;\n");
 
-    const payload = expectOkPayload(await listFiles({ search: "needle" }));
+    const payload = await files.ok("list", { search: "needle" });
 
-    expect(payload.browser).toMatchObject({
-      search: "needle",
-      truncated: true,
-    });
+    expect(payload.browser).toMatchObject({ search: "needle", truncated: true });
     expect(payload.browser.entries).toEqual([]);
   });
 
@@ -440,7 +406,7 @@ describe("sessions.files RPC handlers", () => {
       ]);
       fs.writeFileSync(invalidPath, "unaddressable file");
 
-      await expect(listFiles(query)).rejects.toMatchObject({
+      await expect(files.request("list", query)).rejects.toMatchObject({
         code: "invalid-path",
         message: 'Cannot list workspace directory "ui": directory entry name is not valid UTF-8',
       });
@@ -456,7 +422,7 @@ describe("sessions.files RPC handlers", () => {
     writeWorkspaceFile(outsideDir, "secret.txt", "linked parent outside\n");
     fs.symlinkSync(outsideDir, path.join(workspaceRoot, "linked-dir"), "dir");
 
-    const error = expectError(await getFile("linked-dir/secret.txt"));
+    const error = await files.error("get", "linked-dir/secret.txt");
 
     expect(error.details).toMatchObject({
       path: "linked-dir/secret.txt",
@@ -465,7 +431,7 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("does not browse paths outside the session workspace root", async () => {
-    const payload = expectOkPayload(await listFiles({ path: "../" }));
+    const payload = await files.ok("list", { path: "../" });
 
     expect(payload.root).toBe(workspaceRoot);
     expect(payload.browser).toBeUndefined();
@@ -486,28 +452,17 @@ describe("sessions.files RPC handlers", () => {
       canonicalKey: "agent:main:main",
       cfg: {},
       storePath: path.join(sessionsDir, "sessions.json"),
-      entry: {
-        sessionId: "sess-main",
-        sessionFile: "sess-main.jsonl",
-      },
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl" },
     });
     mockVisibleMessages([assistantToolCall("read", { path: "secret.txt" })]);
-    const listPayload = expectOkPayload(await listFiles());
+    const listPayload = await files.ok("list");
 
     expect(listPayload.root).toBe(workspaceRoot);
     expect(listPayload.browser).toBeDefined();
-    expect(listPayload.files).toMatchObject([
-      {
-        missing: true,
-        path: "secret.txt",
-      },
-    ]);
+    expect(listPayload.files).toMatchObject([{ missing: true, path: "secret.txt" }]);
 
-    const error = expectError(await getFile("secret.txt"));
-    expect(error.details).toMatchObject({
-      path: "secret.txt",
-      type: "session_file_not_found",
-    });
+    const error = await files.error("get", "secret.txt");
+    expect(error.details).toMatchObject({ path: "secret.txt", type: "session_file_not_found" });
   });
 
   it("refreshes committed identity bytes after a pending pre-write read", async () => {
@@ -547,14 +502,9 @@ describe("sessions.files RPC handlers", () => {
     let save: ReturnType<typeof invoke> | undefined;
     try {
       await awaitGateBeforeSettlement(captured.promise, staleRead, "identity read was not started");
-      save = invoke(
-        "sessions.files.set",
-        {
-          sessionKey,
-          path: identityPath,
-          content: replacement,
-          expectedHash: hashContent(original),
-        },
+      save = files.request(
+        "set",
+        { path: identityPath, content: replacement, expectedHash: hashContent(original) },
         { broadcast },
       );
       await awaitGateBeforeSettlement(joined.promise, save, "identity read was not joined");
@@ -585,10 +535,9 @@ describe("sessions.files RPC handlers", () => {
         hoisted.resolveAgentWorkspaceDir.mockReturnValue(path.join(workspaceRoot, "agent"));
       }
       const broadcast = vi.fn();
-      const calls = await invoke(
-        "sessions.files.set",
+      const calls = await files.request(
+        "set",
         {
-          sessionKey,
           path: name,
           content: "- Name: After\n",
           expectedHash: hashContent(variant === "conflict" ? "stale" : original),
@@ -609,7 +558,7 @@ describe("sessions.files RPC handlers", () => {
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
     const expectedHash = hashContent(original);
-    const firstSave = saveFile({
+    const firstSave = files.request("set", {
       path: "ui/vite.config.ts",
       content: "export default { first: true };\n",
       expectedHash,
@@ -617,7 +566,7 @@ describe("sessions.files RPC handlers", () => {
     mockSession({ sessionId: "nested", spawnedCwd: path.join(workspaceRoot, "ui") });
     const [first, second] = await Promise.all([
       firstSave,
-      saveFile({
+      files.request("set", {
         path: "./vite.config.ts",
         content: "export default { second: true };\n",
         expectedHash,
@@ -649,13 +598,11 @@ describe("sessions.files RPC handlers", () => {
     const content = "é".repeat(128 * 1024 + 1);
     const bufferFrom = vi.spyOn(Buffer, "from");
     try {
-      const error = expectError(
-        await saveFile({
-          path: "ui/vite.config.ts",
-          content,
-          expectedHash: hashContent("export default {};\n"),
-        }),
-      );
+      const error = await files.error("set", {
+        path: "ui/vite.config.ts",
+        content,
+        expectedHash: hashContent("export default {};\n"),
+      });
 
       expect(error.details).toMatchObject({
         maxPreviewBytes: 256 * 1024,
@@ -691,18 +638,13 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("rejects replacement content containing NUL bytes", async () => {
-    const error = expectError(
-      await saveFile({
-        path: "ui/vite.config.ts",
-        content: "before\0after",
-        expectedHash: hashContent("export default {};\n"),
-      }),
-    );
-
-    expect(error.details).toMatchObject({
+    const error = await files.error("set", {
       path: "ui/vite.config.ts",
-      type: "session_file_unsafe",
+      content: "before\0after",
+      expectedHash: hashContent("export default {};\n"),
     });
+
+    expect(error.details).toMatchObject({ path: "ui/vite.config.ts", type: "session_file_unsafe" });
     expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
       "export default {};\n",
     );
@@ -712,38 +654,24 @@ describe("sessions.files RPC handlers", () => {
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
     fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
 
-    const error = expectError(
-      await saveFile({
-        path: "logo.png",
-        content: "text\n",
-        expectedHash: createHash("sha256").update(binary).digest("hex"),
-      }),
-    );
-
-    expect(error.details).toMatchObject({
+    const error = await files.error("set", {
       path: "logo.png",
-      type: "session_file_unsafe",
+      content: "text\n",
+      expectedHash: createHash("sha256").update(binary).digest("hex"),
     });
+
+    expect(error.details).toMatchObject({ path: "logo.png", type: "session_file_unsafe" });
     expect(fs.readFileSync(path.join(workspaceRoot, "logo.png"))).toEqual(binary);
   });
 
   it("registers session assets and rejects more than 64 references before loading files", async () => {
-    const empty = expectOkPayload(
-      await invoke("sessions.files.assets", {
-        sessionKey,
-        path: "index.html",
-        refs: [],
-      }),
-    );
+    const empty = await files.ok("assets", { path: "index.html", refs: [] });
     expect(empty).toEqual({ assets: [] });
     hoisted.loadSessionEntry.mockClear();
-    const error = expectError(
-      await invoke("sessions.files.assets", {
-        sessionKey,
-        path: "index.html",
-        refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
-      }),
-    );
+    const error = await files.error("assets", {
+      path: "index.html",
+      refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
+    });
     expect(error.code).toBe("INVALID_REQUEST");
     expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
@@ -807,14 +735,14 @@ describe("sessions.files preview formats", () => {
           })),
       },
     });
-    const payload = expectOkPayload(await getFile("result.json"));
+    const payload = await files.ok("get", "result.json");
     expect(payload.file).toMatchObject({
       content: '{"total":46}',
       previewKind: "text",
       missing: false,
     });
     expect(payload.file.hash).toBeUndefined();
-    const listed = expectOkPayload(await listFiles());
+    const listed = await files.ok("list");
     expect(listed.browser.entries.map((entry: { name: string }) => entry.name)).toEqual([
       "large.txt",
       "result.json",
@@ -822,29 +750,20 @@ describe("sessions.files preview formats", () => {
     expect(listed.gitCheckout).toBeUndefined();
     includeFileTypes = false;
     // Older nodes reject symlink stats instead of returning a file type.
-    const legacyListing = expectOkPayload(await listFiles());
+    const legacyListing = await files.ok("list");
     expect(legacyListing.browser.entries.map((entry: { name: string }) => entry.name)).toEqual([
       "large.txt",
       "result.json",
     ]);
     denyLegacyChild = true;
-    await expect(
-      invoke("sessions.files.list", {
-        sessionKey,
-      }),
-    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(files.request("list")).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     denyLegacyChild = false;
-    const reveal = expectOkPayload(
-      await invoke("sessions.files.reveal", {
-        key: sessionKey,
-      }),
-    );
+    const reveal = await files.ok("reveal");
     expect(reveal).toMatchObject({ ok: false, error: expect.stringContaining("remote host") });
-    expect(expectError(await getFile("large.txt")).details.type).toBe("session_file_too_large");
+    expect((await files.error("get", "large.txt")).details.type).toBe("session_file_too_large");
     expect(readFile).toHaveBeenCalledTimes(1);
     await expect(
-      invoke("sessions.files.set", {
-        sessionKey,
+      files.request("set", {
         path: "result.json",
         content: "changed",
         expectedHash: hashContent('{"total":46}'),
@@ -852,7 +771,7 @@ describe("sessions.files preview formats", () => {
     ).rejects.toThrow("conflict-safe editing");
     expect(fs.readFileSync(path.join(workspaceRoot, "result.json"), "utf8")).toBe("Gateway decoy");
     releaseRemote();
-    await expect(getFile("result.json")).rejects.toThrow("stopped or not ready");
+    await expect(files.request("get", "result.json")).rejects.toThrow("stopped or not ready");
   });
 
   it("reports the preview limit when a remote file grows between stat and fetch", async () => {
@@ -867,14 +786,14 @@ describe("sessions.files preview formats", () => {
         },
       },
     });
-    const result = await getFile("growing.txt");
+    const result = await files.request("get", "growing.txt");
     expect(expectError(result).details.type).toBe("session_file_too_large");
   });
 
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {
     const fileName = `detected-${fixture.format.toLowerCase().replaceAll(" ", "-")}.bin`;
     fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.content, "utf8");
-    const payload = expectOkPayload(await getFile(fileName));
+    const payload = await files.ok("get", fileName);
     expect(payload.file).toMatchObject({
       content: fixture.content,
       contentEncoding: "utf8",
@@ -894,7 +813,7 @@ describe("sessions.files touched-file folds", () => {
   ) {
     return { kind: "page", cursor, events, hasMore, serializedBytes: 100 };
   }
-  const listTouched = async () => expectOkPayload(await listFiles());
+  const listTouched = async () => await files.ok("list");
   const touchedKinds = (payload: Record<string, unknown>[]) =>
     payload.map((file) => [file.path, file.kind]);
 
@@ -992,11 +911,7 @@ describe("sessions.files touched-file folds", () => {
         );
       }
       if (limits.cursor === "generation-1") {
-        return {
-          kind: "reset",
-          cursor: "generation-2-bootstrap",
-          reason: "generation_mismatch",
-        };
+        return { kind: "reset", cursor: "generation-2-bootstrap", reason: "generation_mismatch" };
       }
       if (limits.cursor === "generation-2-bootstrap") {
         return page(
@@ -1032,9 +947,7 @@ describe("sessions.files touched-file folds", () => {
           {
             type: "tool_call",
             name: "apply_patch",
-            input: {
-              input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-            },
+            input: { input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n" },
           },
         ],
       },

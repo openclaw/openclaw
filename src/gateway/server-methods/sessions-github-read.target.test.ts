@@ -21,6 +21,11 @@ import {
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const guest = { personal: true, scopes: ["operator.sessions.write"] };
+const sharedOptions = expect.objectContaining({ shared: publisher });
+
+async function git(root: string, ...args: string[]) {
+  expect((await runGit(root, args)).code).toBe(0);
+}
 
 beforeEach(() => {
   vi.spyOn(availability, "prepareCurrentGitHubPublicationOptionsIdentity").mockResolvedValue({
@@ -32,25 +37,22 @@ afterEach(() => vi.restoreAllMocks());
 
 async function registerWorktree(origin?: string) {
   const root = await fs.realpath(temporary.make("publication-read-target-"));
-  expect((await runGit(root, ["init", "--initial-branch=feature"])).code).toBe(0);
-  expect(
-    (
-      await runGit(root, [
-        "-c",
-        "user.name=Publication Fixture",
-        "-c",
-        "user.email=publication@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "fixture",
-      ])
-    ).code,
-  ).toBe(0);
+  await git(root, "init", "--initial-branch=feature");
+  await git(
+    root,
+    "-c",
+    "user.name=Publication Fixture",
+    "-c",
+    "user.email=publication@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "fixture",
+  );
   if (origin) {
-    expect((await runGit(root, ["remote", "add", "origin", origin])).code).toBe(0);
+    await git(root, "remote", "add", "origin", origin);
   }
   const identity = await managedWorktrees.resolveRepositoryIdentity(root);
   const worktree = {
@@ -69,9 +71,7 @@ async function registerWorktree(origin?: string) {
   await insertRegistryWorktree(process.env, worktree);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    {
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
+    { worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot } },
   );
   return worktree;
 }
@@ -101,7 +101,7 @@ describe("registered guest publication target discovery", () => {
         ),
       );
       for (const response of responses) {
-        expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ shared: publisher }));
+        expect(response).toHaveBeenCalledWith(true, sharedOptions);
       }
       expect(lookup).toHaveBeenCalledOnce();
     }, guest);
@@ -115,27 +115,18 @@ describe("registered guest publication target discovery", () => {
       vi.spyOn(Date, "now").mockImplementation(() => now);
       const options = () => fixture.invoke("sessions.github.options", { sessionKey });
       for (let index = 0; index < 2; index++) {
-        expect(await options()).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ shared: publisher }),
-        );
+        expect(await options()).toHaveBeenCalledWith(true, sharedOptions);
       }
       expect(lookup).toHaveBeenCalledOnce();
-      expect(
-        (
-          await runGit(worktree.path, [
-            "remote",
-            "set-url",
-            "origin",
-            "https://example.test/replacement.git",
-          ])
-        ).code,
-      ).toBe(0);
-      now += 14_999;
-      expect(await options()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ shared: publisher }),
+      await git(
+        worktree.path,
+        "remote",
+        "set-url",
+        "origin",
+        "https://example.test/replacement.git",
       );
+      now += 14_999;
+      expect(await options()).toHaveBeenCalledWith(true, sharedOptions);
       expect(lookup).toHaveBeenCalledOnce();
       await expect(
         prepareGitHubPublicationTarget({
@@ -161,15 +152,9 @@ describe("registered guest publication target discovery", () => {
     await withReadFixture(async (fixture) => {
       await registerWorktree("https://github.com/example/project.git");
       const options = () => fixture.invoke("sessions.github.options", { sessionKey });
-      expect(await options()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ shared: publisher }),
-      );
+      expect(await options()).toHaveBeenCalledWith(true, sharedOptions);
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
-      expect(await options()).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ shared: publisher }),
-      );
+      expect(await options()).toHaveBeenCalledWith(true, sharedOptions);
       expect(lookup).not.toHaveBeenCalled();
       fixture.disconnect();
       expect(await options()).toHaveBeenCalledWith(
@@ -199,16 +184,13 @@ describe("registered guest publication target discovery", () => {
             new Error("Repository read unavailable"),
           );
         } else {
-          expect(
-            (
-              await runGit(worktree.path, [
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/example/project.git",
-              ])
-            ).code,
-          ).toBe(0);
+          await git(
+            worktree.path,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/project.git",
+          );
         }
         const failed = await fixture.invoke("sessions.github.options", { sessionKey });
         expect(failed).toHaveBeenCalledWith(
@@ -345,7 +327,7 @@ describe("registered guest publication target discovery", () => {
             respond,
           });
         }
-        expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ shared: publisher }));
+        expect(respond).toHaveBeenCalledWith(true, sharedOptions);
         expect(target).not.toHaveBeenCalled();
       });
     },

@@ -57,15 +57,15 @@ const expectedSystemRequester = {
   version: 2,
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
-  snapshot: {
-    version: 1,
-    actor: { kind: "system" },
-    scopes: ["operator.admin"],
-    grant: null,
-  },
+  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
 };
+const acceptedPublication = {
+  requestId: "publication-1",
+  status: "requested",
+  message: "Publication was accepted.",
+} as const;
 
 async function invoke(
   params: Record<string, unknown>,
@@ -131,11 +131,7 @@ describe("sessions.github.publish", () => {
     });
     mocks.request.mockReset().mockImplementation(async ({ requester }) => {
       expect(() => requester.assertCurrent()).not.toThrow();
-      return {
-        requestId: "publication-1",
-        status: "requested",
-        message: "Publication was accepted.",
-      };
+      return acceptedPublication;
     });
   });
 
@@ -143,30 +139,19 @@ describe("sessions.github.publish", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it.each([undefined])(
-    "uses host-owned caller identity with requested owner %s",
-    async (agentId) => {
-      const respond = await invoke({
-        idempotencyKey: "tool-call-1",
-        title: "Publish the fix",
-        ...(agentId ? { agentId } : {}),
-      });
+  it("uses host-owned caller identity", async () => {
+    const respond = await invoke({ idempotencyKey: "tool-call-1", title: "Publish the fix" });
 
-      expect(mocks.request).toHaveBeenCalledWith({
-        idempotencyKey: "tool-call-1",
-        title: "Publish the fix",
-        sessionKey: "agent:main:dashboard:task",
-        agentId: "main",
-        expectedRunId: "run-1",
-        requester: expectedSystemRequester,
-      });
-      expect(respond).toHaveBeenCalledWith(true, {
-        requestId: "publication-1",
-        status: "requested",
-        message: "Publication was accepted.",
-      });
-    },
-  );
+    expect(mocks.request).toHaveBeenCalledWith({
+      idempotencyKey: "tool-call-1",
+      title: "Publish the fix",
+      sessionKey: "agent:main:dashboard:task",
+      agentId: "main",
+      expectedRunId: "run-1",
+      requester: expectedSystemRequester,
+    });
+    expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
+  });
 
   it.each([{ agentId: "research" }, { sessionKey: "agent:research:main" }])(
     "rejects a conflicting tool caller target %j",
@@ -193,12 +178,7 @@ describe("sessions.github.publish", () => {
         }
         rejectGitHubPublicationSelection("GitHub publication identity changed.", {
           idempotencyKey: mode === "wrong-key" ? "another-invocation" : key,
-          hasRequest: () => {
-            if (mode === "lookup-failed") {
-              throw new Error("Receipt lookup unavailable.");
-            }
-            return mode === "existing";
-          },
+          hasRequest: () => false,
         });
       });
       const respond = await invoke({ idempotencyKey: key });
@@ -294,24 +274,15 @@ describe("sessions.github.publish", () => {
             idempotencyKey: "operator-publication-1",
             agentId: "main",
             requester: {
-              version: 2,
-              signal: expect.any(AbortSignal),
-              prepareSource: expect.any(Function),
+              ...expectedSystemRequester,
               snapshot: {
-                version: 1,
+                ...expectedSystemRequester.snapshot,
                 actor: { kind: "operator", profileId: profile.id },
                 scopes: ["operator.write"],
-                grant: null,
               },
-              assertCurrent: expect.any(Function),
-              assertInvocationCurrent: expect.any(Function),
             },
           });
-          expect(respond).toHaveBeenCalledWith(true, {
-            requestId: "publication-1",
-            status: "requested",
-            message: "Publication was accepted.",
-          });
+          expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
         },
       );
     },

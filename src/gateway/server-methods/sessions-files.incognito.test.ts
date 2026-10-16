@@ -36,10 +36,9 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createSessionFileDownloadClient,
   fetchSessionFileDownload,
-  expectOkPayload,
-  expectError,
 } from "./sessions-files.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import * as workspaceFs from "./workspace-fs.js";
@@ -53,6 +52,11 @@ let workspace: string;
 let cfg: OpenClawConfig;
 let entry: SessionEntry;
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+const files = createSessionFilesClient(
+  invoke,
+  () => key,
+  () => context,
+);
 const context = {
   getRuntimeConfig: () => cfg,
   logGateway: createSubsystemLogger("gateway/test/incognito-files"),
@@ -105,68 +109,39 @@ it("serves unbound memory files and the complete diff baseline without opening h
   await writeFile(path.join(workspace, "example.txt"), "after session\n");
   const sql = observeHostDataSql();
   try {
-    const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey: key }, context));
+    const list = await files.ok("list");
     expect(list.browser.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: "example.txt", sessionKind: "modified" }),
       ]),
     );
-    const file = expectOkPayload(
-      await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
-    );
+    const file = await files.ok("get", "example.txt");
     expect(file.file.content).toBe("after session\n");
     using connection = createSessionFileDownloadClient();
-    const download = expectOkPayload(
-      await invoke(
-        "sessions.files.download",
-        { sessionKey: key, path: "example.txt" },
-        context,
-        connection,
-      ),
-    );
+    const download = await files.ok("download", "example.txt", undefined, connection);
     const fetched = await fetchSessionFileDownload(connection.client, download.url);
     expect(fetched.response.statusCode).toBe(200);
     expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("after session\n");
-    expect(
-      expectError(
-        await invoke("sessions.files.get", { sessionKey: key, path: "../outside.txt" }, context),
-      ),
-    ).toMatchObject({ details: { reason: "outside_session_boundary" } });
-    expect(
-      expectOkPayload(
-        await invoke(
-          "sessions.files.assets",
-          { sessionKey: key, path: "example.txt", refs: [] },
-          context,
-        ),
-      ),
-    ).toEqual({ assets: [] });
+    expect(await files.error("get", "../outside.txt")).toMatchObject({
+      details: { reason: "outside_session_boundary" },
+    });
+    expect(await files.ok("assets", { path: "example.txt", refs: [] })).toEqual({ assets: [] });
     expect(
       await loadSessionDiff(
         { sessionKey: key },
         context as GatewayRequestHandlerOptions["context"],
       ),
     ).toMatchObject({ files: [expect.objectContaining({ path: "example.txt" })] });
-    const saved = expectOkPayload(
-      await invoke(
-        "sessions.files.set",
-        {
-          sessionKey: key,
-          path: "example.txt",
-          content: "saved\n",
-          expectedHash: file.file.hash,
-        },
-        context,
-      ),
-    );
+    const saved = await files.ok("set", {
+      path: "example.txt",
+      content: "saved\n",
+      expectedHash: file.file.hash,
+    });
     expect(saved.file).toMatchObject({ path: "example.txt", size: 6 });
     expect(saved.file.hash).not.toBe(file.file.hash);
     expect(await readFile(path.join(workspace, "example.txt"), "utf8")).toBe("saved\n");
     const opened = vi.spyOn(openPath, "execOpenPath").mockResolvedValue(undefined);
-    expect(expectOkPayload(await invoke("sessions.files.reveal", { key }, context))).toMatchObject({
-      ok: true,
-      path: workspace,
-    });
+    expect(await files.ok("reveal")).toMatchObject({ ok: true, path: workspace });
     expect(opened).toHaveBeenCalledOnce();
     expect(sql.queries).toEqual([]);
   } finally {
@@ -249,14 +224,7 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
     expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
     await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
     using connection = createSessionFileDownloadClient();
-    const download = expectOkPayload(
-      await invoke(
-        "sessions.files.download",
-        { sessionKey: key, path: "example.txt" },
-        context,
-        connection,
-      ),
-    );
+    const download = await files.ok("download", "example.txt", undefined, connection);
     const entered = createDeferred();
     const release = createDeferred();
     const original = workspaceFs.readWorkspaceFile;
@@ -331,9 +299,7 @@ it("preserves unbound memory and durable files while an absent memory namespace 
       );
       await withEnvAsync(nativeEnv, async () => {
         const ownersBefore = memorySessionActorOwners.list();
-        const file = expectOkPayload(
-          await invoke("sessions.files.get", { sessionKey, path: "control.txt" }, context),
-        );
+        const file = await files.ok("get", { sessionKey, path: "control.txt" });
         expect(file.file.content).toBe("native control\n");
         expect(memorySessionActorOwners.list()).toEqual(ownersBefore);
       });
@@ -344,9 +310,7 @@ it("preserves unbound memory and durable files while an absent memory namespace 
       cfg = { ...originalCfg };
       setRuntimeConfigSnapshot(cfg);
       await withEnvAsync(absentEnv, async () => {
-        const missing = expectError(
-          await invoke("sessions.files.get", { sessionKey: key, path: "example.txt" }, context),
-        );
+        const missing = await files.error("get", "example.txt");
         expect(missing).toMatchObject({ details: { type: "session_file_not_found" } });
       });
       expect(sql.queries).toEqual([]);

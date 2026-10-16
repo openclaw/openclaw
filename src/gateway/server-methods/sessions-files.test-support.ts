@@ -10,16 +10,10 @@ import type {
   GatewayClient,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
-  RespondFn,
 } from "./types.js";
 
-type SessionFilesMethod =
-  | "sessions.files.list"
-  | "sessions.files.get"
-  | "sessions.files.download"
-  | "sessions.files.assets"
-  | "sessions.files.set"
-  | "sessions.files.reveal";
+type SessionFilesOperation = "list" | "get" | "download" | "assets" | "set" | "reveal";
+type SessionFilesMethod = `sessions.files.${SessionFilesOperation}`;
 
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
@@ -33,14 +27,6 @@ export const TEXT_PREVIEW_FIXTURES = [
   { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
 ] as const;
 
-function createResponder() {
-  const calls: ResponderCall[] = [];
-  const respond: RespondFn = (ok, payload, error) => {
-    calls.push({ ok, payload, error });
-  };
-  return { calls, respond };
-}
-
 export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandlers) {
   return async (
     method: SessionFilesMethod,
@@ -53,20 +39,22 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
       >
     > = {},
   ) => {
-    const responder = createResponder();
+    const calls: ResponderCall[] = [];
     await handlers[method]?.({
       req: { type: "req", id: method, method, params: {} },
       params,
       client: null,
       isWebchatConnect: () => false,
-      respond: responder.respond,
+      respond: (ok, payload, error) => {
+        calls.push({ ok, payload, error });
+      },
       context: {
         getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
         ...context,
       } as never,
       ...options,
     });
-    return responder.calls;
+    return calls;
   };
 }
 
@@ -83,6 +71,34 @@ export function createSessionFileDownloadClient() {
     },
   };
   return { client, [Symbol.dispose]: () => controller.abort() };
+}
+
+export function createSessionFilesClient(
+  invoke: ReturnType<typeof createSessionFilesHandlerInvoker>,
+  sessionKey: () => string,
+  context: () => Record<string, unknown> = () => ({}),
+  options: () => Parameters<typeof invoke>[3] = () => ({}),
+) {
+  const request = (
+    method: SessionFilesOperation,
+    params: string | Record<string, unknown> = {},
+    requestContext = context(),
+    requestOptions = options(),
+  ) =>
+    invoke(
+      `sessions.files.${method}`,
+      {
+        [method === "reveal" ? "key" : "sessionKey"]: sessionKey(),
+        ...(typeof params === "string" ? { path: params } : params),
+      },
+      requestContext,
+      requestOptions,
+    );
+  return {
+    request,
+    ok: async (...args: Parameters<typeof request>) => expectOkPayload(await request(...args)),
+    error: async (...args: Parameters<typeof request>) => expectError(await request(...args)),
+  };
 }
 
 const downloadClients = new Set<GatewayClient>();
@@ -145,16 +161,7 @@ export function expectError(calls: ResponderCall[]): Record<string, any> {
 }
 
 export function assistantToolCall(name: string, args: Record<string, unknown>) {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        name,
-        arguments: args,
-      },
-    ],
-  };
+  return { role: "assistant", content: [{ type: "toolCall", name, arguments: args }] };
 }
 
 export function visibleMessageEvent(message: unknown, seq: number) {
@@ -233,17 +240,14 @@ function createSessionEntryFixture(
   workspaceRoot: string,
   sessionId: string,
   storePath = path.join(workspaceRoot, ".sessions.json"),
+  sessionFile = `${sessionId}.jsonl`,
 ) {
   return {
     agentId: "main",
     canonicalKey: "agent:main:main",
     cfg: {},
     storePath,
-    entry: {
-      sessionId,
-      sessionFile: `${sessionId}.jsonl`,
-      spawnedCwd: workspaceRoot,
-    },
+    entry: { sessionId, sessionFile, spawnedCwd: workspaceRoot },
   };
 }
 
@@ -253,16 +257,13 @@ export function useSqliteSession(
   sessionId: string,
   storePath = path.join(workspaceRoot, `${sessionId}.sqlite`),
 ): string {
-  loadSessionEntry.mockReturnValue({
-    agentId: "main",
-    canonicalKey: "agent:main:main",
-    cfg: {},
-    storePath,
-    entry: {
+  loadSessionEntry.mockReturnValue(
+    createSessionEntryFixture(
+      workspaceRoot,
       sessionId,
-      sessionFile: `sqlite:main:${sessionId}:${storePath}`,
-      spawnedCwd: workspaceRoot,
-    },
-  });
+      storePath,
+      `sqlite:main:${sessionId}:${storePath}`,
+    ),
+  );
   return storePath;
 }
