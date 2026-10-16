@@ -1,4 +1,3 @@
-// Ios Node E2E tests cover the dev iOS node smoke script.
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,38 +22,30 @@ type GatewayFrame = {
   };
   type: string;
 };
+type Report = {
+  results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
+};
+type PayloadMode = "empty" | "invalid-payload-json" | "primitive-device-info" | "valid";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => {
-    wss?.close(() => resolve());
-    if (!wss) {
-      resolve();
-    }
-  });
-  wss = undefined;
-
-  await new Promise<void>((resolve, reject) => {
-    server?.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+  if (wss) {
+    await new Promise<void>((resolve) => {
+      wss?.close(() => resolve());
     });
-    if (!server) {
-      resolve();
-    }
-  });
+  }
+  wss = undefined;
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server?.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
   server = undefined;
 });
 
-function invokePayload(
-  command: string,
-  mode: "empty" | "invalid-payload-json" | "primitive-device-info" | "valid",
-): unknown {
+function invokePayload(command: string, mode: PayloadMode): unknown {
   if (mode === "primitive-device-info" && command === "device.info") {
     return "ok";
   }
@@ -64,30 +55,21 @@ function invokePayload(
   if (mode === "empty") {
     return {};
   }
-  switch (command) {
-    case "device.info":
-      return { systemName: "iOS", systemVersion: "18.0" };
-    case "device.status":
-      return { battery: { state: "charging" } };
-    case "system.notify":
-      return { delivered: true };
-    case "contacts.search":
-      return { contacts: [] };
-    case "calendar.events":
-      return { events: [] };
-    case "reminders.list":
-      return { reminders: [] };
-    case "motion.pedometer":
-      return { steps: 12 };
-    case "photos.latest":
-      return { photos: [] };
-    default:
-      return { ok: true };
-  }
+  const payloads: Record<string, unknown> = {
+    "device.info": { systemName: "iOS", systemVersion: "18.0" },
+    "device.status": { battery: { state: "charging" } },
+    "system.notify": { delivered: true },
+    "contacts.search": { contacts: [] },
+    "calendar.events": { events: [] },
+    "reminders.list": { reminders: [] },
+    "motion.pedometer": { steps: 12 },
+    "photos.latest": { photos: [] },
+  };
+  return payloads[command] ?? { ok: true };
 }
 
 async function listenGateway(params: {
-  mode: "empty" | "invalid-payload-json" | "primitive-device-info" | "valid";
+  mode: PayloadMode;
   invokeParams: Array<{ command?: string; idempotencyKey?: string }>;
 }): Promise<string> {
   server = createServer();
@@ -103,52 +85,28 @@ async function listenGateway(params: {
       if (frame.type !== "req") {
         return;
       }
+      const reply = (payload: unknown) => {
+        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
+      };
       if (frame.method === "connect") {
-        ws.send(
-          JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { connected: true } }),
-        );
-        return;
+        return reply({ connected: true });
       }
       if (frame.method === "health") {
-        ws.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload: { status: "ok" } }));
-        return;
+        return reply({ status: "ok" });
       }
       if (frame.method === "node.list") {
-        ws.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: {
-              nodes: [
-                {
-                  nodeId: "ios-node",
-                  displayName: "iPhone",
-                  platform: "iOS",
-                  connected: true,
-                },
-              ],
-            },
-          }),
-        );
-        return;
+        return reply({
+          nodes: [{ nodeId: "ios-node", displayName: "iPhone", platform: "iOS", connected: true }],
+        });
       }
       if (frame.method === "node.invoke") {
         params.invokeParams.push(frame.params ?? {});
-        ws.send(
-          JSON.stringify({
-            type: "res",
-            id: frame.id,
-            ok: true,
-            payload: {
-              ok: true,
-              nodeId: "ios-node",
-              command: frame.params?.command,
-              payload: invokePayload(frame.params?.command ?? "", params.mode),
-            },
-          }),
-        );
-        return;
+        return reply({
+          ok: true,
+          nodeId: "ios-node",
+          command: frame.params?.command,
+          payload: invokePayload(frame.params?.command ?? "", params.mode),
+        });
       }
       ws.send(
         JSON.stringify({
@@ -178,6 +136,14 @@ function runScript(
   return runScriptRaw(["--url", url, "--token", "token", "--json", ...extraArgs], signal);
 }
 
+async function runGateway(mode: PayloadMode, signal: AbortSignal, status: number) {
+  const invokeParams: NonNullable<GatewayFrame["params"]>[] = [];
+  const result = await runScript(await listenGateway({ mode, invokeParams }), signal);
+  expect(result).toMatchObject({ signal: null, status, timedOut: false });
+  const report: Report = JSON.parse(result.stdout);
+  return { report, invokeParams };
+}
+
 async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promise<ScriptResult> {
   const child = spawn(
     process.execPath,
@@ -186,12 +152,8 @@ async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promi
   );
   const stdout = createBoundedChildOutput();
   const stderr = createBoundedChildOutput();
-  child.stdout.on("data", (chunk) => {
-    stdout.append(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr.append(chunk);
-  });
+  child.stdout.on("data", (chunk) => stdout.append(chunk));
+  child.stderr.on("data", (chunk) => stderr.append(chunk));
   let spawnError: Error | undefined;
   child.once("error", (error) => {
     spawnError = error;
@@ -248,14 +210,7 @@ describe("ios-node-e2e", () => {
   });
 
   it("fails empty node invoke payloads instead of counting them as proof", async ({ signal }) => {
-    const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
-    const url = await listenGateway({ mode: "empty", invokeParams });
-    const result = await runScript(url, signal);
-    const report = JSON.parse(result.stdout) as {
-      results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
-    };
-
-    expect(result).toMatchObject({ signal: null, status: 10, timedOut: false });
+    const { report, invokeParams } = await runGateway("empty", signal, 10);
     expect(report.results[0]).toMatchObject({
       error: "device.info returned an empty object payload",
       id: "device.info",
@@ -270,14 +225,7 @@ describe("ios-node-e2e", () => {
   });
 
   it("fails malformed primitive device info payloads", async ({ signal }) => {
-    const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
-    const url = await listenGateway({ mode: "primitive-device-info", invokeParams });
-    const result = await runScript(url, signal);
-    const report = JSON.parse(result.stdout) as {
-      results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
-    };
-
-    expect(result).toMatchObject({ signal: null, status: 10, timedOut: false });
+    const { report } = await runGateway("primitive-device-info", signal, 10);
     expect(report.results[0]).toMatchObject({
       error: "device.info returned a string payload",
       id: "device.info",
@@ -286,14 +234,7 @@ describe("ios-node-e2e", () => {
   });
 
   it("fails malformed nested payloadJSON payloads", async ({ signal }) => {
-    const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
-    const url = await listenGateway({ mode: "invalid-payload-json", invokeParams });
-    const result = await runScript(url, signal);
-    const report = JSON.parse(result.stdout) as {
-      results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
-    };
-
-    expect(result).toMatchObject({ signal: null, status: 10, timedOut: false });
+    const { report } = await runGateway("invalid-payload-json", signal, 10);
     expect(report.results[1]).toMatchObject({
       error: "device.status returned no payload",
       id: "device.status",
@@ -302,14 +243,7 @@ describe("ios-node-e2e", () => {
   });
 
   it("accepts non-empty node invoke payloads and sends idempotency keys", async ({ signal }) => {
-    const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
-    const url = await listenGateway({ mode: "valid", invokeParams });
-    const result = await runScript(url, signal);
-    const report = JSON.parse(result.stdout) as {
-      results: Array<{ id: string; ok: boolean }>;
-    };
-
-    expect(result).toMatchObject({ signal: null, status: 0, timedOut: false });
+    const { report, invokeParams } = await runGateway("valid", signal, 0);
     expect(report.results.every((entry) => entry.ok)).toBe(true);
     expect(invokeParams.map((params) => params.command)).toEqual([
       "device.info",
