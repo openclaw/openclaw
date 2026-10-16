@@ -427,7 +427,9 @@ function maybeEmitFailureAlert(
   const repair = params.job.state.failureAlertIncident?.repair;
   // Older stored incidents have no deadline and retain request-based escalation.
   // A run admitted before settlement cannot verify the repair, even if it fails later.
+  // A recurring job disabled by this failure is reported now, even while a repair is pending.
   if (
+    !terminalRecurring &&
     repair?.deadlineAtMs !== undefined &&
     (repair.settledAtMs !== undefined && repair.settledAtMs < repair.deadlineAtMs
       ? params.runAtMs <= repair.settledAtMs
@@ -460,13 +462,16 @@ function maybeEmitFailureAlert(
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
+  // A recurring job's auto-disable notice goes straight to the route: a repair turn can
+  // fail the same way the job did and leave the route silent.
   if (
     !repair &&
-    (terminal || alertConfig.mode === "announce") &&
+    !terminalRecurring &&
+    (terminalOneShot || alertConfig.mode === "announce") &&
     params.status === "error" &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
-    (terminal || isJobEnabled(params.job))
+    (terminalOneShot || isJobEnabled(params.job))
   ) {
     const opened = params.job.state.failureAlertIncident ?? incident;
     params.job.state.failureAlertIncident = {
@@ -477,17 +482,19 @@ function maybeEmitFailureAlert(
       },
     };
     // A terminal job keeps its alert cycle open for fallback delivery if repair cannot start.
-    params.job.state.lastFailureNotificationDeliveryStatus = terminal ? "unknown" : "not-requested";
+    params.job.state.lastFailureNotificationDeliveryStatus = terminalOneShot
+      ? "unknown"
+      : "not-requested";
     params.deferredNotifications.push({
       kind: "failure-repair",
       job,
-      ...(terminal ? { fallback: alert } : {}),
+      ...(terminalOneShot ? { fallback: alert } : {}),
       text: buildCronFailureRepairBrief({
         job: params.job,
         consecutiveErrors: params.consecutiveCount,
         error: params.error,
         errorReason: params.errorReason,
-        terminal,
+        terminal: terminalOneShot,
       }),
     });
     return "queued";
