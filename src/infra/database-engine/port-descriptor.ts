@@ -32,6 +32,11 @@ export type DatabasePortProvider = {
   ): Promise<PortDescriptor>;
 };
 
+export type DatabasePortPluginOwners = Record<
+  string,
+  NonNullable<Parameters<DatabasePortProvider["loadDescriptor"]>[0]>
+>;
+
 type Endpoint = PortEndpoint;
 function selectFragments(descriptor: PortDescriptor, tables: ReadonlySet<string>): PortDescriptor {
   if (descriptor.activeFragments) {

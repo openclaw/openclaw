@@ -37,22 +37,26 @@ export async function assertUpdateDatabaseEngineContexts(
       );
     }
   }
+  const { listDatabaseEngineStores, selectDatabaseEngine } =
+    await import("./database-engine/registry.js");
   const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
   const { readBackupEngine, readPostgresBackupFamily } =
     await import("../snapshot/database-backup.js");
   for (const context of contexts) {
-    const paths = await discoverBackupDatabasePaths({
-      ...context,
-      stateDir: resolveStateDir(context.env),
-    });
-    const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
-    const { listDatabaseEngineStores, selectDatabaseEngine } =
-      await import("./database-engine/registry.js");
     const required = new Set(
       listDatabaseEngineStores()
         .filter((store) => selectDatabaseEngine(store, context.config) === "postgres")
         .map((store) => store.id),
     );
+    // Preserve the SQLite path: a PostgreSQL-capable target needs no source copies.
+    if (supportsPostgres && required.size === 0) {
+      continue;
+    }
+    const paths = await discoverBackupDatabasePaths({
+      ...context,
+      stateDir: resolveStateDir(context.env),
+    });
+    const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
     if (postgres.length === 0 && required.size === 0) {
       continue;
     }
@@ -62,7 +66,7 @@ export async function assertUpdateDatabaseEngineContexts(
         `Update refused: ${detail}. Reverse-port to SQLite with the current binary before updating, or stay on the current version. See https://docs.openclaw.ai/reference/database-engines.`,
       );
     };
-    if (!Array.isArray(targetEngines) || !targetEngines.includes("postgres")) {
+    if (!supportsPostgres) {
       refuse(
         `the target does not support the PostgreSQL store at ${postgres[0] ?? "the configured PostgreSQL families"}`,
       );

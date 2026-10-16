@@ -47,7 +47,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     | {
         mode: "database-generations";
         paths: string[];
-        pluginOwners?: import("./database-engine/port-provider-descriptor.js").DatabasePortPluginOwners;
+        pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
       };
   switch (input.mode) {
     case "database-restore-preparation": {

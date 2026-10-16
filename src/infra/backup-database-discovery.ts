@@ -3,7 +3,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
 import { resolveDatabaseEngineInput } from "./database-engine/config.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
-import type { DatabasePortPluginOwners } from "./database-engine/port-provider-descriptor.js";
+import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 

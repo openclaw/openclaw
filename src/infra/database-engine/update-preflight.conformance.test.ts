@@ -36,12 +36,9 @@ import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
-import { logbookPortProvider } from "./logbook-port.js";
 import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
-import { teamReportsPortProvider } from "./team-reports-port.js";
-import { workboardPortProvider } from "./workboard-port.js";
-
+import { updatePostgresFamilies as families } from "./update-preflight.conformance.test-support.js";
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
@@ -84,6 +81,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("../../../scripts/tsx.mjs", import.meta.url).href}`,
     };
     config = { database: { engine: "postgres", postgres: { connection: connection! } } };
     for (const directory of [path.dirname(shared), path.dirname(agent), plugin]) {
@@ -294,207 +292,202 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
     }
   });
 
-  it("captures before a failed candidate migration and restores exact PostgreSQL rows while preserving current update history", async () => {
-    const families = [
-      {
-        provider: workboardPortProvider,
-        relativePath: "plugins/workboard/workboard.sqlite",
-        seed: "PRAGMA user_version=3; INSERT INTO workboard_schema_migrations VALUES ('schema-3',1); INSERT INTO workboard_boards (id,name,created_at,updated_at) VALUES ('board','baseline',1,1)",
-        table: "workboard_boards",
-        column: "name",
-      },
-      {
-        provider: logbookPortProvider,
-        relativePath: "logbook/logbook.sqlite",
-        seed: "PRAGMA user_version=1; INSERT INTO standups VALUES ('2026-10-16','baseline',1)",
-        table: "standups",
-        column: "text",
-      },
-      {
-        provider: teamReportsPortProvider,
-        relativePath: "plugins/team-reports/team-reports.sqlite",
-        seed: "PRAGMA user_version=1; INSERT INTO team_reports_schema_migrations VALUES ('schema-1',1); INSERT INTO team_reports_periods VALUES ('day','2026-10-16',1,2,'closed',2,'{}',NULL,'baseline')",
-        table: "team_reports_periods",
-        column: "markdown",
-      },
-    ];
+  describe("four-family recovery", () => {
     const stores: Array<(typeof families)[number] & { pathname: string; namespace: string }> = [];
-    const pluginRoots: string[] = [];
-    for (const family of families) {
-      const id = family.provider.id;
-      const rootDir = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
-      pluginRoots.push(rootDir);
-      const descriptor = await family.provider.loadDescriptor({
-        id,
-        rootDir,
-        source: path.join(rootDir, "index.ts"),
-        origin: "global",
-      });
-      const pathname = path.join(stateDir, family.relativePath);
-      const storeId = randomUUID();
-      const storeNamespace = `update_${id.replaceAll("-", "_")}_${storeId.replaceAll("-", "")}`;
-      namespaces.add(storeNamespace);
-      await fs.mkdir(path.dirname(pathname), { recursive: true });
-      {
-        using source = openNodeSqliteDatabase(":memory:");
-        source.exec(descriptor.sqlite);
-        source.exec(family.seed);
-        await materializeDatabasePort({
-          source: { engine: "sqlite", db: source },
-          destination: { engine: "postgres", db: client, namespace: storeNamespace },
-          descriptor,
-          storeId,
-          assertCurrent() {},
+    beforeAll(async () => {
+      const pluginRoots: string[] = [];
+      for (const family of families) {
+        const id = family.provider.id;
+        const rootDir = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
+        pluginRoots.push(rootDir);
+        const descriptor = await family.provider.loadDescriptor({
+          id,
+          rootDir,
+          source: path.join(rootDir, "index.ts"),
+          origin: "global",
         });
-        if (id === "logbook") {
-          const input = {
-            client,
+        const pathname = path.join(stateDir, family.relativePath);
+        const storeId = randomUUID();
+        const storeNamespace = `update_${id.replaceAll("-", "_")}_${storeId.replaceAll("-", "")}`;
+        namespaces.add(storeNamespace);
+        await fs.mkdir(path.dirname(pathname), { recursive: true });
+        {
+          using source = openNodeSqliteDatabase(":memory:");
+          source.exec(descriptor.sqlite);
+          source.exec(family.seed);
+          await materializeDatabasePort({
+            source: { engine: "sqlite", db: source },
+            destination: { engine: "postgres", db: client, namespace: storeNamespace },
             descriptor,
-            anchor: { engine: "postgres" as const, storeId, namespace: storeNamespace },
-          };
-          const fingerprint = await fingerprintPostgresDatabase(input);
-          await client.query("SET enable_hashjoin = off; SET enable_mergejoin = off");
-          try {
-            expect(await fingerprintPostgresDatabase(input)).toBe(fingerprint);
-          } finally {
-            await client.query("RESET enable_hashjoin; RESET enable_mergejoin");
+            storeId,
+            assertCurrent() {},
+          });
+          if (id === "logbook") {
+            const input = {
+              client,
+              descriptor,
+              anchor: { engine: "postgres" as const, storeId, namespace: storeNamespace },
+            };
+            const fingerprint = await fingerprintPostgresDatabase(input);
+            await client.query("SET enable_hashjoin = off; SET enable_mergejoin = off");
+            try {
+              expect(await fingerprintPostgresDatabase(input)).toBe(fingerprint);
+            } finally {
+              await client.query("RESET enable_hashjoin; RESET enable_mergejoin");
+            }
           }
         }
+        createAnchor(pathname, storeId, storeNamespace);
+        pluginAnchors.push(pathname);
+        stores.push({ ...family, pathname, namespace: storeNamespace });
       }
-      createAnchor(pathname, storeId, storeNamespace);
-      pluginAnchors.push(pathname);
-      stores.push({ ...family, pathname, namespace: storeNamespace });
-    }
-    config = {
-      ...config,
-      plugins: {
-        load: { paths: pluginRoots },
-        entries: Object.fromEntries(
-          families.map(({ provider }) => [provider.id, { enabled: true }]),
-        ),
-      },
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-    env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
-    env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoots[0]!);
-    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR);
-    const owner = await acquireGatewayLock({
-      env,
-      role: "sqlite-maintenance",
-      allowInTests: true,
-      timeoutMs: 0,
+      config = {
+        ...config,
+        plugins: {
+          load: { paths: pluginRoots },
+          entries: Object.fromEntries(
+            families.map(({ provider }) => [provider.id, { enabled: true }]),
+          ),
+        },
+      };
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+      env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoots[0]!);
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR);
     });
-    let backup: UpdateDatabaseBackup | undefined;
-    try {
-      const baseline = await owner!.run(() =>
-        captureUpdateRecoveryBaseline({
-          runId: "postgres-original-baseline",
-          installRoot: root,
-          env,
-          drivers: [],
-          assertCurrent: () => owner!.assertCurrent(),
-          acquisition: { mode: "maintenance-owner" },
-        }),
-      );
-      expect(baseline.diagnostics.databaseWarnings).toEqual([]);
-      const manifest = parseUpdateRecoveryBackupManifest(
-        await fs.readFile(baseline.ref.manifestPath, "utf8"),
-      );
-      expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
-      backup = await owner!.run(() =>
-        createUpdateDatabaseBackup({
-          backupRoot: path.join(root, "rollback"),
-          stateDir,
-          config,
-          env,
-          acquisition: { mode: "maintenance-owner" },
-        }),
-      );
-      expect(backup.warnings).toEqual([]);
-      const migration = await owner!.run(() =>
-        runLegacyStateMigrationSteps([
-          {
-            id: "update-conformance-failure",
-            phase: "shared",
-            source: [],
-            target: [],
-            requiredness: "required",
-            reversibility: "not-applicable",
-            run: async () => {
-              await client.query(
-                `UPDATE "${namespace}".config_machine_state SET value_json = '"candidate"' WHERE state_key = 'update.conformance'`,
-              );
-              await client.query(
-                `UPDATE "${namespace}".update_runs SET phase = 'validating', updated_at_ms = 2, reason = 'candidate migration failed', after_json = $1 WHERE run_id = $2`,
-                [' {"opaque":"\\u0062"} ', runId],
-              );
-              for (const store of stores) {
+
+    it("seals an original recovery baseline containing all PostgreSQL families", async () => {
+      const owner = await acquireGatewayLock({
+        env,
+        role: "sqlite-maintenance",
+        allowInTests: true,
+        timeoutMs: 0,
+      });
+      try {
+        const baseline = await owner!.run(() =>
+          captureUpdateRecoveryBaseline({
+            runId: "postgres-original-baseline",
+            installRoot: root,
+            env,
+            drivers: [],
+            assertCurrent: () => owner!.assertCurrent(),
+            acquisition: { mode: "maintenance-owner" },
+          }),
+        );
+        expect(baseline.diagnostics.databaseWarnings).toEqual([]);
+        const manifest = parseUpdateRecoveryBackupManifest(
+          await fs.readFile(baseline.ref.manifestPath, "utf8"),
+        );
+        expect(manifest).toMatchObject({ schemaVersion: 2, generation: { kind: "baseline" } });
+      } finally {
+        await owner!.release();
+      }
+    });
+
+    it("captures before a failed candidate migration and restores exact PostgreSQL rows while preserving current update history", async () => {
+      const owner = await acquireGatewayLock({
+        env,
+        role: "sqlite-maintenance",
+        allowInTests: true,
+        timeoutMs: 0,
+      });
+      let backup: UpdateDatabaseBackup | undefined;
+      try {
+        backup = await owner!.run(() =>
+          createUpdateDatabaseBackup({
+            backupRoot: path.join(root, "rollback"),
+            stateDir,
+            config,
+            env,
+            acquisition: { mode: "maintenance-owner" },
+          }),
+        );
+        expect(backup.warnings).toEqual([]);
+        const migration = await owner!.run(() =>
+          runLegacyStateMigrationSteps([
+            {
+              id: "update-conformance-failure",
+              phase: "shared",
+              source: [],
+              target: [],
+              requiredness: "required",
+              reversibility: "not-applicable",
+              run: async () => {
                 await client.query(
-                  `UPDATE "${store.namespace}"."${store.table}" SET "${store.column}" = 'candidate'`,
+                  `UPDATE "${namespace}".config_machine_state SET value_json = '"candidate"' WHERE state_key = 'update.conformance'`,
                 );
-              }
-              throw new Error("candidate migration failed after committed data write");
+                await client.query(
+                  `UPDATE "${namespace}".update_runs SET phase = 'validating', updated_at_ms = 2, reason = 'candidate migration failed', after_json = $1 WHERE run_id = $2`,
+                  [' {"opaque":"\\u0062"} ', runId],
+                );
+                for (const store of stores) {
+                  await client.query(
+                    `UPDATE "${store.namespace}"."${store.table}" SET "${store.column}" = 'candidate'`,
+                  );
+                }
+                throw new Error("candidate migration failed after committed data write");
+              },
             },
-          },
-        ]),
-      );
-      expect(migration.haltedBy?.refusal?.code).toBe("step-threw");
-      expect(
-        (
-          await client.query(
-            `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
-          )
-        ).rows,
-      ).toEqual([{ value_json: '"candidate"' }]);
-    } finally {
-      await owner!.release();
-    }
-    await restoreUpdateDatabaseBackup({
-      backup: backup!,
-      runId,
-      env,
-      assertCurrent() {},
-    });
-    const restored = readBackupEngine(shared);
-    if (restored.engine !== "postgres") {
-      throw new Error("Recovery replaced the PostgreSQL anchor with SQLite data");
-    }
-    namespaces.add(restored.namespace);
-    expect(
-      (
-        await client.query(
-          `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
-        )
-      ).rows,
-    ).toEqual([{ value_json: ' {"value":"baseline","opaque":"\\u0061"} ' }]);
-    expect(
-      (
-        await client.query(
-          `SELECT phase, reason, after_json FROM "${restored.namespace}".update_runs WHERE run_id = $1`,
-          [runId],
-        )
-      ).rows,
-    ).toEqual([
-      {
-        phase: "validating",
-        reason: "candidate migration failed",
-        after_json: ' {"opaque":"\\u0062"} ',
-      },
-    ]);
-    for (const store of stores) {
-      const restoredStore = readBackupEngine(store.pathname);
-      if (restoredStore.engine !== "postgres") {
-        throw new Error(`Recovery replaced ${store.provider.id} with SQLite data`);
+          ]),
+        );
+        expect(migration.haltedBy?.refusal?.code).toBe("step-threw");
+        expect(
+          (
+            await client.query(
+              `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
+            )
+          ).rows,
+        ).toEqual([{ value_json: '"candidate"' }]);
+      } finally {
+        await owner!.release();
       }
-      namespaces.add(restoredStore.namespace);
+      await restoreUpdateDatabaseBackup({
+        backup: backup!,
+        runId,
+        env,
+        assertCurrent() {},
+      });
+      const restored = readBackupEngine(shared);
+      if (restored.engine !== "postgres") {
+        throw new Error("Recovery replaced the PostgreSQL anchor with SQLite data");
+      }
+      namespaces.add(restored.namespace);
       expect(
         (
           await client.query(
-            `SELECT "${store.column}" AS value FROM "${restoredStore.namespace}"."${store.table}"`,
+            `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'update.conformance'`,
           )
         ).rows,
-      ).toEqual([{ value: "baseline" }]);
-    }
+      ).toEqual([{ value_json: ' {"value":"baseline","opaque":"\\u0061"} ' }]);
+      expect(
+        (
+          await client.query(
+            `SELECT phase, reason, after_json FROM "${restored.namespace}".update_runs WHERE run_id = $1`,
+            [runId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          phase: "validating",
+          reason: "candidate migration failed",
+          after_json: ' {"opaque":"\\u0062"} ',
+        },
+      ]);
+      for (const store of stores) {
+        const restoredStore = readBackupEngine(store.pathname);
+        if (restoredStore.engine !== "postgres") {
+          throw new Error(`Recovery replaced ${store.provider.id} with SQLite data`);
+        }
+        namespaces.add(restoredStore.namespace);
+        expect(
+          (
+            await client.query(
+              `SELECT "${store.column}" AS value FROM "${restoredStore.namespace}"."${store.table}"`,
+            )
+          ).rows,
+        ).toEqual([{ value: "baseline" }]);
+      }
+    });
   });
 });

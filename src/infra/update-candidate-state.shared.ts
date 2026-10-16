@@ -15,7 +15,6 @@ import {
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
-import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
 export type StateInput = {
   stateDir: string;
   additionalPaths?: readonly string[];
@@ -71,7 +70,7 @@ export async function readSharedDatabaseVersion(
   shared: string,
   files: Map<string, StateDatabaseDiscovery>,
   input: StateInput,
-): Promise<Omit<UpdateStateSchemaVersion, "path">> {
+) {
   const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     const registered = collectRegisteredPaths(db, shared, files);

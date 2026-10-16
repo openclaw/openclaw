@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { sha256Hex } from "./crypto-digest.js";
-import type { DatabasePortPluginOwners } from "./database-engine/port-provider-descriptor.js";
+import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";

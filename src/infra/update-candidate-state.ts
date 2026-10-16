@@ -446,7 +446,7 @@ export async function readUpdateDatabaseGenerationsIsolated(
     signal?: AbortSignal;
     acquisition?: UpdateRecoveryCaptureAcquisition;
     retryAdvice?: boolean;
-    pluginOwners?: import("./database-engine/port-provider-descriptor.js").DatabasePortPluginOwners;
+    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   } = {},
 ): Promise<UpdateDatabaseGenerations> {
   const scope = getOpenClawDatabaseMaintenanceScope();

@@ -6,10 +6,10 @@ import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import {
   DatabasePortDataError,
+  type DatabasePortPluginOwners,
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
-import type { DatabasePortPluginOwners } from "./port-provider-descriptor.js";
 import { statePortProvider } from "./state-port.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
 import { workboardPortProvider } from "./workboard-port.js";
@@ -31,7 +31,7 @@ export function requireDatabasePortProvider(id: string) {
       );
     }
     throw new DatabasePortDataError(
-      `Unknown database family ${id}; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
+      `Unknown database family; supported families: ${databasePortProviders.map((entry) => entry.id).join(", ")}`,
     );
   }
   return provider;

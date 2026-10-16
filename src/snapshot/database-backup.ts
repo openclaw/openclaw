@@ -4,7 +4,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
-import type { DatabasePortPluginOwners } from "../infra/database-engine/port-provider-descriptor.js";
+import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
