@@ -3,6 +3,7 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
@@ -27,8 +28,6 @@ export class BrowserPanelNativePresentation {
   presentedTabId: string | null = null;
   lastPresented = 0;
   private stage: HTMLElement | null = null;
-  private resizeObserver: ResizeObserver | null = null;
-  private intersectionObserver: IntersectionObserver | null = null;
   private unsubscribeOcclusion?: () => void;
   private intersecting = true;
   private occluded = false;
@@ -60,8 +59,6 @@ export class BrowserPanelNativePresentation {
       },
       () => this.stage?.getBoundingClientRect() ?? null,
     );
-    document.addEventListener("scroll", this.schedule, true);
-    window.addEventListener("resize", this.schedule);
     this.update();
   }
 
@@ -73,13 +70,8 @@ export class BrowserPanelNativePresentation {
       cancelAnimationFrame(this.frame);
       this.frame = null;
     }
-    this.resizeObserver?.disconnect();
-    this.intersectionObserver?.disconnect();
-    this.stage = null;
     this.unsubscribeOcclusion?.();
     this.unsubscribeOcclusion = undefined;
-    document.removeEventListener("scroll", this.schedule, true);
-    window.removeEventListener("resize", this.schedule);
     this.lastPresentation = null;
     void postNativeBrowserMessage({ type: "release-scope", scope: this.scope });
   }
@@ -88,37 +80,36 @@ export class BrowserPanelNativePresentation {
     if (!this.connected) {
       return;
     }
-    this.synchronizeStage();
     if (!this.canPresent()) {
       this.hide();
     }
     this.schedule();
   }
 
-  private synchronizeStage(): void {
-    const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-    if (stage !== this.stage) {
-      this.resizeObserver?.disconnect();
-      this.intersectionObserver?.disconnect();
-      this.stage = stage;
-      this.intersecting = true;
-      if (stage) {
-        if (typeof ResizeObserver === "function") {
-          this.resizeObserver ??= new ResizeObserver(this.schedule);
-          this.resizeObserver.observe(stage);
-        }
-        if (typeof IntersectionObserver === "function") {
-          this.intersectionObserver ??= new IntersectionObserver((entries) => {
-            const entry = entries.find((candidate) => candidate.target === this.stage);
-            if (entry) {
-              this.intersecting = entry.isIntersecting;
-              this.schedule();
-            }
-          });
-          this.intersectionObserver.observe(stage);
-        }
-      }
-    }
+  mountStage(stage: HTMLElement): () => void {
+    this.stage = stage;
+    this.intersecting = true;
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(this.schedule) : null;
+    const intersection =
+      typeof IntersectionObserver === "function"
+        ? new IntersectionObserver(([entry]) => {
+            this.intersecting = entry?.isIntersecting ?? this.intersecting;
+            this.schedule();
+          })
+        : null;
+    resize?.observe(stage);
+    intersection?.observe(stage);
+    const stopScroll = listen(document, "scroll", this.schedule, true);
+    const stopResize = listen(window, "resize", this.schedule);
+    this.update();
+    return () => {
+      this.hide();
+      this.stage = null;
+      resize?.disconnect();
+      intersection?.disconnect();
+      stopScroll();
+      stopResize();
+    };
   }
 
   readonly schedule = (): void => {
@@ -159,8 +150,6 @@ export class BrowserPanelNativePresentation {
     if (!this.connected) {
       return;
     }
-    // Nested Solid content can mount after the owner commit that scheduled this frame.
-    this.synchronizeStage();
     const stage = this.stage;
     if (!stage || !this.canPresent()) {
       this.hide();
