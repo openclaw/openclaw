@@ -12,7 +12,6 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
-import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.tsx";
 import {
   renderSessionListFrame,
   renderSessionSection as SessionSection,
@@ -43,7 +42,6 @@ type RosterProps = {
   active: boolean;
   sections: SidebarVisibleSections["sections"];
   involvingMe: boolean;
-  empty: boolean;
 };
 
 function cachedRosterCards(host: RosterHost) {
@@ -106,7 +104,6 @@ export function SidebarAgentRoster(props: RosterProps) {
   const roster = useRoster(props);
   const presented = () => props.active;
   const parkedSections = createParkedProjection(() => props.sections, presented);
-  const empty = createParkedProjection(() => props.empty, presented);
   const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
   const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
   // Restore saved choices only when the Gateway scope changes, retaining local toggles otherwise.
@@ -408,16 +405,6 @@ export function SidebarAgentRoster(props: RosterProps) {
               );
             }}
           </For>
-          {renderPersonalSessionEmpty(
-            roster.host(),
-            empty(),
-            gatewaySnapshot().snapshot.phase === "connected" &&
-              roster.snapshot().result !== null &&
-              !roster.snapshot().loading &&
-              !error() &&
-              !roster.snapshot().result!.hasMore &&
-              !roster.host().sessionData.sessionMutationError,
-          )}
         </div>,
       )}
     </openclaw-sidebar-agent-roster>
