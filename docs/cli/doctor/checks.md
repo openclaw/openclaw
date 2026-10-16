@@ -37,6 +37,16 @@ runtime launch permissions.
 
 After its checks finish, `doctor --fix` settles its own inspection workers while retaining maintenance ownership, then checks whether abandoned updater runtimes can be removed. Independent OpenClaw processes, Worker threads, and shared-broker work still prevent removal. Doctor reports the holder PIDs and asks you to let their work finish before rerunning `openclaw doctor --fix`.
 
+On Linux, an administrator-owned maintenance launcher can supply a short-lived,
+authenticated working-directory provider for processes whose cwd is not readable
+by the runtime user. OpenClaw stays unprivileged and pairs each response with the
+same PID birth and credential tuple used for command inspection. The provider
+client shares the census deadline and must exit before its response is used.
+Missing, denied, deleted, truncated, or changed-generation evidence still blocks
+cleanup. A positive cwd inside a retained runtime still protects that runtime.
+Ordinary launches without this capability keep the existing conservative checks;
+setting a locator alone does not authorize a provider or bypass cleanup guards.
+
 - On npm global installs, Doctor reports retained `.openclaw.package-backup-*.databases` directories (and `.openclaw-package-backup-*.databases`, the name a failed cleanup retires them under) beside the installed package, with their total regular-file size in bytes and human-readable units and a quoted removal command for each directory. The scan is bounded; incomplete sizes are lower bounds. If inspection is incomplete before any snapshot is found, Doctor warns and asks you to list the npm global root manually, including hidden entries. A missing global root produces no warning. This is warning-only, including with `--fix`: confirm no update is in progress and no recovery needs the snapshots before removing them manually. Updater-driven Doctor passes defer this check so they do not report the active update's snapshots; run standalone Doctor after the update settles.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
