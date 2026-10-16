@@ -13,8 +13,7 @@ import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createSignedFileSharedActivityRequest } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig } from "./types.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 import type { NextcloudTalkIngressPayload } from "./webhook-spool-state.js";
 import {
   createNextcloudTalkWebhookSpool,
