@@ -36,6 +36,11 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import {
+  containsObjects,
+  expectFiles,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { doctorCommand } from "./doctor.js";
 
@@ -48,7 +53,7 @@ it("rebuilds a missing receipt index while protecting a changed source", async (
       "default",
       "brave",
     );
-    const run = () => importSessions(cfg, state.env);
+    const run = sessionDoctor(cfg, state.env, storePath);
     expect((await run()).totals.importedEntries).toBe(2);
     const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
     const deletedTranscript = path.join(path.dirname(storePath), "legacy-deleted.jsonl");
@@ -65,9 +70,7 @@ it("rebuilds a missing receipt index while protecting a changed source", async (
       archivedTranscriptFiles: 1,
     });
     const issues = allIssues(result);
-    expect(issues).toContainEqual(
-      expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
-    );
+    containsObjects(issues, { code: "retained_plugin_source_index_rebuilt" });
     const conflicts = issues.filter((issue) => issue.code === "historical_transcript_deferred");
     expect(conflicts).toHaveLength(1);
     const receipt = withExistingOpenClawStateDatabaseReadOnly(
@@ -82,7 +85,7 @@ it("rebuilds a missing receipt index while protecting a changed source", async (
     const sources = JSON.parse(String(receipt?.report_json)).sources;
     expect(sources.map((source: { path: string }) => source.path)).not.toContain(storePath);
     expect(sources.map((source: { path: string }) => source.path)).toContain(transcript);
-    expect(fs.existsSync(storePath)).toBe(false);
+    expectMissing(storePath);
     expect(
       loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId,
     ).toBe("legacy-kept");
@@ -101,14 +104,8 @@ it("rebuilds a missing receipt index while protecting a changed source", async (
     const settled = await run();
     expect(settled.totals.importedEntries).toBe(0);
     expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
-    expect(fs.existsSync(transcript)).toBe(false);
-    expect(fs.existsSync(deletedTranscript)).toBe(false);
-    const inspected = await runDoctorSessionSqlite({
-      cfg,
-      env: state.env,
-      mode: "inspect",
-      store: storePath,
-    });
+    expectMissing(transcript, deletedTranscript);
+    const inspected = await run("inspect");
     expect(allIssues(inspected)).not.toContainEqual(
       expect.objectContaining({ code: "plugin_migration_source_retained" }),
     );
@@ -150,7 +147,8 @@ it("preserves an empty-index receipt with unindexed history for an existing data
     expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
       "Legacy session store requires migration",
     );
-    const report = await importSessions(cfg, state.env);
+    const run = sessionDoctor(cfg, state.env, storePath);
+    const report = await run();
     expect(report.totals.importedEntries).toBe(1);
     expectIssueCodes(report, "plugin_migration_source_retained");
     for (const mode of ["import", "inspect", "validate", "dry-run"] as const) {
@@ -185,16 +183,16 @@ it("preserves an empty-index receipt with unindexed history for an existing data
     expect(
       loadExactSessionEntry({ ...scope, sessionKey: "agent:main:current" })?.entry.sessionId,
     ).toBe("current");
-    expect(fs.readFileSync(storePath, "utf8")).toBe("{}");
+    expectFiles("{}", storePath);
 
     const uncaptured = path.join(directory, "current.jsonl");
     const bytes = JSON.stringify({ type: "session", version: 3, id: "current" }) + "\n";
     fs.writeFileSync(uncaptured, bytes);
-    const unexpected = await importSessions(cfg, state.env);
+    const unexpected = await run();
     expectIssueCodes(unexpected, "plugin_migration_source_retained");
-    expect(fs.existsSync(uncaptured)).toBe(false);
+    expectMissing(uncaptured);
     expect(unexpected.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
-    expect(fs.readFileSync(unexpected.targets[0]!.archivedTranscriptFiles[0]!, "utf8")).toBe(bytes);
+    expectFiles(bytes, unexpected.targets[0]!.archivedTranscriptFiles[0]!);
   });
 });
 
@@ -234,13 +232,13 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
             );
           }
         }
-        const imported = await importSessions(cfg, state.env);
+        const imported = await sessionDoctor(cfg, state.env)();
         expect(imported.totals.importedEntries).toBe(2 * historyIds.length);
         const manifestPath = imported.migrationRun!.manifestPath;
         const manifest = readManifest(manifestPath)!;
         const originals = new Map<string, Buffer>();
         for (const target of manifest.targets) {
-          expect(fs.existsSync(target.storePath)).toBe(false);
+          expectMissing(target.storePath);
           for (const move of target.completedMoves) {
             originals.set(move.archivePath, fs.readFileSync(move.archivePath));
             if ((history === "live" || history === "missing-index") && move.kind === "transcript") {
@@ -389,14 +387,14 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
             ?.entries?.[pluginId]?.config,
         ).toEqual({ fixture: false });
         for (const [file, bytes] of originals) {
-          expect(fs.readFileSync(file)).toEqual(bytes);
+          expectFiles(bytes, file);
         }
         if (history === "missing-index" || history === "live") {
           const completedMoves = listManifests(state.env)
             .flatMap((file) => readManifest(file)?.targets ?? [])
             .flatMap((owner) => owner.completedMoves);
           for (const target of manifest.targets) {
-            expect(fs.existsSync(target.storePath)).toBe(false);
+            expectMissing(target.storePath);
             for (const move of target.completedMoves) {
               if (move.kind !== "transcript") {
                 continue;
@@ -404,7 +402,7 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
               if (history === "missing-index") {
                 expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
               } else {
-                expect(fs.existsSync(move.sourcePath)).toBe(false);
+                expectMissing(move.sourcePath);
                 const settledMoves = completedMoves.filter(
                   (settled) =>
                     settled.sourcePath === move.sourcePath &&
@@ -442,7 +440,7 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
       );
     }
     writeJson(storePath, entries);
-    const run = () => importSessions(cfg, state.env);
+    const run = sessionDoctor(cfg, state.env, storePath);
     expect((await run()).totals.importedEntries).toBe(32);
     await recordDeferredPluginMigrations({
       env: state.env,
@@ -452,7 +450,7 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
     const archived = await run();
     expect(archived.totals.importedEntries).toBe(0);
     expect(archived.totals.archivedTranscriptFiles).toBe(32);
-    expect(fs.existsSync(storePath)).toBe(false);
+    expectMissing(storePath);
     // Older releases left this receipt active even after its originals were archived.
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -499,12 +497,7 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
     for (let pass = 0; pass < 2; pass++) {
       reads.mockClear();
       hashes.mockClear();
-      const validated = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        store: storePath,
-        mode: "validate",
-      });
+      const validated = await run("validate");
       expect(validated.totals.importedEntries).toBe(0);
       expect(validated.totals.validatedEntries).toBe(32);
       const verifiedArchives = hashes.mock.calls
@@ -581,6 +574,12 @@ function writeTranscript(file: string, sessionId: string, messageId: string, con
   fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
 }
 
-function importSessions(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
+function sessionDoctor(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, store?: string) {
+  return (mode: "import" | "inspect" | "validate" = "import") =>
+    runDoctorSessionSqlite({
+      cfg,
+      env,
+      mode,
+      ...(mode === "import" ? { allAgents: true } : { store }),
+    });
 }

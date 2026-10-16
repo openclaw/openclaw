@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage as historyPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   readSessionTranscriptHistoryEvents as historyEvents,
   readSessionTranscriptHistoryEventCount as historyCount,
@@ -24,6 +24,10 @@ import { runOutsideOpenClawDatabaseMaintenanceScope } from "../state/openclaw-st
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import {
+  expectFiles,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import {
   isDirectoryDescriptor,
   importLegacyStore,
@@ -84,8 +88,8 @@ function disposalState(file: string, archive: string, planned = false) {
   )?.artifact?.disposal.state;
 }
 
-function sessionScope(store: TestStore) {
-  return { agentId: "main", storePath: store.storePath, sessionId: "session-1" };
+function artifact(report: Awaited<ReturnType<typeof retire>>, file: string) {
+  return report.artifacts.find((item) => item.path === file);
 }
 
 it.each([
@@ -157,7 +161,7 @@ it.each([
     });
     if (phase === "intent" || phase === "intent-sync") {
       await expect(retire(store)).rejects.toThrow(`injected ${phase}`);
-      expect(fs.readFileSync(archivePath)).toEqual(original);
+      expectFiles(original, archivePath);
     } else {
       const first = await retire(store);
       expect(first.status).toBe("blocked");
@@ -165,9 +169,7 @@ it.each([
         expect(first.totals.removedFiles).toBe(1);
       }
       if (duplicate) {
-        expect(first.artifacts.find((item) => item.path === archivePath)?.removedBytes).toBe(
-          original.length,
-        );
+        expect(artifact(first, archivePath)?.removedBytes).toBe(original.length);
       }
     }
   }
@@ -178,10 +180,8 @@ it.each([
   const resumed = await retire(store);
   if (phase === "recreated") {
     expect(resumed.status).toBe("blocked");
-    expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement after interrupted cleanup");
-    expect(
-      resumed.artifacts.find((item) => item.path === archivePath)?.removedBytes,
-    ).toBeUndefined();
+    expectFiles("replacement after interrupted cleanup", archivePath);
+    expect(artifact(resumed, archivePath)?.removedBytes).toBeUndefined();
     return;
   }
   expect(resumed.status).toBe("complete");
@@ -190,7 +190,7 @@ it.each([
       expect(disposalState(file, archivePath, true)).toBe("disposed");
     }
   }
-  expect(fs.existsSync(archivePath)).toBe(false);
+  expectMissing(archivePath);
   if (duplicate) {
     expect(resumed.totals.removedBytes).toBe(0);
   }
@@ -209,26 +209,27 @@ it.each([
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     const fsync = fs.fsyncSync;
     const failureCode = syncFailure === "EIO" ? "EIO" : platform === "win32" ? "EPERM" : "ENOTSUP";
-    // Simulate directory-sync policy without invoking foreign-platform ACL APIs.
-    const stagingRootSpy = vi
-      .spyOn(sqlitePrivateDirectory, "resolvePrivateSqliteSnapshotStagingRoot")
-      .mockReturnValue(store.tempDir);
-    const privateDirectorySpy = vi
-      .spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory")
-      .mockImplementation((directoryPath) => {
-        fs.mkdirSync(directoryPath, { mode: 0o700 });
-      });
+    // Avoid foreign-platform ACL APIs while testing directory-sync policy.
+    using stagingRootSpy = vi.spyOn(
+      sqlitePrivateDirectory,
+      "resolvePrivateSqliteSnapshotStagingRoot",
+    );
+    stagingRootSpy.mockReturnValue(store.tempDir);
+    using privateDirectorySpy = vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory");
+    privateDirectorySpy.mockImplementation((directoryPath) => {
+      fs.mkdirSync(directoryPath, { mode: 0o700 });
+    });
     const installPlatformSpy = () => vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     let platformSpy: ReturnType<typeof installPlatformSpy> | undefined;
-    const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+    using syncSpy = vi.spyOn(fs, "fsyncSync");
+    syncSpy.mockImplementation((fd) => {
       if (!isDirectoryDescriptor(fd, path.dirname(manifestPath))) {
         return fsync(fd);
       }
       platformSpy ??= installPlatformSpy();
-      // Assert the persisted intent at the commit boundary, before any original moves.
       if (fs.existsSync(archivePath)) {
         expect(disposalState(manifestPath, archivePath)).toBe("pending-disposal");
-        expect(fs.readFileSync(archivePath)).toEqual(original);
+        expectFiles(original, archivePath);
       }
       throw Object.assign(new Error(`injected manifest ${failureCode}`), { code: failureCode });
     });
@@ -237,21 +238,18 @@ it.each([
       if (retires) {
         const result = await cleanup;
         expect(result.status).toBe("complete");
-        expect(result.artifacts.find((item) => item.path === archivePath)).toMatchObject({
+        expect(artifact(result, archivePath)).toMatchObject({
           outcome: "removed",
           removedBytes: original.length,
         });
-        expect(fs.existsSync(archivePath)).toBe(false);
+        expectMissing(archivePath);
         expect(disposalState(manifestPath, archivePath)).toBe("disposed");
       } else {
         await expect(cleanup).rejects.toThrow(`injected manifest ${failureCode}`);
-        expect(fs.readFileSync(archivePath)).toEqual(original);
+        expectFiles(original, archivePath);
       }
     } finally {
-      syncSpy.mockRestore();
       platformSpy?.mockRestore();
-      privateDirectorySpy.mockRestore();
-      stagingRootSpy.mockRestore();
     }
   },
 );
@@ -271,7 +269,7 @@ it("refuses retirement while a peer maintenance operation holds the selected sta
     },
   });
   expect(confirm).not.toHaveBeenCalled();
-  expect(fs.readFileSync(archivePath)).toEqual(original);
+  expectFiles(original, archivePath);
 });
 
 it.each([
@@ -297,11 +295,9 @@ it.each([
   const result = await retire(store);
   expect(result.totals.removedFiles).toBe(0);
   if (move) {
-    expect(result.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
-      "protected",
-    );
+    expect(artifact(result, move.archivePath)?.outcome).toBe("protected");
   }
-  expect(fs.readFileSync(move?.archivePath ?? store.transcriptPath)).toEqual(original);
+  expectFiles(original, move?.archivePath ?? store.transcriptPath);
 });
 
 it("retains complete recovery when durable transcript verification is short", async () => {
@@ -350,10 +346,7 @@ it.each(["fresh", "identical", "divergent"] as const)(
       first,
       archived
         ? first
-        : {
-            ...first,
-            message: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
-          },
+        : message("reply", [{ type: "text", text: "different replay" }], "root", "assistant"),
       ...(fresh ? [leaf, leaf] : []),
     ];
     const store = createLegacyStore({
@@ -392,9 +385,7 @@ it.each(["fresh", "identical", "divergent"] as const)(
         "reply",
       ]);
       expect(historyCount(scope)).toBe(2);
-      expect(
-        readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
-      ).toMatchObject({
+      expect(historyPage(scope, { maxMessages: 1, offset: 0 })).toMatchObject({
         activeLeafEntryId: "reply",
         totalMessages: 2,
         events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
@@ -405,7 +396,7 @@ it.each(["fresh", "identical", "divergent"] as const)(
     } else if (!archived) {
       const retried = await run();
       expect(hasCountMismatch(retried)).toBe(true);
-      expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
+      expectFiles(original, store.transcriptPath);
       expect(loadTranscriptEventsSync(scope)).toEqual(existingEvents);
     }
   },
@@ -441,14 +432,15 @@ it("retires verified originals after remount while preserving current SQLite and
   const originalMove = manifest.targets[0]!.completedMoves.find(
     (move) => move.kind === "transcript",
   )!;
-  expect(fs.readFileSync(originalMove.archivePath)).toEqual(original);
+  expectFiles(original, originalMove.archivePath);
   expect(originalMove.artifact?.classification).toBe("repair-original");
-  expect(loadTranscriptEventsSync(sessionScope(store))).toEqual(
+  const scope = { agentId: "main", storePath: store.storePath, sessionId: "session-1" };
+  expect(loadTranscriptEventsSync(scope)).toEqual(
     ["session-1", "user-1", "reply-1"].map((id) => expect.objectContaining({ id })),
   );
   const manager = SessionManager.open(
     {
-      ...sessionScope(store),
+      ...scope,
       sessionKey: "agent:main:main",
     },
     store.tempDir,
@@ -461,15 +453,12 @@ it("retires verified originals after remount while preserving current SQLite and
   closeOpenClawAgentDatabasesForTest();
   const sqlitePath = imported.targets[0]!.sqlitePath;
   const databaseBefore = fs.readFileSync(sqlitePath);
-  expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
-  expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(false);
+  expectMissing(`${sqlitePath}-wal`, `${sqlitePath}-shm`);
   // Keep real source sidecars present independently of cached owner inspection.
   using sourceReader = new DatabaseSync(sqlitePath, { readOnly: true });
   sourceReader.prepare("SELECT count(*) FROM sqlite_schema").get();
   const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-  expect(preview.artifacts.find((item) => item.path === originalMove.archivePath)?.outcome).toBe(
-    "candidate",
-  );
+  expect(artifact(preview, originalMove.archivePath)?.outcome).toBe("candidate");
   const cleanup = await retire(
     store,
     async () => {
@@ -479,11 +468,10 @@ it("retires verified originals after remount while preserving current SQLite and
     },
     preview,
   );
-  expect(cleanup.status).toBe("complete");
-  expect(cleanup.totals.removedFiles).toBe(2);
+  expect(cleanup).toMatchObject({ status: "complete", totals: { removedFiles: 2 } });
   expect(cleanup.totals.removedBytes).toBeGreaterThan(original.length);
-  expect(fs.existsSync(originalMove.archivePath)).toBe(false);
-  expect(fs.readFileSync(sqlitePath)).toEqual(databaseBefore);
+  expectMissing(originalMove.archivePath);
+  expectFiles(databaseBefore, sqlitePath);
   expect(cleanup.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
   const retry = await retire(store);
   expect(retry.totals.removedBytes).toBe(0);

@@ -15,6 +15,11 @@ import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-i
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
+  containsObjects,
+  expectFiles,
+  snapshotFiles,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
+import {
   readMigrationManifest as readManifest,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
@@ -28,6 +33,12 @@ type FixtureScope = Pick<SharedFixture, "cfg" | "env">;
 
 function run(fixture: FixtureScope, mode: "import" | "restore", agent?: string) {
   return runDoctorSessionSqlite({ ...fixture, mode, ...(agent ? { agent } : { allAgents: true }) });
+}
+
+async function cleanRun(fixture: FixtureScope, mode: "import" | "restore") {
+  const report = await run(fixture, mode);
+  expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+  return report;
 }
 
 async function importAtCommittedOwner(
@@ -57,10 +68,6 @@ async function importAtCommittedOwner(
   } finally {
     spy.mockRestore();
   }
-}
-
-function snapshotFiles(files: string[]) {
-  return files.map((file) => ({ file, bytes: fs.readFileSync(file) }));
 }
 
 function addPrivateHistory(indexPath: string) {
@@ -104,6 +111,20 @@ function expectOutcome(report: Cleanup, archivePath: string, outcome: string) {
   expect(report.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(outcome);
 }
 
+function importedMoves(manifest: Manifest, storePath?: string) {
+  const targets = storePath
+    ? [
+        expectDefined(
+          manifest.targets.find((target) => target.storePath === storePath),
+          "independent target",
+        ),
+      ]
+    : manifest.targets;
+  return targets
+    .flatMap((target) => target.completedMoves)
+    .filter((move) => move.kind === "transcript" || move.kind === "legacy-store");
+}
+
 describe("runDoctorSessionSqlite", () => {
   it.each([
     { kind: "transcript", reverse: false },
@@ -135,7 +156,6 @@ describe("runDoctorSessionSqlite", () => {
         }
       });
       expect(disappeared).toBe(true);
-      closeDatabases();
       const retired = await retireRecovery(cfg, env);
       const manifest = readManifest(imported.migrationRun?.manifestPath);
       for (const original of originals) {
@@ -148,7 +168,7 @@ describe("runDoctorSessionSqlite", () => {
       const code =
         kind === "transcript" ? "transcript_archive_failed" : "legacy_store_archive_failed";
       for (const owner of affectedOwners) {
-        expect(owner.issues).toContainEqual(expect.objectContaining({ code }));
+        containsObjects(owner.issues, { code });
       }
     },
   );
@@ -168,25 +188,18 @@ describe("runDoctorSessionSqlite", () => {
         sharedTranscript,
       });
       const originals = snapshotFiles([transcriptPath, ...indexes]);
-      const imported = await run({ cfg, env }, "import");
-      expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
+      const imported = await cleanRun({ cfg, env }, "import");
       if (!sharedTranscript) {
         expectOwners(imported, indexes, reverse);
         const manifest = readManifest(imported.migrationRun?.manifestPath);
         for (const target of manifest.targets.filter((candidate) =>
           indexes.includes(candidate.storePath),
         )) {
-          expect(target.completedMoves).toContainEqual(
-            expect.objectContaining({
-              kind: "transcript",
-              sourcePath: path.join(
-                path.dirname(transcriptPath),
-                `${target.agentId}-session.jsonl`,
-              ),
-            }),
-          );
+          containsObjects(target.completedMoves, {
+            kind: "transcript",
+            sourcePath: path.join(path.dirname(transcriptPath), `${target.agentId}-session.jsonl`),
+          });
         }
-        closeDatabases();
         expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(6);
         return;
       }
@@ -207,12 +220,8 @@ describe("runDoctorSessionSqlite", () => {
         current.push({ scope, entry: structuredClone(entry) });
       }
       await drainDatabases();
-      const restored = await run({ cfg, env }, "restore");
-      expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
-      for (const original of originals) {
-        expect(fs.existsSync(original.file)).toBe(true);
-        expect(fs.readFileSync(original.file)).toEqual(original.bytes);
-      }
+      await cleanRun({ cfg, env }, "restore");
+      expect(snapshotFiles(originals.map(({ file }) => file))).toEqual(originals);
       if (missingOwner) {
         const manifestPath = expectDefined(imported.migrationRun, "import run").manifestPath;
         const manifest = readManifest(manifestPath);
@@ -221,13 +230,14 @@ describe("runDoctorSessionSqlite", () => {
       }
       const reimported = await run({ cfg, env }, "import", missingOwner ? "main" : undefined);
       if (missingOwner) {
-        expect(reimported.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
+        containsObjects(
+          reimported.targets.flatMap((target) => target.issues),
+          {
             code: "legacy_import_deferred",
             message: expect.stringContaining("Restored session index evidence cannot be verified"),
-          }),
+          },
         );
-        expect(fs.readFileSync(indexes[0]!)).toEqual(originals[1]!.bytes);
+        expectFiles(originals[1]!.bytes, indexes[0]!);
       } else {
         expect(reimported.targets.flatMap((target) => target.issues)).toEqual([]);
       }
@@ -235,7 +245,6 @@ describe("runDoctorSessionSqlite", () => {
         expect(loadSessionEntry(scope)).toEqual(entry);
       }
       if (!missingOwner) {
-        closeDatabases();
         expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(separateIndexes ? 5 : 4);
       }
     },
@@ -267,16 +276,14 @@ describe("runDoctorSessionSqlite", () => {
       const original = fs.readFileSync(workSource);
       const indexBytes = fs.readFileSync(workIndex);
       const report = await run({ cfg, env }, "import", "main");
-      closeDatabases();
       const cleanup = await retireRecovery(cfg, env);
-      expect(fs.existsSync(workSource)).toBe(true);
-      expect(fs.readFileSync(workSource)).toEqual(original);
-      expect(fs.readFileSync(workIndex)).toEqual(indexBytes);
+      expect([fs.readFileSync(workSource), fs.readFileSync(workIndex)]).toEqual([
+        original,
+        indexBytes,
+      ]);
       expect(cleanup.totals.removedFiles).toBe(coverage === "distinct" ? 3 : 0);
       if (coverage !== "distinct") {
-        expect(report.targets[0]?.issues).toContainEqual(
-          expect.objectContaining({ code: "transcript_archive_deferred" }),
-        );
+        containsObjects(report.targets[0]?.issues, { code: "transcript_archive_deferred" });
       }
       expect(report.targets[0]?.archivedUnreferencedJsonlFiles).toEqual([]);
       // Keep the whole retained index usable; a direct retry must not orphan an earlier archive.
@@ -284,17 +291,10 @@ describe("runDoctorSessionSqlite", () => {
         expect(fs.existsSync(siblingSource)).toBe(true);
       }
       if (coverage === "shared") {
-        const retry = await run({ cfg, env }, "import");
-        expect(retry.targets.flatMap((target) => target.issues)).toEqual([]);
-        closeDatabases();
+        const retry = await cleanRun({ cfg, env }, "import");
         const retired = await retireRecovery(cfg, env);
         const current = readManifest(retry.migrationRun?.manifestPath);
-        for (const move of current.targets
-          .flatMap((target) => target.completedMoves)
-          .filter(
-            (plannedMove) =>
-              plannedMove.kind === "transcript" || plannedMove.kind === "legacy-store",
-          )) {
+        for (const move of importedMoves(current)) {
           expectOutcome(retired, move.archivePath, "removed");
         }
       }
@@ -328,24 +328,16 @@ describe("runDoctorSessionSqlite", () => {
       expect(
         manifest.targets.find((target) => target.agentId === "work")?.validationBeforeArchive,
       ).toBe("failed");
-      closeDatabases();
       const cleanup = await retireRecovery(cfg, env);
       expectRetained(manifest, transcriptPath, original);
-      const independentMoves = manifest.targets.find(
-        (target) => target.storePath === independent.storePath,
-      )!.completedMoves;
-      for (const move of independentMoves.filter(
-        (item) => item.kind === "transcript" || item.kind === "legacy-store",
-      )) {
+      for (const move of importedMoves(manifest, independent.storePath)) {
         expectOutcome(cleanup, move.archivePath, "removed");
       }
       // Recovery and retry must remain usable with the failed owner's original index and bytes.
       await run({ cfg, env }, "restore");
-      expect(fs.readFileSync(transcriptPath)).toEqual(original);
+      expectFiles(original, transcriptPath);
       expect(indexes.every((index) => fs.existsSync(index))).toBe(true);
-      const retried = await run({ cfg, env }, "import");
-      expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
-      closeDatabases();
+      const retried = await cleanRun({ cfg, env }, "import");
       const retired = await retireRecovery(cfg, env);
       const latest = readManifest(retried.migrationRun?.manifestPath);
       const protectedSources = new Set<string>();
@@ -361,7 +353,7 @@ describe("runDoctorSessionSqlite", () => {
             },
           });
           expectOutcome(retired, move.archivePath, "protected");
-          expect(fs.readFileSync(move.archivePath)).toEqual(supportBytes);
+          expectFiles(supportBytes, move.archivePath);
           protectedSources.add(move.sourcePath);
           continue;
         }
@@ -376,6 +368,7 @@ function retireRecovery(
   cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
   env: NodeJS.ProcessEnv,
 ) {
+  closeDatabases();
   return retireSessionSqliteRecovery({
     env,
     preview: inspectSessionSqliteRecovery({ cfg, env }),

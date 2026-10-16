@@ -6,7 +6,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as durability from "../infra/directory-durability.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { withSpies } from "./doctor-session-sqlite.publication-spies.test-support.js";
+import {
+  contains,
+  containsObjects,
+  expectFiles,
+  expectMissing,
+  expectOriginal,
+  writeManifest,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { createCompetingRestoreTarget } from "./doctor-session-sqlite.publication.test-support.js";
 import {
   runPublicSessionSqlite as runPublic,
@@ -26,18 +33,6 @@ const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
 type PublicResult = Awaited<ReturnType<typeof runPublic>>;
 function conflicts(result: PublicResult) {
   return result.report.targets[0]?.restore?.conflicts;
-}
-function contains(actual: unknown, ...items: unknown[]) {
-  expect(actual).toEqual(expect.arrayContaining(items));
-}
-function expectMissing(...files: string[]) {
-  for (const file of files) {
-    expect(fs.existsSync(file)).toBe(false);
-  }
-}
-function expectOriginal(file: string, bytes: Buffer, ino: bigint) {
-  expect(fs.readFileSync(file)).toEqual(bytes);
-  expect(fs.statSync(file, { bigint: true }).ino).toBe(ino);
 }
 function originalMoves(target: Manifest["targets"][number]) {
   return target.plannedMoves.map((move) => ({
@@ -60,12 +55,18 @@ function historicalFixture(version: 1 | 2, interrupted = false) {
   const target = expectDefined(manifest.targets[0], "historical restore target");
   if (interrupted) {
     manifest.failedAt = manifest.startedAt;
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    writeManifest(manifestPath, manifest);
   }
+  const originals = originalMoves(target);
   return {
     ...fixture,
     target,
-    originals: originalMoves(target),
+    originals,
+    move: (kind: string) =>
+      expectDefined(
+        target.plannedMoves.find((move) => move.kind === kind),
+        kind,
+      ),
     run: (mode: Parameters<typeof runPublic>[1]) => runPublic(store, mode),
     read: () => readManifest(manifestPath),
   };
@@ -85,19 +86,18 @@ it.each([
     const originalIdentity = fs.statSync(archivePath, { bigint: true });
     if (interrupted) {
       const unlink = fs.unlinkSync;
-      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+      using unlinkSpy = vi.spyOn(fs, "unlinkSync");
+      unlinkSpy.mockImplementation((file) => {
         if (String(file) === archivePath) {
           throw new Error("injected restore interruption");
         }
         return unlink(file);
       });
-      await withSpies([unlinkSpy], async () => {
-        const first = await runPublic(store, "restore");
-        expect(conflicts(first)).toEqual([
-          expect.objectContaining({ archivePath, reason: "injected restore interruption" }),
-        ]);
-        expect(fs.statSync(archivePath).nlink).toBe(2);
-      });
+      const first = await runPublic(store, "restore");
+      expect(conflicts(first)).toEqual([
+        expect.objectContaining({ archivePath, reason: "injected restore interruption" }),
+      ]);
+      expect(fs.statSync(archivePath).nlink).toBe(2);
     }
     const manifest = readManifest(manifestPath);
     for (const target of manifest.targets) {
@@ -109,7 +109,7 @@ it.each([
         artifact.identity.dev = String(BigInt(artifact.identity.dev) + 1n);
       }
     }
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    writeManifest(manifestPath, manifest);
     const retainedTargets = structuredClone(manifest.targets);
     const content = changed ? original.replace("preserved history", "different history") : original;
     if (changed) {
@@ -131,10 +131,10 @@ it.each([
     const recorded = readManifest(manifestPath);
     expect(recorded.targets).toEqual(retainedTargets);
     if (changed) {
-      expect(fs.readFileSync(archivePath, "utf8")).toBe(content);
+      expectFiles(content, archivePath);
       expect(fs.existsSync(store.transcriptPath)).toBe(interrupted);
     } else {
-      expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
+      expectFiles(original, store.transcriptPath);
       const restored = fs.statSync(store.transcriptPath, { bigint: true });
       expect(restored).toMatchObject({ ino: originalIdentity.ino, nlink: 1n });
       expectMissing(archivePath);
@@ -153,49 +153,48 @@ it.each(
 )(
   "preserves a late-created $destination during historical v$version restore without SQLite",
   async ({ version, destination }) => {
-    const { store, manifest, archivePath, run, read } = historicalFixture(version);
+    const { store, manifest, archivePath, run, read, move } = historicalFixture(version);
     const original = fs.readFileSync(archivePath);
-    const sourcePath = expectDefined(
-      manifest.targets
-        .flatMap((target) => target.plannedMoves)
-        .find((move) => move.archivePath === archivePath),
-      "transcript restore move",
-    ).sourcePath;
+    const { sourcePath } = move("transcript");
     const competitorPath = path.join(store.tempDir, "competing-writer.jsonl");
     const competitorContent = "history written by a separate process\n";
     if (destination === "file") {
       fs.writeFileSync(competitorPath, competitorContent, { mode: 0o600 });
     }
     let competitorIdentity: fs.BigIntStats | undefined;
-    const insertCompetitor = (from: fs.PathLike, to: fs.PathLike) => {
-      if (competitorIdentity || String(from) !== archivePath || String(to) !== sourcePath) {
-        return;
-      }
-      // Insert after Doctor's pathname guards, then forward the guarded publication.
-      competitorIdentity = createCompetingRestoreTarget(destination, competitorPath, sourcePath);
-    };
     const publish = durability.publishFileExclusive;
-    const publicationSpy = vi
+    using publicationSpy = vi
       .spyOn(durability, "publishFileExclusive")
       .mockImplementation(async (options) => {
-        insertCompetitor(options.sourcePath, options.targetPath);
+        if (
+          !competitorIdentity &&
+          options.sourcePath === archivePath &&
+          options.targetPath === sourcePath
+        ) {
+          competitorIdentity = createCompetingRestoreTarget(
+            destination,
+            competitorPath,
+            sourcePath,
+          );
+        }
         return publish(options);
       });
-    const result = await withSpies([publicationSpy], () => run("restore"));
+    const result = await run("restore");
+    publicationSpy.mockRestore();
     const created = expectDefined(competitorIdentity, "separate writer ran at publication");
     const retained = fs.lstatSync(sourcePath, { bigint: true });
     expect(retained).toMatchObject({ ino: created.ino, dev: created.dev });
     if (destination === "file") {
-      expect(fs.readFileSync(sourcePath, "utf8")).toBe(competitorContent);
+      expectFiles(competitorContent, sourcePath);
     } else {
       expect(retained.isSymbolicLink()).toBe(true);
       expect(fs.readlinkSync(sourcePath)).toBe(competitorPath);
       expectMissing(competitorPath);
     }
-    expect(fs.readFileSync(archivePath)).toEqual(original);
+    expectFiles(original, archivePath);
     expect(result.exitCode).toBe(1);
     const restored = read().restore;
-    contains(restored?.conflicts, expect.objectContaining({ archivePath, sourcePath }));
+    containsObjects(restored?.conflicts, { archivePath, sourcePath });
     expect(restored?.consumedArchives ?? []).not.toContain(archivePath);
     expect(restored?.restoredFiles ?? []).not.toContain(sourcePath);
     expectMissing(...manifest.targets.map((target) => target.sqlitePath));
@@ -203,11 +202,8 @@ it.each(
 );
 
 it("rejects a changed historical v1 transcript before adopting restore metadata", async () => {
-  const { manifestPath, manifest, target, run, read } = historicalFixture(1);
-  const move = expectDefined(
-    target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-    "selected historical archive",
-  );
+  const { manifestPath, manifest, target, run, read, move: findMove } = historicalFixture(1);
+  const move = findMove("transcript");
   const original = fs.readFileSync(move.archivePath, "utf8");
   const changed = original.replace('"session-1"', '"session-2"');
   expect(changed).not.toBe(original);
@@ -217,11 +213,11 @@ it("rejects a changed historical v1 transcript before adopting restore metadata"
   fs.copyFileSync(move.archivePath, duplicate.archivePath);
   target.plannedMoves.push(duplicate);
   target.completedMoves.push({ ...duplicate });
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+  writeManifest(manifestPath, manifest);
 
   const close = fs.closeSync;
   let injected = false;
-  const closeSpy = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+  using closeSpy = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
     const opened = fs.fstatSync(fd, { bigint: true });
     close(fd);
     if (!injected && opened.dev === identity.dev && opened.ino === identity.ino) {
@@ -230,7 +226,8 @@ it("rejects a changed historical v1 transcript before adopting restore metadata"
       fs.writeFileSync(move.archivePath, changed);
     }
   });
-  const result = await withSpies([closeSpy], () => run("restore"));
+  const result = await run("restore");
+  closeSpy.mockRestore();
   expect(injected).toBe(true);
   expect(result.exitCode).toBe(1);
   expect(conflicts(result)).toEqual([
@@ -241,9 +238,9 @@ it("rejects a changed historical v1 transcript before adopting restore metadata"
     },
   ]);
   expectMissing(move.sourcePath);
-  expect(fs.readFileSync(move.archivePath, "utf8")).toBe(changed);
+  expectFiles(changed, move.archivePath);
   expect(fs.statSync(move.archivePath, { bigint: true }).ino).toBe(identity.ino);
-  expect(fs.readFileSync(duplicate.archivePath, "utf8")).toBe(original);
+  expectFiles(original, duplicate.archivePath);
   const recorded = read();
   expect(recorded.restore?.consumedArchives ?? []).not.toContain(move.archivePath);
   expect(recorded.restore?.restoredFiles ?? []).not.toContain(move.sourcePath);
@@ -274,31 +271,28 @@ it("retries historical v2 restored-directory edge sync through recover", async (
   };
   const fsync = fs.fsyncSync;
   let edgeSyncAttempted = false;
-  const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+  using syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
     if (isDirectoryDescriptor(fd, sourceParent)) {
       edgeSyncAttempted = true;
       throw Object.assign(new Error("injected restored-directory edge sync"), { code: "EIO" });
     }
     fsync(fd);
   });
-  await withSpies([syncSpy], async () => {
-    const first = await run("restore");
-    expect(edgeSyncAttempted).toBe(true);
-    expect(first.exitCode).toBe(1);
-    contains(
-      conflicts(first),
-      ...originals.map(({ archivePath, sourcePath }) =>
-        expect.objectContaining({ archivePath, sourcePath }),
-      ),
-    );
-    expect(fs.statSync(store.sessionDir).isDirectory()).toBe(true);
-    assertOriginalsRetained();
+  const first = await run("restore");
+  expect(edgeSyncAttempted).toBe(true);
+  expect(first.exitCode).toBe(1);
+  containsObjects(
+    conflicts(first),
+    ...originals.map(({ archivePath, sourcePath }) => ({ archivePath, sourcePath })),
+  );
+  expect(fs.statSync(store.sessionDir).isDirectory()).toBe(true);
+  assertOriginalsRetained();
 
-    edgeSyncAttempted = false;
-    await expect(run("recover")).rejects.toThrow("injected restored-directory edge sync");
-    expect(edgeSyncAttempted).toBe(true);
-    assertOriginalsRetained();
-  });
+  edgeSyncAttempted = false;
+  await expect(run("recover")).rejects.toThrow("injected restored-directory edge sync");
+  expect(edgeSyncAttempted).toBe(true);
+  assertOriginalsRetained();
+  syncSpy.mockRestore();
   const resumed = await run("recover");
   expect(conflicts(resumed)).toEqual([]);
   const consumed = read().restore?.consumedArchives;
@@ -346,24 +340,33 @@ it.each([
       }
     };
     const write = replaceFile.replaceFileAtomicSync;
-    const writeSpy = vi
-      .spyOn(replaceFile, "replaceFileAtomicSync")
-      .mockImplementation((options) => {
-        if (options.filePath === manifestPath) {
-          failManifestPhase(JSON.parse(String(options.content)) as Manifest, "write");
-        }
-        return write(options);
-      });
+    using writeSpy = vi.spyOn(replaceFile, "replaceFileAtomicSync");
+    writeSpy.mockImplementation((options) => {
+      if (options.filePath === manifestPath) {
+        failManifestPhase(JSON.parse(String(options.content)) as Manifest, "write");
+      }
+      return write(options);
+    });
     const fsync = fs.fsyncSync;
-    const fsyncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+    using fsyncSpy = vi.spyOn(fs, "fsyncSync");
+    fsyncSpy.mockImplementation((fd) => {
       if (isDirectoryDescriptor(fd, manifestDir)) {
         failManifestPhase(read(), "sync");
       }
       fsync(fd);
     });
     const open = asyncFs.open;
-    const restoreHandleSpies: Array<{ mockRestore(): void }> = [];
-    const openSpy = vi.spyOn(asyncFs, "open").mockImplementation(async (...args) => {
+    const handleSpies: Array<{ mockRestore(): void }> = [];
+    using handles = {
+      spies: handleSpies,
+      [Symbol.dispose]() {
+        for (const spy of this.spies) {
+          spy.mockRestore();
+        }
+      },
+    };
+    using openSpy = vi.spyOn(asyncFs, "open");
+    openSpy.mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (phase === "target-sync" && String(args[0]) === sourceDir) {
         const sync = handle.sync.bind(handle);
@@ -374,94 +377,86 @@ it.each([
           }
           return sync();
         });
-        restoreHandleSpies.push(handleSpy);
+        handles.spies.push(handleSpy);
       }
       return handle;
     });
     const sync = durability.syncDirectory;
-    const syncSpy = vi
-      .spyOn(durability, "syncDirectory")
-      .mockImplementation(async (directory, options) => {
-        const syncingPath = typeof directory === "string" ? directory : directory.path;
-        if (replay && syncingPath === sourceDir) {
-          if (failReplaySync) {
-            throw new Error("injected replay target-sync");
-          }
-          const result = await sync(directory, options);
-          replaySynced = true;
-          return result;
+    using syncSpy = vi.spyOn(durability, "syncDirectory");
+    syncSpy.mockImplementation(async (directory, options) => {
+      const syncingPath = typeof directory === "string" ? directory : directory.path;
+      if (replay && syncingPath === sourceDir) {
+        if (failReplaySync) {
+          throw new Error("injected replay target-sync");
         }
-        if (
-          !injected &&
-          phase === "archive-sync" &&
-          syncingPath === archiveDir &&
-          !fs.existsSync(index.archivePath)
-        ) {
-          injected = true;
-          throw new Error("injected archive-sync");
-        }
-        return sync(directory, options);
-      });
+        const result = await sync(directory, options);
+        replaySynced = true;
+        return result;
+      }
+      if (
+        !injected &&
+        phase === "archive-sync" &&
+        syncingPath === archiveDir &&
+        !fs.existsSync(index.archivePath)
+      ) {
+        injected = true;
+        throw new Error("injected archive-sync");
+      }
+      return sync(directory, options);
+    });
     const unlink = fs.unlinkSync;
-    const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-      if (String(file) === index.archivePath) {
-        if (replay) {
-          expect(replaySynced).toBe(true);
-          replayUnlinked = true;
-        }
+    using unlinkSpy = vi.spyOn(fs, "unlinkSync");
+    unlinkSpy.mockImplementation((file) => {
+      if (String(file) === index.archivePath && replay) {
+        expect(replaySynced).toBe(true);
+        replayUnlinked = true;
       }
       return unlink(file);
     });
-    const copySpy = vi.spyOn(fs, "copyFileSync");
-    const asyncCopySpy = vi.spyOn(asyncFs, "copyFile");
-    await withSpies(
-      [writeSpy, fsyncSpy, openSpy, syncSpy, unlinkSpy, copySpy, asyncCopySpy],
-      async () => {
-        const failed = await run("restore");
-        expect(injected).toBe(true);
-        expect(failed.exitCode).toBe(1);
-        contains(conflicts(failed), expect.objectContaining({ archivePath: index.archivePath }));
-        const interrupted = read();
-        const consumedBeforeRetry = interrupted.restore?.consumedArchives ?? [];
-        if (phase === "metadata-write" || phase === "metadata-sync") {
-          expectMissing(index.sourcePath);
-        } else {
-          expect(fs.readFileSync(index.sourcePath)).toEqual(index.bytes);
-        }
-        if (phase !== "archive-sync") {
-          expect(fs.readFileSync(index.archivePath)).toEqual(index.bytes);
-        }
-        if (phase === "archive-sync") {
-          expect(consumedBeforeRetry).toContain(index.archivePath);
-        }
-        replay = fs.existsSync(index.sourcePath) && fs.existsSync(index.archivePath);
-        if (phase === "target-sync") {
-          failReplaySync = true;
-          await expect(run(retryMode)).rejects.toThrow("injected replay target-sync");
-          expect(fs.statSync(index.sourcePath).nlink).toBe(2);
-          expect(fs.statSync(index.archivePath).ino).toBe(fs.statSync(index.sourcePath).ino);
-          expect(replayUnlinked).toBe(false);
-          failReplaySync = false;
-        }
-        const resumed = await run(retryMode);
-        expect(conflicts(resumed)).toEqual([]);
-        if (replay) {
-          expect(replaySynced).toBe(true);
-          expect(replayUnlinked).toBe(true);
-        }
-        replay = false;
-        const settled = read();
-        expect(settled.manifestVersion).toBe(version);
-        contains(settled.restore?.consumedArchives, ...consumedBeforeRetry);
-        contains(settled.restore?.consumedArchives, ...originals.map((item) => item.archivePath));
-        expectRestored(originals, target.sqlitePath);
-        expect(copySpy).not.toHaveBeenCalled();
-        expect(asyncCopySpy).not.toHaveBeenCalled();
-        expect((await run("import")).report.totals.issues).toBe(0);
-        expect(conflicts(await run("restore"))).toEqual([]);
-        contains(read().restore?.consumedArchives, ...originals.map((item) => item.archivePath));
-      },
-      restoreHandleSpies,
-    );
+    using copySpy = vi.spyOn(fs, "copyFileSync");
+    using asyncCopySpy = vi.spyOn(asyncFs, "copyFile");
+    const failed = await run("restore");
+    expect(injected).toBe(true);
+    expect(failed.exitCode).toBe(1);
+    containsObjects(conflicts(failed), { archivePath: index.archivePath });
+    const interrupted = read();
+    const consumedBeforeRetry = interrupted.restore?.consumedArchives ?? [];
+    if (phase === "metadata-write" || phase === "metadata-sync") {
+      expectMissing(index.sourcePath);
+    } else {
+      expectFiles(index.bytes, index.sourcePath);
+    }
+    if (phase !== "archive-sync") {
+      expectFiles(index.bytes, index.archivePath);
+    }
+    if (phase === "archive-sync") {
+      expect(consumedBeforeRetry).toContain(index.archivePath);
+    }
+    replay = fs.existsSync(index.sourcePath) && fs.existsSync(index.archivePath);
+    if (phase === "target-sync") {
+      failReplaySync = true;
+      await expect(run(retryMode)).rejects.toThrow("injected replay target-sync");
+      expect(fs.statSync(index.sourcePath).nlink).toBe(2);
+      expect(fs.statSync(index.archivePath).ino).toBe(fs.statSync(index.sourcePath).ino);
+      expect(replayUnlinked).toBe(false);
+      failReplaySync = false;
+    }
+    const resumed = await run(retryMode);
+    expect(conflicts(resumed)).toEqual([]);
+    if (replay) {
+      expect(replaySynced).toBe(true);
+      expect(replayUnlinked).toBe(true);
+    }
+    replay = false;
+    const settled = read();
+    expect(settled.manifestVersion).toBe(version);
+    contains(settled.restore?.consumedArchives, ...consumedBeforeRetry);
+    contains(settled.restore?.consumedArchives, ...originals.map((item) => item.archivePath));
+    expectRestored(originals, target.sqlitePath);
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(asyncCopySpy).not.toHaveBeenCalled();
+    expect((await run("import")).report.totals.issues).toBe(0);
+    expect(conflicts(await run("restore"))).toEqual([]);
+    contains(read().restore?.consumedArchives, ...originals.map((item) => item.archivePath));
   },
 );

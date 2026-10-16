@@ -5,8 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as durability from "../infra/directory-durability.js";
-import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
-import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import * as readers from "../infra/session-sqlite-migration-readers.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -14,7 +14,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
-import { withSpies } from "./doctor-session-sqlite.publication-spies.test-support.js";
+import {
+  containsObjects,
+  expectFiles,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import {
   RECOVERY_TRANSCRIPT_LINES,
   runPublicSessionSqlite as runPublic,
@@ -32,22 +36,6 @@ const {
   createHistoricalRestoreStore,
   createVerifiedRecoveryStore,
 } = useDoctorSessionSqliteTestFixture();
-
-function contains(actual: unknown, ...items: unknown[]) {
-  expect(actual).toEqual(expect.arrayContaining(items));
-}
-
-function expectFiles(bytes: Buffer, ...files: string[]) {
-  for (const file of files) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
-  }
-}
-
-function expectMissing(...files: string[]) {
-  for (const file of files) {
-    expect(fs.existsSync(file)).toBe(false);
-  }
-}
 
 async function cleanupRecovery(store: TestStore, cfg = {}) {
   closeOpenClawAgentDatabasesForTest();
@@ -71,8 +59,7 @@ it("preserves shared database bytes without creating a WAL when custom restore r
   process.env.OPENCLAW_STATE_DIR = store.stateDir;
   const cfg = { session: { store: store.storePath } };
   const imported = await runPublic(store, "import");
-  expect(imported.exitCode).toBe(0);
-  expect(imported.report.totals.importedEntries).toBe(1);
+  expect(imported).toMatchObject({ exitCode: 0, report: { totals: { importedEntries: 1 } } });
   expect(await cleanupRecovery(store, cfg)).toMatchObject({
     status: "complete",
     totals: { removedFiles: 2 },
@@ -89,12 +76,13 @@ it("preserves shared database bytes without creating a WAL when custom restore r
   expect(before[0]?.length).toBeGreaterThan(0);
   expect(before[1]).toBeUndefined();
   const restored = await runPublic(store, "restore");
-  expect(restored.exitCode).toBe(1);
-  expect(restored.report.targets[0]?.restore).toMatchObject({ restoredFiles: [] });
-  contains(
-    restored.report.targets[0]?.restore?.conflicts,
-    expect.objectContaining({ reason: expect.stringContaining("intentionally disposed") }),
-  );
+  expect(restored).toMatchObject({
+    exitCode: 1,
+    report: { targets: [{ restore: { restoredFiles: [] } }] },
+  });
+  containsObjects(restored.report.targets[0]?.restore?.conflicts, {
+    reason: expect.stringContaining("intentionally disposed"),
+  });
   expect(readArtifacts()).toEqual(before);
   expectMissing(store.storePath, store.transcriptPath);
 });
@@ -177,14 +165,12 @@ it.each([false, true])(
       unknown
     >;
     legacyStore["agent:main:alias"] = legacyStore["agent:main:main"];
-    fs.writeFileSync(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    fs.writeFileSync(store.storePath, JSON.stringify(legacyStore), { mode: 0o600 });
 
     const original = fs.readFileSync(store.transcriptPath);
-    const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
-    const spy = vi
-      .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
+    const snapshot = readers.readOnlySqliteValidationSnapshot;
+    using spy = vi
+      .spyOn(readers, "readOnlySqliteValidationSnapshot")
       .mockImplementation((target) => {
         const result = snapshot(target);
         if (failed && result.ok && result.snapshot.sessionIdsBySessionKey.has("agent:main:alias")) {
@@ -194,16 +180,14 @@ it.each([false, true])(
         }
         return result;
       });
-    const report = await withSpies([spy], () => importLegacyStore(store));
+    const report = await importLegacyStore(store);
+    spy.mockRestore();
     if (failed) {
-      contains(
-        report.targets[0]?.issues,
-        expect.objectContaining({
-          code: "sqlite_entry_missing",
-          sessionKey: "agent:main:alias",
-        }),
-      );
-      expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
+      containsObjects(report.targets[0]?.issues, {
+        code: "sqlite_entry_missing",
+        sessionKey: "agent:main:alias",
+      });
+      expectFiles(original, store.transcriptPath);
     } else {
       expect(report.targets[0]?.issues).toEqual([]);
     }
@@ -224,7 +208,7 @@ it.each([false, true])(
     const cleanup = await cleanupRecovery(store);
     expect(cleanup.totals.removedFiles).toBe(failed ? 0 : 2);
     if (failed) {
-      expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
+      expectFiles(original, store.transcriptPath);
     }
   },
 );
@@ -237,10 +221,7 @@ it("leaves legacy transcript symlinks in place instead of archiving them", async
 
   const report = await importLegacyStore(store);
 
-  contains(
-    report.targets[0]?.issues,
-    expect.objectContaining({ code: expect.stringMatching(/archive_failed$/) }),
-  );
+  containsObjects(report.targets[0]?.issues, { code: expect.stringMatching(/archive_failed$/) });
   expect(report.targets[0]?.archivedTranscriptFiles).toEqual([]);
   expect(fs.existsSync(outsideTranscriptPath)).toBe(true);
   expect(fs.lstatSync(store.transcriptPath).isSymbolicLink()).toBe(true);
@@ -258,7 +239,7 @@ it.each([
     const token = "sk-abcdefghijklmnopqrstuv";
     const unlink = fs.unlinkSync;
     let injected = false;
-    const spy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+    using spy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
       if (!injected && file === source) {
         injected = true;
         throw new Error(
@@ -267,7 +248,8 @@ it.each([
       }
       return unlink(file);
     });
-    const interrupted = await withSpies([spy], () => importLegacyStore(store));
+    const interrupted = await importLegacyStore(store);
+    spy.mockRestore();
     expect(injected).toBe(true);
     const manifestPath = requireMigrationManifestPath(interrupted.migrationRun?.manifestPath);
     const move = readManifest(manifestPath).targets[0]!.plannedMoves.find(
@@ -278,17 +260,16 @@ it.each([
     const issue = interrupted.targets[0]?.issues.find((item) => item.code === issueCode);
     expect(issue?.message).toContain("injected interruption before source unlink");
     expect(issue?.message).not.toContain(token);
-    expect(fs.readFileSync(source)).toEqual(original);
+    expectFiles(original, source);
     expect(fs.statSync(source).nlink).toBe(2);
     expect(fs.statSync(source).ino).toBe(fs.statSync(move.archivePath).ino);
     const recovered = await runPublic(store, mode);
-    expect(recovered.exitCode).toBe(0);
-    expect(recovered.report.targets[0]?.issues).toEqual([]);
+    expect(recovered).toMatchObject({ exitCode: 0, report: { targets: [{ issues: [] }] } });
     expect(readManifest(manifestPath).restore?.consumedArchives).toContain(move.archivePath);
-    expect(fs.existsSync(move.archivePath)).toBe(false);
+    expectMissing(move.archivePath);
     if (mode === "restore") {
       expect(fs.statSync(source).nlink).toBe(1);
-      expect(fs.readFileSync(source)).toEqual(original);
+      expectFiles(original, source);
       const reimport = await importLegacyStore(store);
       expect(reimport.targets[0]?.issues).toEqual([]);
     }
@@ -323,80 +304,75 @@ it.each(["mismatch", "third-link"] as const)(
   },
 );
 
-it.each([2] as const)(
-  "protects historical v%s restore metadata and its retained transcript dependency from cleanup",
-  async (version) => {
-    const { store, manifestPath, manifest, archivePath } = createHistoricalRestoreStore(version);
-    const target = expectDefined(manifest.targets[0], "historical cleanup target");
-    const index = expectDefined(
-      target.plannedMoves.find((move) => move.kind === "legacy-store"),
-      "historical index",
-    );
-    const indexIdentity = migrationArtifact.readMigrationArtifactIdentity(index.archivePath);
-    const indexBytes = fs.readFileSync(index.archivePath);
-    const transcriptBytes = fs.readFileSync(archivePath);
-    fs.writeFileSync(store.transcriptPath, "new source history\n", { mode: 0o600 });
-    const publish = durability.publishFileExclusive;
-    const publicationSpy = vi
-      .spyOn(durability, "publishFileExclusive")
-      .mockImplementation(async (options) => {
-        if (options.sourcePath === index.archivePath && options.targetPath === index.sourcePath) {
-          throw Object.assign(new Error("injected unsupported hard link"), { code: "EXDEV" });
-        }
-        return publish(options);
-      });
-    const copySpy = vi.spyOn(fs, "copyFileSync");
-    const asyncCopySpy = vi.spyOn(asyncFs, "copyFile");
-    await withSpies([publicationSpy, copySpy, asyncCopySpy], async () => {
-      const failed = await runPublic(store, "restore");
-      expect(failed.exitCode).toBe(1);
-      contains(
-        failed.report.targets[0]?.restore?.conflicts,
-        expect.objectContaining({ archivePath: index.archivePath }),
-      );
-      expect(publicationSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sourcePath: index.archivePath,
-          targetPath: index.sourcePath,
-          strategy: "link-required",
-        }),
-      );
-      expect(copySpy).not.toHaveBeenCalled();
-      expect(asyncCopySpy).not.toHaveBeenCalled();
+it("protects historical v2 restore metadata and its retained transcript dependency from cleanup", async () => {
+  const { store, manifestPath, manifest, archivePath } = createHistoricalRestoreStore(2);
+  const target = expectDefined(manifest.targets[0], "historical cleanup target");
+  const index = expectDefined(
+    target.plannedMoves.find((move) => move.kind === "legacy-store"),
+    "historical index",
+  );
+  const indexIdentity = readMigrationArtifactIdentity(index.archivePath);
+  const indexBytes = fs.readFileSync(index.archivePath);
+  const transcriptBytes = fs.readFileSync(archivePath);
+  fs.writeFileSync(store.transcriptPath, "new source history\n", { mode: 0o600 });
+  const publish = durability.publishFileExclusive;
+  using publicationSpy = vi
+    .spyOn(durability, "publishFileExclusive")
+    .mockImplementation(async (options) => {
+      if (options.sourcePath === index.archivePath && options.targetPath === index.sourcePath) {
+        throw Object.assign(new Error("injected unsupported hard link"), { code: "EXDEV" });
+      }
+      return publish(options);
     });
-    const recorded = readManifest(manifestPath);
-    expect(recorded.manifestVersion).toBe(version);
-    const indexMoves = [
-      ...recorded.targets[0]!.plannedMoves,
-      ...recorded.targets[0]!.completedMoves,
-    ].filter((move) => move.archivePath === index.archivePath);
-    expect(indexMoves).toHaveLength(2);
-    for (const move of indexMoves) {
-      expect(move.artifact).toMatchObject({
-        classification: "protected",
-        disposal: { state: "retained" },
-        identity: indexIdentity,
-        dependencies: [canonicalTestPath(store.transcriptPath)],
-      });
-    }
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-    expect(preview.artifacts.find((item) => item.path === index.archivePath)?.outcome).toBe(
-      "protected",
-    );
-    expect(preview.artifacts.find((item) => item.path === archivePath)).toMatchObject({
-      outcome: "protected",
-      reason: "retained-recovery-dependency",
+  using copySpy = vi.spyOn(fs, "copyFileSync");
+  using asyncCopySpy = vi.spyOn(asyncFs, "copyFile");
+  const failed = await runPublic(store, "restore");
+  expect(failed.exitCode).toBe(1);
+  containsObjects(failed.report.targets[0]?.restore?.conflicts, { archivePath: index.archivePath });
+  expect(publicationSpy).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sourcePath: index.archivePath,
+      targetPath: index.sourcePath,
+      strategy: "link-required",
+    }),
+  );
+  expect(copySpy).not.toHaveBeenCalled();
+  expect(asyncCopySpy).not.toHaveBeenCalled();
+  publicationSpy.mockRestore();
+  copySpy.mockRestore();
+  asyncCopySpy.mockRestore();
+  const recorded = readManifest(manifestPath);
+  expect(recorded.manifestVersion).toBe(2);
+  const indexMoves = [
+    ...recorded.targets[0]!.plannedMoves,
+    ...recorded.targets[0]!.completedMoves,
+  ].filter((move) => move.archivePath === index.archivePath);
+  expect(indexMoves).toHaveLength(2);
+  for (const move of indexMoves) {
+    expect(move.artifact).toMatchObject({
+      classification: "protected",
+      disposal: { state: "retained" },
+      identity: indexIdentity,
+      dependencies: [canonicalTestPath(store.transcriptPath)],
     });
-    const cleanup = await retireSessionSqliteRecovery({
-      env: store.env,
-      preview,
-      readConfig: async () => ({}),
-      confirm: async () => true,
-    });
-    expect(cleanup.totals.removedFiles).toBe(0);
-    expect(fs.readFileSync(index.archivePath)).toEqual(indexBytes);
-    expect(fs.readFileSync(archivePath)).toEqual(transcriptBytes);
-    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe("new source history\n");
-    expectMissing(index.sourcePath, target.sqlitePath);
-  },
-);
+  }
+  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  expect(preview.artifacts.find((item) => item.path === index.archivePath)?.outcome).toBe(
+    "protected",
+  );
+  expect(preview.artifacts.find((item) => item.path === archivePath)).toMatchObject({
+    outcome: "protected",
+    reason: "retained-recovery-dependency",
+  });
+  const cleanup = await retireSessionSqliteRecovery({
+    env: store.env,
+    preview,
+    readConfig: async () => ({}),
+    confirm: async () => true,
+  });
+  expect(cleanup.totals.removedFiles).toBe(0);
+  expectFiles(indexBytes, index.archivePath);
+  expectFiles(transcriptBytes, archivePath);
+  expectFiles("new source history\n", store.transcriptPath);
+  expectMissing(index.sourcePath, target.sqlitePath);
+});

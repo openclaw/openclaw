@@ -13,6 +13,10 @@ import {
 } from "./doctor-session-sqlite-failure.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
+  expectFiles,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
+import {
   importLegacyStore,
   readMigrationManifest,
   requireMigrationManifestPath,
@@ -68,6 +72,20 @@ function failureManifest(
     targets: [failureTarget(store)],
     ...overrides,
   };
+}
+
+function failureFixture(runId: string, savedReport?: string) {
+  const store = createLegacyStore();
+  const file = path.join(store.tempDir, `${runId}.json`);
+  const paths = {
+    jsonPath: path.join(store.tempDir, `${runId}.failure.json`),
+    markdownPath: path.join(store.tempDir, `${runId}.failure.md`),
+  };
+  writeJson(file, failureManifest(store, runId, savedReport ? { failureReports: paths } : {}));
+  if (savedReport) {
+    fs.writeFileSync(paths.markdownPath, savedReport, { mode: 0o600 });
+  }
+  return { store, file, paths };
 }
 
 it.each([false, true])("records import rejection (journal failure=%s)", async (journalFailure) => {
@@ -170,7 +188,7 @@ it.each([false, true])(
     if (explicitStore) {
       expect(recover.supportIssue).toBeUndefined();
       expect(recover.totals.issues).toBe(0);
-      expect(fs.existsSync(store.transcriptPath)).toBe(false);
+      expectMissing(store.transcriptPath);
       return;
     }
     expect(recover.mode).toBe("recover");
@@ -192,7 +210,7 @@ it.each([false, true])(
     expect(recover.targets[0]?.restore?.conflicts).toEqual([
       expect.objectContaining({ sourcePath: canonicalTestPaths([store.transcriptPath])[0] }),
     ]);
-    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(conflictingTranscript);
+    expectFiles(conflictingTranscript, store.transcriptPath);
     expect(recover.supportIssue?.title).toContain(manifest.runId);
     for (const text of ["startup_failure", "restore_conflict", `- Failed: ${manifest.failedAt}`]) {
       expect(recover.supportIssue?.body).toContain(text);
@@ -245,11 +263,8 @@ it.each(["empty-report", "restored", "completed"] as const)(
       evidence === "empty-report"
         ? writeReports(manifestPath, { reason: "Earlier recovery" })
         : undefined;
-    const previousBytes = previousReports
-      ? [previousReports.jsonPath, previousReports.markdownPath].map((file) =>
-          fs.readFileSync(file),
-        )
-      : undefined;
+    const previousBytes =
+      previousReports && Object.values(previousReports).map((file) => fs.readFileSync(file));
     const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
     expect(recover.totals.issues).toBe(0);
     if (evidence === "restored") {
@@ -261,18 +276,20 @@ it.each(["empty-report", "restored", "completed"] as const)(
     expect(recover.supportIssue).toBeUndefined();
     expect(readMigrationManifest(manifestPath).targets[0]?.issues).toEqual(target.issues);
     if (previousReports && previousBytes) {
-      expect(fs.readFileSync(previousReports.jsonPath)).toEqual(previousBytes[0]);
-      expect(fs.readFileSync(previousReports.markdownPath)).toEqual(previousBytes[1]);
+      expect(Object.values(previousReports).map((file) => fs.readFileSync(file))).toEqual(
+        previousBytes,
+      );
     } else {
-      expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.json"))).toBe(false);
-      expect(fs.existsSync(manifestPath.replace(/\.json$/u, ".failure.md"))).toBe(false);
+      expectMissing(
+        ...["json", "md"].map((ext) => manifestPath.replace(/\.json$/u, `.failure.${ext}`)),
+      );
     }
   },
 );
 
 it.each(["replaced", "missing"] as const)("rechecks saved support consent (%s)", (change) => {
   const store = createLegacyStore();
-  writeFailedManifest(store, "consent-race.json", "2030-01-01T00:00:00.000Z");
+  writeFailedManifest(store, "consent-race.json", failureTime);
   const manifestPath = path.join(store.stateDir, "session-sqlite-migration-runs/consent-race.json");
   const { markdownPath } = writeReports(manifestPath, { reason: "recovery before consent" });
   const approved = preparedIssue(manifestPath);
@@ -284,10 +301,10 @@ it.each(["replaced", "missing"] as const)("rechecks saved support consent (%s)",
   const manifestBefore = fs.readFileSync(manifestPath);
 
   expect(claimIssue(manifestPath, approved, { assertCurrent: vi.fn() })).toBeUndefined();
-  expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
+  expectFiles(manifestBefore, manifestPath);
   if (change === "missing") {
     expect(createIssue(manifestPath)).toBeUndefined();
-    expect(fs.existsSync(markdownPath)).toBe(false);
+    expectMissing(markdownPath);
     return;
   }
 
@@ -303,19 +320,9 @@ it.each(["replaced", "missing"] as const)("rechecks saved support consent (%s)",
 });
 
 it("persists one support issue receipt on a historical v3 manifest", () => {
-  const store = createLegacyStore();
-  const manifestPath = path.join(store.tempDir, "historical-v3.json");
-  const failureJsonPath = manifestPath.replace(/\.json$/u, ".failure.json");
-  const failureMarkdownPath = manifestPath.replace(/\.json$/u, ".failure.md");
-  const manifest = failureManifest(store, "historical-v3", {
-    failureReports: { jsonPath: failureJsonPath, markdownPath: failureMarkdownPath },
-    manifestVersion: 3,
-    openClawVersion: "historical",
-  });
-  writeJson(manifestPath, manifest);
-  const authority = { assertCurrent: vi.fn() };
   const savedReport = "stable sanitized report v3\n";
-  fs.writeFileSync(failureMarkdownPath, savedReport, { mode: 0o600 });
+  const { file: manifestPath, paths } = failureFixture("historical-v3", savedReport);
+  const authority = { assertCurrent: vi.fn() };
   const { marker, title } = preparedIssue(manifestPath);
   const issue = { marker, title };
 
@@ -357,7 +364,7 @@ it("persists one support issue receipt on a historical v3 manifest", () => {
     '"body"',
     "?body=",
   ]);
-  expect(fs.readFileSync(failureMarkdownPath, "utf8")).toBe(savedReport);
+  expectFiles(savedReport, paths.markdownPath);
   expect(clearClaim(manifestPath, issue.marker, authority)).toBe(true);
   const clearedManifest = readMigrationManifest(manifestPath);
   expect(clearedManifest.manifestVersion).toBe(4);
@@ -366,33 +373,26 @@ it("persists one support issue receipt on a historical v3 manifest", () => {
 });
 
 it("derives private report paths instead of trusting persisted destinations", () => {
-  const store = createLegacyStore();
-  const manifestPath = path.join(store.tempDir, "path-ownership.json");
-  const expectedJsonPath = path.join(store.tempDir, "path-ownership.failure.json");
-  const expectedMarkdownPath = path.join(store.tempDir, "path-ownership.failure.md");
-  const untrustedJsonPath = path.join(store.tempDir, "untrusted-destination.json");
-  const untrustedMarkdownPath = path.join(store.tempDir, "untrusted-destination.md");
-  const manifest = failureManifest(store, "path-ownership", {
-    failureReports: { jsonPath: untrustedJsonPath, markdownPath: untrustedMarkdownPath },
-  });
-  writeJson(manifestPath, manifest);
-  fs.writeFileSync(untrustedJsonPath, "private json sentinel\n", { mode: 0o600 });
-  fs.writeFileSync(untrustedMarkdownPath, "private markdown sentinel\n", { mode: 0o600 });
-
-  const expectedPaths = { jsonPath: expectedJsonPath, markdownPath: expectedMarkdownPath };
-  expect(writeReports(manifestPath, { reason: "failed" })).toEqual(expectedPaths);
-  expect(createIssue(manifestPath)).toMatchObject({
+  const { store, file, paths } = failureFixture("path-ownership");
+  const untrusted = {
+    jsonPath: path.join(store.tempDir, "untrusted.json"),
+    markdownPath: path.join(store.tempDir, "untrusted.md"),
+  };
+  writeJson(file, { ...readMigrationManifest(file), failureReports: untrusted });
+  fs.writeFileSync(untrusted.jsonPath, "private json sentinel\n", { mode: 0o600 });
+  fs.writeFileSync(untrusted.markdownPath, "private markdown sentinel\n", { mode: 0o600 });
+  expect(writeReports(file, { reason: "failed" })).toEqual(paths);
+  expect(createIssue(file)).toMatchObject({
     body: expect.not.stringContaining("private markdown sentinel"),
-    bodyPath: expectedMarkdownPath,
+    bodyPath: paths.markdownPath,
   });
-  expect(fs.readFileSync(untrustedJsonPath, "utf8")).toBe("private json sentinel\n");
-  expect(fs.readFileSync(untrustedMarkdownPath, "utf8")).toBe("private markdown sentinel\n");
-  expect(readMigrationManifest(manifestPath).failureReports).toEqual(expectedPaths);
+  expectFiles("private json sentinel\n", untrusted.jsonPath);
+  expectFiles("private markdown sentinel\n", untrusted.markdownPath);
+  expect(readMigrationManifest(file).failureReports).toEqual(paths);
 });
 
 it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
-  const store = createLegacyStore();
-  const manifestPath = path.join(store.tempDir, "failed-migration.json");
+  const { store, file: manifestPath } = failureFixture("utf16-boundary");
   const unpairedSurrogate =
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
   const render = (messages: string[]) => {
@@ -425,16 +425,13 @@ it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
   const probe = render([...messages, `${marker}!!tail`]);
   const markerOffset = probe?.body.indexOf(marker) ?? -1;
   expect(markerOffset).toBeGreaterThanOrEqual(0);
-  let padding = limit - 1 - markerOffset - marker.length;
+  const padding = limit - 1 - markerOffset - marker.length;
   expect(padding).toBeGreaterThanOrEqual(0);
 
-  // Fill earlier fields within their 500-unit caps to align the body boundary.
-  for (let index = 0; index < messages.length; index += 1) {
-    const length = Math.min(padding, 500);
-    messages[index] = "x".repeat(length);
-    padding -= length;
-  }
-  expect(padding).toBe(0);
+  messages.forEach((_, index) => {
+    messages[index] = "x".repeat(Math.max(0, Math.min(padding - index * 500, 500)));
+  });
+  expect(messages.join("")).toHaveLength(padding);
   const aligned = render([...messages, `${marker}!!tail`]);
   expect(aligned?.body.slice(limit - 1 - marker.length, limit)).toBe(`${marker}!`);
 
@@ -453,17 +450,17 @@ function writeFailedManifest(
   const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   writeJson(path.join(runsDir, fileName), {
+    ...failureManifest(store, path.basename(fileName, ".json")),
     failedAt,
-    manifestVersion: 1,
-    openClawVersion: "test",
-    runId: path.basename(fileName, ".json"),
     startedAt: failedAt,
+    manifestVersion: 1,
     targets: [
       failureTarget(store, {
-        agentId: target.agentId ?? "older",
+        agentId: "older",
         issues: [{ code: "older_failure", message: "older failure" }],
         sqlitePath: path.join(store.tempDir, "older.sqlite"),
-        storePath: target.storePath ?? path.join(store.tempDir, "older-sessions.json"),
+        storePath: path.join(store.tempDir, "older-sessions.json"),
+        ...target,
       }),
     ],
   });
