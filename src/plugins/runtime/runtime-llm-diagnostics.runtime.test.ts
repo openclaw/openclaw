@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -9,56 +10,68 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  acquireSimpleCompletionModelForAgent:
+  acquire:
     vi.fn<
       typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
     >(),
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
-  resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  complete: vi.fn(),
+  select: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
-  resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquire,
+  completeWithPreparedSimpleCompletionModel: hoisted.complete,
+  resolveSimpleCompletionSelectionForAgent: hoisted.select,
 }));
 
-const cfg = {
-  agents: {
-    defaults: {
-      model: "openai/gpt-5.5",
-    },
-  },
-} satisfies OpenClawConfig;
+const cfg = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
 
 const preparedModel = {
   async [Symbol.asyncDispose]() {},
-  selection: {
-    provider: "openai",
-    modelId: "gpt-5.5",
-    agentDir: "/tmp/openclaw-agent",
-  },
-  model: {
+  selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/openclaw-agent" },
+  model: makeProviderModelFixture({
     provider: "openai",
     id: "gpt-5.5",
-    name: "gpt-5.5",
     api: "openai-completions",
     baseUrl: "https://fixture.invalid/v1",
-    input: ["text"],
-    reasoning: false,
     contextWindow: 128_000,
     maxTokens: 4096,
     cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-  },
-  auth: {
-    apiKey: "test-api-key",
-    source: "test",
-    mode: "api-key",
-  },
-} satisfies Extract<
-  Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
-  { model: unknown }
->;
+  }),
+  auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+} satisfies Extract<Awaited<ReturnType<typeof hoisted.acquire>>, { model: unknown }>;
+
+function runtime(config: OpenClawConfig = cfg) {
+  return createRuntimeLlm({
+    getConfig: () => config,
+    authority: { allowComplete: true, pluginIdForPolicy: "trusted-plugin" },
+  });
+}
+
+function complete(config: OpenClawConfig = cfg) {
+  return runtime(config).complete({ messages: [{ role: "user", content: "Ping" }] });
+}
+
+function trustedEvent(event: object) {
+  return {
+    trusted: true,
+    hostPluginId: "trusted-plugin",
+    internal: true,
+    event: expect.objectContaining(event),
+  };
+}
+
+const emptyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0, total: 0 };
+
+function usageCase(
+  name: string,
+  rawUsage: unknown,
+  expectedUsage?: typeof emptyUsage,
+  expectedCost?: number,
+  enabled = true,
+) {
+  return [name, rawUsage, enabled, expectedUsage, expectedCost] as const;
+}
 
 function captureUsageEvents() {
   const events: Array<{
@@ -85,12 +98,12 @@ function captureUsageEvents() {
 describe("runtime.llm.complete diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
-    hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
-    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(preparedModel);
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(preparedModel.selection);
-    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    hoisted.acquire.mockReset();
+    hoisted.complete.mockReset();
+    hoisted.select.mockReset();
+    hoisted.acquire.mockResolvedValue(preparedModel);
+    hoisted.select.mockReturnValue(preparedModel.selection);
+    hoisted.complete.mockResolvedValue({
       content: [{ type: "text", text: "done" }],
       usage: {
         input: 11,
@@ -137,26 +150,14 @@ describe("runtime.llm.complete diagnostics", () => {
       purpose: "test-purpose",
     });
     expect(usageEvents.events).toEqual([
-      {
-        trusted: true,
-        hostPluginId: "trusted-plugin",
-        internal: true,
-        event: expect.objectContaining({
-          type: "model.usage",
-          agentId: "main",
-          provider: "openai",
-          model: "gpt-5.5",
-          usage: {
-            input: 11,
-            output: 7,
-            cacheRead: 5,
-            cacheWrite: 2,
-            promptTokens: 18,
-            total: 25,
-          },
-          costUsd: 0.0042,
-        }),
-      },
+      trustedEvent({
+        type: "model.usage",
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, promptTokens: 18, total: 25 },
+        costUsd: 0.0042,
+      }),
     ]);
   });
 
@@ -179,38 +180,35 @@ describe("runtime.llm.complete diagnostics", () => {
         selection: { ...preparedModel.selection, provider: "pricing-fixture", modelId: "unpriced" },
         model: { ...preparedModel.model, provider: "pricing-fixture", id: "unpriced" },
       };
-      hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(prepared);
-      hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue(prepared.selection);
-      hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      hoisted.acquire.mockResolvedValue(prepared);
+      hoisted.select.mockReturnValue(prepared.selection);
+      hoisted.complete.mockResolvedValue({
         content: [{ type: "text", text: "done" }],
         stopReason: "stop",
         usage: { input: 1_000, output: 500, cost },
       });
-      const config: OpenClawConfig = {
-        ...cfg,
-        ...(free
-          ? {
-              models: {
-                providers: {
-                  "pricing-fixture": {
-                    baseUrl: "https://pricing.invalid",
-                    models: [
-                      {
-                        ...prepared.model,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      },
-                    ],
-                  },
+      const config: OpenClawConfig = free
+        ? {
+            ...cfg,
+            models: {
+              providers: {
+                "pricing-fixture": {
+                  baseUrl: "https://pricing.invalid",
+                  models: [
+                    {
+                      ...prepared.model,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    },
+                  ],
                 },
               },
-            }
-          : {}),
-      };
-      const llm = createRuntimeLlm({
+            },
+          }
+        : cfg;
+      const result = await createRuntimeLlm({
         getConfig: () => config,
         authority: { allowComplete: true, allowModelOverride: true },
-      });
-      const result = await llm.complete({
+      }).complete({
         model: "pricing-fixture/unpriced",
         messages: [{ role: "user", content: "Ping" }],
       });
@@ -219,73 +217,37 @@ describe("runtime.llm.complete diagnostics", () => {
   );
 
   it.each([
-    ["absent", undefined, true, undefined, undefined],
-    [
-      "all-zero",
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      true,
-      undefined,
-      undefined,
-    ],
-    ["reasoning-only", { reasoningTokens: 7 }, true, undefined, undefined],
-    [
-      "unavailable context usage",
-      { contextUsage: { state: "unavailable" } },
-      true,
-      undefined,
-      undefined,
-    ],
-    [
-      "input-only",
-      { input: 4 },
-      true,
-      { input: 4, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 4, total: 4 },
-      undefined,
-    ],
-    [
+    usageCase("absent", undefined),
+    usageCase("all-zero", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }),
+    usageCase("reasoning-only", { reasoningTokens: 7 }),
+    usageCase("unavailable context usage", { contextUsage: { state: "unavailable" } }),
+    usageCase("input-only", { input: 4 }, { ...emptyUsage, input: 4, promptTokens: 4, total: 4 }),
+    usageCase(
       "cache-only",
       { cacheRead: 9 },
-      true,
-      { input: 0, output: 0, cacheRead: 9, cacheWrite: 0, promptTokens: 9, total: 9 },
-      undefined,
-    ],
-    [
-      "positive explicit cost-only",
-      { cost: { total: 0.0042 } },
-      true,
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0, total: 0 },
-      0.0042,
-    ],
-    ["zero explicit cost-only", { cost: { total: 0 } }, true, undefined, undefined],
-    ["disabled", { input: 1 }, false, undefined, undefined],
+      { ...emptyUsage, cacheRead: 9, promptTokens: 9, total: 9 },
+    ),
+    usageCase("positive explicit cost-only", { cost: { total: 0.0042 } }, emptyUsage, 0.0042),
+    usageCase("zero explicit cost-only", { cost: { total: 0 } }),
+    usageCase("disabled", { input: 1 }, undefined, undefined, false),
   ] as const)(
     "emits usage only for positive enabled tokens or cost: %s",
     async (_name, rawUsage, enabled, expectedEventUsage, expectedCostUsd) => {
-      hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      hoisted.complete.mockResolvedValueOnce({
         content: [{ type: "text", text: "done" }],
         usage: rawUsage,
         stopReason: "stop",
       });
       const usageEvents = captureUsageEvents();
-      const llm = createRuntimeLlm({
-        getConfig: () => (enabled ? cfg : { ...cfg, diagnostics: { enabled: false } }),
-        authority: { allowComplete: true, pluginIdForPolicy: "trusted-plugin" },
-      });
-
-      await llm.complete({ messages: [{ role: "user", content: "Ping" }] });
+      await complete(enabled ? cfg : { ...cfg, diagnostics: { enabled: false } });
       usageEvents.stop();
 
       if (expectedEventUsage) {
         expect(usageEvents.events).toEqual([
-          {
-            trusted: true,
-            hostPluginId: "trusted-plugin",
-            internal: true,
-            event: expect.objectContaining({
-              usage: expectedEventUsage,
-              ...(expectedCostUsd !== undefined ? { costUsd: expectedCostUsd } : {}),
-            }),
-          },
+          trustedEvent({
+            usage: expectedEventUsage,
+            ...(expectedCostUsd !== undefined ? { costUsd: expectedCostUsd } : {}),
+          }),
         ]);
       } else {
         expect(usageEvents.events).toHaveLength(0);
@@ -297,20 +259,13 @@ describe("runtime.llm.complete diagnostics", () => {
     ["resolved provider error", "error", [{ type: "text", text: "partial" }], "partial"],
     ["thinking-only completion", "stop", [{ type: "thinking", thinking: "hidden" }], ""],
   ] as const)("keeps %s usage silent", async (_name, stopReason, content, expectedText) => {
-    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+    hoisted.complete.mockResolvedValueOnce({
       content,
       stopReason,
       usage: { input: 11, output: 7, totalTokens: 18 },
     });
     const usageEvents = captureUsageEvents();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: { allowComplete: true, pluginIdForPolicy: "trusted-plugin" },
-    });
-
-    await expect(
-      llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-    ).resolves.toMatchObject({ text: expectedText });
+    await expect(complete()).resolves.toMatchObject({ text: expectedText });
     usageEvents.stop();
 
     expect(usageEvents.events).toEqual([]);
@@ -318,17 +273,8 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it("emits no usage when the provider fails", async () => {
     const usageEvents = captureUsageEvents();
-    hoisted.completeWithPreparedSimpleCompletionModel.mockRejectedValueOnce(
-      new Error("provider failed"),
-    );
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: { allowComplete: true },
-    });
-
-    await expect(llm.complete({ messages: [{ role: "user", content: "Ping" }] })).rejects.toThrow(
-      "provider failed",
-    );
+    hoisted.complete.mockRejectedValueOnce(new Error("provider failed"));
+    await expect(complete()).rejects.toThrow("provider failed");
     usageEvents.stop();
 
     expect(usageEvents.events).toHaveLength(0);

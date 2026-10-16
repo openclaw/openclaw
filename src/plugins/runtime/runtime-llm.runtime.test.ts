@@ -1,146 +1,114 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
-import { createRuntimeLlm } from "./runtime-llm.runtime.js";
+import { createRuntimeLlm, type CreateRuntimeLlmOptions } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
-  acquireSimpleCompletionModelForAgent:
+  acquire:
     vi.fn<
       typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
     >(),
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
-  resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  complete: vi.fn(),
+  select: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
-  completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
-  resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+  acquireSimpleCompletionModelForAgent: hoisted.acquire,
+  completeWithPreparedSimpleCompletionModel: hoisted.complete,
+  resolveSimpleCompletionSelectionForAgent: hoisted.select,
 }));
 
-const cfg = {
-  agents: {
-    defaults: {
-      model: "openai/gpt-5.5",
-    },
-  },
-} satisfies OpenClawConfig;
+const cfg = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
 
 function configWithPluginPolicy(pluginId: string, llm: PluginEntryConfig["llm"]): OpenClawConfig {
   return { ...cfg, plugins: { entries: { [pluginId]: { llm } } } };
 }
 
+function runtime(options: CreateRuntimeLlmOptions = {}) {
+  return createRuntimeLlm({
+    getConfig: () => cfg,
+    ...options,
+    authority: { allowComplete: true, ...options.authority },
+  });
+}
+
+function context(overrides: Partial<Parameters<typeof resolveContextEngineCapabilities>[0]> = {}) {
+  return resolveContextEngineCapabilities({
+    config: cfg,
+    sessionKey: "agent:main:session:abc",
+    purpose: "context-engine.compaction",
+    ...overrides,
+  });
+}
+
+const messages = [{ role: "user" as const, content: "Ping" }];
+const summaryMessages = [{ role: "user" as const, content: "summarize" }];
+
 function createPreparedModel(
   modelId = "gpt-5.5",
-): Extract<
-  Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
-  { model: unknown }
-> {
+): Extract<Awaited<ReturnType<typeof hoisted.acquire>>, { model: unknown }> {
   return {
     async [Symbol.asyncDispose]() {},
-    selection: {
-      provider: "openai",
-      modelId,
-      agentDir: "/tmp/openclaw-agent",
-    },
-    model: {
+    selection: { provider: "openai", modelId, agentDir: "/tmp/openclaw-agent" },
+    model: makeProviderModelFixture({
       provider: "openai",
       id: modelId,
-      name: modelId,
       api: "openai",
       baseUrl: "https://fixture.invalid/v1",
-      input: ["text"],
-      reasoning: false,
       contextWindow: 128_000,
       maxTokens: 4096,
       cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-    },
-    auth: {
-      apiKey: "test-api-key",
-      source: "test",
-      mode: "api-key",
-    },
+    }),
+    auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
   };
 }
 
 function createLogger(): RuntimeLogger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
 type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as unknown[];
+function expectFields(record: unknown, expected: object) {
+  expect(record).toEqual(expect.objectContaining(expected));
 }
 
-function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(value);
-  }
-}
-
-function expectSingleCallFirstArg(
-  mock: MockCalls,
-  expected: Record<string, unknown>,
-  label = "mock first argument",
-): Record<string, unknown> {
+function expectSingleCallFirstArg(mock: MockCalls, expected: object) {
   expect(mock.mock.calls).toHaveLength(1);
-  const [firstArg] = mock.mock.calls[0] ?? [];
-  const record = requireRecord(firstArg, label);
-  expectFields(record, expected);
-  return record;
+  expectFields(mock.mock.calls[0]?.[0], expected);
 }
 
-function expectSingleLogPayload(
-  loggerMethod: MockCalls,
-  message: string,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  expect(loggerMethod.mock.calls).toHaveLength(1);
-  const [actualMessage, payload] = loggerMethod.mock.calls[0] ?? [];
-  expect(actualMessage).toBe(message);
-  const payloadRecord = requireRecord(payload, "log payload");
-  expectFields(payloadRecord, expected);
-  return payloadRecord;
+function expectSingleLogPayload(mock: MockCalls, message: string, expected: object) {
+  expect(mock.mock.calls).toEqual([[message, expect.objectContaining(expected)]]);
 }
 
 function primeCompletionMocks() {
-  hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(createPreparedModel());
-  hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
-    (params: { modelRef?: string; agentId: string }) => {
-      if (!params.modelRef) {
-        return {
-          provider: "openai",
-          modelId: "gpt-5.5",
-          agentDir: `/tmp/${params.agentId}`,
-        };
-      }
-      const slash = params.modelRef.indexOf("/");
+  hoisted.acquire.mockResolvedValue(createPreparedModel());
+  hoisted.select.mockImplementation((params: { modelRef?: string; agentId: string }) => {
+    if (!params.modelRef) {
       return {
-        provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
-        modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+        provider: "openai",
+        modelId: "gpt-5.5",
         agentDir: `/tmp/${params.agentId}`,
       };
-    },
-  );
-  hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+    }
+    const slash = params.modelRef.indexOf("/");
+    return {
+      provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
+      modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+      agentDir: `/tmp/${params.agentId}`,
+    };
+  });
+  hoisted.complete.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
     stopReason: "stop",
@@ -157,43 +125,34 @@ function primeCompletionMocks() {
 
 describe("runtime.llm.complete", () => {
   beforeEach(() => {
-    hoisted.acquireSimpleCompletionModelForAgent.mockReset();
-    hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    hoisted.acquire.mockReset();
+    hoisted.complete.mockReset();
+    hoisted.select.mockReset();
     primeCompletionMocks();
   });
 
   it("denies context-engine model overrides without owning plugin llm policy", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "agent:main:session:abc",
-      contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
-    });
+    const runtimeContext = context({ contextEnginePluginId: "lossless-claw" });
 
     await expect(
-      runtimeContext.llm!.complete({
-        model: "openai/gpt-5.4-mini",
-        messages: [{ role: "user", content: "summarize" }],
-      }),
+      runtimeContext.llm!.complete({ model: "openai/gpt-5.4-mini", messages: summaryMessages }),
     ).rejects.toThrow("cannot override the target model");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
   it("binds context-engine completions to the active session agent", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
+    const runtimeContext = context({
       sessionKey: "agent:ada:session:abc",
       authProfileId: "openai:configured",
       purpose: "context-engine.after-turn",
     });
 
     const result = await runtimeContext.llm!.complete({
-      messages: [{ role: "user", content: "summarize" }],
+      messages: summaryMessages,
       purpose: "memory-maintenance",
     });
 
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+    expectSingleCallFirstArg(hoisted.acquire, {
       cfg,
       agentId: "ada",
       preferredProfile: "openai:configured",
@@ -202,7 +161,7 @@ describe("runtime.llm.complete", () => {
       skipAgentDiscovery: true,
     });
     expect(result.agentId).toBe("ada");
-    expectFields(requireRecord(result.audit, "audit"), {
+    expectFields(result.audit, {
       caller: { kind: "context-engine", id: "context-engine.after-turn" },
       purpose: "memory-maintenance",
       sessionKey: "agent:ada:session:abc",
@@ -225,12 +184,10 @@ describe("runtime.llm.complete", () => {
       activeAgentId: "main",
     });
 
-    await expect(
-      runtimeContext.llm!.complete({
-        messages: [{ role: "user", content: "summarize" }],
-      }),
-    ).rejects.toThrow("not bound to an active session agent");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    await expect(runtimeContext.llm!.complete({ messages: summaryMessages })).rejects.toThrow(
+      "not bound to an active session agent",
+    );
+    expect(hoisted.acquire).not.toHaveBeenCalled();
 
     const maintain = vi.fn(async (params: { runtimeContext?: typeof runtimeContext }) => {
       await params.runtimeContext?.llm?.complete({
@@ -254,73 +211,62 @@ describe("runtime.llm.complete", () => {
 
     expect(maintain).toHaveBeenCalledOnce();
     expect(maintenanceResult).toBeUndefined();
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
   it("accepts an explicitly trusted pre-fallback agent", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
+    const runtimeContext = context({
       sessionKey: "legacy-session",
       explicitAgentId: "ada",
       purpose: "context-engine.after-turn",
     });
 
-    const result = await runtimeContext.llm!.complete({
-      messages: [{ role: "user", content: "summarize" }],
-    });
+    const result = await runtimeContext.llm!.complete({ messages: summaryMessages });
 
     expect(result.agentId).toBe("ada");
   });
 
   it("matches allowlist entries for provider-qualified model ids without doubling the provider prefix", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
+    const runtimeContext = context({
       config: configWithPluginPolicy("lossless-claw", {
         allowModelOverride: true,
         allowedModels: ["openrouter/gpt-5.4-mini"],
       }),
-      sessionKey: "agent:main:session:abc",
       contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
     });
 
-    hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(
-      createPreparedModel("openrouter/gpt-5.4-mini"),
-    );
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
-      (params: { agentId: string }) => ({
-        provider: "openrouter",
-        modelId: "openrouter/gpt-5.4-mini",
-        agentDir: `/tmp/${params.agentId}`,
-      }),
-    );
+    hoisted.acquire.mockResolvedValue(createPreparedModel("openrouter/gpt-5.4-mini"));
+    hoisted.select.mockImplementation((params: { agentId: string }) => ({
+      provider: "openrouter",
+      modelId: "openrouter/gpt-5.4-mini",
+      agentDir: `/tmp/${params.agentId}`,
+    }));
 
     await runtimeContext.llm!.complete({
       agentId: "main",
       model: "openrouter/gpt-5.4-mini",
-      messages: [{ role: "user", content: "summarize" }],
+      messages: summaryMessages,
     });
 
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+    expectSingleCallFirstArg(hoisted.acquire, {
       agentId: "main",
       modelRef: "openrouter/gpt-5.4-mini",
     });
   });
 
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
+    const runtimeContext = context({
       config: configWithPluginPolicy("lossless-claw", {
         allowModelOverride: true,
         allowedModels: ["openai/gpt-5.4-mini"],
       }),
-      sessionKey: "agent:main:session:abc",
       contextEnginePluginId: "lossless-claw",
-      purpose: "context-engine.compaction",
     });
 
     const result = await withPluginRuntimePluginScope({ pluginId: "spoofed-plugin" }, () =>
       runtimeContext.llm!.complete({
         model: "openai/gpt-5.4-mini",
-        messages: [{ role: "user", content: "summarize" }],
+        messages: summaryMessages,
         caller: { kind: "plugin", id: "spoofed-plugin" },
       } as Parameters<NonNullable<typeof runtimeContext.llm>["complete"]>[0] & {
         caller: unknown;
@@ -331,116 +277,75 @@ describe("runtime.llm.complete", () => {
       kind: "context-engine",
       id: "context-engine.compaction",
     });
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      modelRef: "openai/gpt-5.4-mini",
-    });
+    expectSingleCallFirstArg(hoisted.acquire, { modelRef: "openai/gpt-5.4-mini" });
   });
 
   it("allows the bound context-engine agent and denies cross-agent overrides", async () => {
-    const runtimeContext = resolveContextEngineCapabilities({
-      config: cfg,
-      sessionKey: "main",
-      purpose: "context-engine.compaction",
-    });
+    const runtimeContext = context({ sessionKey: "main" });
 
-    await runtimeContext.llm!.complete({
-      agentId: "main",
-      messages: [{ role: "user", content: "summarize" }],
-    });
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      agentId: "main",
-    });
+    await runtimeContext.llm!.complete({ agentId: "main", messages: summaryMessages });
+    expectSingleCallFirstArg(hoisted.acquire, { agentId: "main" });
 
     await expect(
-      runtimeContext.llm!.complete({
-        agentId: "worker",
-        messages: [{ role: "user", content: "summarize" }],
-      }),
+      runtimeContext.llm!.complete({ agentId: "worker", messages: summaryMessages }),
     ).rejects.toThrow("cannot override the active session agent");
   });
 
   it("ignores request auth profile preferences without a trusted authority binding", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: {
-        allowComplete: true,
-      },
-    });
+    const llm = runtime();
 
     await llm.complete({
       authProfileId: "openai:work",
       messages: [{ role: "user", content: "draft" }],
     } as Parameters<typeof llm.complete>[0] & { authProfileId: string });
 
-    const call = expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      cfg,
-      agentId: "main",
-    });
-    expect(call.preferredProfile).toBeUndefined();
+    expectSingleCallFirstArg(hoisted.acquire, { cfg, agentId: "main" });
+    expect(hoisted.acquire.mock.calls[0]?.[0]?.preferredProfile).toBeUndefined();
   });
 
   it("allows host model overrides only when explicit authority allowlists the model", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
+    const llm = runtime({
       authority: {
         caller: { kind: "host", id: "runtime-test" },
         allowModelOverride: true,
         allowedModels: ["openai/gpt-5.4"],
-        allowComplete: true,
       },
     });
 
-    await llm.complete({
-      model: "openai/gpt-5.4",
-      messages: [{ role: "user", content: "Ping" }],
-    });
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      modelRef: "openai/gpt-5.4",
-    });
+    await llm.complete({ model: "openai/gpt-5.4", messages });
+    expectSingleCallFirstArg(hoisted.acquire, { modelRef: "openai/gpt-5.4" });
 
-    await expect(
-      llm.complete({
-        model: "openai/gpt-5.5",
-        messages: [{ role: "user", content: "Ping" }],
-      }),
-    ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
+    await expect(llm.complete({ model: "openai/gpt-5.5", messages })).rejects.toThrow(
+      'model override "openai/gpt-5.5" is not allowlisted',
+    );
   });
 
   it("requires model overrides to satisfy host and plugin allowlists", async () => {
-    const llm = createRuntimeLlm({
+    const llm = runtime({
       getConfig: () =>
         configWithPluginPolicy("restricted-plugin", {
           allowModelOverride: true,
           allowedModels: ["openai/gpt-5.4"],
         }),
-      authority: {
-        allowComplete: true,
-        allowModelOverride: true,
-        allowedModels: ["openai/gpt-5.5"],
-      },
+      authority: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] },
     });
 
     await expect(
       withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({
-          model: "openai/gpt-5.5",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
+        llm.complete({ model: "openai/gpt-5.5", messages }),
       ),
     ).rejects.toThrow(
       'model override "openai/gpt-5.5" is not allowlisted for plugin "restricted-plugin"',
     );
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
     const logger = createLogger();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
+    const llm = runtime({
       logger,
       authority: {
         caller: { kind: "host", id: "runtime-test" },
-        allowComplete: true,
       },
     });
 
@@ -459,232 +364,162 @@ describe("runtime.llm.complete", () => {
       purpose: "test-purpose",
     });
 
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+    expectSingleCallFirstArg(hoisted.acquire, { cfg, agentId: "main" });
+    expectSingleCallFirstArg(hoisted.complete, {
       cfg,
-      agentId: "main",
+      context: expect.objectContaining({
+        systemPrompt: "Be terse.",
+        messages: [expect.objectContaining({ role: "user", content: "Ping" })],
+      }),
+      options: expect.objectContaining({
+        maxTokens: 64,
+        temperature: 0.2,
+        reasoning: "ultra",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+        },
+      }),
     });
-    const completionArg = expectSingleCallFirstArg(
-      hoisted.completeWithPreparedSimpleCompletionModel,
-      {
-        cfg,
-      },
-    );
-    const context = requireRecord(completionArg.context, "completion context");
-    expect(context.systemPrompt).toBe("Be terse.");
-    const [message] = requireArray(context.messages, "completion messages");
-    expectFields(requireRecord(message, "completion message"), {
-      role: "user",
-      content: "Ping",
-    });
-    expectFields(requireRecord(completionArg.options, "completion options"), {
-      maxTokens: 64,
-      temperature: 0.2,
-      reasoning: "ultra",
-      responseFormat: {
-        type: "json_schema",
-        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
-      },
-    });
-    expectFields(requireRecord(result, "completion result"), {
+    expectFields(result, {
       text: "done",
       provider: "openai",
       model: "gpt-5.5",
       responseModel: "gpt-5.5-2026-08-01",
       stopReason: "stop",
+      usage: expect.objectContaining({
+        inputTokens: 11,
+        outputTokens: 7,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 2,
+        totalTokens: 25,
+        costUsd: 0.0042,
+      }),
     });
-    expectFields(requireRecord(result.usage, "completion usage"), {
-      inputTokens: 11,
-      outputTokens: 7,
-      cacheReadTokens: 5,
-      cacheWriteTokens: 2,
-      totalTokens: 25,
-      costUsd: 0.0042,
+    expectSingleLogPayload(vi.mocked(logger.info), "plugin llm completion", {
+      caller: { kind: "host", id: "runtime-test" },
+      purpose: "test-purpose",
+      usage: expect.objectContaining({ costUsd: 0.0042 }),
     });
-    const logPayload = expectSingleLogPayload(
-      logger.info as unknown as MockCalls,
-      "plugin llm completion",
-      {
-        caller: { kind: "host", id: "runtime-test" },
-        purpose: "test-purpose",
-      },
-    );
-    expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
     const logger = createLogger();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
+    const llm = runtime({
       logger,
       authority: {
         caller: { kind: "host", id: "ignored-host" },
-        allowComplete: true,
       },
     });
 
     const result = await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
       llm.complete({
-        messages: [{ role: "user", content: "Ping" }],
+        messages,
         purpose: "identity-test",
         caller: { kind: "plugin", id: "spoofed-plugin" },
       } as Parameters<typeof llm.complete>[0] & { caller: unknown }),
     );
 
     expect(result.audit.caller).toEqual({ kind: "plugin", id: "trusted-plugin" });
-    expectSingleLogPayload(logger.info as unknown as MockCalls, "plugin llm completion", {
+    expectSingleLogPayload(vi.mocked(logger.info), "plugin llm completion", {
       caller: { kind: "plugin", id: "trusted-plugin" },
       purpose: "identity-test",
     });
   });
 
   it("denies plugin model overrides by default", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: {
-        allowComplete: true,
-      },
-    });
+    const llm = runtime();
 
     await expect(
       withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
-        llm.complete({
-          model: "openai/gpt-5.4",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
+        llm.complete({ model: "openai/gpt-5.4", messages }),
       ),
     ).rejects.toThrow("cannot override the target model");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
   it("denies plugin agent overrides by default and allows them only when configured", async () => {
-    const denied = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: {
-        allowComplete: true,
-      },
-    });
+    const denied = runtime();
 
     await expect(
       withPluginRuntimePluginScope({ pluginId: "plain-plugin" }, () =>
-        denied.complete({
-          agentId: "worker",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
+        denied.complete({ agentId: "worker", messages }),
       ),
     ).rejects.toThrow("cannot override the target agent");
 
-    const allowed = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("trusted-plugin", {
-          allowAgentIdOverride: true,
-        }),
-      authority: {
-        allowComplete: true,
-      },
+    const allowed = runtime({
+      getConfig: () => configWithPluginPolicy("trusted-plugin", { allowAgentIdOverride: true }),
     });
 
     await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
-      allowed.complete({
-        agentId: "worker",
-        messages: [{ role: "user", content: "Ping" }],
-      }),
+      allowed.complete({ agentId: "worker", messages }),
     );
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      agentId: "worker",
-    });
+    expectSingleCallFirstArg(hoisted.acquire, { agentId: "worker" });
   });
 
-  it.each(["TrUsTeD-plugin"])(
-    "allows model overrides for %s only when configured and allowlisted",
-    async (pluginId) => {
-      const llm = createRuntimeLlm({
-        getConfig: () =>
-          configWithPluginPolicy("trusted-plugin", {
-            allowModelOverride: true,
-            allowedModels: ["openai/gpt-5.4"],
-          }),
-        authority: {
-          allowComplete: true,
-        },
-      });
-
-      await withPluginRuntimePluginScope({ pluginId }, () =>
-        llm.complete({
-          model: "openai/gpt-5.4",
-          messages: [{ role: "user", content: "Ping" }],
+  it("allows model overrides for case-insensitive plugin ids only when configured and allowlisted", async () => {
+    const pluginId = "TrUsTeD-plugin";
+    const llm = runtime({
+      getConfig: () =>
+        configWithPluginPolicy("trusted-plugin", {
+          allowModelOverride: true,
+          allowedModels: ["openai/gpt-5.4"],
         }),
-      );
-      expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-        agentId: "main",
-        modelRef: "openai/gpt-5.4",
-      });
+    });
 
-      await expect(
-        withPluginRuntimePluginScope({ pluginId }, () =>
-          llm.complete({
-            model: "openai/gpt-5.6",
-            messages: [{ role: "user", content: "Ping" }],
-          }),
-        ),
-      ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
-    },
-  );
+    await withPluginRuntimePluginScope({ pluginId }, () =>
+      llm.complete({ model: "openai/gpt-5.4", messages }),
+    );
+    expectSingleCallFirstArg(hoisted.acquire, { agentId: "main", modelRef: "openai/gpt-5.4" });
 
-  it.each(["ReStRiCtEd-plugin"])(
-    "applies the completion allowlist to the host-resolved default for %s",
-    async (pluginId) => {
-      const llm = createRuntimeLlm({
-        getConfig: () =>
-          configWithPluginPolicy("restricted-plugin", {
-            allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
-          }),
-        authority: { allowComplete: true },
-      });
+    await expect(
+      withPluginRuntimePluginScope({ pluginId }, () =>
+        llm.complete({ model: "openai/gpt-5.6", messages }),
+      ),
+    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
+  });
 
-      await expect(
-        withPluginRuntimePluginScope({ pluginId }, () =>
-          llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-        ),
-      ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
-      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([[["not-a-canonical-model-ref"]]])(
-    "fails closed for an unusable completion allowlist %j",
-    async (allowedCompletionModels) => {
-      const llm = createRuntimeLlm({
-        getConfig: () => configWithPluginPolicy("restricted-plugin", { allowedCompletionModels }),
-        authority: { allowComplete: true },
-      });
-
-      await expect(
-        withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-          llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-        ),
-      ).rejects.toThrow("completion model allowlist has no valid models");
-      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("denies completions when runtime authority disables the capability", async () => {
-    const logger = createLogger();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      logger,
-      authority: {
-        allowComplete: false,
-        denyReason: "not trusted",
-      },
+  it("applies the completion allowlist to the host-resolved default for case-insensitive plugin ids", async () => {
+    const pluginId = "ReStRiCtEd-plugin";
+    const llm = runtime({
+      getConfig: () =>
+        configWithPluginPolicy("restricted-plugin", {
+          allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+        }),
     });
 
     await expect(
-      llm.complete({
-        messages: [{ role: "user", content: "Ping" }],
-      }),
-    ).rejects.toThrow("Plugin LLM completion denied: not trusted");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expectSingleLogPayload(logger.warn as unknown as MockCalls, "plugin llm completion denied", {
+      withPluginRuntimePluginScope({ pluginId }, () => llm.complete({ messages })),
+    ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
+    expect(hoisted.acquire).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unusable completion allowlist", async () => {
+    const allowedCompletionModels = ["not-a-canonical-model-ref"];
+    const llm = runtime({
+      getConfig: () => configWithPluginPolicy("restricted-plugin", { allowedCompletionModels }),
+    });
+
+    await expect(
+      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
+        llm.complete({ messages }),
+      ),
+    ).rejects.toThrow("completion model allowlist has no valid models");
+    expect(hoisted.acquire).not.toHaveBeenCalled();
+  });
+
+  it("denies completions when runtime authority disables the capability", async () => {
+    const logger = createLogger();
+    const llm = runtime({
+      logger,
+      authority: { allowComplete: false, denyReason: "not trusted" },
+    });
+
+    await expect(llm.complete({ messages })).rejects.toThrow(
+      "Plugin LLM completion denied: not trusted",
+    );
+    expect(hoisted.acquire).not.toHaveBeenCalled();
+    expectSingleLogPayload(vi.mocked(logger.warn), "plugin llm completion denied", {
       reason: "not trusted",
     });
   });

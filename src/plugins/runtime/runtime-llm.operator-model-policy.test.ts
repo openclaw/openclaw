@@ -4,6 +4,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -57,20 +58,43 @@ function preparedModel(modelId = "allowed") {
   return {
     async [Symbol.asyncDispose]() {},
     selection,
-    model: {
+    model: makeProviderModelFixture({
       provider: "test-provider",
       id: modelId,
-      name: modelId,
       api: "openai-completions" as const,
       baseUrl: "https://fixture.invalid/v1",
-      input: ["text" as const],
-      reasoning: false,
       contextWindow: 8192,
       maxTokens: 1024,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    },
+    }),
     auth: { apiKey: "synthetic-test-key", source: "fixture", mode: "api-key" as const },
   };
+}
+
+function isolatedAnswer(text = "Allowed answer.") {
+  return {
+    text,
+    provider: "test-provider",
+    model: "allowed",
+    owner: { kind: "harness" as const, id: "test-harness" },
+  };
+}
+
+async function expectDenied(pending: Promise<unknown>, message?: string) {
+  await expect(pending).rejects.toMatchObject({
+    name: "LlmCompleteError",
+    code: "LLM_COMPLETION_NOT_AUTHORIZED",
+    ...(message ? { message } : {}),
+  });
+}
+
+function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
+  return Promise.race([
+    started,
+    pending.then(() => {
+      throw new Error("completion settled before work started");
+    }),
+  ]);
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {
@@ -175,6 +199,14 @@ function asOperator<T>(
   );
 }
 
+function completeAs(
+  authority: AdmittedRunOperatorAuthority,
+  mode: CompletionMode,
+  source: OperatorSource = "agent-tool",
+) {
+  return withWork(() => asOperator(authority, () => completion().complete(request(mode)), source));
+}
+
 async function withWork<T>(run: () => Promise<T>): Promise<T> {
   const work = new AsyncWorkScope();
   try {
@@ -210,12 +242,7 @@ beforeEach(() => {
   });
   mocks.isolated.mockImplementation(async (params) => {
     params.assertCurrent?.();
-    return {
-      text: "Allowed answer.",
-      provider: "test-provider",
-      model: "allowed",
-      owner: { kind: "harness", id: "test-harness" },
-    };
+    return isolatedAnswer();
   });
 });
 
@@ -375,12 +402,7 @@ describe("operator model policy on plugin completions", () => {
         asOperator(authority, () => llm.complete({ ...request("direct"), model: "model-a" })),
       );
       // Vitest's manual mock loader shares import callstacks; overlap provider work after import.
-      const second = Promise.race([
-        firstStarted.promise,
-        first.then(() => {
-          throw new Error("first completion settled before provider work started");
-        }),
-      ]).then(() =>
+      const second = waitForWork(firstStarted.promise, first).then(() =>
         work.track(() =>
           asOperator(authority, () => llm.complete({ ...request("direct"), model: "model-b" })),
         ),
@@ -473,13 +495,7 @@ describe("operator model policy on plugin completions", () => {
       }
       const authority = operator();
       await expect(
-        withWork(() =>
-          asOperator(
-            authority,
-            () => completion().complete(request(mode)),
-            mode === "direct" ? "direct-tool" : "agent-tool",
-          ),
-        ),
+        completeAs(authority, mode, mode === "direct" ? "direct-tool" : "agent-tool"),
       ).resolves.toMatchObject({ text: "Allowed answer." });
       expect(mode === "direct" ? mocks.complete : mocks.isolated).toHaveBeenCalledOnce();
     },
@@ -533,12 +549,7 @@ describe("operator model policy on plugin completions", () => {
           started.resolve();
           await resume.promise;
           params.assertCurrent?.();
-          return {
-            text: "Allowed answer.",
-            provider: "test-provider",
-            model: "allowed",
-            owner: { kind: "harness", id: "test-harness" },
-          };
+          return isolatedAnswer();
         });
       }
       const authority = operator(() => {
@@ -546,22 +557,11 @@ describe("operator model policy on plugin completions", () => {
           throw new Error("requester retired");
         }
       }, retain);
-      const pending = withWork(() =>
-        asOperator(authority, () => completion().complete(request(mode))),
-      );
-      await Promise.race([
-        started.promise,
-        pending.then(() => {
-          throw new Error("completion settled before work started");
-        }),
-      ]);
+      const pending = completeAs(authority, mode);
+      await waitForWork(started.promise, pending);
       active = false;
       resume.resolve();
-      await expect(pending).rejects.toMatchObject({
-        name: "LlmCompleteError",
-        code: "LLM_COMPLETION_NOT_AUTHORIZED",
-        message: "requester retired",
-      });
+      await expectDenied(pending, "requester retired");
       expect(mocks.complete).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
     },
@@ -596,12 +596,7 @@ describe("operator model policy on plugin completions", () => {
       } else {
         mocks.isolated.mockImplementation(async (params) => {
           await waitForAbort(params.abortSignal);
-          return {
-            text: "unreachable",
-            provider: "test-provider",
-            model: "allowed",
-            owner: { kind: "harness", id: "test-harness" },
-          };
+          return isolatedAnswer("unreachable");
         });
       }
       const pending = withWork(() =>
@@ -609,10 +604,7 @@ describe("operator model policy on plugin completions", () => {
       );
       await Promise.race([started.promise, pending]);
       controller.abort(revocation);
-      await expect(pending).rejects.toMatchObject({
-        name: "LlmCompleteError",
-        code: "LLM_COMPLETION_NOT_AUTHORIZED",
-      });
+      await expectDenied(pending);
       expect(mocks.complete).not.toHaveBeenCalled();
     },
   );
@@ -651,12 +643,7 @@ describe("operator model policy on plugin completions", () => {
             active = false;
             params.assertCurrent?.();
           }
-          return {
-            text: "Allowed answer.",
-            provider: "test-provider",
-            model: "allowed",
-            owner: { kind: "harness", id: "test-harness" },
-          };
+          return isolatedAnswer();
         });
       }
       const work = new AsyncWorkScope();
@@ -674,10 +661,7 @@ describe("operator model policy on plugin completions", () => {
         if (result === "answer") {
           await expect(pending).resolves.toMatchObject({ text: "Allowed answer." });
         } else {
-          await expect(pending).rejects.toMatchObject({
-            name: "LlmCompleteError",
-            code: "LLM_COMPLETION_NOT_AUTHORIZED",
-          });
+          await expectDenied(pending);
         }
         expect(retain).toHaveBeenCalled();
         expect(release).not.toHaveBeenCalled();

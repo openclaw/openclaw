@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
@@ -45,6 +44,20 @@ import {
 } from "../test-helpers/cold-plugin-fixtures.js";
 import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
+
+function waitForWork(started: Promise<unknown>, completion: Promise<unknown>, message: string) {
+  return Promise.race([
+    started,
+    completion.then(() => {
+      throw new Error(message);
+    }),
+  ]);
+}
+
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 it.each([
   "setup-success",
@@ -384,6 +397,32 @@ it.each([
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: fixture.providerId, modelId, agentId: "main" }],
       });
+      const changeConfig = () => {
+        currentConfig = {
+          ...cfg,
+          models: {
+            providers: {
+              ...cfg.models?.providers,
+              [fixture.providerId]: {
+                ...cfg.models!.providers![fixture.providerId]!,
+                baseUrl: `http://127.0.0.1:${address.port}/B/v1`,
+                apiKey: "fixture-auth-B",
+              },
+            },
+          },
+        };
+      };
+      const expectedResult = (index: number, changed = false) => ({
+        text: `result-${index}|/${changed && mode === "config" ? "B" : "A"}/v1/${anthropicReadCancel ? "messages" : "chat/completions"}|${anthropicReadCancel ? "" : "Bearer "}fixture-auth-${changed && (mode === "config" || mode === "auth") ? "B" : "A"}`,
+      });
+      const finishResult = async (index: number, completion: Promise<unknown>, changed = false) => {
+        finish(requests[index]!, index);
+        await expect(completion).resolves.toMatchObject(expectedResult(index, changed));
+      };
+      const expectSeparateForks = (previous: number) => {
+        expect(fork.mock.calls).toHaveLength(previous + 1);
+        expect(fork.mock.calls[previous - 1]![0]).not.toBe(fork.mock.calls[previous]![0]);
+      };
       const publishAuth = (key: string) =>
         setRuntimeAuthProfileStoreSnapshot(
           {
@@ -420,12 +459,11 @@ it.each([
         return completion;
       };
       const waitForRequest = (index: number, completion: Promise<unknown>) =>
-        Promise.race([
+        waitForWork(
           arrivals[index]!.promise,
-          completion.then(() => {
-            throw new Error(`Completion ${index} settled before its provider request`);
-          }),
-        ]);
+          completion,
+          `Completion ${index} settled before its provider request`,
+        );
       try {
         if (setupMode) {
           type SetupRecord = {
@@ -486,12 +524,7 @@ it.each([
                     .then(() => undefined)
                 : start(0).then(() => undefined);
           pending.push(first);
-          await Promise.race([
-            workStarted.promise,
-            first.then(() => {
-              throw new Error("Setup did not start its real descendant");
-            }),
-          ]);
+          await waitForWork(workStarted.promise, first, "Setup did not start its real descendant");
           if (mode === "setup-error") {
             await expect(first).rejects.toThrow("fixture setup failure");
             expect(requests).toHaveLength(0);
@@ -505,9 +538,7 @@ it.each([
           if (!record || !setupTail) {
             throw new Error("Missing setup source or descendant");
           }
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await nextTurn();
           expect.soft(record.disposed).toBe(0);
           let hostClosed = false;
           const closing = sdk
@@ -555,12 +586,11 @@ it.each([
           if (mode === "late-prepare") {
             const preparing = prepare(firstHost, true);
             pending.push(preparing);
-            await Promise.race([
+            await waitForWork(
               prepareStarted.promise,
-              preparing.then(() => {
-                throw new Error("SDK preparation did not enter the real model resolver");
-              }),
-            ]);
+              preparing,
+              "SDK preparation did not enter the real model resolver",
+            );
             const firstBuilds = create.mock.calls.length;
             expect(firstBuilds).toBeGreaterThan(0);
             let closed = false;
@@ -657,12 +687,11 @@ it.each([
           let closing: Promise<void> | undefined;
           if (drainMode) {
             finish(requests[0]!, 0);
-            await Promise.race([
+            await waitForWork(
               workStarted.promise,
-              first.then(() => {
-                throw new Error("SDK completion settled before accepted work");
-              }),
-            ]);
+              first,
+              "SDK completion settled before accepted work",
+            );
             controller?.abort();
             await expect(first).resolves.toMatchObject({ text: "" });
             closing = firstHost.close().then(() => {
@@ -670,18 +699,7 @@ it.each([
             });
           }
           if (mode === "config") {
-            currentConfig = {
-              ...cfg,
-              models: {
-                providers: {
-                  [fixture.providerId]: {
-                    ...cfg.models!.providers![fixture.providerId]!,
-                    baseUrl: `http://127.0.0.1:${address.port}/B/v1`,
-                    apiKey: "fixture-auth-B",
-                  },
-                },
-              },
-            };
+            changeConfig();
           }
           if (mode === "auth") {
             publishAuth("fixture-auth-B");
@@ -692,8 +710,7 @@ it.each([
           if (mode === "overlap" || drainMode) {
             expect.soft(create.mock.calls.length).toBe(firstBuilds);
           }
-          expect(fork.mock.calls).toHaveLength(2);
-          expect(fork.mock.calls[0]![0]).not.toBe(fork.mock.calls[1]![0]);
+          expectSeparateForks(1);
           if (drainMode) {
             expect.soft(closed).toBe(false);
             finishWork.resolve();
@@ -703,17 +720,12 @@ it.each([
             finish(requests[0]!, 0);
             const firstResult = await first;
             expect(nestedPreparationFailure).toBeUndefined();
-            expect(firstResult).toMatchObject({
-              text: "result-0|/A/v1/chat/completions|Bearer fixture-auth-A",
-            });
+            expect(firstResult).toMatchObject(expectedResult(0));
           }
           if (mode === "nested-prepare") {
             expect(nestedPreparationCompleted).toBe(true);
           }
-          finish(requests[1]!, 1);
-          await expect(second).resolves.toMatchObject({
-            text: `result-1|/${mode === "config" ? "B" : "A"}/v1/chat/completions|Bearer fixture-auth-${mode === "config" || mode === "auth" ? "B" : "A"}`,
-          });
+          await finishResult(1, second, true);
           await firstHost.close();
           await secondHost.close();
           const staleCompletion = completeWithPreparedSimpleCompletionModel({
@@ -784,39 +796,31 @@ it.each([
           const next = start(0);
           await waitForRequest(0, next);
           expect.soft(create.mock.calls.length).toBe(buildsAfterFailure + 1);
-          finish(requests[0]!, 0);
-          await expect(next).resolves.toMatchObject({
-            text: "result-0|/A/v1/chat/completions|Bearer fixture-auth-A",
-          });
+          await finishResult(0, next);
           return;
         }
         const abortController =
           mode === "abort" || mode === "callback-drain" || anthropicReadCancel
             ? new AbortController()
             : undefined;
-        const firstStarted = performance.now();
         const first = drainMode
           ? parentWork.track(() => start(0, abortController?.signal))
           : start(0, abortController?.signal);
         await waitForRequest(0, first);
-        const firstPreparationMs = performance.now() - firstStarted;
         const firstBuilds = create.mock.calls.length;
         expect(firstBuilds).toBeGreaterThan(0);
         if (drainMode) {
           finish(requests[0]!, 0);
           if (anthropicReadCancel) {
             await bodyReadStarted.promise;
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await nextTurn();
             foreignWork.run(() => abortController?.abort(new Error("foreign cancellation")));
           }
-          await Promise.race([
+          await waitForWork(
             workStarted.promise,
-            first.then(() => {
-              throw new Error("Completion settled before accepted fixture work");
-            }),
-          ]);
+            first,
+            "Completion settled before accepted fixture work",
+          );
           abortController?.abort();
           await expect(first).resolves.toMatchObject({ text: "" });
           parentDrain = parentWork.drain().then(() => {
@@ -830,28 +834,17 @@ it.each([
             await foreignWork.drain();
           }
           expect.soft(create.mock.calls.length).toBe(firstBuilds);
-          expect(fork.mock.calls).toHaveLength(2);
-          expect(fork.mock.calls[0]![0]).not.toBe(fork.mock.calls[1]![0]);
+          expectSeparateForks(1);
           finishWork.resolve();
           await workSettled.promise;
           await parentDrain;
           expect(parentDrained).toBe(true);
-          finish(requests[1]!, 1);
-          await expect(second).resolves.toMatchObject({
-            text: anthropicReadCancel
-              ? "result-1|/A/v1/messages|fixture-auth-A"
-              : "result-1|/A/v1/chat/completions|Bearer fixture-auth-A",
-          });
+          await finishResult(1, second);
           const buildsAfterSecond = create.mock.calls.length;
           const third = start(2);
           await waitForRequest(2, third);
           expect(create.mock.calls.length).toBe(buildsAfterSecond + 1);
-          finish(requests[2]!, 2);
-          await expect(third).resolves.toMatchObject({
-            text: anthropicReadCancel
-              ? "result-2|/A/v1/messages|fixture-auth-A"
-              : "result-2|/A/v1/chat/completions|Bearer fixture-auth-A",
-          });
+          await finishResult(2, third);
           return;
         }
         if (mode === "provider-error" || mode === "abort") {
@@ -869,26 +862,11 @@ it.each([
           const next = start(1);
           await waitForRequest(1, next);
           expect(create.mock.calls.length).toBe(firstBuilds + 1);
-          finish(requests[1]!, 1);
-          await expect(next).resolves.toMatchObject({
-            text: "result-1|/A/v1/chat/completions|Bearer fixture-auth-A",
-          });
+          await finishResult(1, next);
           return;
         }
         if (mode === "config") {
-          currentConfig = {
-            ...cfg,
-            models: {
-              providers: {
-                ...cfg.models?.providers,
-                [fixture.providerId]: {
-                  ...cfg.models!.providers![fixture.providerId]!,
-                  baseUrl: `http://127.0.0.1:${address.port}/B/v1`,
-                  apiKey: "fixture-auth-B",
-                },
-              },
-            },
-          };
+          changeConfig();
         }
         if (mode === "auth") {
           publishAuth("fixture-auth-B");
@@ -904,42 +882,20 @@ it.each([
         }
         const buildsBeforeSecond = create.mock.calls.length;
         const forksBeforeSecond = fork.mock.calls.length;
-        const secondStarted = performance.now();
         const second = start(1);
         await waitForRequest(1, second);
-        const secondPreparationMs = performance.now() - secondStarted;
         const secondBuilds = create.mock.calls.length;
-        console.info("direct completion owner reuse", {
-          mode,
-          firstBuilds,
-          buildsBeforeSecond,
-          secondBuilds,
-          firstPreparationMs,
-          secondPreparationMs,
-        });
         if (mode === "overlap" || mode === "lru") {
           expect.soft(secondBuilds).toBe(buildsBeforeSecond);
         }
-        expect(fork.mock.calls.length).toBe(forksBeforeSecond + 1);
-        expect(fork.mock.calls[forksBeforeSecond - 1]![0]).not.toBe(
-          fork.mock.calls[forksBeforeSecond]![0],
-        );
-        finish(requests[0]!, 0);
-        await expect(first).resolves.toMatchObject({
-          text: "result-0|/A/v1/chat/completions|Bearer fixture-auth-A",
-        });
-        finish(requests[1]!, 1);
-        await expect(second).resolves.toMatchObject({
-          text: `result-1|/${mode === "config" ? "B" : "A"}/v1/chat/completions|Bearer fixture-auth-${mode === "config" || mode === "auth" ? "B" : "A"}`,
-        });
+        expectSeparateForks(forksBeforeSecond);
+        await finishResult(0, first);
+        await finishResult(1, second, true);
         if (mode === "overlap") {
           const third = start(2);
           await waitForRequest(2, third);
           expect(create.mock.calls.length).toBe(secondBuilds + 1);
-          finish(requests[2]!, 2);
-          await expect(third).resolves.toMatchObject({
-            text: "result-2|/A/v1/chat/completions|Bearer fixture-auth-A",
-          });
+          await finishResult(2, third);
         }
       } finally {
         Reflect.deleteProperty(globalThis, setupKey);
