@@ -15,11 +15,12 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
-  mockCallArg,
   readySessionMeta,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
+
+installAcpSessionManagerTestLifecycle();
 
 const sessionTarget = { cfg: baseCfg, sessionKey: "agent:codex:acp:actor-epoch-fencing" };
 const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
@@ -75,14 +76,10 @@ function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: Session
     get meta() {
       return persistedMeta;
     },
-    get ensureCount() {
-      return ensureCount;
-    },
   };
 }
 
 describe("AcpSessionManager actor epoch fencing", () => {
-  installAcpSessionManagerTestLifecycle();
   const { sessionKey } = sessionTarget;
 
   it.each([
@@ -223,16 +220,10 @@ describe("AcpSessionManager actor epoch fencing", () => {
         },
       });
       let settled = false;
-      const outcome = pending.then(
-        (value) => {
-          settled = true;
-          return { kind: "success" as const, value };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { kind: "error" as const, error };
-        },
-      );
+      const outcome = Promise.allSettled([pending]).then(([result]) => {
+        settled = true;
+        return result;
+      });
       try {
         expect(
           await Promise.race([entered.promise.then(() => "read"), outcome.then(() => "settled")]),
@@ -248,13 +239,13 @@ describe("AcpSessionManager actor epoch fencing", () => {
         expect(settled).toBe(false);
         release.resolve();
         const result = await outcome;
-        if (result.kind !== "error") {
+        if (result.status !== "rejected") {
           throw new Error("Expected the retired status read to reject");
         }
         if (retired === "actor") {
-          expect(result.error).toMatchObject({ detailCode: "SESSION_ACTOR_SUPERSEDED" });
+          expect(result.reason).toMatchObject({ detailCode: "SESSION_ACTOR_SUPERSEDED" });
         } else {
-          expect(result.error).toBe(revoked);
+          expect(result.reason).toBe(revoked);
         }
         expect(runtime.ensureSession).not.toHaveBeenCalled();
         expect(runtime.getCapabilities).not.toHaveBeenCalled();
@@ -378,8 +369,8 @@ describe("AcpSessionManager actor epoch fencing", () => {
         mode: "prompt",
         requestId: "fresh-follow-up",
       });
-      expect(fixture.ensureCount).toBe(2);
-      expect(mockCallArg(runtimeState.runTurn).handle).toMatchObject({
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(runtimeState.runTurn.mock.calls[0]?.[0].handle).toMatchObject({
         runtimeSessionName: "runtime-2",
       });
       if (operation === "runtime mode") {
@@ -424,108 +415,99 @@ describe("AcpSessionManager actor epoch fencing", () => {
   });
 });
 
-describe("ACP close target custody", () => {
-  installAcpSessionManagerTestLifecycle();
-
-  it("captures the expected owner before waiting for the session actor", async () => {
-    const sessionKey = "agent:main:acp:close-wait";
-    const state = createRuntime();
-    const meta = readySessionMeta({ agent: "main" });
-    let entry = {
-      sessionId: "original",
-      lifecycleRevision: "original",
-      updatedAt: 1,
-      spawnedBy: "agent:main:original-owner",
+it("captures the expected owner before waiting for the session actor", async () => {
+  const sessionKey = "agent:main:acp:close-wait";
+  const state = createRuntime();
+  const meta = readySessionMeta({ agent: "main" });
+  let entry = {
+    sessionId: "original",
+    lifecycleRevision: "original",
+    updatedAt: 1,
+    spawnedBy: "agent:main:original-owner",
+  };
+  hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    entry,
+    acp: meta,
+  }));
+  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+  const entered = createDeferred();
+  const release = createDeferred();
+  state.ensureSession.mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
+  });
+  const manager = new AcpSessionManager();
+  const status = manager.getSessionStatus({ cfg: baseCfg, sessionKey });
+  let closing: Promise<unknown> | undefined;
+  try {
+    await entered.promise;
+    const expectedControlBinding = {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      ownerKey: entry.spawnedBy,
     };
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    closing = manager.closeSession({
+      cfg: baseCfg,
       sessionKey,
-      storeSessionKey: sessionKey,
-      entry,
-      acp: meta,
-    }));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+      reason: "terminal-task-cleanup",
+      expectedControlBinding,
+      discardPersistentState: true,
+      allowBackendUnavailable: true,
+      clearMeta: true,
+    });
+    const rejected = expect(closing).rejects.toMatchObject({
+      detailCode: "SESSION_ACTOR_SUPERSEDED",
+    });
+    entry = { ...entry, spawnedBy: "agent:main:replacement-owner" };
+    expectedControlBinding.ownerKey = entry.spawnedBy;
+    release.resolve();
+    await status;
+    await rejected;
+    expect(state.close).not.toHaveBeenCalled();
+    expect(state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([status, closing]);
+    await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
+  }
+});
+it.each(["update", "reset"] as const)(
+  "rechecks the admitted requester before an awaited %s commits",
+  async (operation) => {
     const entered = createDeferred();
     const release = createDeferred();
-    state.ensureSession.mockImplementation(async () => {
-      entered.resolve();
-      await release.promise;
-      return { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
-    });
-    const manager = new AcpSessionManager();
-    const status = manager.getSessionStatus({ cfg: baseCfg, sessionKey });
-    let closing: Promise<unknown> | undefined;
-    try {
-      await entered.promise;
-      const expectedControlBinding = {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        ownerKey: entry.spawnedBy,
-      };
-      closing = manager.closeSession({
-        cfg: baseCfg,
-        sessionKey,
-        reason: "terminal-task-cleanup",
-        expectedControlBinding,
-        discardPersistentState: true,
-        allowBackendUnavailable: true,
-        clearMeta: true,
-      });
-      const rejected = expect(closing).rejects.toMatchObject({
-        detailCode: "SESSION_ACTOR_SUPERSEDED",
-      });
-      entry = { ...entry, spawnedBy: "agent:main:replacement-owner" };
-      expectedControlBinding.ownerKey = entry.spawnedBy;
-      release.resolve();
-      await status;
-      await rejected;
-      expect(state.close).not.toHaveBeenCalled();
-      expect(state.prepareFreshSession).not.toHaveBeenCalled();
-      expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await Promise.allSettled([status, closing]);
-      await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
-    }
-  });
-});
-
-describe("ACP metadata-only command authority", () => {
-  installAcpSessionManagerTestLifecycle();
-
-  it.each(["update", "reset"] as const)(
-    "rechecks the admitted requester before an awaited %s commits",
-    async (operation) => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      let current = true;
-      const fixture = createFixture(
-        async () => {
-          entered.resolve();
-          await release.promise;
-        },
-        readySessionMeta({ runtimeOptions: { cwd: "/workspace/original" } }),
-      );
-      const { manager, runtimeState: runtime } = fixture;
-      const target = {
-        ...sessionTarget,
-        assertActive: () => {
-          if (!current) {
-            throw new Error("requester authority revoked");
-          }
-        },
-      };
-      const pending =
-        operation === "update"
-          ? manager.updateSessionRuntimeOptions({ ...target, patch: { cwd: "/workspace/changed" } })
-          : manager.resetSessionRuntimeOptions(target);
-      const rejected = expect(pending).rejects.toThrow("requester authority revoked");
-      await entered.promise;
-      current = false;
-      release.resolve();
-      await rejected;
-      expect(fixture.meta?.runtimeOptions).toEqual({ cwd: "/workspace/original" });
-      expect(runtime.ensureSession).not.toHaveBeenCalled();
-      expect(runtime.close).not.toHaveBeenCalled();
-    },
-  );
-});
+    let current = true;
+    const fixture = createFixture(
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      readySessionMeta({ runtimeOptions: { cwd: "/workspace/original" } }),
+    );
+    const { manager, runtimeState: runtime } = fixture;
+    const target = {
+      ...sessionTarget,
+      assertActive: () => {
+        if (!current) {
+          throw new Error("requester authority revoked");
+        }
+      },
+    };
+    const pending =
+      operation === "update"
+        ? manager.updateSessionRuntimeOptions({ ...target, patch: { cwd: "/workspace/changed" } })
+        : manager.resetSessionRuntimeOptions(target);
+    const rejected = expect(pending).rejects.toThrow("requester authority revoked");
+    await entered.promise;
+    current = false;
+    release.resolve();
+    await rejected;
+    expect(fixture.meta?.runtimeOptions).toEqual({ cwd: "/workspace/original" });
+    expect(runtime.ensureSession).not.toHaveBeenCalled();
+    expect(runtime.close).not.toHaveBeenCalled();
+  },
+);

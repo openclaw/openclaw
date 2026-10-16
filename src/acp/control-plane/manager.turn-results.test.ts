@@ -1,60 +1,30 @@
-import type {
-  AcpRuntimeEvent,
-  AcpRuntimeTurn,
-  AcpRuntimeTurnResult,
-} from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
-  AcpSessionManager,
-  baseCfg,
-  createRuntime,
-  expectRecordFields,
-  expectRejectedRecord,
   extractStatesFromUpserts,
-  hoisted,
   installAcpSessionManagerTestLifecycle,
+  managerFixture,
   mockMutableSession,
-  mockCallArg,
   mockParentedAcpSessionEntries,
   readySessionMeta,
+  resolvedIdentity,
+  runtimeTurn as turn,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager turn results", () => {
   installAcpSessionManagerTestLifecycle();
 
   function setupRuntime(meta = readySessionMeta(), sessionKey = "agent:codex:acp:session-1") {
-    const state = createRuntime();
-    const manager = new AcpSessionManager();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: meta,
-    });
-    const run = (overrides: Partial<Parameters<typeof manager.runTurn>[0]> = {}) =>
-      manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey,
+    const f = managerFixture(sessionKey, meta);
+    const run = (overrides: Partial<Parameters<typeof f.manager.runTurn>[0]> = {}) =>
+      f.run({
         text: "Do work",
-        mode: "prompt",
         requestId: "turn-result",
         ...overrides,
       });
-    return { ...state, sessionKey, run };
-  }
-
-  function turn(requestId: string, overrides: Partial<AcpRuntimeTurn> = {}): AcpRuntimeTurn {
-    return {
-      requestId,
-      events: (async function* () {})(),
-      result: Promise.resolve({ status: "completed" }),
-      cancel: vi.fn(async () => {}),
-      closeStream: vi.fn(async () => {}),
-      ...overrides,
-    };
+    return { ...f.runtimeState, sessionKey, run };
   }
 
   function parentSession(sessionKey: string) {
@@ -70,12 +40,10 @@ describe("AcpSessionManager turn results", () => {
       currentMeta: readySessionMeta({
         agent: "claude",
         runtimeSessionName: sessionKey,
-        identity: {
-          state: "resolved",
-          source: "status",
+        identity: resolvedIdentity({
           acpxSessionId: "acpx-sid-stale",
           lastUpdatedAt: Date.now(),
-        },
+        }),
       }),
     };
     const state = setupRuntime(meta.currentMeta, sessionKey);
@@ -274,52 +242,45 @@ describe("AcpSessionManager turn results", () => {
           { type: "done", ...result },
         ]);
         const states = extractStatesFromUpserts();
-        expect(states).toContain("running");
-        expect(states).toContain("idle");
+        expect(states).toEqual(expect.arrayContaining(["running", "idle"]));
         expect(states).not.toContain("error");
       });
     },
   );
 
-  it("rejects an incomplete legacy stream without discarding its persistent session", async () => {
+  it.each([
+    ["incomplete stream", "ACP turn ended without a terminal done event."],
+    ["generic Internal error without resume-required detail", "Internal error"],
+  ])("does not retry or discard a persistent session after %s", async (kind, message) => {
     const { state } = setupPersistentRuntime();
-    state.runTurn.mockImplementation(async function* () {});
-    await expect(state.run()).rejects.toMatchObject({
-      code: "ACP_TURN_FAILED",
-      message: "ACP turn ended without a terminal done event.",
+    state.runTurn.mockImplementation(async function* () {
+      if (kind !== "incomplete stream") {
+        yield { type: "error", code: "ACP_TURN_FAILED", message };
+      }
     });
-    const states = extractStatesFromUpserts();
-    expect(states).toContain("running");
-    expect(states.at(-1)).toBe("error");
+    await expect(state.run()).rejects.toMatchObject({ code: "ACP_TURN_FAILED", message });
+    if (kind === "incomplete stream") {
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("running");
+      expect(states.at(-1)).toBe("error");
+    }
     expect(state.prepareFreshSession).not.toHaveBeenCalled();
     expect(state.ensureSession).toHaveBeenCalledOnce();
+    if (kind !== "incomplete stream") {
+      expect(state.runTurn).toHaveBeenCalledOnce();
+    }
   });
 
   it("marks the session errored when runtime initialization fails before turn start", async () => {
     const state = setupRuntime(readySessionMeta({ state: "running" }));
     state.ensureSession.mockRejectedValue(new Error("acpx exited with code 1"));
-    await expectRejectedRecord(state.run(), {
+    await expect(state.run()).rejects.toMatchObject({
       code: "ACP_SESSION_INIT_FAILED",
       message: "acpx exited with code 1",
     });
     const states = extractStatesFromUpserts();
     expect(states).not.toContain("running");
     expect(states.at(-1)).toBe("error");
-  });
-
-  it("does not retry a generic Internal error without a resume-required detail code", async () => {
-    const { state } = setupPersistentRuntime();
-    state.runTurn.mockImplementation(async function* () {
-      yield { type: "error" as const, code: "ACP_TURN_FAILED", message: "Internal error" };
-    });
-
-    await expect(state.run()).rejects.toMatchObject({
-      code: "ACP_TURN_FAILED",
-      message: "Internal error",
-    });
-    expect(state.prepareFreshSession).not.toHaveBeenCalled();
-    expect(state.ensureSession).toHaveBeenCalledOnce();
-    expect(state.runTurn).toHaveBeenCalledOnce();
   });
 
   it.each(["event", "cause"] as const)(
@@ -355,20 +316,19 @@ describe("AcpSessionManager turn results", () => {
         [{ sessionKey, agentId: "claude", persistedHandle }],
       ]);
       expect(state.ensureSession).toHaveBeenCalledTimes(2);
-      expectRecordFields(mockCallArg(state.ensureSession), {
+      expect(state.ensureSession.mock.calls[0]?.[0]).toMatchObject({
         sessionKey,
         agentId: "claude",
         resumeSessionId: "acpx-sid-stale",
       });
-      expect(mockCallArg(state.ensureSession, 1).resumeSessionId).toBeUndefined();
-      expect(mockCallArg(state.ensureSession, 1).agentId).toBe("claude");
+      expect(state.ensureSession.mock.calls[1]?.[0].resumeSessionId).toBeUndefined();
+      expect(state.ensureSession.mock.calls[1]?.[0].agentId).toBe("claude");
       expect(meta.currentMeta.identity).toMatchObject({
         acpxSessionId: "acpx-sid-fresh",
         state: "resolved",
       });
       const states = extractStatesFromUpserts();
-      expect(states).toContain("running");
-      expect(states).toContain("idle");
+      expect(states).toEqual(expect.arrayContaining(["running", "idle"]));
       expect(states).not.toContain("error");
     },
   );
