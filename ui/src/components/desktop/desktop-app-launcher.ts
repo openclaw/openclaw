@@ -1,65 +1,53 @@
-import type {
-  DesktopSource,
-  WorkerDesktopAppId,
-  WorkerDesktopLaunchResult,
-} from "@openclaw/gateway-protocol";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WorkerDesktopAppId, WorkerDesktopLaunchResult } from "@openclaw/gateway-protocol";
+import { createSignal, onCleanup } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
-
-type LaunchTarget = {
-  client: GatewayBrowserClient | null;
-  source: DesktopSource | null;
-  presented: boolean;
-  state: DesktopPanelState;
-  apps: readonly WorkerDesktopAppId[];
-};
+import type { DesktopPanelController } from "./desktop-panel-controller.ts";
 
 /** Keeps app-launch feedback scoped to the current desktop presentation. */
-export class DesktopAppLauncher {
-  app: WorkerDesktopAppId | null = null;
-  error: string | null = null;
-  private operationId = 0;
-
-  constructor(
-    private readonly host: { requestUpdate(): void },
-    private readonly target: () => LaunchTarget,
-  ) {}
-
-  clear(): void {
-    this.operationId += 1;
-    this.app = null;
-    this.error = null;
-    this.host.requestUpdate();
-  }
-
-  async launch(app: WorkerDesktopAppId): Promise<void> {
-    const { client, source, presented, state, apps } = this.target();
+export function createDesktopAppLauncher(target: () => DesktopPanelController["launchTarget"]) {
+  const [app, setApp] = createSignal<WorkerDesktopAppId | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  // Admission must see a same-turn launch before Solid publishes its busy indicator.
+  let pendingApp: WorkerDesktopAppId | null = null;
+  let operationId = 0;
+  onCleanup(() => {
+    operationId += 1;
+  });
+  const clear = () => {
+    operationId += 1;
+    pendingApp = null;
+    setApp(null);
+    setError(null);
+  };
+  const launch = async (nextApp: WorkerDesktopAppId) => {
+    const { client, source, presented, state, apps } = target();
     if (
       !client ||
       !presented ||
       source?.kind !== "environment" ||
       (state !== "connecting" && state !== "connected") ||
-      !apps.includes(app) ||
-      this.app === app
+      !apps.includes(nextApp) ||
+      pendingApp === nextApp
     ) {
       return;
     }
-    const operationId = ++this.operationId;
-    this.app = app;
-    this.error = null;
-    this.host.requestUpdate();
+    const requestId = ++operationId;
+    pendingApp = nextApp;
+    setApp(nextApp);
+    setError(null);
     try {
-      await client.request<WorkerDesktopLaunchResult>("desktop.launch", { source, app });
-    } catch (error) {
-      if (operationId !== this.operationId) {
-        return;
+      await client.request<WorkerDesktopLaunchResult>("desktop.launch", { source, app: nextApp });
+    } catch (cause) {
+      if (requestId === operationId) {
+        setError(formatUiError(cause));
       }
-      this.error = formatUiError(error);
     }
-    if (operationId === this.operationId) {
-      this.app = null;
-      this.host.requestUpdate();
+    if (requestId === operationId) {
+      pendingApp = null;
+      setApp(null);
     }
-  }
+  };
+  return { app, error, clear, launch };
 }
+
+export type DesktopAppLauncher = ReturnType<typeof createDesktopAppLauncher>;
