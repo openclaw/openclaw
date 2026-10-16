@@ -1,9 +1,10 @@
 import { createHmac } from "node:crypto";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import {
   createMockIncomingRequest,
   createMockServerResponse,
   postRawWebhook,
+  withServer,
 } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
@@ -525,38 +526,22 @@ describe("createMattermostInteractionHandler body limits", () => {
       accountId: "acct",
       handleInteraction,
     });
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
+    await withServer(
+      (req, res) => {
+        void handler(req, res);
+      },
+      async (baseUrl) => {
+        // Declared and sent in one write: the shape whose rejection used to race the flush.
+        const result = await postRawWebhook({
+          url: `${baseUrl}/mattermost/interactions`,
+          body: "x".repeat(64 * 1024 + 1),
+          headers: { "content-type": "application/json" },
         });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the interaction test server to have a TCP address");
-      }
-
-      // Declared and sent in one write: the shape whose rejection used to race the flush.
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/mattermost/interactions`,
-        body: "x".repeat(64 * 1024 + 1),
-        headers: { "content-type": "application/json" },
-      });
-
-      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
-      expect(result.closedByServer).toBe(true);
-      expect(handleInteraction).not.toHaveBeenCalled();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+        expect(result.closedByServer).toBe(true);
+        expect(handleInteraction).not.toHaveBeenCalled();
+      },
+    );
   });
 });
