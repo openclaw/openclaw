@@ -12,9 +12,23 @@ const audioFailure = {
   attachment: { code: "delivery-failed", kind: "audio", label: "Generated audio 1" },
 };
 const audioReceipt = "⚠️ audio attachment: Delivery failed. Try sending this file again.";
+const recordingReceipt = `Your recording\n${audioReceipt}`;
 const caption = { type: "text", text: "Your recording" };
 const image = { type: "image", url: "file:///private/image.png" };
 const assistant = (content: readonly unknown[]) => ({ role: "assistant", content });
+const privateMetadata = {
+  label: "\x1b]52;c;private-clipboard\x07file:///private/name",
+  url: "https://private.invalid/file?ticket=private",
+  mimeType: "private/type",
+};
+const missingImage = "⚠️ image attachment: File not found. Check the path and try again.";
+const blockedVideo =
+  "⚠️ video attachment: Rejected by the local attachment allowlist. Send a supported file type.";
+const failedFile = "⚠️ file attachment: Delivery failed. Try sending this file again.";
+function privateAttachment(kind: string, code: string) {
+  const attachment = { kind, code, ...privateMetadata };
+  return assistant([{ type: "attachment_error", attachment }]);
+}
 
 function createDisplayHarness() {
   const state = makeTuiState({
@@ -51,51 +65,19 @@ function createDisplayHarness() {
 
 describe("TUI attachment failure presentation", () => {
   it.each([
-    ["caption and failure", [caption, audioFailure], `Your recording\n${audioReceipt}`],
-    [
-      "caption, success and failure",
-      [caption, image, audioFailure],
-      `Your recording\n${audioReceipt}`,
-    ],
-    ["multiple failures", [audioFailure, audioFailure], `${audioReceipt}\n${audioReceipt}`],
-  ] as const)("keeps %s in history and final output", (_name, content, expected) => {
-    const message = assistant(content);
-    expect(extractTextFromMessage(message)).toBe(expected);
-    expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(expected);
-  });
-
-  it.each([
-    [
-      "image",
-      "file-not-found",
-      "⚠️ image attachment: File not found. Check the path and try again.",
-    ],
-    [
-      "video",
-      "unsupported-format",
-      "⚠️ video attachment: Rejected by the local attachment allowlist. Send a supported file type.",
-    ],
-    [
-      "document",
-      "delivery-failed",
-      "⚠️ file attachment: Delivery failed. Try sending this file again.",
-    ],
-  ])("renders actionable %s/%s receipts without source metadata", (kind, code, expected) => {
-    const message = assistant([
-      {
-        type: "attachment_error",
-        attachment: {
-          kind,
-          code,
-          label: "\x1b]52;c;private-clipboard\x07file:///private/name",
-          url: "https://private.invalid/file?ticket=private",
-          mimeType: "private/type",
-        },
-      },
-    ]);
-    expect(extractTextFromMessage(message)).toBe(expected);
-    expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(expected);
-  });
+    ["caption and failure", assistant([caption, audioFailure]), recordingReceipt],
+    ["caption, success and failure", assistant([caption, image, audioFailure]), recordingReceipt],
+    ["two failures", assistant([audioFailure, audioFailure]), `${audioReceipt}\n${audioReceipt}`],
+    ["private missing image", privateAttachment("image", "file-not-found"), missingImage],
+    ["private blocked video", privateAttachment("video", "unsupported-format"), blockedVideo],
+    ["private failed file", privateAttachment("document", "delivery-failed"), failedFile],
+  ] as const)(
+    "renders %s in history and final output without source metadata",
+    (_name, message, expected) => {
+      expect(extractTextFromMessage(message)).toBe(expected);
+      expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(expected);
+    },
+  );
 
   it.each([false, true])(
     "retains streamed captions and thinking visibility (%s) before a failure-only final",
@@ -132,7 +114,7 @@ describe("TUI attachment failure presentation", () => {
   it.each([
     ["failure only", [audioFailure], false, audioReceipt],
     ["mixed attachments", [image, audioFailure], false, `Attached image\n${audioReceipt}`],
-    ["streamed caption", [image, audioFailure], true, `Your recording\n${audioReceipt}`],
+    ["streamed caption", [image, audioFailure], true, recordingReceipt],
   ] as const)(
     "renders one receipt through optimistic and authoritative history: %s",
     (_name, content, streamed, expected) => {
