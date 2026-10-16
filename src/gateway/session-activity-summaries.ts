@@ -15,7 +15,6 @@ import {
   readSessionActivitySummary,
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -47,6 +46,7 @@ import {
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
+  createActivitySummaryStorePaths,
   prepareSessionActivitySummaryView,
   resolveActivitySummaryEventTarget,
   sessionActivitySummaryOwnerIsCurrent,
@@ -133,22 +133,7 @@ export function createSessionActivitySummaries(deps: {
   const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
-  // The pump rechecks every queued state; store paths change only with a config publication.
-  let storePathConfig: OpenClawConfig | undefined;
-  const storePaths = new Map<string, string>();
-  const storePathFor = (agentId: string) => {
-    const cfg = deps.getConfig();
-    if (cfg !== storePathConfig) {
-      storePathConfig = cfg;
-      storePaths.clear();
-    }
-    let storePath = storePaths.get(agentId);
-    if (storePath === undefined) {
-      storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-      storePaths.set(agentId, storePath);
-    }
-    return storePath;
-  };
+  const storePathFor = createActivitySummaryStorePaths(deps.getConfig);
   const scope = (target: ActivitySummaryTarget) => ({
     agentId: target.agentId,
     sessionKey: target.key,

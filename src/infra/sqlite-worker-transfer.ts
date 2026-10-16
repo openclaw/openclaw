@@ -186,12 +186,6 @@ export function createSqliteWorkerTransferReceiver(
           if (frame.offset !== 0) {
             throw new Error("SQLite read transfer omitted the start of a record");
           }
-          // Single-frame records need no reassembly copy.
-          if (frame.recordDone && frame.bytes.byteLength === frame.recordBytes) {
-            consume({ kind: frame.kind, value: deserialize(frame.bytes) });
-            counts.set(frame.kind, count + 1);
-            return undefined;
-          }
           record = { kind: frame.kind, bytes: new Uint8Array(frame.recordBytes), offset: 0 };
         }
         const end = frame.offset + frame.bytes.byteLength;
