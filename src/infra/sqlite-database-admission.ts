@@ -692,9 +692,7 @@ function revoke(record: Admission | undefined, location = record?.location): voi
   if (location) {
     state.seals.invalidate(location, record);
   }
-  if (record) {
-    revokeSqliteDatabaseAdmissionFacts(record);
-  }
+  revokeSqliteDatabaseAdmissionFacts(record);
 }
 
 export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {

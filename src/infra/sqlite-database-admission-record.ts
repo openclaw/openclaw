@@ -151,7 +151,10 @@ export function publishSqliteDatabaseFact(
   return true;
 }
 
-export function revokeSqliteDatabaseAdmissionFacts(record: Admission): void {
+export function revokeSqliteDatabaseAdmissionFacts(record: Admission | undefined): void {
+  if (!record) {
+    return;
+  }
   // Corruption can follow native close; shared cells also revoke retained physical facts.
   for (const fact of record.facts.values()) {
     Atomics.store(new Int32Array(fact.current), 0, 0);
