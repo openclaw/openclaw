@@ -24,6 +24,7 @@ import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -232,11 +233,7 @@ function SettingsNavigationItem(props: {
       touch,
     );
   let anchor!: HTMLAnchorElement;
-  onSettled(() => {
-    const touch = (event: TouchEvent) => preload(event, true);
-    anchor.addEventListener("touchstart", touch, { passive: true });
-    return () => anchor.removeEventListener("touchstart", touch);
-  });
+  onSettled(() => listen(anchor, "touchstart", (event) => preload(event, true), { passive: true }));
   return (
     <a
       ref={(element) => {
@@ -544,10 +541,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 type="button"
                 class="settings-sidebar__search-clear"
                 aria-label={t("nav.settingsSearchClear")}
-                onClick={(event) => {
-                  const input = event.currentTarget.parentElement?.querySelector("input");
+                onClick={() => {
                   props.onSearchQueryChange("");
-                  input?.focus();
+                  searchInput?.focus();
                 }}
               >
                 <Icon name="x" />
