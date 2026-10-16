@@ -47,37 +47,73 @@ const {
   resetConfiguredGlobalAgentSessionStore,
 } = setupPersistentSessionListTestHarness();
 
-type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
+type SeedMessage = Parameters<typeof seedCompletedSessionTranscript>[0]["message"];
 
-async function prepareRequest(context: Record<string, unknown> = {}) {
+function reply(
+  provider: string,
+  model: string,
+  [input, output, cacheRead, cacheWrite]: [number, number, number, number?],
+  cost?: number,
+): SeedMessage {
+  const usage: SeedMessage["usage"] = { input, output, cacheRead };
+  if (cacheWrite !== undefined) {
+    usage.cacheWrite = cacheWrite;
+  }
+  if (cost !== undefined) {
+    usage.cost = { total: cost };
+  }
+  return { role: "assistant", provider, model, usage };
+}
+
+async function invokeSession(
+  method: "sessions.list" | MutationMethod,
+  params: Record<string, unknown>,
+  context: Record<string, unknown>,
+  defer = false,
+  subscribedConnIds = new Set(["conn-1"]),
+) {
   const respond = vi.fn();
+  const broadcastToConnIds = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const requestContext = {
     getRuntimeConfig,
+    ...(method === "sessions.list"
+      ? {
+          readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
+        }
+      : {
+          broadcastToConnIds,
+          chatAbortControllers: new Map(),
+          chatQueuedTurns: new Map(),
+          dedupe: new Map(),
+          getSessionEventSubscriberConnIds: () => subscribedConnIds,
+          loadGatewayModelCatalog: async () => ({ providers: [] }),
+          loadGatewayModelCatalogSnapshot: () => mutationCatalogSnapshot([]),
+        }),
     ...context,
   } as unknown as GatewayRequestContext;
-  return {
-    respond,
-    context: requestContext,
-    invoke: async (method: "sessions.list" | MutationMethod, params: Record<string, unknown>) => {
-      await initializeSessionReadContext(requestContext);
-      const options = {
-        req: { type: "req" as const, id: "test-request", method, params },
-        params,
-        respond,
-        client: null,
-        isWebchatConnect: () => false,
-        context: requestContext,
-      };
-      await expectDefined(sessionsHandlers[method], "session handler")(
-        method === "sessions.list"
-          ? options
-          : bindInProcessRequestMutationAuthority(options, undefined, undefined),
-      );
-    },
-  };
+  const handler = expectDefined(sessionsHandlers[method], "session handler");
+  const request = initializeSessionReadContext(requestContext).then(() => {
+    const options = {
+      req: { type: "req" as const, id: "test-request", method, params },
+      params,
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: requestContext,
+    };
+    return handler(
+      method === "sessions.list"
+        ? options
+        : bindInProcessRequestMutationAuthority(options, undefined, undefined),
+    );
+  });
+  if (!defer) {
+    await request;
+  }
+  return { request, respond, context: requestContext, broadcastToConnIds };
 }
 
 async function invokeSessionsList(
@@ -85,15 +121,7 @@ async function invokeSessionsList(
   context: Record<string, unknown> = {},
   defer = false,
 ) {
-  const prepared = await prepareRequest({
-    readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
-    ...context,
-  });
-  const request = prepared.invoke("sessions.list", params);
-  if (!defer) {
-    await request;
-  }
-  return { request, respond: prepared.respond, context: prepared.context };
+  return invokeSession("sessions.list", params, context, defer);
 }
 
 async function mutationCatalogSnapshot(
@@ -112,45 +140,25 @@ async function mutationCatalogSnapshot(
   };
 }
 
-async function invokeSessionMutation({
-  method,
-  params,
+async function invokeSessionMutation(
+  params: Record<string, unknown>,
   context = {},
   subscribedConnIds = new Set(["conn-1"]),
-}: {
-  method: MutationMethod;
-  params: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  subscribedConnIds?: Set<string>;
-}) {
-  const broadcastToConnIds = vi.fn();
-  const prepared = await prepareRequest({
-    broadcastToConnIds,
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    dedupe: new Map(),
-    getSessionEventSubscriberConnIds: () => subscribedConnIds,
-    loadGatewayModelCatalog: async () => ({ providers: [] }),
-    loadGatewayModelCatalogSnapshot: () => mutationCatalogSnapshot([]),
-    ...context,
-  });
-  await prepared.invoke(method, params);
+  method: MutationMethod = "sessions.patch",
+) {
+  const prepared = await invokeSession(method, params, context, false, subscribedConnIds);
   await flushPendingSessionsChangedEvents(prepared.context);
   return {
-    broadcastToConnIds,
+    broadcastToConnIds: prepared.broadcastToConnIds,
     responsePayload: expectRespondPayload(prepared.respond),
   };
-}
-
-async function invokeSessionsPatch(params: Record<string, unknown>) {
-  return invokeSessionMutation({ method: "sessions.patch", params });
 }
 
 async function expectManagementPatch(
   params: Record<string, unknown>,
   expected: Record<string, unknown>,
 ) {
-  const result = await invokeSessionsPatch({ key: "discord:group:dev", ...params });
+  const result = await invokeSessionMutation({ key: "discord:group:dev", ...params });
   return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
@@ -158,22 +166,9 @@ async function expectManagementPatch(
   });
 }
 
-async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
+async function writeMainSessionStore(options?: Parameters<typeof sessionStoreEntry>[1]) {
   await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main", options) } });
-}
-
-async function invokeSessionsCompact(
-  getRuntimeConfig: unknown,
-  params: Record<string, unknown> = {},
-  subscribedConnIds = new Set(["conn-1"]),
-) {
-  return invokeSessionMutation({
-    method: "sessions.compact",
-    params: { key: "global", agentId: "work", ...params },
-    context: { getRuntimeConfig },
-    subscribedConnIds,
-  });
 }
 
 test("sessions.list uses persisted usage and selected model fields", async () => {
@@ -205,30 +200,11 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
         cacheWrite: 0,
       }),
     },
-    message: {
-      role: "assistant",
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      usage: {
-        input: 2_000,
-        output: 500,
-        cacheRead: 1_000,
-        cost: { total: 0.0042 },
-      },
-    },
-    trailingMessages: [
-      {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
+    message: reply("anthropic", "claude-sonnet-4-6", [2_000, 500, 1_000], 0.0042),
+    trailingMessages: [reply("openclaw", "delivery-mirror", [0, 0, 0, 0])],
   });
-
   const { ws } = await openClient();
   const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {});
-
   expect(listed.ok).toBe(true);
   const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
   const child = listed.payload?.sessions.find(
@@ -258,7 +234,6 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   });
   expect(galleryChild).not.toHaveProperty("totalTokens");
   expect(galleryChild).not.toHaveProperty("model");
-
   ws.close();
 });
 
@@ -281,13 +256,10 @@ test("sessions.patch omits thinking metadata when an unrelated patch skips the c
       },
     ]),
   );
-
-  const result = await invokeSessionMutation({
-    method: "sessions.patch",
-    params: { key: "main", label: "Renamed" },
-    context: { loadGatewayModelCatalogSnapshot },
-  });
-
+  const result = await invokeSessionMutation(
+    { key: "main", label: "Renamed" },
+    { loadGatewayModelCatalogSnapshot },
+  );
   const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
   expect(resolved).not.toHaveProperty("thinkingLevel");
   expect(resolved).not.toHaveProperty("thinkingLevels");
@@ -304,15 +276,12 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
   const received = vi.fn();
   const unsubscribe = subscribePluginSessionsChanged(received);
   const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
-
   try {
-    await invokeSessionMutation({
-      method: "sessions.patch",
-      params: { key: "main", label: "Renamed title" },
-      subscribedConnIds: new Set(),
-      context: { broadcastToConnIds },
-    });
-
+    await invokeSessionMutation(
+      { key: "main", label: "Renamed title" },
+      { broadcastToConnIds },
+      new Set(),
+    );
     await vi.waitFor(() => {
       expect(received).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -329,11 +298,9 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
 
 test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
   await writeMainSessionStore();
-
   const idle = await invokeSessionsList();
   const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
   expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
-
   const runId = "list-unavailable-exact-identities";
   registerAgentRunContext(runId, {
     agentId: "main",
@@ -356,16 +323,14 @@ test("sessions.list distinguishes proven idle from unavailable run identities", 
 
 test("sessions.changed publishes running status during ordinary startup", async () => {
   await writeMainSessionStore({ status: "failed" });
-  const result = await invokeSessionMutation({
-    method: "sessions.patch",
-    params: { key: "main", label: "Starting main" },
-    context: {
+  const result = await invokeSessionMutation(
+    { key: "main", label: "Starting main" },
+    {
       chatAbortControllers: new Map([
         ["run-1", { sessionKey: "agent:main:main", executionStarted: false }],
       ]),
     },
-  });
-
+  );
   expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
@@ -389,10 +354,8 @@ test("sessions.list yields for bulk metadata and later serves previews without r
       { logGateway: { debug: vi.fn() } },
       true,
     );
-
     await Promise.resolve();
     await Promise.resolve();
-
     expect(respond).not.toHaveBeenCalled();
     await request;
     expectFields(findSession(expectRespondPayload(respond), "agent:main:bulk-10"), {
@@ -435,22 +398,11 @@ test("sessions.changed includes live usage metadata without inventing an unprice
       }),
     },
     message: {
-      role: "assistant",
-      provider: "openai",
-      model: "test-unpriced-model",
-      usage: {
-        input: 5_107,
-        output: 1_827,
-        cacheRead: 1_536,
-        cacheWrite: 0,
-        cost: { total: 0 },
-      },
+      ...reply("openai", "test-unpriced-model", [5_107, 1_827, 1_536, 0], 0),
       timestamp: Date.now(),
     },
   });
-
-  const result = await invokeSessionsPatch({ key: "main", label: "Renamed" });
-
+  const result = await invokeSessionMutation({ key: "main", label: "Renamed" });
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
   expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
@@ -477,7 +429,6 @@ test("sessions.changed mutation events include session management metadata", asy
       }),
     },
   });
-
   for (const archived of [true, false]) {
     await expectManagementPatch(
       { expectedSessionId: "sess-dev", archived },
@@ -512,14 +463,12 @@ test("sessions.changed mutation events include session management metadata", asy
       },
     );
   const unreadPayload = await markUnread({ lastReadAt: 20, lastActivityAt: 5 });
-
   const marker = expectDefined(
     unreadPayload.markedUnreadAt as number | undefined,
     "manual unread marker",
   );
   expect(marker).toEqual(expect.any(Number));
-
-  const staleRead = await invokeSessionsPatch({
+  const staleRead = await invokeSessionMutation({
     key: "discord:group:dev",
     unread: false,
     expectedMarkedUnreadAt: null,
@@ -529,7 +478,6 @@ test("sessions.changed mutation events include session management metadata", asy
   expect(requireRecord(staleRead.responsePayload.entry, "stale read entry").markedUnreadAt).toBe(
     marker,
   );
-
   await markRead({ expectedMarkedUnreadAt: marker });
   await markUnread();
   await markRead();
@@ -537,13 +485,11 @@ test("sessions.changed mutation events include session management metadata", asy
 
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
-
-  const { broadcastToConnIds, responsePayload } = await invokeSessionsPatch({
+  const { broadcastToConnIds, responsePayload } = await invokeSessionMutation({
     key: "global",
     agentId: "work",
     label: "Work global",
   });
-
   expectFields(responsePayload, { ok: true, key: "global" });
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
@@ -551,28 +497,23 @@ test("sessions.patch scopes selected global mutations and events to the requeste
     reason: "patch",
     label: "Work global",
   });
-  const mainEntry = loadSessionEntry({
-    agentId: "main",
-    sessionKey: "global",
-    storePath: globalStores.mainStorePath,
-  });
-  const workEntry = loadSessionEntry({
-    agentId: "work",
-    sessionKey: "global",
-    storePath: globalStores.workStorePath,
-  });
-  expect(mainEntry?.label).toBeUndefined();
-  expect(workEntry?.label).toBe("Work global");
+  for (const [agentId, storePath, label] of [
+    ["main", globalStores.mainStorePath, undefined],
+    ["work", globalStores.workStorePath, "Work global"],
+  ] as const) {
+    expect(loadSessionEntry({ agentId, sessionKey: "global", storePath })?.label).toBe(label);
+  }
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.compact scopes selected global truncation to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact(
-    globalStores.getRuntimeConfig,
-    { maxLines: 2 },
+  const { broadcastToConnIds, responsePayload } = await invokeSessionMutation(
+    { key: "global", agentId: "work", maxLines: 2 },
+    { getRuntimeConfig: globalStores.getRuntimeConfig },
+    undefined,
+    "sessions.compact",
   );
-
   expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
@@ -598,12 +539,12 @@ test("sessions.compact scopes selected global truncation to the requested agent"
 
 test("sessions.compact passes the selected global agent into embedded compaction", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { responsePayload } = await invokeSessionsCompact(
-    globalStores.getRuntimeConfig,
-    {},
+  const { responsePayload } = await invokeSessionMutation(
+    { key: "global", agentId: "work" },
+    { getRuntimeConfig: globalStores.getRuntimeConfig },
     new Set(),
+    "sessions.compact",
   );
-
   expectFields(responsePayload, { ok: true, key: "global", compacted: true });
   expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
   expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({

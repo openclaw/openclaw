@@ -1,5 +1,3 @@
-import { readdirSync } from "node:fs";
-import path from "node:path";
 import { beforeEach, expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -12,12 +10,10 @@ import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -45,6 +41,8 @@ type CreateParams = Parameters<
 >[0];
 const adminClient = () => ({ client: { connect: { scopes: ["operator.admin"] } } as never });
 const writeClient = () => ({ client: { connect: { scopes: ["operator.write"] } } as never });
+const mainReset = { parentSessionKey: "main", emitCommandHooks: true };
+const expectOk = (result: { ok: boolean }) => expect(result.ok).toBe(true);
 const missingAdmin = {
   ok: false,
   error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
@@ -70,8 +68,7 @@ async function resetMain(params: Partial<CreateParams>) {
   return createGatewaySession({
     cfg: getRuntimeConfig(),
     agentId: "main",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
+    ...mainReset,
     resetMainWhenUnspecified: true,
     commandSource: "test",
     ...params,
@@ -152,13 +149,11 @@ test.for([
         successorFinished = true;
       });
       creating = rpcReq(ws, "sessions.create", { key: createdKey, agentId: "main" });
-      expect(await withinTest(creating, signal)).toMatchObject({ ok: true });
+      expectOk(await withinTest(creating, signal));
       expect(successorFinished).toBe(false);
       const created = readEntry(createdKey);
       expect(created?.sessionId).toBeTruthy();
-      expect(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true })).toMatchObject({
-        ok: true,
-      });
+      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true }));
       expect(readEntry(createdKey)?.pinnedAt).toEqual(expect.any(Number));
     } finally {
       release.resolve();
@@ -174,20 +169,6 @@ test.for([
     expect(createGatewayActiveWorkSnapshot()).toMatchObject({ idle: true, blockers: [] });
   },
 );
-
-// CI 31609081812 lost the persisted row after successful creates; retain writer/reader diagnostics.
-function describeSessionStoreForensics(): string {
-  const storeDir = path.dirname(storePath);
-  const files = readdirSync(storeDir).toSorted();
-  const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-  const rows = database.db
-    .prepare(
-      "SELECT session_key, length(entry_json) AS entry_bytes, updated_at FROM session_nodes ORDER BY session_key",
-    )
-    .all();
-  return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
-}
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   const category = "Deferred category";
@@ -214,10 +195,7 @@ test("sessions.create registers a category only after the session commit succeed
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
   const broadcastToConnIds = vi.fn();
   const created = await createSession(
-    {
-      category: `  ${category}  `,
-      key: "agent:main:dashboard:successful-category-create",
-    },
+    { category: `  ${category}  `, key: "agent:main:dashboard:created" },
     {
       context: {
         broadcastToConnIds,
@@ -225,7 +203,7 @@ test("sessions.create registers a category only after the session commit succeed
       },
     },
   );
-  expect(created.ok).toBe(true);
+  expectOk(created);
   expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
     1,
   );
@@ -250,10 +228,7 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(sessionIds.size).toBe(1);
   const persistedSessionId = loadSessionEntry({ sessionKey: key, storePath })?.sessionId;
   const canonicalSessionId = created[0]?.payload?.sessionId;
-  expect(
-    persistedSessionId,
-    persistedSessionId === canonicalSessionId ? "" : describeSessionStoreForensics(),
-  ).toBe(canonicalSessionId);
+  expect(persistedSessionId).toBe(canonicalSessionId);
 });
 
 test("createGatewaySession forwards its commit guard into main-session reset", async () => {
@@ -278,7 +253,7 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
 test("sessions.create preserves keyed draft adoption idempotency", async () => {
   const key = "agent:main:dashboard:idempotent-draft";
   const first = await createSession({ key, visibility: "draft" });
-  expect(first.ok).toBe(true);
+  expectOk(first);
   const retried = await createSession({ key, visibility: "draft" });
   const expected = {
     ok: true,
@@ -340,7 +315,7 @@ test("sessions.create persists explicit tool overrides before the first turn", a
     expect(observed).toEqual([normalized]);
     expect(readEntry(sessionKey)?.toolOverrides).toEqual(normalized);
     const retried = await createSession({ key: sessionKey, toolOverrides: requested }, client);
-    expect(retried.ok).toBe(true);
+    expectOk(retried);
     const mismatch = await createSession(
       { key: sessionKey, toolOverrides: { skills: { release: true } } },
       client,
@@ -356,25 +331,21 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   await seedMain("sess-node-parent");
   const nodeSession = await createSession(
     {
-      parentSessionKey: "main",
-      emitCommandHooks: true,
+      ...mainReset,
       execNode: "macbook",
       cwd: "/Users/peter/Projects/openclaw",
     },
     adminClient(),
   );
-  expect(nodeSession.ok).toBe(true);
+  expectOk(nodeSession);
   expect(nodeSession.payload?.entry).toMatchObject({
     execHost: "node",
     execNode: "macbook",
     execCwd: "/Users/peter/Projects/openclaw",
   });
   expect(nodeSession.payload?.entry.spawnedCwd).toBeUndefined();
-  const gatewaySession = await createSession(
-    { parentSessionKey: "main", emitCommandHooks: true },
-    writeClient(),
-  );
-  expect(gatewaySession.ok).toBe(true);
+  const gatewaySession = await createSession(mainReset, writeClient());
+  expectOk(gatewaySession);
   const cleared = gatewaySession.payload?.entry;
   expect([cleared?.execHost, cleared?.execNode, cleared?.execCwd]).toEqual(
     Array(3).fill(undefined),
@@ -389,12 +360,7 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
     createdAt: 1234,
   } as const;
   await seedMain("sess-fast-reset", { fastMode: false, ...provenance });
-  const params = {
-    agentId: "main",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    fastMode: true,
-  };
+  const params = { ...mainReset, fastMode: true };
   const denied = await createSession(params, writeClient());
   expect(denied).toMatchObject(missingAdmin);
   expect(readEntry()).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
@@ -540,25 +506,16 @@ test("sessions.reset preserves the recorded permission boundary", async () => {
 test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
   testState.sessionConfig = { dmScope: "main" };
   await seedMain("sess-existing-main");
-  const reset = await createSession({
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    visibility: "draft",
-  });
+  const reset = await createSession({ ...mainReset, visibility: "draft" });
   expect(reset).toMatchObject(invalidCreate("visibility"));
 });
 
 test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
-  const { sessionCreateHandlers } = await import("./server-methods/sessions-create.js");
-  let sharedContext:
-    | Parameters<typeof chatSendOwner.handleDirectExternalChatSend>[0]["context"]
-    | undefined;
   const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-  chatSend.mockImplementation(async ({ context, respond }) => {
-    sharedContext ??= context;
+  chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "create-once", status: "started" });
   });
-  const dedupe = new Map();
+  const context = { dedupe: new Map() };
   const ownerId = ensureProfileForEmail("replay@owner.test").id;
   const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
     connect: {
@@ -574,31 +531,11 @@ test("sessions.create replays an identical creation once and rejects conflicting
     message: "start this task exactly once",
     permissionMode: "full",
   };
-  const request = async (nextParams = params, nextClient = clientFor()) => {
-    if (!sharedContext) {
-      return await directSessionReq<{ key: string }>("sessions.create", nextParams, {
-        client: nextClient as never,
-        context: { dedupe },
-      });
-    }
-    let result:
-      | { ok: boolean; payload?: { key: string }; error?: { code?: string; message?: string } }
-      | undefined;
-    await sessionCreateHandlers["sessions.create"]?.({
-      req: {} as never,
-      params: nextParams,
+  const request = (nextParams = params, nextClient = clientFor()) =>
+    directSessionReq<{ key: string }>("sessions.create", nextParams, {
       client: nextClient as never,
-      context: sharedContext,
-      isWebchatConnect: () => false,
-      respond: (ok, payload, error) => {
-        result = { ok, payload: payload as { key: string } | undefined, error };
-      },
+      context,
     });
-    if (!result) {
-      throw new Error("sessions.create did not respond");
-    }
-    return result;
-  };
   try {
     const first = await request();
     const replay = await request(
@@ -610,7 +547,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
       },
       clientFor(["operator.admin", "operator.read", "operator.write"]),
     );
-    expect(first.ok).toBe(true);
+    expectOk(first);
     expect(replay).toEqual(first);
     expect(chatSend).toHaveBeenCalledOnce();
     expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
@@ -636,7 +573,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
       params,
       clientFor(undefined, ensureProfileForEmail("other@owner.test").id),
     );
-    expect(differentOwner.ok).toBe(true);
+    expectOk(differentOwner);
     expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
     expect(chatSend).toHaveBeenCalledTimes(2);
     expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
