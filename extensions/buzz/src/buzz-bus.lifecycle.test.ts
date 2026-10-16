@@ -1,7 +1,7 @@
 import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("nostr-tools", async (importOriginal) => {
   const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
