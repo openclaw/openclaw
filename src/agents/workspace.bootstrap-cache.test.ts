@@ -216,6 +216,22 @@ describe("workspace file cache retention", () => {
     return filePath;
   }
 
+  it("accounts for the prepared identity prompt while retaining the raw avatar", () => {
+    const identityPath = path.join(workspaceRoot, "IDENTITY.md");
+    const raw = `- Avatar: data:image/png;base64,${"A".repeat(2 * 1024 * 1024)}\n${"x".repeat(1024 * 1024)}`;
+    writeWorkspaceFileCache({ filePath: identityPath, content: raw, identity: "avatar" });
+    const oldest = cacheFile("oldest", 4 * 1024 * 1024);
+    const recent = cacheFile("recent", 4 * 1024 * 1024);
+
+    const prompt = readWorkspaceFileCache(identityPath, "avatar", "IDENTITY.md");
+
+    expect(prompt).toBe(`- Avatar: [inline image omitted]\n${"x".repeat(1024 * 1024)}`);
+    expect(readWorkspaceFileCache(oldest, "oldest")).toBeUndefined();
+    expect(readWorkspaceFileCache(recent, "recent")).toBeDefined();
+    expect(readWorkspaceFileCache(identityPath, "avatar")).toBe(raw);
+    expect(readWorkspaceFileCache(identityPath, "avatar", "IDENTITY.md")).toBe(prompt);
+  });
+
   it("retires contained entries without evicting sibling roots", () => {
     const contained = cacheFile("contained", 2);
     const siblingRoot = `${workspaceRoot}-sibling`;
