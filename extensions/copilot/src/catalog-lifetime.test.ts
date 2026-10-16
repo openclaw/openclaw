@@ -191,20 +191,6 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     gate.resolve();
     await waitReply;
     const waitResult = observed.find((event) => event.toolName === "wait")?.result;
-    const cleanupWindow = {
-      cellId: execResult.details.runId,
-      catalogId: catalogIdentity?.counterScope,
-      catalogClosed: catalog?.current === undefined,
-      contextAborted: contextSignal?.aborted,
-      callAborted: callController.signal.aborted,
-      admissionRunId: host.admittedRunContext.operationalRunInstance.runId,
-      hostActiveAtCleanup: true,
-      abortsBeforeGateRelease,
-      nestedAbortedBeforeGateRelease,
-      nestedAborted: nestedSignal?.aborted,
-      aborts,
-      waitResult,
-    };
     peer.releaseDetach();
     const attemptResult = await attempt;
     if (!("terminal" in attemptResult)) {
@@ -213,52 +199,23 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     const terminal = attemptResult.terminal;
     const failure =
       terminal.kind === "failed" ? terminal : "failure" in terminal ? terminal.failure : undefined;
-    const attemptFacts = {
-      terminal: {
-        kind: terminal.kind,
-        source: "source" in terminal ? terminal.source : null,
-        failureSource: failure?.source ?? null,
-        errorMessage: failure?.error instanceof Error ? failure.error.message.slice(0, 512) : null,
-      },
-      lastToolError: attemptResult.lastToolError
-        ? {
-            toolName: attemptResult.lastToolError.toolName,
-            error: attemptResult.lastToolError.error?.slice(0, 512),
-            executionStarted: attemptResult.lastToolError.executionStarted,
-            mutatingAction: attemptResult.lastToolError.mutatingAction,
-          }
-        : null,
-      toolMetas: attemptResult.toolMetas.slice(0, 8).map(({ toolName, isError, meta }) => ({
-        toolName,
-        isError,
-        meta: meta?.slice(0, 512),
-      })),
-      replayMetadata: attemptResult.replayMetadata,
-      outerAborted: callController.signal.aborted,
-    };
     expect(() => host.hostCapabilities.assertActive()).toThrow(/no longer active/);
     const retainedTool = retained.at(0);
     if (!retainedTool) {
       throw new Error("Expected a retained host-bound tool");
     }
     await expect(retainedTool.execute("retained", {})).rejects.toThrow(/no longer active/);
-    console.log(
-      "CATALOG_LIFETIME_VERDICT",
-      JSON.stringify({
-        ...cleanupWindow,
-        attempt: attemptFacts,
-        caller: "createCopilotAgentHarness.runAttempt",
-        finalHostClosed: true,
-        retainedToolRejected: true,
-        rpcMethods: peer.methods,
-      }),
-    );
     expect(abortsBeforeGateRelease).toBe(1);
     expect(nestedAbortedBeforeGateRelease).toBe(true);
     expect(aborts).toBe(1);
     expect(waitResult).toMatchObject({ details: { status: "failed", code: "aborted" } });
     expect(JSON.stringify(waitResult)).not.toContain("STALE AFTER CLOSE");
-    expect(attemptFacts.terminal).toEqual({
+    expect({
+      kind: terminal.kind,
+      source: "source" in terminal ? terminal.source : null,
+      failureSource: failure?.source ?? null,
+      errorMessage: failure?.error instanceof Error ? failure.error.message : null,
+    }).toEqual({
       kind: "failed",
       source: "prompt",
       failureSource: "prompt",

@@ -30,6 +30,10 @@ function makeEvent(type: string, data: Record<string, unknown>): SessionEvent {
   } as SessionEvent;
 }
 
+function emit(session: FakeSession, type: string, data: Record<string, unknown> = {}) {
+  session.emit(type, makeEvent(type, data));
+}
+
 function makeAssistantMessageEvent(
   content = "assistant text",
   overrides: Record<string, unknown> = {},
@@ -89,16 +93,24 @@ function attachTestBridge(
   });
 }
 
+function setup(options: Partial<Parameters<typeof attachEventBridge>[1]> = {}) {
+  const session = createFakeSession();
+  return { session, bridge: attachTestBridge(session, options) };
+}
+
+function emitDelta(session: FakeSession, deltaContent: string, messageId: string) {
+  emit(session, "assistant.message_delta", { deltaContent, messageId });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("attachEventBridge", () => {
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
-    const session = createFakeSession();
     const onAssistantDelta = vi.fn();
     const onAgentEvent = vi.fn();
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onAssistantDelta,
       onAgentEvent,
     });
@@ -107,10 +119,7 @@ describe("attachEventBridge", () => {
       ...makeEvent("assistant.message_delta", { deltaContent: "child", messageId: "child-msg" }),
       agentId: "child-1",
     } as SessionEvent);
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "root", messageId: "root-msg" }),
-    );
+    emitDelta(session, "root", "root-msg");
     session.emit("tool.execution_start", {
       ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
       agentId: "child-1",
@@ -153,28 +162,17 @@ describe("attachEventBridge", () => {
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "a", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "x", messageId: "msg-2" }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "b", messageId: "msg-1" }),
-    );
+    emitDelta(session, "a", "msg-1");
+    emitDelta(session, "x", "msg-2");
+    emitDelta(session, "b", "msg-1");
 
     expect(bridge.snapshot().assistantTexts).toEqual(["ab", "x"]);
   });
 
   it("ignored child and ephemeral users do not split a root assistant API call", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
     session.emit("assistant.message", {
       ...makeAssistantMessageEvent("first", {
@@ -206,10 +204,9 @@ describe("attachEventBridge", () => {
   });
 
   it("onAssistantDelta callbacks are serialized and awaitDeltaChain resolves after both", async () => {
-    const session = createFakeSession();
     const order: string[] = [];
     const releases: Array<() => void> = [];
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onAssistantDelta: vi.fn(async (payload: { delta: string }) => {
         order.push(`start:${payload.delta}`);
         await new Promise<void>((resolve) => {
@@ -221,14 +218,8 @@ describe("attachEventBridge", () => {
       }),
     });
 
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "a", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "b", messageId: "msg-1" }),
-    );
+    emitDelta(session, "a", "msg-1");
+    emitDelta(session, "b", "msg-1");
     await flushAsync();
 
     expect(order).toEqual(["start:a"]);
@@ -242,11 +233,10 @@ describe("attachEventBridge", () => {
   });
 
   it("onAssistantDelta rejection propagates through awaitDeltaChain while later deltas still serialize", async () => {
-    const session = createFakeSession();
     const order: string[] = [];
     const firstError = new Error("delta failed");
     const secondDeferred = createDeferred<void>();
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onAssistantDelta: vi.fn((payload: { delta: string }) => {
         order.push(`start:${payload.delta}`);
         if (payload.delta === "a") {
@@ -258,14 +248,8 @@ describe("attachEventBridge", () => {
       }),
     });
 
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "a", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "b", messageId: "msg-1" }),
-    );
+    emitDelta(session, "a", "msg-1");
+    emitDelta(session, "b", "msg-1");
     await flushAsync();
     await flushAsync();
 
@@ -277,13 +261,9 @@ describe("attachEventBridge", () => {
   });
 
   it("buildAssistantMessage prefers terminal reasoningText over reasoning deltas", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit(
-      "assistant.reasoning_delta",
-      makeEvent("assistant.reasoning_delta", { deltaContent: "older", reasoningId: "reason-1" }),
-    );
+    emit(session, "assistant.reasoning_delta", { deltaContent: "older", reasoningId: "reason-1" });
     bridge.recordSendResult(
       makeAssistantMessageEvent("done", {
         reasoningText: "terminal reasoning",
@@ -297,23 +277,15 @@ describe("attachEventBridge", () => {
   });
 
   it("assistant.message only overwrites accumulated text when content is at least as long", () => {
-    const shorterSession = createFakeSession();
-    const shorterBridge = attachTestBridge(shorterSession);
-    shorterSession.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "longer", messageId: "msg-1" }),
-    );
+    const { session: shorterSession, bridge: shorterBridge } = setup();
+    emitDelta(shorterSession, "longer", "msg-1");
     shorterSession.emit(
       "assistant.message",
       makeAssistantMessageEvent("short", { messageId: "msg-1" }),
     );
 
-    const longerSession = createFakeSession();
-    const longerBridge = attachTestBridge(longerSession);
-    longerSession.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "tiny", messageId: "msg-1" }),
-    );
+    const { session: longerSession, bridge: longerBridge } = setup();
+    emitDelta(longerSession, "tiny", "msg-1");
     longerSession.emit(
       "assistant.message",
       makeAssistantMessageEvent("longer text", { messageId: "msg-1" }),
@@ -324,8 +296,7 @@ describe("attachEventBridge", () => {
   });
 
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { bridge } = setup();
 
     bridge.recordSendResult(
       makeAssistantMessageEvent("call tool", {
@@ -374,34 +345,24 @@ describe("attachEventBridge", () => {
   });
 
   it("projects Copilot plan events through the generic plan stream", async () => {
-    const session = createFakeSession();
     const onAgentEvent = vi.fn().mockResolvedValue(undefined);
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onAgentEvent,
     });
 
-    session.emit(
-      "session.plan_changed",
-      makeEvent("session.plan_changed", { operation: "update" }),
-    );
-    session.emit(
-      "exit_plan_mode.requested",
-      makeEvent("exit_plan_mode.requested", {
-        actions: ["approve", "edit"],
-        planContent: "# Plan\n- inspect\n- patch",
-        recommendedAction: "approve",
-        requestId: "request-1",
-        summary: "Plan ready",
-      }),
-    );
-    session.emit(
-      "exit_plan_mode.completed",
-      makeEvent("exit_plan_mode.completed", {
-        approved: true,
-        requestId: "request-1",
-        selectedAction: "approve",
-      }),
-    );
+    emit(session, "session.plan_changed", { operation: "update" });
+    emit(session, "exit_plan_mode.requested", {
+      actions: ["approve", "edit"],
+      planContent: "# Plan\n- inspect\n- patch",
+      recommendedAction: "approve",
+      requestId: "request-1",
+      summary: "Plan ready",
+    });
+    emit(session, "exit_plan_mode.completed", {
+      approved: true,
+      requestId: "request-1",
+      selectedAction: "approve",
+    });
 
     await bridge.awaitAgentEventChain();
 
@@ -446,22 +407,18 @@ describe("attachEventBridge", () => {
   });
 
   it("replaces prior usage and terminal token fallback with an invalid usage zero snapshot", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
     bridge.recordSendResult(
       makeAssistantMessageEvent("done", { apiCallId: "usage-without-id", outputTokens: 7 }),
     );
-    session.emit("assistant.usage", makeEvent("assistant.usage", { inputTokens: 5 }));
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", {
-        cacheReadTokens: "bad",
-        cacheWriteTokens: Number.POSITIVE_INFINITY,
-        inputTokens: undefined,
-        outputTokens: Number.NaN,
-      }),
-    );
+    emit(session, "assistant.usage", { inputTokens: 5 });
+    emit(session, "assistant.usage", {
+      cacheReadTokens: "bad",
+      cacheWriteTokens: Number.POSITIVE_INFINITY,
+      inputTokens: undefined,
+      outputTokens: Number.NaN,
+    });
 
     expect(bridge.snapshot().usage).toEqual({
       cacheRead: undefined,
@@ -489,33 +446,20 @@ describe("attachEventBridge", () => {
   registerCopilotToolEventTests({ createFakeSession, makeEvent });
 
   it("tool.execution_complete updates one tool meta per call and marks failures", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-1", toolName: "bash" }),
-    );
-    session.emit(
-      "tool.execution_complete",
-      makeEvent("tool.execution_complete", {
-        result: { content: "content", detailedContent: "details" },
-        success: true,
-        toolCallId: "call-1",
-      }),
-    );
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-2", toolName: "read" }),
-    );
-    session.emit(
-      "tool.execution_complete",
-      makeEvent("tool.execution_complete", {
-        error: { message: "failed" },
-        success: false,
-        toolCallId: "call-2",
-      }),
-    );
+    emit(session, "tool.execution_start", { toolCallId: "call-1", toolName: "bash" });
+    emit(session, "tool.execution_complete", {
+      result: { content: "content", detailedContent: "details" },
+      success: true,
+      toolCallId: "call-1",
+    });
+    emit(session, "tool.execution_start", { toolCallId: "call-2", toolName: "read" });
+    emit(session, "tool.execution_complete", {
+      error: { message: "failed" },
+      success: false,
+      toolCallId: "call-2",
+    });
 
     expect(bridge.snapshot().toolMetas).toEqual([
       { meta: "details", toolName: "bash", isError: false },
@@ -524,26 +468,21 @@ describe("attachEventBridge", () => {
   });
 
   it("tool.execution_complete without a matching start increments completedCount without pushing meta", () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit(
-      "tool.execution_complete",
-      makeEvent("tool.execution_complete", {
-        result: { content: "done" },
-        success: true,
-        toolCallId: "missing",
-      }),
-    );
+    emit(session, "tool.execution_complete", {
+      result: { content: "done" },
+      success: true,
+      toolCallId: "missing",
+    });
 
     expect(bridge.snapshot().completedCount).toBe(1);
     expect(bridge.snapshot().toolMetas).toEqual([]);
   });
 
   it("serializes compaction callbacks and clears active compaction state on completion", async () => {
-    const session = createFakeSession();
     const calls: string[] = [];
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onCompactionStart: () => {
         calls.push("start");
       },
@@ -552,16 +491,10 @@ describe("attachEventBridge", () => {
       },
     });
 
-    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { success: false }),
-    );
-    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { success: true }),
-    );
+    emit(session, "session.compaction_start", {});
+    emit(session, "session.compaction_complete", { success: false });
+    emit(session, "session.compaction_start", {});
+    emit(session, "session.compaction_complete", { success: true });
     await bridge.awaitCompactionChain();
 
     expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
@@ -575,16 +508,10 @@ describe("attachEventBridge", () => {
       onContextCompacted,
     });
 
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { success: false }),
-    );
+    emit(session, "session.compaction_complete", { success: false });
     expect(onContextCompacted).not.toHaveBeenCalled();
 
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { success: true }),
-    );
+    emit(session, "session.compaction_complete", { success: true });
     expect(onContextCompacted).toHaveBeenCalledTimes(1);
 
     session.emit("session.compaction_complete", {
@@ -595,22 +522,18 @@ describe("attachEventBridge", () => {
   });
 
   it("waits for an active compaction and its completion callback", async () => {
-    const session = createFakeSession();
     const complete = vi.fn();
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onCompactionComplete: complete,
     });
 
-    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    emit(session, "session.compaction_start", {});
     const completion = bridge.awaitCompactionCompletion();
     await flushAsync();
 
     expect(bridge.hasObservedCompaction()).toBe(true);
     expect(complete).not.toHaveBeenCalled();
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { messagesRemoved: 3, success: true }),
-    );
+    emit(session, "session.compaction_complete", { messagesRemoved: 3, success: true });
     await completion;
 
     expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
@@ -618,8 +541,7 @@ describe("attachEventBridge", () => {
   });
 
   it("ignores subagent idle events while waiting for the root session", async () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
     const idle = bridge.awaitSessionIdle();
     session.emit("session.idle", {
@@ -629,35 +551,30 @@ describe("attachEventBridge", () => {
     await flushAsync();
     expect(bridge.hasObservedSessionIdle()).toBe(false);
 
-    session.emit("session.idle", makeEvent("session.idle", {}));
+    emit(session, "session.idle", {});
     await idle;
     expect(bridge.hasObservedSessionIdle()).toBe(true);
   });
 
   it("keeps compaction pending after an abort until the SDK reports completion", async () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    emit(session, "session.compaction_start", {});
     const completion = bridge.awaitCompactionCompletion();
-    session.emit("abort", makeEvent("abort", { reason: "tool yield" }));
+    emit(session, "abort", { reason: "tool yield" });
     await flushAsync();
 
     expect(bridge.isCompacting()).toBe(true);
-    session.emit(
-      "session.compaction_complete",
-      makeEvent("session.compaction_complete", { success: false }),
-    );
+    emit(session, "session.compaction_complete", { success: false });
     await completion;
 
     expect(bridge.isCompacting()).toBe(false);
   });
 
   it("settles an active compaction wait before terminal teardown", async () => {
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session);
+    const { session, bridge } = setup();
 
-    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    emit(session, "session.compaction_start", {});
     const completion = bridge.awaitCompactionCompletion();
     bridge.settleCompactionWait();
 
@@ -666,10 +583,9 @@ describe("attachEventBridge", () => {
   });
 
   it("ignores subagent compaction events when tracking the root session", async () => {
-    const session = createFakeSession();
     const onCompactionStart = vi.fn();
     const onCompactionComplete = vi.fn();
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onCompactionStart,
       onCompactionComplete,
     });
@@ -691,28 +607,20 @@ describe("attachEventBridge", () => {
   });
 
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
-    const activeSession = createFakeSession();
-    const activeBridge = attachTestBridge(activeSession);
-    activeSession.emit(
-      "session.error",
-      makeEvent("session.error", {
-        errorCode: "boom_code",
-        errorType: "boom_type",
-        message: "boom",
-      }),
-    );
+    const { session: activeSession, bridge: activeBridge } = setup();
+    emit(activeSession, "session.error", {
+      errorCode: "boom_code",
+      errorType: "boom_type",
+      message: "boom",
+    });
 
-    const abortedSession = createFakeSession();
-    const abortedBridge = attachTestBridge(abortedSession, {
+    const { session: abortedSession, bridge: abortedBridge } = setup({
       isAborted: () => true,
     });
-    abortedSession.emit(
-      "session.error",
-      makeEvent("session.error", {
-        errorType: "ignored",
-        message: "ignored",
-      }),
-    );
+    emit(abortedSession, "session.error", {
+      errorType: "ignored",
+      message: "ignored",
+    });
 
     expect((activeBridge.snapshot().streamError as Error & { code?: string })?.code).toBe(
       "boom_code",
@@ -723,21 +631,14 @@ describe("attachEventBridge", () => {
 
   it("ignores empty assistant and reasoning deltas", () => {
     const onAssistantDelta = vi.fn();
-    const session = createFakeSession();
-    const bridge = attachTestBridge(session, {
+    const { session, bridge } = setup({
       onAssistantDelta,
     });
 
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
 
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.reasoning_delta",
-      makeEvent("assistant.reasoning_delta", { deltaContent: "", reasoningId: "reason-1" }),
-    );
+    emitDelta(session, "", "msg-1");
+    emit(session, "assistant.reasoning_delta", { deltaContent: "", reasoningId: "reason-1" });
     session.emit("assistant.message", makeAssistantMessageEvent("", { messageId: "msg-1" }));
 
     expect(onAssistantDelta).not.toHaveBeenCalled();
@@ -776,10 +677,7 @@ describe("attachEventBridge", () => {
 
     const registeredEvents = vi.mocked(session.on).mock.calls.map(([eventType]) => eventType);
     bridge.detach();
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "ignored", messageId: "msg-1" }),
-    );
+    emitDelta(session, "ignored", "msg-1");
 
     expect(order).toEqual(registeredEvents.toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);

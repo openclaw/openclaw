@@ -25,16 +25,6 @@ type TranscriptRecorder = TranscriptRecorderContract & {
   resolveMessage: Mock<TranscriptRecorderContract["resolveMessage"]>;
 };
 
-type AttemptTranscriptJournalFixture = {
-  attempt: AttemptParamsLike;
-  bridge: ReturnType<typeof attachEventBridge>;
-  journal: ReturnType<typeof createAttemptTranscriptJournal>;
-  recorder: TranscriptRecorder;
-  session: FakeSession;
-  target: SessionTranscriptTargetParams;
-  tempDir: string;
-};
-
 export function createFakeSession(): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEvent) => void>>();
   return {
@@ -122,7 +112,7 @@ export function emitReplayGroup(targetSession: FakeSession): void {
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
-): Promise<AttemptTranscriptJournalFixture> {
+) {
   const tempDir = sessionDirs.make();
   const target: SessionTranscriptTargetParams = {
     agentId: "main",
@@ -177,10 +167,8 @@ export async function createFixture(
     userTurnTranscriptRecorder: recorder,
   } as unknown as AttemptParamsLike;
   await upsertSessionEntry({
-    agentId: "main",
+    ...target,
     entry: { sessionId: target.sessionId, updatedAt: 1 },
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
   });
   const { bridge, journal, session } = createJournalSession(
     attempt,
