@@ -8,6 +8,15 @@ function blocksFor(markdown: string): InputRichBlock[] {
   return markdownToTelegramRichBlocks(markdown).blocks;
 }
 
+const contains = expect.objectContaining;
+const typed = (type: InputRichBlock["type"], fields: object = {}) => contains({ type, ...fields });
+const details = (summary: unknown, blocks: unknown[]) =>
+  contains({ type: "details", summary, blocks });
+const paragraph = (text: unknown) => ({ type: "paragraph", text });
+const image = (file: string) => `<img src="https://example.com/${file}"/>`;
+const video = (file: string) => `<video src="https://example.com/${file}"></video>`;
+const audio = (file: string) => `<audio src="https://example.com/${file}"></audio>`;
+
 function single(markdown: string): InputRichBlock {
   const blocks = blocksFor(markdown);
   expect(blocks).toHaveLength(1);
@@ -22,6 +31,15 @@ function expectLiteral(markdown: string, ...content: string[]) {
     expect(JSON.stringify(blocks)).toContain(text);
   }
 }
+function expectJson(value: unknown, includes: string[], excludes: string[] = []) {
+  const json = JSON.stringify(value);
+  for (const text of includes) {
+    expect(json).toContain(text);
+  }
+  for (const text of excludes) {
+    expect(json).not.toContain(text);
+  }
+}
 
 describe("block HTML islands", () => {
   it("keeps Markdown lists inside <details> islands", () => {
@@ -30,10 +48,7 @@ describe("block HTML islands", () => {
     expect(block.summary).toBe("List");
     expect(block.blocks).toHaveLength(1);
     expect(block.blocks[0]?.type).toBe("paragraph");
-    const serialized = JSON.stringify(block);
-    expect(serialized).toContain("• item A");
-    expect(serialized).toContain("• item B");
-    expect(serialized).not.toContain("<details>");
+    expectJson(block, ["• item A", "• item B"], ["<details>"]);
   });
 
   it("preserves styled HTML links and entity data (skip detection: true)", () => {
@@ -66,32 +81,73 @@ describe("block HTML islands", () => {
     expect(JSON.stringify(block)).not.toContain("<details>");
   });
 
-  it("ignores tag-shaped code while finding the details summary", () => {
-    const block = single("<details><summary><code><summary></code>Title</summary>Body</details>");
-    assert(block.type === "details");
-    expect(block.summary).toEqual([{ type: "code", text: "<summary>" }, "Title"]);
-    expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
-  });
-
-  it("binds summary ranges to their direct details container", () => {
-    const block = single(
+  it.each<[string, unknown]>([
+    [
+      "<details><summary><code><summary></code>Title</summary>Body</details>",
+      [details([{ type: "code", text: "<summary>" }, "Title"], [paragraph("Body")])],
+    ],
+    [
       "<details><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></details>",
-    );
-    expect(block).toMatchObject({ type: "details", summary: "Details" });
-    assert(block.type === "details");
-    expect(block.blocks.map(({ type }) => type)).toEqual(["details"]);
-    const inner = block.blocks[0];
-    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
-    assert(inner?.type === "details");
-    expect(inner.blocks.map(({ type }) => type)).toEqual(["heading"]);
-  });
-
-  it("keeps a Markdown table between disclosures outside their bodies", () => {
-    expect(
-      blocksFor(
-        "<details><summary>A</summary>\n\n# In\n\n</details>\n\n| a |\n| --- |\n| between |\n\n<details><summary>B</summary>Body</details>",
-      ).map((block) => block.type),
-    ).toEqual(["details", "table", "details"]);
+      [details("Details", [details("Inner", [typed("heading")])])],
+    ],
+    [
+      "<details><summary>Outer</summary>\n\n> <details><summary>Inner</summary>\n>\n> # Inner heading\n>\n> </details>\n\n</details>",
+      [details("Outer", [typed("blockquote", { blocks: [typed("details")] })])],
+    ],
+    [
+      "<details open>\n<summary>Long <b>output</b></summary>\n<p>B</p>\n</details>",
+      [
+        typed("details", {
+          is_open: true,
+          summary: ["Long ", { type: "bold", text: "output" }],
+          blocks: [paragraph("B")],
+        }),
+      ],
+    ],
+    [
+      '<figure><img src="https://example.com/a.jpg"/><figcaption>Cap<cite>Src</cite></figcaption></figure>',
+      [
+        {
+          type: "photo",
+          photo: { type: "photo", media: "https://example.com/a.jpg" },
+          caption: { text: "Cap", credit: "Src" },
+        },
+      ],
+    ],
+    [
+      "<details><summary>A</summary>\n\n# In\n\n</details>\n\n| a |\n| --- |\n| between |\n\n<details><summary>B</summary>Body</details>",
+      [typed("details"), typed("table"), typed("details")],
+    ],
+    [
+      '<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>\n\n<tg-map lat="48.8584" long="2.2945" zoom="15"/>\n\n<hr/>\n\n<aside>Pull quote<cite>Source</cite></aside>\n\n<a name="top"></a>',
+      [
+        typed("mathematical_expression"),
+        typed("map", { location: { latitude: 48.8584, longitude: 2.2945 }, zoom: 15 }),
+        typed("divider"),
+        typed("pullquote"),
+        typed("anchor"),
+      ],
+    ],
+    [
+      "| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>",
+      contains({
+        0: typed("table", {
+          cells: [
+            [contains({ text: "Header" })],
+            [contains({ text: { type: "superscript", text: { type: "bold", text: "x" } } })],
+          ],
+        }),
+      }),
+    ],
+    [
+      '<tg-collage><img src="https://example.com/1.png"/><figcaption>Album<cite>me</cite></figcaption></tg-collage>\n\n<figure><tg-map lat="1" long="2" zoom="10"/><figcaption>Here</figcaption></figure>',
+      [
+        typed("collage", { caption: { text: "Album", credit: "me" } }),
+        typed("map", { caption: { text: "Here" } }),
+      ],
+    ],
+  ])("preserves HTML block structure: %s", (markdown, expected) => {
+    expect(blocksFor(markdown)).toEqual(expected);
   });
 
   it("reports wide-table degradation inside a disclosure", () => {
@@ -114,17 +170,6 @@ describe("block HTML islands", () => {
     expect(JSON.stringify(block)).toContain("</details>");
   });
 
-  it("keeps blockquote wrappers around nested <details>", () => {
-    const block = single(
-      "<details><summary>Outer</summary>\n\n> <details><summary>Inner</summary>\n>\n> # Inner heading\n>\n> </details>\n\n</details>",
-    );
-    assert(block.type === "details");
-    expect(block.blocks.map(({ type }) => type)).toEqual(["blockquote"]);
-    const quote = block.blocks[0];
-    assert(quote?.type === "blockquote");
-    expect(quote.blocks.map(({ type }) => type)).toEqual(["details"]);
-  });
-
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
@@ -137,52 +182,16 @@ describe("block HTML islands", () => {
     expect(block.items[2]?.has_checkbox).toBeUndefined();
   });
 
-  it("maps figure/img with figcaption and cite credit", () => {
-    const block = single(
-      '<figure><img src="https://example.com/a.jpg"/><figcaption>Cap<cite>Src</cite></figcaption></figure>',
-    );
-    expect(block).toEqual({
-      type: "photo",
-      photo: { type: "photo", media: "https://example.com/a.jpg" },
-      caption: { text: "Cap", credit: "Src" },
-    });
-  });
-
   it.each([
     [
       "ordinary media",
-      '<img src="https://example.com/a.png"/>\n\n<video src="https://example.com/a.mp4"></video>\n\n<audio src="https://example.com/a.mp3"></audio>',
+      [image("a.png"), video("a.mp4"), audio("a.mp3")].join("\n\n"),
       ["photo", "video", "audio"],
     ],
-    [
-      "GIF animations",
-      '<img src="https://example.com/a.gif"/>\n\n<video src="https://example.com/b.gif"></video>',
-      ["animation", "animation"],
-    ],
-    [
-      "voice notes",
-      '<audio src="https://example.com/a.opus"></audio>\n\n<audio src="https://example.com/b.ogg"></audio>',
-      ["voice_note", "voice_note"],
-    ],
+    ["GIF animations", [image("a.gif"), video("b.gif")].join("\n\n"), ["animation", "animation"]],
+    ["voice notes", [audio("a.opus"), audio("b.ogg")].join("\n\n"), ["voice_note", "voice_note"]],
   ] as const)("maps %s islands", (_name, markdown, types) => {
     expect(blocksFor(markdown).map((block) => block.type)).toEqual(types);
-  });
-
-  it("maps tg-math-block, tg-map, hr, aside, and anchor islands", () => {
-    const blocks = blocksFor(
-      '<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>\n\n<tg-map lat="48.8584" long="2.2945" zoom="15"/>\n\n<hr/>\n\n<aside>Pull quote<cite>Source</cite></aside>\n\n<a name="top"></a>',
-    );
-    expect(blocks.map((block) => block.type)).toEqual([
-      "mathematical_expression",
-      "map",
-      "divider",
-      "pullquote",
-      "anchor",
-    ]);
-    expect(blocks[1]).toMatchObject({
-      location: { latitude: 48.8584, longitude: 2.2945 },
-      zoom: 15,
-    });
   });
 
   it("maps Telegram <pre> blocks between rich islands", () => {
@@ -249,32 +258,10 @@ describe("block HTML islands", () => {
     );
   });
 
-  it("keeps HTML active in a table before an unsupported wrapper", () => {
-    const blocks = blocksFor("| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>");
-    expect(blocks[0]).toMatchObject({
-      type: "table",
-      cells: [
-        [{ text: "Header" }],
-        [{ text: { type: "superscript", text: { type: "bold", text: "x" } } }],
-      ],
-    });
-  });
-
   it("counts rowspan carryover toward the table column limit", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");
     const block = single(`<table><tr><td rowspan="2">left</td></tr><tr>${secondRow}</tr></table>`);
     expect(block.type).toBe("pre");
-  });
-
-  it("attaches figcaption captions to collages and figure-wrapped maps", () => {
-    const blocks = blocksFor(
-      '<tg-collage><img src="https://example.com/1.png"/><figcaption>Album<cite>me</cite></figcaption></tg-collage>\n\n<figure><tg-map lat="1" long="2" zoom="10"/><figcaption>Here</figcaption></figure>',
-    );
-    expect(blocks[0]).toMatchObject({
-      type: "collage",
-      caption: { text: "Album", credit: "me" },
-    });
-    expect(blocks[1]).toMatchObject({ type: "map", caption: { text: "Here" } });
   });
 
   it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
@@ -336,18 +323,6 @@ describe("block HTML islands", () => {
     expectLiteral(markdown, ...content);
   });
 
-  it("does not mint blank paragraphs from multiline island indentation", () => {
-    const blocks = blocksFor(
-      "<details open>\n<summary>Long <b>output</b></summary>\n<p>B</p>\n</details>",
-    );
-    expect(blocks).toHaveLength(1);
-    const details = blocks[0];
-    assert(details?.type === "details");
-    expect(details.is_open).toBe(true);
-    expect(details.summary).toEqual(["Long ", { type: "bold", text: "output" }]);
-    expect(details.blocks).toEqual([{ type: "paragraph", text: "B" }]);
-  });
-
   it("projects ordered lists and pullquote credits into plain text", () => {
     const { plainText } = markdownToTelegramRichBlocks(
       "<ol><li>alpha</li><li>beta</li></ol>\n\n<aside>Quote<cite>Author</cite></aside>",
@@ -357,46 +332,23 @@ describe("block HTML islands", () => {
 });
 
 describe("inline HTML islands", () => {
-  it.each<[string, string, string[], string[]]>([
+  it.each<[string, string[], string[]]>([
     [
-      "supported inline tags",
       'H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math> <tg-emoji emoji-id="5368324170671202286">😀</tg-emoji>',
-      [
-        '"subscript"',
-        '"superscript"',
-        '"marked"',
-        '"spoiler"',
-        '"mathematical_expression"',
-        '"custom_emoji"',
-        "5368324170671202286",
-      ],
+      "subscript superscript marked spoiler mathematical_expression custom_emoji"
+        .split(" ")
+        .map((type) => JSON.stringify(type))
+        .concat("5368324170671202286"),
       [],
     ],
     [
-      "fragment hrefs as anchor links",
       'go <a href="#top">back</a> and [also](#top)',
       ['"anchor_link"', '"anchor_name":"top"'],
       ['"url":"#top"'],
     ],
-    [
-      "non-numeric emoji ids as alternative text",
-      '<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi',
-      ["😀"],
-      ['"custom_emoji"'],
-    ],
-    [
-      "unclosed tags as literal text",
-      "value is <sup>oops and more text",
-      ["<sup>oops"],
-      ['"superscript"'],
-    ],
-  ])("preserves %s", (_name, markdown, contains, excludes) => {
-    const serialized = JSON.stringify(blocksFor(markdown));
-    for (const text of contains) {
-      expect(serialized).toContain(text);
-    }
-    for (const text of excludes) {
-      expect(serialized).not.toContain(text);
-    }
+    ['<tg-emoji emoji-id="not-numeric">😀</tg-emoji> hi', ["😀"], ['"custom_emoji"']],
+    ["value is <sup>oops and more text", ["<sup>oops"], ['"superscript"']],
+  ])("preserves inline HTML: %s", (markdown, includes, excludes) => {
+    expectJson(blocksFor(markdown), includes, excludes);
   });
 });

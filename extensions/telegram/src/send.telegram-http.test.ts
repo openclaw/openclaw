@@ -41,16 +41,21 @@ describe("Telegram physical send acceptance over HTTP", () => {
   const recordDispatch = async () => {
     events.push("dispatch");
   };
-  const configForToken = (botToken: string) => ({
-    channels: { telegram: { ...cfg.channels.telegram, botToken } },
-  });
   let bot: typeof fixture.bot;
   let mediaDir: string;
   let photoPath: string;
   const requestOptions = () => ({ cfg, api: bot.api });
+  const send = (text: string, options: Parameters<typeof sendMessageTelegram>[2] = {}) =>
+    sendMessageTelegram("123", text, { ...requestOptions(), ...options });
+  const edit = (text: string, options: Parameters<typeof editMessageTelegram>[3] = {}) =>
+    editMessageTelegram("123", 321, text, { ...requestOptions(), ...options });
   const fieldValues = (key: string) => requests.map(({ fields }) => fields[key]);
   const expectMethods = (...methods: string[]) =>
     expect(requests.map(({ method }) => method)).toEqual(methods);
+  const expectPins = (...ids: number[]) =>
+    expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual(
+      ids.map((id) => ["pinChatMessage", id]),
+    );
   const configWith = <const T extends object>(overrides: T) => ({
     channels: { telegram: { ...cfg.channels.telegram, ...overrides } },
   });
@@ -64,15 +69,39 @@ describe("Telegram physical send acceptance over HTTP", () => {
     fixture.requestHold = held;
     return held;
   };
+  const createAuthority = (message: string) => {
+    const authority = {
+      active: true,
+      checks: 0,
+      error: new Error(message),
+      assertCurrent: (): void => {
+        authority.checks += 1;
+        if (!authority.active) {
+          throw authority.error;
+        }
+      },
+    };
+    return authority;
+  };
+  const settlePin = (pending: Promise<void>) =>
+    pending.then(
+      () => ({ ok: true }),
+      (error: unknown) => ({ error }),
+    );
+  const partialDelivery = (error: unknown) => {
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    if (!isChannelPartialDeliveryError(error)) {
+      throw error;
+    }
+    return error.deliveryResult;
+  };
   beforeEach(() => {
     ({ bot, mediaDir, photoPath } = fixture);
   });
   afterEach(() => vi.restoreAllMocks());
 
   it("preserves literal code spacing in captions sent over HTTP", async () => {
-    await sendMessageTelegram("123", "````\n```\n• literal bullet\n3. literal number\n````", {
-      ...photoOptions(),
-    });
+    await send("````\n```\n• literal bullet\n3. literal number\n````", photoOptions());
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("sendPhoto");
@@ -82,104 +111,88 @@ describe("Telegram physical send acceptance over HTTP", () => {
     );
   });
 
-  it.each(["active", "closed", "aborted"])(
-    "checks %s send authority after the real account queue drains",
-    async (state) => {
-      const token = `123456:telegram-queue-${state}`;
-      getOrCreateAccountThrottler(token, () =>
-        apiThrottler({ global: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
-      );
-      const queuedCfg = configForToken(token);
-      const held = holdRequest();
-      const blocker = sendMessageTelegram("123", "queue blocker", { cfg: queuedCfg });
-      await held.arrived.promise;
-      const checkedBeforeQueue = createDeferred<void>();
-      const controller = new AbortController();
-      const revoked = new Error("Send authority closed while queued");
-      let authorityActive = true;
-      const outcome = sendMessageTelegram("123", "queued message", {
-        cfg: queuedCfg,
-        signal: controller.signal,
-        assertPlatformSendAuthorized: () => {
-          if (!authorityActive) {
-            throw revoked;
-          }
-          checkedBeforeQueue.resolve();
-        },
-      }).then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await checkedBeforeQueue.promise;
-        expect(fieldValues("text")).toEqual(["queue blocker"]);
-        authorityActive = state !== "closed";
-        if (state === "aborted") {
-          controller.abort();
-        }
-        held.release.resolve();
-        await blocker;
-        if (state === "active") {
-          await expect(outcome).resolves.toMatchObject({ result: { messageId: "2" } });
-          expect(fieldValues("text")).toEqual(["queue blocker", "queued message"]);
-        } else {
-          await expect(outcome).resolves.toMatchObject({
-            error: state === "closed" ? revoked : { name: "AbortError" },
-          });
-          expect(fieldValues("text")).toEqual(["queue blocker"]);
-        }
-      } finally {
-        held.release.resolve();
-        await Promise.allSettled([blocker, outcome]);
+  it.each(["active", "closed", "aborted"])("queued send: %s authority", async (state) => {
+    const token = `123456:telegram-queue-${state}`;
+    getOrCreateAccountThrottler(token, () =>
+      apiThrottler({ global: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+    );
+    const queuedCfg = configWith({ botToken: token });
+    const held = holdRequest();
+    const blocker = sendMessageTelegram("123", "queue blocker", { cfg: queuedCfg });
+    await held.arrived.promise;
+    const checkedBeforeQueue = createDeferred<void>();
+    const controller = new AbortController();
+    const authority = createAuthority("Send authority closed while queued");
+    const outcome = sendMessageTelegram("123", "queued message", {
+      cfg: queuedCfg,
+      signal: controller.signal,
+      assertPlatformSendAuthorized: () => {
+        authority.assertCurrent();
+        checkedBeforeQueue.resolve();
+      },
+    }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await checkedBeforeQueue.promise;
+      expect(fieldValues("text")).toEqual(["queue blocker"]);
+      authority.active = state !== "closed";
+      if (state === "aborted") {
+        controller.abort();
       }
-    },
-  );
-
-  it.each(["active", "closed"] as const)(
-    "checks %s adopted-message deletion authority at the registered action boundary",
-    async (state) => {
-      const revoked = new Error("Progress owner retired");
-      const action = telegramPlugin.actions?.handleAction?.({
-        channel: "telegram",
-        action: "delete",
-        params: { chatId: "123", messageId: 42 },
-        cfg,
-        accountId: "default",
-        conversationReadOrigin: "direct-operator",
-        assertDirectAdapterHandoff: () => {
-          if (state === "closed") {
-            throw revoked;
-          }
-        },
-      });
-      if (state === "closed") {
-        await expect(action).rejects.toBe(revoked);
-        expect(requests).toEqual([]);
+      held.release.resolve();
+      await blocker;
+      if (state === "active") {
+        await expect(outcome).resolves.toMatchObject({ result: { messageId: "2" } });
+        expect(fieldValues("text")).toEqual(["queue blocker", "queued message"]);
       } else {
-        await expect(action).resolves.toMatchObject({ details: { ok: true, deleted: true } });
-        expect(requests).toEqual([
-          { method: "deleteMessage", fields: { chat_id: "123", message_id: 42 } },
-        ]);
+        await expect(outcome).resolves.toMatchObject({
+          error: state === "closed" ? authority.error : { name: "AbortError" },
+        });
+        expect(fieldValues("text")).toEqual(["queue blocker"]);
       }
-    },
-  );
+    } finally {
+      held.release.resolve();
+      await Promise.allSettled([blocker, outcome]);
+    }
+  });
+
+  it.each(["active", "closed"] as const)("delete action: %s authority", async (state) => {
+    const revoked = new Error("Progress owner retired");
+    const action = telegramPlugin.actions?.handleAction?.({
+      channel: "telegram",
+      action: "delete",
+      params: { chatId: "123", messageId: 42 },
+      cfg,
+      accountId: "default",
+      conversationReadOrigin: "direct-operator",
+      assertDirectAdapterHandoff: () => {
+        if (state === "closed") {
+          throw revoked;
+        }
+      },
+    });
+    if (state === "closed") {
+      await expect(action).rejects.toBe(revoked);
+      expect(requests).toEqual([]);
+    } else {
+      await expect(action).resolves.toMatchObject({ details: { ok: true, deleted: true } });
+      expect(requests).toEqual([
+        { method: "deleteMessage", fields: { chat_id: "123", message_id: 42 } },
+      ]);
+    }
+  });
 
   it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
-    const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
-    let authorityActive = true;
+    const authority = createAuthority("delivery authority revoked after dispatch refresh");
     const dispatch = async () => {
       await Promise.resolve();
-      authorityActive = false;
+      authority.active = false;
     };
-    const assertPlatformSendAuthorized = () => {
-      if (!authorityActive) {
-        throw authorityRevoked;
-      }
-    };
-
     await expect(
-      sendThrough("direct", "answer", dispatch, undefined, false, assertPlatformSendAuthorized),
-    ).rejects.toBe(authorityRevoked);
+      sendThrough("direct", "answer", dispatch, undefined, false, authority.assertCurrent),
+    ).rejects.toBe(authority.error);
     expect(requests).toHaveLength(0);
   });
 
@@ -198,18 +211,10 @@ describe("Telegram physical send acceptance over HTTP", () => {
       };
     });
     const held = holdRequest();
-    const revoked = new Error("Pin authority revoked while queued");
-    let authorityActive = true;
+    const authority = createAuthority("Pin authority revoked while queued");
     let authorizedChecks = 0;
     const blocker = pinThroughAdapter(token, 101);
-    const deniedPin = pinThroughAdapter(token, 102, () => {
-      if (!authorityActive) {
-        throw revoked;
-      }
-    }).then(
-      () => ({ ok: true }),
-      (error: unknown) => ({ error }),
-    );
+    const deniedPin = settlePin(pinThroughAdapter(token, 102, authority.assertCurrent));
     const authorizedPin = pinThroughAdapter(token, 103, () => {
       authorizedChecks += 1;
     });
@@ -217,19 +222,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
       await held.arrived.promise;
       await queued.promise;
       expect(fieldValues("message_id")).toEqual([101]);
-      authorityActive = false;
+      authority.active = false;
       held.release.resolve();
       await blocker;
-      await expect(deniedPin).resolves.toEqual({ error: revoked });
+      await expect(deniedPin).resolves.toEqual({ error: authority.error });
       await authorizedPin;
       expect(authorizedChecks).toBeGreaterThan(0);
       // An older caller must not inherit the rejected client's assertion.
       await pinThroughAdapter(token, 104);
-      expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual([
-        ["pinChatMessage", 101],
-        ["pinChatMessage", 103],
-        ["pinChatMessage", 104],
-      ]);
+      expectPins(101, 103, 104);
     } finally {
       held.release.resolve();
       await Promise.allSettled([blocker, deniedPin, authorizedPin]);
@@ -254,16 +255,8 @@ describe("Telegram physical send acceptance over HTTP", () => {
       description: "Too Many Requests: retry after 1",
       parameters: { retry_after: 1 },
     });
-    const revoked = new Error("Pin authority revoked during retry delay");
-    let authorityActive = true;
-    const outcome = pinThroughAdapter(token, 201, () => {
-      if (!authorityActive) {
-        throw revoked;
-      }
-    }).then(
-      () => ({ ok: true }),
-      (error: unknown) => ({ error }),
-    );
+    const authority = createAuthority("Pin authority revoked during retry delay");
+    const outcome = settlePin(pinThroughAdapter(token, 201, authority.assertCurrent));
     try {
       await retryResponse.promise;
       // Let grammY consume the response and enter the existing real retry sleep.
@@ -271,38 +264,27 @@ describe("Telegram physical send acceptance over HTTP", () => {
         setImmediate(resolve);
       });
       expect(fieldValues("message_id")).toEqual([201]);
-      authorityActive = false;
-      await expect(outcome).resolves.toEqual({ error: revoked });
-      expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual([
-        ["pinChatMessage", 201],
-      ]);
+      authority.active = false;
+      await expect(outcome).resolves.toEqual({ error: authority.error });
+      expectPins(201);
     } finally {
       await outcome;
     }
   });
 
   it("settles an accepted delivery pin after its authority is revoked", async () => {
-    const token = "123456:telegram-pin-accepted";
     const held = holdRequest();
-    let authorityActive = true;
-    let authorityChecks = 0;
-    const outcome = pinThroughAdapter(token, 301, () => {
-      authorityChecks += 1;
-      if (!authorityActive) {
-        throw new Error("Pin authority revoked after acceptance");
-      }
-    });
+    const authority = createAuthority("Pin authority revoked after acceptance");
+    const outcome = pinThroughAdapter("123456:telegram-pin-accepted", 301, authority.assertCurrent);
     try {
       await held.arrived.promise;
-      expect(authorityChecks).toBeGreaterThan(0);
-      const checksAtAcceptance = authorityChecks;
-      authorityActive = false;
+      expect(authority.checks).toBeGreaterThan(0);
+      const checksAtAcceptance = authority.checks;
+      authority.active = false;
       held.release.resolve();
       await expect(outcome).resolves.toBeUndefined();
-      expect(authorityChecks).toBe(checksAtAcceptance);
-      expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual([
-        ["pinChatMessage", 301],
-      ]);
+      expect(authority.checks).toBe(checksAtAcceptance);
+      expectPins(301);
     } finally {
       held.release.resolve();
       await Promise.allSettled([outcome]);
@@ -313,79 +295,62 @@ describe("Telegram physical send acceptance over HTTP", () => {
     { failure: "misdirected", revoke: true },
     { failure: "connection", revoke: false },
     { failure: "connection", revoke: true },
-  ] as const)(
-    "checks pin authority through $failure fallback (revoked: $revoke)",
-    async ({ failure, revoke }) => {
-      // Each control needs a fresh transport with an available fallback path.
-      resetTelegramClientOptionsCacheForTests();
-      const held = holdRequest();
-      rejections.push(
-        failure === "misdirected"
-          ? { error_code: 421, description: "Misdirected Request" }
-          : { resetConnection: true },
-      );
-      const revoked = new Error("Pin authority revoked before transport fallback");
-      let current = true;
-      const outcome = pinThroughAdapter(`123456:pin-${failure}-${revoke}`, 401, () => {
-        if (!current) {
-          throw revoked;
-        }
-      }).then(
-        () => ({ ok: true }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await Promise.race([
-          held.arrived.promise,
-          outcome.then(() => {
-            throw new Error("pin settled before the held fallback response");
-          }),
-        ]);
-        current = !revoke;
-        held.release.resolve();
-        expect(await outcome).toEqual(revoke ? { error: revoked } : { ok: true });
-        expect(requests.map(({ method, fields }) => [method, fields.message_id])).toEqual(
-          Array.from({ length: revoke ? 1 : 2 }, () => ["pinChatMessage", 401]),
-        );
-      } finally {
-        held.release.resolve();
-        await outcome;
-      }
-    },
-  );
+  ] as const)("$failure pin fallback: revoked=$revoke", async ({ failure, revoke }) => {
+    // Each fallback control needs a fresh transport.
+    resetTelegramClientOptionsCacheForTests();
+    const held = holdRequest();
+    rejections.push(
+      failure === "misdirected"
+        ? { error_code: 421, description: "Misdirected Request" }
+        : { resetConnection: true },
+    );
+    const authority = createAuthority("Pin authority revoked before transport fallback");
+    const outcome = settlePin(
+      pinThroughAdapter(`123456:pin-${failure}-${revoke}`, 401, authority.assertCurrent),
+    );
+    try {
+      await Promise.race([
+        held.arrived.promise,
+        outcome.then(() => {
+          throw new Error("pin settled before the held fallback response");
+        }),
+      ]);
+      authority.active = !revoke;
+      held.release.resolve();
+      expect(await outcome).toEqual(revoke ? { error: authority.error } : { ok: true });
+      expectPins(...Array<number>(revoke ? 1 : 2).fill(401));
+    } finally {
+      held.release.resolve();
+      await outcome;
+    }
+  });
 
-  it.each([
-    { entry: "public", rich: false },
-    { entry: "public", rich: true },
-  ] as const)(
-    "preserves $entry callbacks and controls through quote fallback (rich: $rich)",
-    async ({ entry, rich }) => {
-      rejections.push("Bad Request: quote not found");
-      if (!rich) {
-        rejections.push("Bad Request: can't parse entities");
-      }
-      await sendThrough(entry, "answer", recordDispatch, undefined, rich);
-      expect(events).toEqual(
-        rich
-          ? ["dispatch", "http", "dispatch", "http"]
-          : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
-      );
-      expect(requests).toHaveLength(rich ? 2 : 3);
-      expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
-      if (rich) {
-        expectMethods("sendRichMessage", "sendRichMessage");
-        expect(requests[1]?.fields.reply_parameters).toMatchObject({ message_id: 7 });
-        expect(requests[1]?.fields.reply_parameters).not.toHaveProperty("quote");
-        expect(fieldValues("reply_markup")).toEqual([
-          { inline_keyboard: buttons },
-          { inline_keyboard: buttons },
-        ]);
-      } else {
-        expect(requests[1]?.fields.reply_to_message_id).toBe(7);
-        expect(requests[2]?.fields.parse_mode).toBeUndefined();
-      }
-    },
-  );
+  it.each([false, true])("quote fallback: rich=%s", async (rich) => {
+    rejections.push("Bad Request: quote not found");
+    if (!rich) {
+      rejections.push("Bad Request: can't parse entities");
+    }
+    await sendThrough("public", "answer", recordDispatch, undefined, rich);
+    expect(events).toEqual(
+      rich
+        ? ["dispatch", "http", "dispatch", "http"]
+        : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
+    );
+    expect(requests).toHaveLength(rich ? 2 : 3);
+    expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
+    if (rich) {
+      expectMethods("sendRichMessage", "sendRichMessage");
+      expect(requests[1]?.fields.reply_parameters).toMatchObject({ message_id: 7 });
+      expect(requests[1]?.fields.reply_parameters).not.toHaveProperty("quote");
+      expect(fieldValues("reply_markup")).toEqual([
+        { inline_keyboard: buttons },
+        { inline_keyboard: buttons },
+      ]);
+    } else {
+      expect(requests[1]?.fields.reply_to_message_id).toBe(7);
+      expect(requests[2]?.fields.parse_mode).toBeUndefined();
+    }
+  });
 
   it("retains accepted IDs when the next direct callback rejects closure", async () => {
     const closure = new PlatformMessageNotDispatchedError("delivery owner closed", {
@@ -399,11 +364,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     }).catch((error: unknown) => error);
     expect(events).toEqual(["dispatch", "http", "dispatch"]);
     expect(requests).toHaveLength(1);
-    expect(isChannelPartialDeliveryError(observed)).toBe(true);
-    if (!isChannelPartialDeliveryError(observed)) {
-      throw observed;
-    }
-    expect(observed.deliveryResult.messageIds).toEqual(["1"]);
+    expect(partialDelivery(observed).messageIds).toEqual(["1"]);
     const causes: Error[] = [];
     for (
       let cause: unknown = observed;
@@ -415,20 +376,17 @@ describe("Telegram physical send acceptance over HTTP", () => {
     expect(causes).toContain(closure);
   });
 
-  it.each(["direct", "public"] as const)(
-    "preserves %s media follow-up ordering and keyboard placement",
-    async (entry) => {
-      await sendThrough(entry, "A".repeat(9000), async () => {}, photoPath);
-      expectMethods("sendPhoto", "sendMessage", "sendMessage", "sendMessage");
-      expect(requests[0]?.fields.caption).toBeUndefined();
-      expect(requests.slice(1).map(({ fields }) => String(fields.text).length)).toEqual([
-        4000, 4000, 1000,
-      ]);
-      expect(requests.flatMap(({ fields }, index) => (fields.reply_markup ? [index] : []))).toEqual(
-        [entry === "direct" ? 1 : 3],
-      );
-    },
-  );
+  it.each(["direct", "public"] as const)("%s media ordering and keyboard", async (entry) => {
+    await sendThrough(entry, "A".repeat(9000), async () => {}, photoPath);
+    expectMethods("sendPhoto", "sendMessage", "sendMessage", "sendMessage");
+    expect(requests[0]?.fields.caption).toBeUndefined();
+    expect(requests.slice(1).map(({ fields }) => String(fields.text).length)).toEqual([
+      4000, 4000, 1000,
+    ]);
+    expect(requests.flatMap(({ fields }, index) => (fields.reply_markup ? [index] : []))).toEqual([
+      entry === "direct" ? 1 : 3,
+    ]);
+  });
 
   it("delivers later chunks after a rendered-empty first chunk", async () => {
     const empty = "Bad Request: text must be non-empty";
@@ -452,47 +410,38 @@ describe("Telegram physical send acceptance over HTTP", () => {
   it("never resends or continues after an observer throws a recoverable-looking error", async () => {
     const error = new Error("can't parse entities");
     const observedIds: string[] = [];
-    let observedError: unknown;
-    try {
-      await sendMessageTelegram("123", `${"A".repeat(4000)}${"B".repeat(4000)}tail`, {
-        ...requestOptions(),
-        textMode: "html",
-        onDeliveryResult: (delivery) => {
-          observedIds.push(delivery.messageId);
-          if (observedIds.length === 2) {
-            throw error;
-          }
-        },
-      });
-    } catch (caught) {
-      observedError = caught;
-    }
+    const observedError: unknown = await send(`${"A".repeat(4000)}${"B".repeat(4000)}tail`, {
+      textMode: "html",
+      onDeliveryResult: (delivery) => {
+        observedIds.push(delivery.messageId);
+        if (observedIds.length === 2) {
+          throw error;
+        }
+      },
+    }).catch((caught: unknown) => caught);
 
     expect(
-      requests.map(({ method, fields }) => ({
+      requests.map(({ method, fields }) => [
         method,
-        textPrefix: String(fields.text).slice(0, 4),
-        textLength: String(fields.text).length,
-        parseMode: fields.parse_mode,
-      })),
+        String(fields.text).slice(0, 4),
+        String(fields.text).length,
+        fields.parse_mode,
+      ]),
     ).toEqual([
-      { method: "sendMessage", textPrefix: "AAAA", textLength: 4000, parseMode: "HTML" },
-      { method: "sendMessage", textPrefix: "BBBB", textLength: 4000, parseMode: "HTML" },
+      ["sendMessage", "AAAA", 4000, "HTML"],
+      ["sendMessage", "BBBB", 4000, "HTML"],
     ]);
     expect(observedIds).toEqual(["1", "2"]);
-    expect(isChannelPartialDeliveryError(observedError)).toBe(true);
-    if (!isChannelPartialDeliveryError(observedError)) {
-      throw observedError;
-    }
-    expect(observedError.deliveryResult.messageIds).toEqual(["1", "2"]);
-    expect(observedError.deliveryResult.receipt?.platformMessageIds).toEqual(["1", "2"]);
+    const delivery = partialDelivery(observedError);
+    expect(delivery.messageIds).toEqual(["1", "2"]);
+    expect(delivery.receipt?.platformMessageIds).toEqual(["1", "2"]);
   });
 
   it.each([
     { required: false, revoke: false, legacy: true },
     { required: true, revoke: true, legacy: false },
   ])(
-    "settles registered Telegram delivery and pin (required: $required, revoked: $revoke, legacy: $legacy)",
+    "registered pin: required=$required revoke=$revoke legacy=$legacy",
     async ({ required, revoke, legacy }) => {
       await withOpenClawTestState({ prefix: "telegram-registered-pin-" }, async () => {
         resetTelegramClientOptionsCacheForTests();
@@ -500,14 +449,8 @@ describe("Telegram physical send acceptance over HTTP", () => {
           createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
         );
         const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
-        const revoked = new Error("Registered pin owner revoked before retry");
-        let current = true;
-        const assertCurrent = () => {
-          if (!current) {
-            throw revoked;
-          }
-        };
-        const pinCfg = configForToken(`123456:registered-pin-${required}-${revoke}`);
+        const authority = createAuthority("Registered pin owner revoked before retry");
+        const pinCfg = configWith({ botToken: `123456:registered-pin-${required}-${revoke}` });
         const outcome = legacy
           ? telegramPlugin.actions!.handleAction!({
               channel: "telegram",
@@ -531,7 +474,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
                 },
               ],
               skipQueue: true,
-              assertDirectAdapterHandoff: assertCurrent,
+              assertDirectAdapterHandoff: authority.assertCurrent,
               onDeliveredPayload: () => {
                 if (revoke) {
                   fixture.requestHold = held;
@@ -551,7 +494,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
                 throw new Error("delivery settled before pin retry");
               }),
             ]);
-            current = false;
+            authority.active = false;
             held.release.resolve();
           }
           if (legacy) {
@@ -585,14 +528,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
       method === "getChat" ? { id: -100123, type: "supergroup", title: "Resolved" } : undefined;
     await sendMessageTelegram("https://t.me/fixture", "Resolved destination", {
       gatewayClientScopes: ["operator.write"],
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: cfg.channels.telegram.botToken,
-            apiRoot: cfg.channels.telegram.apiRoot,
-          },
-        },
-      },
+      cfg,
     });
     expect(fixture.endpoints).toEqual(
       ["getChat", "sendMessage"].map((method) => `/bot${cfg.channels.telegram.botToken}/${method}`),
@@ -610,34 +546,20 @@ describe("Telegram physical send acceptance over HTTP", () => {
     await pinMessageTelegram("-100123:topic:77", 321, opts);
     await unpinMessageTelegram("-100123:topic:77", undefined, opts);
     await deleteMessageTelegram("-100123:topic:77", 321, opts);
+    const expected = (method: string, fields: Record<string, unknown> = {}) => ({
+      method,
+      fields: { chat_id: "-100123", ...fields },
+    });
+    const reaction = (value: unknown[]) =>
+      expected("setMessageReaction", { message_id: 321, reaction: value });
     expect(requests).toEqual([
       { method: "getChat", fields: { chat_id: "@fixture" } },
-      {
-        method: "setMessageReaction",
-        fields: {
-          chat_id: "-100123",
-          message_id: 321,
-          reaction: [{ type: "emoji", emoji: "❤‍🔥" }],
-        },
-      },
-      {
-        method: "setMessageReaction",
-        fields: {
-          chat_id: "-100123",
-          message_id: 321,
-          reaction: [{ type: "custom_emoji", custom_emoji_id: "5231419410191111111" }],
-        },
-      },
-      {
-        method: "setMessageReaction",
-        fields: { chat_id: "-100123", message_id: 321, reaction: [] },
-      },
-      {
-        method: "pinChatMessage",
-        fields: { chat_id: "-100123", message_id: 321, disable_notification: true },
-      },
-      { method: "unpinChatMessage", fields: { chat_id: "-100123" } },
-      { method: "deleteMessage", fields: { chat_id: "-100123", message_id: 321 } },
+      reaction([{ type: "emoji", emoji: "❤‍🔥" }]),
+      reaction([{ type: "custom_emoji", custom_emoji_id: "5231419410191111111" }]),
+      reaction([]),
+      expected("pinChatMessage", { message_id: 321, disable_notification: true }),
+      expected("unpinChatMessage"),
+      expected("deleteMessage", { message_id: 321 }),
     ]);
   });
 
@@ -652,20 +574,16 @@ describe("Telegram physical send acceptance over HTTP", () => {
   });
 
   it("preserves captured forum-topic authority after awaited target preparation", async () => {
-    let platformCurrent = true;
+    const authority = createAuthority("Platform request authority revoked");
     const options = {
       ...requestOptions(),
-      assertPlatformSendAuthorized: () => {
-        if (!platformCurrent) {
-          throw new Error("Platform request authority revoked");
-        }
-      },
+      assertPlatformSendAuthorized: authority.assertCurrent,
     };
     fixture.responseFor = (method) => {
       if (method !== "getChat") {
         return undefined;
       }
-      platformCurrent = false;
+      authority.active = false;
       options.assertPlatformSendAuthorized = () => {};
       return { id: -100123, type: "supergroup", title: "Resolved" };
     };
@@ -744,40 +662,34 @@ describe("Telegram physical send acceptance over HTTP", () => {
     { gatewayClientScopes: undefined },
     { gatewayClientScopes: ["operator.write"] },
     { gatewayClientScopes: ["operator.admin"] },
-  ])(
-    "reaches target persistence only for internal or admin send authority ($gatewayClientScopes)",
-    async ({ gatewayClientScopes }) => {
-      const read = vi
-        .spyOn(configMutation, "readConfigFileSnapshotForWrite")
-        .mockRejectedValue(new Error("isolated persistence boundary unavailable"));
-      vi.spyOn(cronStore, "loadCronStore").mockResolvedValue({ version: 1, jobs: [] });
-      fixture.responseFor = (method) =>
-        method === "getChat" ? { id: 123, type: "private" } : undefined;
-      await sendMessageTelegram("@fixture", "Delivered regardless of writeback permission", {
-        ...requestOptions(),
-        gatewayClientScopes,
-      });
-      expect(read).toHaveBeenCalledTimes(
-        gatewayClientScopes === undefined || gatewayClientScopes.includes("operator.admin") ? 1 : 0,
-      );
-      expectMethods("getChat", "sendMessage");
-    },
-  );
+  ])("writeback: $gatewayClientScopes", async ({ gatewayClientScopes }) => {
+    const read = vi
+      .spyOn(configMutation, "readConfigFileSnapshotForWrite")
+      .mockRejectedValue(new Error("isolated persistence boundary unavailable"));
+    vi.spyOn(cronStore, "loadCronStore").mockResolvedValue({ version: 1, jobs: [] });
+    fixture.responseFor = (method) =>
+      method === "getChat" ? { id: 123, type: "private" } : undefined;
+    await sendMessageTelegram("@fixture", "Delivered regardless of writeback permission", {
+      ...requestOptions(),
+      gatewayClientScopes,
+    });
+    expect(read).toHaveBeenCalledTimes(
+      gatewayClientScopes === undefined || gatewayClientScopes.includes("operator.admin") ? 1 : 0,
+    );
+    expectMethods("getChat", "sendMessage");
+  });
 
   it("keeps private captions and media paths out of logs", async () => {
     const info = vi.spyOn(sendLogger, "info");
     const text = "private outbound payload";
-    await sendMessageTelegram("123:topic:77", text, {
-      ...photoOptions(),
-    });
+    await sendMessageTelegram("123:topic:77", text, photoOptions());
     const logs = info.mock.calls.map(([message]) => message).join("\n");
     expect(logs).not.toContain(text);
     expect(logs).not.toContain(photoPath);
   });
 
   it("encodes interactive destinations without leaking invalid or competing actions", async () => {
-    await sendMessageTelegram("123", "Choose", {
-      ...requestOptions(),
+    await send("Choose", {
       buttons: [
         [
           { text: "Open", callback_data: "ignored", url: "https://example.com", style: "primary" },
@@ -822,29 +734,22 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   describe("edit recovery", () => {
     afterEach(resetGlobalHookRunner);
-    it.each(["caption", "auto"] as const)(
-      "preserves rich list caption rendering during a %s edit",
-      async (editMode) => {
-        if (editMode === "auto") {
-          rejections.push("Bad Request: there is no text in the message to edit");
-        }
-        await editMessageTelegram(
-          "123",
-          321,
-          "<ul><li>First</li><li>Second</li></ul><aside>Note</aside>",
-          { cfg, api: bot.api, editMode },
-        );
-        expect(requests.at(-1)?.method).toBe("editMessageCaption");
-        expect(requests.at(-1)?.fields.caption).toBe(
-          "• First\n• Second\n<blockquote>Note</blockquote>",
-        );
-      },
-    );
+    it.each(["caption", "auto"] as const)("%s rich list caption", async (editMode) => {
+      if (editMode === "auto") {
+        rejections.push("Bad Request: there is no text in the message to edit");
+      }
+      await edit("<ul><li>First</li><li>Second</li></ul><aside>Note</aside>", {
+        editMode,
+      });
+      expect(requests.at(-1)?.method).toBe("editMessageCaption");
+      expect(requests.at(-1)?.fields.caption).toBe(
+        "• First\n• Second\n<blockquote>Note</blockquote>",
+      );
+    });
 
     it("keeps a markup-heavy caption edit within the limit after an HTML rejection", async () => {
       rejections.push("Bad Request: can't parse entities");
-      await editMessageTelegram("123", 321, `**${"x".repeat(1024)}**`, {
-        ...requestOptions(),
+      await edit(`**${"x".repeat(1024)}**`, {
         editMode: "caption",
       });
       expectMethods("editMessageCaption", "editMessageCaption");
@@ -854,9 +759,8 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
     it("edits the existing caption when Telegram reports no text to edit", async () => {
       rejections.push("Bad Request: there is no text in the message to edit");
-      await editMessageTelegram("123", 321, "<b>visible</b>", {
+      await edit("<b>visible</b>", {
         cfg: configWith({ richMessages: false, linkPreview: false }),
-        api: bot.api,
         textMode: "html",
         editMode: "auto",
         buttons: [],
@@ -882,44 +786,37 @@ describe("Telegram physical send acceptance over HTTP", () => {
       );
       const text = tokens.map((token) => `${list ? "- " : ""}${token}`).join(list ? "\n" : "\n\n");
       rejections.push("Bad Request: RICH_MESSAGE_BLOCKS_TOO_MANY");
-      await editMessageTelegram("123", 321, text, {
+      await edit(text, {
         cfg: configWith({ richMessages: true }),
-        api: bot.api,
       });
       expectMethods("editMessageText", "editMessageText");
       expect(JSON.stringify(requests.at(-1)!.fields).match(/P\d{3}/g)).toEqual(tokens);
       expect(requests.every(({ fields }) => fields.reply_markup === undefined)).toBe(true);
     });
 
-    it.each([undefined, true])(
-      "resolves named-account edit previews with explicit override %s",
-      async (linkPreview) => {
-        rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
-        await editMessageTelegram("123", 321, "**Read** https://example.com", {
-          cfg: configWith({
-            richMessages: true,
-            linkPreview: true,
-            accounts: { worker: { linkPreview: false } },
-          }),
-          accountId: "worker",
-          token: cfg.channels.telegram.botToken,
-          api: bot.api,
-          linkPreview,
-        });
-        expect(fieldValues("link_preview_options")).toEqual(
-          Array(2).fill(linkPreview === true ? undefined : { is_disabled: true }),
-        );
-      },
-    );
+    it.each([undefined, true])("account preview override: %s", async (linkPreview) => {
+      rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
+      await edit("**Read** https://example.com", {
+        cfg: configWith({
+          richMessages: true,
+          linkPreview: true,
+          accounts: { worker: { linkPreview: false } },
+        }),
+        accountId: "worker",
+        token: cfg.channels.telegram.botToken,
+        linkPreview,
+      });
+      expect(fieldValues("link_preview_options")).toEqual(
+        Array(2).fill(linkPreview === true ? undefined : { is_disabled: true }),
+      );
+    });
 
     it("keeps styled HTML link labels on rich edit fallback and rejects oversized replacement atomically", async () => {
       const richCfg = configWith({ richMessages: true });
       rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
-      await editMessageTelegram(
-        "123",
-        321,
+      await edit(
         '<details><summary>More</summary><p><a href="https://example.com">**Download**</a></p></details>',
-        { cfg: richCfg, api: bot.api },
+        { cfg: richCfg },
       );
       expect(JSON.stringify(requests[0]!.fields.rich_message)).toContain(
         '"url":"https://example.com"',
@@ -927,9 +824,9 @@ describe("Telegram physical send acceptance over HTTP", () => {
       expect(requests[1]!.fields.text).toBe("More\nDownload");
       rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID", "Bad Request: message is too long");
       const text = `START${"x".repeat(4100)}END`;
-      await expect(
-        editMessageTelegram("123", 321, text, { cfg: richCfg, api: bot.api }),
-      ).rejects.toThrow("message is too long");
+      await expect(edit(text, { cfg: richCfg, api: bot.api })).rejects.toThrow(
+        "message is too long",
+      );
       expect(requests.slice(2).map(({ method }) => method)).toEqual([
         "editMessageText",
         "editMessageText",

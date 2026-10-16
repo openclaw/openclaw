@@ -116,15 +116,13 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
   it("removes the full copied prompt before XML and metadata cleanup changes it", async () => {
     const conversationContext = buildHistoryContext({
       historyText: "[Telegram] Alice: private history paragraph",
-      currentMessage: [
-        "Conversation info: ⟦openclaw:ctx⟧",
-        "```json",
-        '{"private":"sender metadata"}',
-        "```",
-        '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-        "",
-        "private second inbound paragraph",
-      ].join("\n"),
+      currentMessage: `Conversation info: ⟦openclaw:ctx⟧
+\`\`\`json
+{"private":"sender metadata"}
+\`\`\`
+<function_calls><invoke name="exec">private XML</invoke></function_calls>
+
+private second inbound paragraph`,
     });
 
     await prepareAndDispatch(
@@ -140,17 +138,15 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
       historyText: "[Telegram] Alice: earlier message",
       currentMessage: "[Telegram] Alice: current message",
     });
-    const literal = [
-      "The prompt format is:",
-      "",
-      "```text",
-      "[Chat messages since your last reply - for context]",
-      "Example: this is public placeholder history.",
-      "",
-      "[Current message - respond to this]",
-      "Example: this is a public placeholder message.",
-      "```",
-    ].join("\n");
+    const literal = `The prompt format is:
+
+\`\`\`text
+[Chat messages since your last reply - for context]
+Example: this is public placeholder history.
+
+[Current message - respond to this]
+Example: this is a public placeholder message.
+\`\`\``;
 
     await prepareAndDispatch({ text: literal }, conversationContext);
 
@@ -161,24 +157,20 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
   });
 
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
-    const leaked = [
-      "Use it to continue answering the active user request now. Do not wait for",
-      "another message. This context is runtime-generated, not user-authored.",
-      "Keep internal details private.",
-      "",
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "Conversation info: (openclaw:ctx)",
-      '{"chat_id":"telegram:123","message_id":"925"}',
-      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "",
-      "Visible answer.",
-    ].join("\n");
+    const leaked = `Use it to continue answering the active user request now. Do not wait for
+another message. This context is runtime-generated, not user-authored.
+Keep internal details private.
+
+<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+Conversation info: (openclaw:ctx)
+{"chat_id":"telegram:123","message_id":"925"}
+<<<END_OPENCLAW_INTERNAL_CONTEXT>>>
+
+Visible answer.`;
 
     await prepareAndDispatch({ text: leaked });
 
     expect(delivered()).toEqual(["Visible answer."]);
-    expect(delivered().join("\n")).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(delivered().join("\n")).not.toContain("Keep internal details private.");
   });
 
   it("removes a copied prompt when the source and model normalize line endings differently", async () => {
@@ -196,37 +188,27 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered()).toEqual(["Visible answer."]);
   });
 
-  it("never delivers a copied prompt disguised with same-line wrappers", async () => {
+  it.each([
+    {
+      name: "same-line wrappers",
+      wrap: (prompt: string) => `Visible prefix: ${prompt} visible suffix.`,
+      visible: ["Visible prefix:", "visible suffix."],
+    },
+    {
+      name: "Markdown code fences",
+      wrap: (prompt: string) => `\`\`\`text\n${prompt}\n\`\`\`\n\nVisible answer.`,
+      visible: ["Visible answer."],
+    },
+  ])("never delivers a private prompt hidden in $name", async ({ wrap, visible }) => {
     const conversationContext = buildHistoryContext({
       historyText: "[Telegram] Alice: private history",
       currentMessage: "private inbound paragraph",
     });
-
-    await prepareAndDispatch(
-      { text: `Visible prefix: ${conversationContext} visible suffix.` },
-      conversationContext,
-    );
-
+    await prepareAndDispatch({ text: wrap(conversationContext) }, conversationContext);
     expect(delivered()).toHaveLength(1);
-    expect(delivered()[0]).toContain("Visible prefix:");
-    expect(delivered()[0]).toContain("visible suffix.");
-    expect(delivered()[0]).not.toContain("private history");
-    expect(delivered()[0]).not.toContain("private inbound paragraph");
-  });
-
-  it("never delivers an exact private prompt hidden inside a Markdown code fence", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private inbound paragraph",
-    });
-
-    await prepareAndDispatch(
-      { text: `\`\`\`text\n${conversationContext}\n\`\`\`\n\nVisible answer.` },
-      conversationContext,
-    );
-
-    expect(delivered()).toHaveLength(1);
-    expect(delivered()[0]).toContain("Visible answer.");
+    for (const text of visible) {
+      expect(delivered()[0]).toContain(text);
+    }
     expect(delivered()[0]).not.toContain("private history");
     expect(delivered()[0]).not.toContain("private inbound paragraph");
   });
