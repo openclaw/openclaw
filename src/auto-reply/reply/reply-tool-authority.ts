@@ -53,6 +53,7 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
+import { applyReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -63,6 +64,8 @@ export type ReplyToolAuthorityInput = {
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   run: Partial<
     Pick<
       FollowupRun["run"],
@@ -108,47 +111,6 @@ export type ReplyToolAuthorityInput = {
 };
 
 export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
-
-function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthorityInput,
-  overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthorityInput {
-  return {
-    ...snapshot,
-    originatingChannel: overlay.originatingChannel,
-    operatorAuthority: overlay.operatorAuthority,
-    toolsAllow: overlay.toolsAllow,
-    disableTools: overlay.disableTools,
-    run: {
-      ...snapshot.run,
-      permissionMode: overlay.permissionMode,
-      toolOverrides: overlay.toolOverrides,
-      messageProvider: overlay.messageProvider,
-      chatType: overlay.chatType,
-      agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
-      groupId: overlay.groupId,
-      groupChannel: overlay.groupChannel,
-      groupSpace: overlay.groupSpace,
-      memberRoleIds: overlay.memberRoleIds,
-      spawnedBy: overlay.spawnedBy,
-      senderId: overlay.senderId,
-      senderName: overlay.senderName,
-      senderUsername: overlay.senderUsername,
-      senderE164: overlay.senderE164,
-      senderIsOwner: overlay.senderIsOwner,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
-      traceAuthorized: overlay.traceAuthorized,
-      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
-      clientCaps: overlay.clientCaps,
-      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
-      toolBindings: overlay.toolBindings,
-    },
-  };
-}
 
 function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
   return {
@@ -301,6 +263,8 @@ function resolveFollowupRunToolAuthorityFingerprint(
           ? readToolAllowlistIntersection(snapshot.toolsAllow)
           : undefined,
         disableTools: snapshot.disableTools === true,
+        forceRestartSafeTools: snapshot.forceRestartSafeTools === true,
+        forceCodeModeTools: snapshot.forceCodeModeTools === true,
         sessionFile: execution.sessionFile,
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
@@ -397,6 +361,8 @@ export function prepareReplyToolAuthority(
     operatorAuthority: run.operatorAuthority,
     toolsAllow,
     disableTools: run.disableTools === true,
+    forceRestartSafeTools: run.forceRestartSafeTools === true,
+    forceCodeModeTools: run.forceCodeModeTools === true,
     run: {
       ...run.run,
       config: run.run.config ? captureRuntimeConfig(run.run.config) : undefined,

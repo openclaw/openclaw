@@ -214,6 +214,7 @@ export type UserTurnTranscriptRecorder = {
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
+    lifecycleAdmission?: import("../config/sessions/restart-resume.js").SessionInputLifecycleAdmission;
     assertCurrent: () => void;
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;

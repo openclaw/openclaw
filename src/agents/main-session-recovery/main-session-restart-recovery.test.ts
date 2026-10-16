@@ -3444,7 +3444,7 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("tombstones exhausted recovery with replacement-session instructions", async () => {
+  it("tombstones exhausted recovery with operator-resume instructions", async () => {
     const { readEntry } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
       mainRestartRecovery: {
@@ -3458,7 +3458,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("Resume in new session"),
+        text: expect.stringContaining("use Resume to continue in this session"),
       }),
     );
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
@@ -3614,7 +3614,7 @@ describe("main-session-restart-recovery", () => {
       to: "discord:dm:main",
       threadId: undefined,
       idempotencyKey: "main-session-restart-recovery:recovery-main:failed-notice",
-      text: expect.stringContaining("Resume in new session"),
+      text: expect.stringContaining("use Resume to continue in this session"),
     });
     const failedEntry = readEntry();
     expect(failedEntry).toMatchObject({
@@ -3654,7 +3654,7 @@ describe("main-session-restart-recovery", () => {
         content: [
           {
             type: "text",
-            text: expect.stringContaining("Resume in new session"),
+            text: expect.stringContaining("use Resume to continue in this session"),
           },
         ],
       },
