@@ -478,7 +478,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
     expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
     expect(targets.flat()).toEqual(
-      listGitTrackedFiles({ pathspecs: ["src/gateway"] })
+      listGitTrackedFiles({ pathspecs: "src/gateway" })
         ?.filter(isGatewayServerTestFile)
         .toSorted((a, b) => a.localeCompare(b)),
     );
@@ -492,10 +492,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it.each([
-    directArgs(e2eConfig, "doctor"),
-    directArgs(e2eConfig, "--testNamePattern", "doctor"),
-    ["watch", "--config", gatewayConfig],
-  ])("keeps explicitly bounded or watched selection %j", (argv) => {
+    { argv: directArgs(e2eConfig, "doctor") },
+    { argv: directArgs(e2eConfig, "--testNamePattern", "doctor") },
+    { argv: ["watch", "--config", gatewayConfig] },
+  ])("keeps explicitly bounded or watched selection %j", ({ argv }) => {
     expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
   });
 
