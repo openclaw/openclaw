@@ -857,6 +857,30 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildStepCacheState", () => {
+  it("validates the saved snapshot only when live outputs need restoration", () => {
+    const f = buildCacheFixture();
+    const cached = f.publish();
+    let savedReads = 0;
+    const readFile = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (String(file).startsWith(`${cached.outputRoot}${path.sep}`)) {
+        savedReads++;
+      }
+      return readFile(file, options);
+    });
+    try {
+      expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
+      expect(savedReads).toBe(0);
+      fs.writeFileSync(f.outputPath, "changed live bytes");
+      expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
+      expect(savedReads).toBeGreaterThan(0);
+      fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
+      expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("hashes static inputs once on warm lookup and invalidates changed or removed compiler inputs", () => {
     const f = buildCacheFixture();
     const consumed = writeFixture(f.rootDir, "shared/consumed.ts", "consumed");

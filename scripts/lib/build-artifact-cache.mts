@@ -476,12 +476,9 @@ export function resolveBuildStepCacheState(
     const actualOutputsAcceptable =
       step.cache.restore !== "always" &&
       artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
-    const cachedOutputMismatch = artifactRecordMismatch(
-      outputRoot,
-      stamp,
-      signature,
-      requiredOutputs,
-    );
+    const cachedOutputMismatch = actualOutputsAcceptable
+      ? undefined
+      : artifactRecordMismatch(outputRoot, stamp, signature, requiredOutputs);
     const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
