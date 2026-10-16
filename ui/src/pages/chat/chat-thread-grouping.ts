@@ -193,6 +193,7 @@ export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
   reasoning?: ChatReasoning | null,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const visibleReasoning = new Set(
     reasoning?.items.flatMap(({ receipt }) =>
@@ -203,9 +204,10 @@ export function groupMessages(
     items,
     visibleReasoning,
     replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
   );
   const context = replyContext.items
-    ? groupChatItems(replyContext.items, visibleReasoning)
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
     : result;
   return stampReplyAttribution(result, context, replyContext);
 }
@@ -230,6 +232,7 @@ function groupChatItems(
   items: ChatItem[],
   visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -274,9 +277,20 @@ function groupChatItems(
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         hasVisibleReasoning ||
+        (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
     };
+    // Projection can remove the last tool block, leaving only hidden thinking.
+    // Keep recorded interruptions/errors, which have their own visible outcome.
+    if (
+      role === "assistant" &&
+      !source.hasVisibleContent &&
+      !assistantMessageIsInterrupted(item.message) &&
+      record?.stopReason !== "error"
+    ) {
+      continue;
+    }
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;

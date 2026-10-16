@@ -5,6 +5,7 @@ import {
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -111,6 +112,18 @@ function scanSessionsYieldItems(
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
           ...(lastYield.runId ? { runId: lastYield.runId } : {}),
         };
+        const facts =
+          asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+        const acknowledgment =
+          typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
+        if (acknowledgment || asRecord(lastYield.args)?.waitFor === "message") {
+          boundary.push({
+            kind: "notice",
+            key: `yield-status:${item.key}:${lastYield.id}`,
+            text: acknowledgment || t("chat.waitingForMessage"),
+            timestamp: timestamp ?? 0,
+          });
+        }
       }
       laterActivity = true;
     }
@@ -214,7 +227,8 @@ function scanSessionsYieldItems(
 
 /**
  * Keeps handoff calls out of tool details and separates a resumed run from the
- * run that handed off. The working indicator shows the wait itself.
+ * run that handed off. Message waits retain their public acknowledgment/status;
+ * child waits use the working indicator.
  *
  * `complete` is this projection of the same transcript before search hid any
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
