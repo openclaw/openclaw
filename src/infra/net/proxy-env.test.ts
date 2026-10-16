@@ -114,6 +114,30 @@ describe("matchesNoProxy", () => {
       env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,
       expected: false,
     },
+    {
+      name: "keeps a leading-* NO_PROXY wildcard off the apex host",
+      url: "http://example.com/",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "matches a leading-* NO_PROXY wildcard against subdomains",
+      url: "http://api.example.com/",
+      env: { NO_PROXY: "*.example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches a plain NO_PROXY suffix against the apex host",
+      url: "http://example.com/",
+      env: { NO_PROXY: "example.com" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "bypasses every host for a bare * entry inside a NO_PROXY list",
+      url: "http://anything.test/",
+      env: { NO_PROXY: "none.invalid,*" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
   ])("$name", ({ url, env, expected }) => {
     expect(matchesNoProxy(url, env)).toBe(expected);
   });

@@ -107,12 +107,12 @@ export function shouldUseEnvHttpProxyForUrl(
  * - A single trailing DNS dot is ignored in both hosts and entries
  * - Lower-case `no_proxy` shadows upper-case `NO_PROXY`, including blank values
  * - Empty or missing → no bypass
- * - Bare `*` value → bypass everything
+ * - Bare `*` entry (anywhere in the list, optionally with a port) → bypass everything
  * - Exact hostname match
  * - Leading-dot match (`.example.com` matches `foo.example.com`)
- * - Leading `*.` wildcard match (`*.example.com` matches `foo.example.com`);
- *   undici normalizes via `.replace(/^\*?\./, '')`, so the bare domain also
- *   matches (kept in sync with that behavior)
+ * - Leading `*` marks a subdomain wildcard (`*.example.com` matches
+ *   `foo.example.com`) and never matches the apex `example.com`; the plain and
+ *   leading-dot forms (`example.com` / `.example.com`) do match the apex
  * - Subdomain suffix match (`openai.com` matches `api.openai.com`)
  * - Optional `:port` suffix; when present, must match target port
  * - IPv6 literals in bracketed (`[::1]`) or bare (`::1`) form
@@ -199,11 +199,19 @@ export function matchesNoProxy(
       continue;
     }
 
-    // Mirror undici: strip optional leading `*` followed by `.` so both
-    // `.example.com` and `*.example.com` normalize to `example.com`. That also
-    // means apex hosts still match those entries after normalization.
+    // Mirror undici: a bare `*` entry bypasses every host, including when it
+    // appears inside a longer list such as `none.invalid,*`.
+    if (entryHost === "*") {
+      return true;
+    }
+
+    // Mirror undici: a leading `*` marks a subdomain wildcard, while the plain
+    // and leading-dot forms also match the apex. Both normalize to the bare
+    // domain, so the wildcard has to be tracked separately to keep the apex
+    // excluded for `*.example.com`.
+    const wildcard = entryHost.startsWith("*");
     const normalizedEntry = entryHost.replace(/^\*?\./, "").replace(/^(.+)\.$/, "$1");
-    if (!normalizedEntry || normalizedEntry === "*") {
+    if (!normalizedEntry) {
       continue;
     }
 
@@ -211,7 +219,7 @@ export function matchesNoProxy(
       return true;
     }
 
-    if (targetHost === normalizedEntry) {
+    if (!wildcard && targetHost === normalizedEntry) {
       return true;
     }
     if (targetHost.endsWith("." + normalizedEntry)) {
