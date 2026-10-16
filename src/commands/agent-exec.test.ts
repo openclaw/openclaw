@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
@@ -151,7 +152,11 @@ describe("agent exec command composition", () => {
                 },
                 entries: { alpha: { skills: [], workspace: "/also-ignored" } },
               },
-              tools: { deny: ["exec"], codeMode: { enabled: true } },
+              tools: {
+                deny: ["exec"],
+                codeMode: { enabled: true },
+                exec: { pathPrepend: ["~/.local/bin"] },
+              },
             }),
             '{"tools":{"deny":[]}}',
           ],
@@ -174,7 +179,11 @@ describe("agent exec command composition", () => {
               entries: { alpha: { model: "custom/model-a", workspace: root, skills: [] } },
             },
             models: base.models,
-            tools: { deny: [], codeMode: { enabled: true, maxOutputBytes: 4096 } },
+            tools: {
+              deny: [],
+              codeMode: { enabled: true, maxOutputBytes: 4096 },
+              exec: { pathPrepend: [path.join(os.homedir(), ".local", "bin")] },
+            },
           });
           return successResult();
         },

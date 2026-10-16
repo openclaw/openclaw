@@ -187,8 +187,8 @@ export async function applyExecConfigOverrides(
     return override;
   });
   const merged = parsed.reduce<unknown>((config, override) => mergeDeep(config, override), base);
-  const { validateConfigObjectRawWithPlugins } = await import("../config/validation.js");
-  const result = validateConfigObjectRawWithPlugins(merged);
+  const { validateConfigObjectWithPlugins } = await import("../config/validation.js");
+  const result = validateConfigObjectWithPlugins(merged);
   if (!result.ok) {
     throw new Error(
       `Invalid --config-override: ${result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
