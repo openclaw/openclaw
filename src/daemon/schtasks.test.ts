@@ -42,65 +42,59 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+const inspectionError = "Effective Scheduled Task service command could not be inspected.";
+type RegisteredAction = { type: number; path: string; arguments: string; workingDirectory: string };
+function taskAction(pathname: string, args = "", workingDirectory = ""): RegisteredAction {
+  return { type: 0, path: pathname, arguments: args, workingDirectory };
+}
+function mockRegisteredTask(
+  actions: RegisteredAction[],
+  taskPath = "\\OpenClaw Gateway",
+  state = 4,
+) {
+  spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify({ taskPath, state, actions }) });
+}
+function effectiveCommand(env: Parameters<typeof readScheduledTaskCommand>[0]) {
+  return readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true });
+}
+
 describe("readScheduledTaskCommand", () => {
-  it.each([
-    {
+  it("reads a direct registered executable without inventing a launcher", async () => {
+    const action = {
       path: "C:\\OpenClaw\\openclaw.exe",
       arguments: 'gateway run --label "literal ^! label"',
-      argv: ["gateway", "run", "--label", "literal ^! label"],
-    },
-  ])(
-    "reads a direct registered executable without inventing a launcher ($path)",
-    async (action) => {
-      const taskName = "\\Custom\\Gateway";
-      spawnSync.mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: taskName,
-          state: 4,
-          actions: [{ type: 0, ...action, workingDirectory: "C:\\OpenClaw" }],
-        }),
-      });
-      const readFile = vi.spyOn(fs, "readFile");
-      await expect(
-        readScheduledTaskCommand(
-          { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName },
-          { requireEffective: true, requireLoaded: true },
-        ),
-      ).resolves.toEqual({
-        programArguments: [action.path, ...action.argv],
-        workingDirectory: "C:\\OpenClaw",
-      });
-      await expect(
-        readScheduledTaskRuntime(
-          { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName },
-          { requireLoaded: true },
-        ),
-      ).resolves.toMatchObject({ status: "unknown", state: "Running" });
-      expect(readFile).not.toHaveBeenCalled();
-    },
-  );
+    };
+    const taskName = "\\Custom\\Gateway";
+    mockRegisteredTask([taskAction(action.path, action.arguments, "C:\\OpenClaw")], taskName);
+    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName };
+    const readFile = vi.spyOn(fs, "readFile");
+    await expect(effectiveCommand(env)).resolves.toEqual({
+      programArguments: [action.path, "gateway", "run", "--label", "literal ^! label"],
+      workingDirectory: "C:\\OpenClaw",
+    });
+    await expect(readScheduledTaskRuntime(env, { requireLoaded: true })).resolves.toMatchObject({
+      status: "unknown",
+      state: "Running",
+    });
+    expect(readFile).not.toHaveBeenCalled();
+  });
 
   it.each(["environment expansion", "ambiguous quotes"] as const)(
     "does not report a direct executable command with %s",
     async (kind) => {
-      const action = {
-        type: 0,
-        path: "C:\\Node\\node.exe",
-        arguments:
-          kind === "environment expansion"
-            ? '"%OPENCLAW_HOME%\\openclaw.mjs" gateway'
-            : '"C:\\OpenClaw\\openclaw.mjs gateway',
-        workingDirectory: "",
-      };
-      const task = { taskPath: "\\Custom\\Gateway", state: 4, actions: [action] };
-      spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
+      const action = taskAction(
+        "C:\\Node\\node.exe",
+        kind === "environment expansion"
+          ? '"%OPENCLAW_HOME%\\openclaw.mjs" gateway'
+          : '"C:\\OpenClaw\\openclaw.mjs gateway',
+      );
+      mockRegisteredTask([action], "\\Custom\\Gateway");
       await expect(
         readScheduledTaskCommand(
-          { OPENCLAW_WINDOWS_TASK_NAME: task.taskPath },
+          { OPENCLAW_WINDOWS_TASK_NAME: "\\Custom\\Gateway" },
           { requireLoaded: true },
         ),
-      ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+      ).rejects.toThrow(inspectionError);
     },
   );
 
@@ -129,27 +123,21 @@ describe("readScheduledTaskCommand", () => {
         "--port",
         "19789",
       ];
-      spawnSync.mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: taskName,
-          state: 3,
-          actions: [
-            {
-              type: 0,
-              path:
-                kind === "wscript executable" ? "C:\\Windows\\System32\\wscript.exe" : launcherPath,
-              arguments:
-                kind === "cmd executable"
-                  ? `/d /s /c ""${scriptPath}""`
-                  : kind === "wscript executable"
-                    ? `"${launcherPath}"`
-                    : "",
-              workingDirectory: "C:\\Services\\Backup",
-            },
-          ],
-        }),
-      });
+      mockRegisteredTask(
+        [
+          taskAction(
+            kind === "wscript executable" ? "C:\\Windows\\System32\\wscript.exe" : launcherPath,
+            kind === "cmd executable"
+              ? `/d /s /c ""${scriptPath}""`
+              : kind === "wscript executable"
+                ? `"${launcherPath}"`
+                : "",
+            "C:\\Services\\Backup",
+          ),
+        ],
+        taskName,
+        3,
+      );
       const readFile = vi
         .spyOn(fs, "readFile")
         .mockImplementation(async (pathname) =>
@@ -218,16 +206,12 @@ describe("readScheduledTaskCommand", () => {
   ])("keeps runtime pins bound to the script with $label", async (scenario) => {
     const scriptPath = "C:\\Services\\Gateway\\gateway.cmd";
     const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
-    const action = {
-      type: 0,
-      path: scenario.directScript ? scriptPath : "C:\\Windows\\System32\\cmd.exe",
-      arguments: scenario.directScript ? "" : `/d /s /c ""${scriptPath}""`,
-      workingDirectory: scenario.nativeCwd,
-    };
-    spawnSync.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({ taskPath: "\\OpenClaw Gateway", state: 4, actions: [action] }),
-    });
+    const action = taskAction(
+      scenario.directScript ? scriptPath : "C:\\Windows\\System32\\cmd.exe",
+      scenario.directScript ? "" : `/d /s /c ""${scriptPath}""`,
+      scenario.nativeCwd,
+    );
+    mockRegisteredTask([action]);
     let script = [
       "@echo off",
       ...(scenario.scriptCwd ? [`cd /d "${scenario.scriptCwd}"`] : []),
@@ -244,19 +228,13 @@ describe("readScheduledTaskCommand", () => {
     if (!authored) {
       throw new Error("Missing authored task command");
     }
-    const effective = await readScheduledTaskCommand(env, {
-      requireEffective: true,
-      requireLoaded: true,
-    });
+    const effective = await effectiveCommand(env);
     expect(effective?.workingDirectory).toBe(scenario.scriptCwd ?? scenario.nativeCwd);
     expect(() => assertDaemonRuntimePinDefinition(authored, effective)).not.toThrow();
     expect(hasGatewayServiceLauncherOverride(effective)).toBe(scenario.overridden);
     if (scenario.scriptCwd) {
       script = script.replace(scenario.scriptCwd, "D:\\Changed Workspace");
-      const changed = await readScheduledTaskCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      });
+      const changed = await effectiveCommand(env);
       expect(() => assertDaemonRuntimePinDefinition(authored, changed)).toThrow("readback differs");
     }
   });
@@ -303,7 +281,7 @@ describe("readScheduledTaskCommand", () => {
   ])("rejects an ambiguous effective launcher body: %s", async (body) => {
     const env = await writeScheduledTaskScript([body]);
     await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-      "Effective Scheduled Task service command could not be inspected.",
+      inspectionError,
     );
   });
 
@@ -337,10 +315,7 @@ describe("readScheduledTaskCommand", () => {
         );
       }
       spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
-      const result = await readScheduledTaskCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      });
+      const result = await effectiveCommand(env);
       if (startup) {
         expect(result).toMatchObject({
           programArguments: ["node", "gateway.js"],
@@ -350,9 +325,7 @@ describe("readScheduledTaskCommand", () => {
         expect(result).toBeNull();
       }
       spawnSync.mockReturnValue({ status: 2, stdout: "-2147024891", stderr: "" });
-      await expect(
-        readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true }),
-      ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+      await expect(effectiveCommand(env)).rejects.toThrow(inspectionError);
     },
   );
 
@@ -385,14 +358,9 @@ describe("readScheduledTaskCommand", () => {
           '@echo off\r\n"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway --port 19789\r\n',
         );
       }
-      const result = readScheduledTaskCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      });
+      const result = effectiveCommand(env);
       if (kind === "conflicting wrappers") {
-        await expect(result).rejects.toThrow(
-          "Effective Scheduled Task service command could not be inspected.",
-        );
+        await expect(result).rejects.toThrow(inspectionError);
       } else {
         await expect(result).resolves.toMatchObject({
           sourcePath: scriptPath,
@@ -416,26 +384,19 @@ describe("readScheduledTaskCommand", () => {
     "unrecognized vbs",
   ] as const)("rejects strict registered command inspection when %s", async (kind) => {
     const scriptPath = "C:\\Services\\Backup\\gateway.cmd";
-    const action = {
-      type: 0,
-      path:
-        kind === "unrecognized vbs"
-          ? "C:\\Services\\Backup\\gateway.vbs"
-          : kind === "root-relative action (backslash)"
-            ? "\\gateway.cmd"
-            : scriptPath,
-      arguments: kind === "action arguments" ? "extra" : "",
-      workingDirectory: "",
-    };
-    const found = {
-      status: 0,
-      stdout: JSON.stringify({
-        taskPath: "\\OpenClaw Gateway Backup",
-        state: 3,
-        actions: kind === "multiple actions" ? [action, action] : [action],
-      }),
-    };
-    spawnSync.mockReturnValue(found);
+    const action = taskAction(
+      kind === "unrecognized vbs"
+        ? "C:\\Services\\Backup\\gateway.vbs"
+        : kind === "root-relative action (backslash)"
+          ? "\\gateway.cmd"
+          : scriptPath,
+      kind === "action arguments" ? "extra" : "",
+    );
+    mockRegisteredTask(
+      kind === "multiple actions" ? [action, action] : [action],
+      "\\OpenClaw Gateway Backup",
+      3,
+    );
 
     vi.spyOn(fs, "readFile").mockResolvedValue(
       Buffer.from(
@@ -450,15 +411,12 @@ describe("readScheduledTaskCommand", () => {
       ),
     );
     await expect(
-      readScheduledTaskCommand(
-        {
-          USERPROFILE: "C:\\Users\\test",
-          OPENCLAW_PROFILE: "default",
-          OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Backup",
-        },
-        { requireEffective: true, requireLoaded: true },
-      ),
-    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+      effectiveCommand({
+        USERPROFILE: "C:\\Users\\test",
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Backup",
+      }),
+    ).rejects.toThrow(inspectionError);
   });
 
   it.each([
@@ -490,7 +448,7 @@ describe("readScheduledTaskCommand", () => {
         "2>&1",
       ]);
       await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-        "Effective Scheduled Task service command could not be inspected.",
+        inspectionError,
       );
     },
   );
