@@ -231,6 +231,16 @@ function apiKeyStore(
   };
 }
 
+function oauthCredential(provider: string) {
+  return {
+    type: "oauth" as const,
+    provider,
+    access: "expired-access",
+    refresh: "refresh-token",
+    expires: 1,
+  };
+}
+
 function makeProviderOrderFallbackCfg(
   entries: Array<[provider: string, model: string]>,
 ): OpenClawConfig {
@@ -320,29 +330,14 @@ async function expectSkippedUnavailableProvider(params: {
               expires: Date.now() + 60_000,
             }
           : params.credentialType === "token"
-            ? {
-                type: "token",
-                provider,
-                token: "test-token",
-              }
-            : {
-                type: "api_key",
-                provider,
-                key: "test-key",
-              },
+            ? { type: "token", provider, token: "test-token" }
+            : { type: "api_key", provider, key: "test-key" },
     },
-    usageStats: {
-      [profileId]: params.usageStat,
-    },
+    usageStats: { [profileId]: params.usageStat },
   };
   const run = createFallbackOnlyRun();
 
-  const result = await runWithStoredAuth({
-    cfg,
-    store,
-    provider,
-    run,
-  });
+  const result = await runWithStoredAuth({ cfg, store, provider, run });
 
   expect(result.result).toBe("ok");
   expect(run.mock.calls).toMatchObject([
@@ -397,11 +392,7 @@ describe("runWithModelFallback", () => {
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(canFallbackAfterError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "gpt-5.4",
-        error: failure,
-      }),
+      expect.objectContaining({ provider: "openai", model: "gpt-5.4", error: failure }),
     );
   });
 
@@ -679,20 +670,13 @@ describe("runWithModelFallback", () => {
 
   it("fails closed before auth cooldown skips when a strict plugin harness is missing", async () => {
     const cfg = makeCfg({
+      ...createModelFallbackConfig("openai/gpt-5.5", ["anthropic/claude-sonnet-4-6"]),
       models: {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             agentRuntime: { id: "codex" },
             models: [],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
       },
@@ -717,11 +701,7 @@ describe("runWithModelFallback", () => {
   });
 
   it.each([
-    {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      runtime: "claude-cli",
-    },
+    { provider: "anthropic", model: "claude-sonnet-4-6", runtime: "claude-cli" },
     { provider: "claude-cli", model: "opus", runtime: undefined },
   ])(
     "lets $runtime/$provider own auth despite provider cooldown",
@@ -729,9 +709,7 @@ describe("runWithModelFallback", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: {
-              primary: `${provider}/${model}`,
-            },
+            model: { primary: `${provider}/${model}` },
             ...(runtime ? { models: { "anthropic/*": { agentRuntime: { id: runtime } } } } : {}),
           },
         },
@@ -1013,20 +991,11 @@ describe("runWithModelFallback", () => {
       agents: {
         entries: {
           main: {},
-          worker: {
-            models: {
-              "anthropic/worker-fallback": { alias: "fast" },
-            },
-          },
+          worker: { models: { "anthropic/worker-fallback": { alias: "fast" } } },
         },
         defaults: {
-          model: {
-            primary: "openai/primary",
-            fallbacks: ["fast"],
-          },
-          models: {
-            "openai/global-fallback": { alias: "fast" },
-          },
+          model: { primary: "openai/primary", fallbacks: ["fast"] },
+          models: { "openai/global-fallback": { alias: "fast" } },
         },
       },
     });
@@ -1157,25 +1126,17 @@ describe("runWithModelFallback", () => {
     const backupProfileId = `${provider}:backup`;
     const pending = createOAuthRefreshFence({
       profileId: pendingProfileId,
-      credential: {
-        type: "oauth",
-        provider,
-        access: "expired-access",
-        refresh: "refresh-token",
-        expires: 1,
-      },
+      credential: oauthCredential(provider),
     });
     const store: AuthProfileStore = {
       version: AUTH_STORE_VERSION,
       profiles: {
         [pendingProfileId]: pending,
-        [backupProfileId]: { type: "api_key", provider, key: "backup-key" },
-        "fallback:default": { type: "api_key", provider: "fallback", key: "fallback-key" },
+        [backupProfileId]: createApiKeyCredential(provider, "backup-key"),
+        "fallback:default": createApiKeyCredential("fallback", "fallback-key"),
       },
       order: { [provider]: [backupProfileId] },
-      usageStats: {
-        [backupProfileId]: { cooldownUntil: Date.now() + 60_000 },
-      },
+      usageStats: { [backupProfileId]: { cooldownUntil: Date.now() + 60_000 } },
     };
     const run = vi.fn().mockResolvedValue("ok");
 
@@ -1211,31 +1172,25 @@ describe("runWithModelFallback", () => {
       const now = Date.now();
       const expiry = now + 120_000;
       const cfg = createModelFallbackConfig("anthropic/claude-opus-4-5", ["openai/gpt-5.2"]);
-      const store: AuthProfileStore = {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "anthropic:default": { type: "api_key", provider: "anthropic", key: "anthropic-key" },
-          "openai:default": { type: "api_key", provider: "openai", key: "openai-key" },
-        },
-        ...(state === "scoped to attempted model"
+      const store = apiKeyStore(
+        ["anthropic", "openai"],
+        state === "scoped to attempted model"
           ? {
-              usageStats: {
-                "anthropic:default": {
-                  cooldownUntil: now + 15_000,
-                  cooldownReason: "rate_limit" as const,
-                  cooldownModel: "claude-haiku-3-5",
-                  failureCounts: { rate_limit: 1 },
-                },
-                "openai:default": {
-                  cooldownUntil: expiry,
-                  cooldownReason: "rate_limit" as const,
-                  cooldownModel: "gpt-5.2",
-                  failureCounts: { rate_limit: 1 },
-                },
+              "anthropic:default": {
+                cooldownUntil: now + 15_000,
+                cooldownReason: "rate_limit" as const,
+                cooldownModel: "claude-haiku-3-5",
+                failureCounts: { rate_limit: 1 },
+              },
+              "openai:default": {
+                cooldownUntil: expiry,
+                cooldownReason: "rate_limit" as const,
+                cooldownModel: "gpt-5.2",
+                failureCounts: { rate_limit: 1 },
               },
             }
-          : {}),
-      };
+          : undefined,
+      );
 
       const tempDir = await makeAuthTempDir();
       setAuthRuntimeStore(tempDir, store);
@@ -1529,10 +1484,7 @@ describe("model fallback live selection", () => {
       [
         "openrouter",
         "openrouter/deepseek-chat",
-        {
-          isFinalFallbackAttempt: true,
-          modelRoutingProvenance: { selectionChanged: true },
-        },
+        { isFinalFallbackAttempt: true, modelRoutingProvenance: { selectionChanged: true } },
       ],
     ]);
   });
@@ -1563,13 +1515,7 @@ describe("model fallback live selection", () => {
 
 describe("runWithModelFallback quota recovery", () => {
   const profileId = "openai:default";
-  const credential = {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "expired-access",
-    refresh: "synthetic-refresh",
-    expires: 1,
-  };
+  const credential = { ...oauthCredential("openai"), refresh: "synthetic-refresh" };
   const fallbackOptions = {
     cfg: createModelFallbackConfig("openai/m1", ["fallback/ok-model"]),
     provider: "openai",

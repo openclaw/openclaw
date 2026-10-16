@@ -122,6 +122,9 @@ function countProviderAttempts(provider: string): number {
   return runEmbeddedAttemptMock.mock.calls.filter(([params]) => params.provider === provider)
     .length;
 }
+function commandButton(label: string, command: string) {
+  return { label, action: { type: "command" as const, command } };
+}
 
 describe("getReplyFromConfig fallback availability", () => {
   it.each([
@@ -290,27 +293,22 @@ describe("getReplyFromConfig fallback availability", () => {
       for (const [attempt] of runEmbeddedAttemptMock.mock.calls) {
         expect(
           authStore.profiles[expectDefined(attempt.authProfileId, "selected auth profile")],
-        ).toMatchObject({
-          provider,
-          type: "api_key",
-        });
+        ).toMatchObject({ provider, type: "api_key" });
       }
       expect(delivered).toHaveLength(1);
-      expect(delivered[0]?.kind).toBe("final");
-      expect(delivered[0]?.payload.isError).toBe(true);
-      expect(delivered[0]?.payload.text?.trim().length).toBeGreaterThan(0);
+      expect(delivered[0]).toMatchObject({ kind: "final", payload: { isError: true } });
+      const payload = delivered[0]?.payload;
+      expect(payload?.text?.trim().length).toBeGreaterThan(0);
       if (errorMessage === RATE_LIMIT_ERROR_MESSAGE) {
         expect(countProviderAttempts("openai")).toBeGreaterThan(2);
         expect(text).toContain("Rate-limit recovery stopped after");
-        expect(delivered[0]?.payload.text).toContain("Rate-limit recovery stopped after");
+        expect(payload?.text).toContain("Rate-limit recovery stopped after");
         expect(text).not.toContain("The AI service is temporarily rate-limited");
-        expect(delivered[0]?.payload.text).not.toContain(
-          "The AI service is temporarily rate-limited",
-        );
+        expect(payload?.text).not.toContain("The AI service is temporarily rate-limited");
       } else if (loginCommand) {
         expect(countProviderAttempts(provider)).toBe(1);
         if (reservedProviders.includes(provider)) {
-          const action = delivered[0]?.payload.presentation?.blocks
+          const action = payload?.presentation?.blocks
             .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
             .find((button) => button.label === "Sign in")?.action;
           if (action?.type !== "command") {
@@ -338,33 +336,20 @@ describe("getReplyFromConfig fallback availability", () => {
           expect(menu?.presentation?.blocks).toContainEqual({
             type: "buttons",
             buttons: expect.arrayContaining([
-              {
-                label: provider,
-                action: { type: "command", command: `/login oauth/reserved-recovery/${provider}` },
-              },
+              commandButton(provider, `/login oauth/reserved-recovery/${provider}`),
             ]),
           });
           expect(countProviderAttempts(provider)).toBe(1);
         }
-        expect(delivered[0]?.payload.text).toContain(loginCommand);
-        expect(delivered[0]?.payload.presentation).toEqual({
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Sign in",
-                  action: { type: "command", command: loginCommand },
-                },
-              ],
-            },
-          ],
+        expect(payload?.text).toContain(loginCommand);
+        expect(payload?.presentation).toEqual({
+          blocks: [{ type: "buttons", buttons: [commandButton("Sign in", loginCommand)] }],
         });
       } else {
         expect(countProviderAttempts(provider)).toBe(1);
-        expect(delivered[0]?.payload.text).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-        expect(delivered[0]?.payload.text).not.toContain("/login");
-        expect(delivered[0]?.payload.presentation).toBeUndefined();
+        expect(payload?.text).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
+        expect(payload?.text).not.toContain("/login");
+        expect(payload?.presentation).toBeUndefined();
       }
     });
   });

@@ -117,19 +117,24 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-async function runEmbeddedFallback(params: {
-  agentDir: string;
-  workspaceDir: string;
-  sessionKey: string;
-  runId: string;
-  provider?: string;
-  sessionId?: string;
-  lane?: string;
-  abortSignal?: AbortSignal;
-  config?: OpenClawConfig;
-}) {
-  // Runs the same embedded-agent entrypoint that production fallback uses while
-  // keeping provider/model attempts deterministic through mocks.
+type Workspace = { agentDir: string; workspaceDir: string };
+async function runEmbeddedFallback(
+  workspace: Workspace,
+  name: string,
+  overrides: {
+    provider?: string;
+    sessionId?: string;
+    lane?: string;
+    abortSignal?: AbortSignal;
+    config?: OpenClawConfig;
+  } = {},
+) {
+  const params = {
+    ...workspace,
+    sessionKey: `agent:test:${name}`,
+    runId: `run:${name}`,
+    ...overrides,
+  };
   const cfg = params.config ?? makeModelFallbackConfig();
   setRuntimeConfigSnapshot(cfg, cfg);
   const sessionId = params.sessionId ?? `session:${params.runId}`;
@@ -337,12 +342,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           ...("replayInvalid" in scenario ? { promptTimeoutOutcome: { replayInvalid: true } } : {}),
         }),
       );
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:attempt-timeout",
-        runId: "run:attempt-timeout",
-      });
+      const result = await runEmbeddedFallback({ agentDir, workspaceDir }, "attempt-timeout");
 
       expectProviderAttemptCounts({ openai: 1, groq: scenario.fallback ? 1 : 0 });
       if (scenario.fallback) {
@@ -482,11 +482,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           result: "candidate_failed",
           reason: "overloaded",
         }),
-        expect.objectContaining({
-          provider: "groq",
-          model: "mock-2",
-          result: "success",
-        }),
+        expect.objectContaining({ provider: "groq", model: "mock-2", result: "success" }),
       ]);
       expect(result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
         requested: { provider: "openai", model: "mock-1" },
@@ -630,12 +626,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           });
         });
         const run = (turn: string) =>
-          runEmbeddedFallback({
-            agentDir,
-            workspaceDir,
+          runEmbeddedFallback({ agentDir, workspaceDir }, `organization-tpm:${source}:${turn}`, {
             config,
-            sessionKey: `agent:test:organization-tpm:${source}:${turn}`,
-            runId: `run:organization-tpm:${source}:${turn}`,
           });
         const result = await run("first");
         expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
@@ -743,18 +735,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           sleepWithAbortMock.mockClear();
           mockPrimaryErrorThenFallbackSuccess(message, { primaryProvider: provider });
 
-          const result = await runEmbeddedFallback({
-            agentDir,
-            workspaceDir,
-            sessionKey: `agent:test:${runName}`,
-            runId: `run:${runName}`,
-            ...(provider === "openai"
-              ? {}
-              : { provider, config: makeModelFallbackConfig(provider) }),
-          });
+          const result = await runEmbeddedFallback(
+            { agentDir, workspaceDir },
+            runName,
+            provider === "openai" ? {} : { provider, config: makeModelFallbackConfig(provider) },
+          );
 
-          expect(result.provider).toBe("groq");
-          expect(result.model).toBe("mock-2");
+          expect(result).toMatchObject({ provider: "groq", model: "mock-2" });
           expect(result.attempts[0]?.reason).toBe(reason);
           expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
           if (primaryAttempts !== undefined) {
@@ -823,7 +810,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           expect(suspendSessionMock).toHaveBeenCalledOnce();
           expect(suspendSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
         } else {
-          const result = await runEmbeddedFallback(params);
+          const result = await runEmbeddedFallback(
+            { agentDir, workspaceDir },
+            `${mode}-suspension`,
+            params,
+          );
           expect(result.provider).toBe("groq");
           expect(suspendSessionMock).not.toHaveBeenCalled();
         }
@@ -838,12 +829,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
       let thrown: unknown;
       try {
-        await runEmbeddedFallback({
-          agentDir,
-          workspaceDir,
-          sessionKey: "agent:test:all-overloaded",
-          runId: "run:all-overloaded",
-        });
+        await runEmbeddedFallback({ agentDir, workspaceDir }, "all-overloaded");
       } catch (err) {
         thrown = err;
       }
@@ -876,12 +862,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
       mockPrimaryOverloadedThenFallbackSuccess();
 
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:overloaded-probe-fallback",
-        runId: "run:overloaded-probe-fallback",
-      });
+      const result = await runEmbeddedFallback(
+        { agentDir, workspaceDir },
+        "overloaded-probe-fallback",
+      );
 
       expect(result.provider).toBe("groq");
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
@@ -893,15 +877,12 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       await writeFallbackAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
 
-      const firstResult = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:overloaded-two-turns:first",
-        runId: "run:overloaded-two-turns:first",
-      });
+      const firstResult = await runEmbeddedFallback(
+        { agentDir, workspaceDir },
+        "overloaded-two-turns:first",
+      );
 
-      expect(firstResult.provider).toBe("groq");
-      expect(firstResult.model).toBe("mock-2");
+      expect(firstResult).toMatchObject({ provider: "groq", model: "mock-2" });
       expect(firstResult.attempts[0]?.reason).toBe("overloaded");
       expect(firstResult.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
       const firstUsageStats = await readFallbackUsageStats(agentDir);
@@ -918,12 +899,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
       mockPrimaryOverloadedThenFallbackSuccess();
 
-      const secondResult = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:overloaded-two-turns:second",
-        runId: "run:overloaded-two-turns:second",
-      });
+      const secondResult = await runEmbeddedFallback(
+        { agentDir, workspaceDir },
+        "overloaded-two-turns:second",
+      );
 
       expect(secondResult.provider).toBe("groq");
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
@@ -998,15 +977,12 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           );
         }
 
-        const result = await runEmbeddedFallback({
-          agentDir,
-          workspaceDir,
-          sessionKey: `agent:test:rotation:${source}:${reason}`,
-          runId: `run:rotation:${source}:${reason}`,
-        });
+        const result = await runEmbeddedFallback(
+          { agentDir, workspaceDir },
+          `rotation:${source}:${reason}`,
+        );
 
-        expect(result.provider).toBe("groq");
-        expect(result.model).toBe("mock-2");
+        expect(result).toMatchObject({ provider: "groq", model: "mock-2" });
         expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
         expectAttemptOrder([
           ...Array.from({ length: primaryAttempts }, () => ({
@@ -1049,18 +1025,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
       mockPrimaryStaleRateLimitTextSuccess(RATE_LIMIT_ERROR_MESSAGE);
 
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:rate-limit-retry-limit-fallback",
-        runId: "run:rate-limit-retry-limit-fallback",
-        config: {
-          ...makeModelFallbackConfig(),
-        },
-      });
+      const result = await runEmbeddedFallback(
+        { agentDir, workspaceDir },
+        "rate-limit-retry-limit-fallback",
+        { config: makeModelFallbackConfig() },
+      );
 
-      expect(result.provider).toBe("openai");
-      expect(result.model).toBe("mock-1");
+      expect(result).toMatchObject({ provider: "openai", model: "mock-1" });
       expect(result.attempts).toEqual([]);
 
       expectProviderAttemptCounts({ openai: 1, groq: 0 });

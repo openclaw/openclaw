@@ -53,6 +53,13 @@ function recordedStop() {
   recordLightweightStop(error);
   return error;
 }
+function withOpaqueCause(errors: unknown[]) {
+  return Object.defineProperty({ errors }, "cause", {
+    get() {
+      throw new Error("opaque cause");
+    },
+  });
+}
 async function expectTerminalStop(
   error: unknown,
   options: Partial<Parameters<typeof runWithModelFallback>[0]> = {},
@@ -257,15 +264,7 @@ describe.each([
 });
 
 it("preserves the typed marker behind a hostile sibling accessor", async () => {
-  const wrapper = Object.defineProperty(
-    { errors: [createSessionPlacementSettlementClosedAbortError()] },
-    "cause",
-    {
-      get() {
-        throw new Error("opaque cause");
-      },
-    },
-  );
+  const wrapper = withOpaqueCause([createSessionPlacementSettlementClosedAbortError()]);
   expect(isSessionPlacementSettlementClosedError(wrapper)).toBe(true);
   expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
   await expectTerminalStop(wrapper);
@@ -276,15 +275,7 @@ it("discovers a canonical timeout beside an opaque cause and a settlement closur
     status: "timeout",
     reason: "hard_timeout",
   });
-  const wrapper = Object.defineProperty(
-    { errors: [createSessionPlacementSettlementClosedAbortError(), timeout] },
-    "cause",
-    {
-      get() {
-        throw new Error("opaque cause");
-      },
-    },
-  );
+  const wrapper = withOpaqueCause([createSessionPlacementSettlementClosedAbortError(), timeout]);
   expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
   expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
   await expectTerminalStop(wrapper);
