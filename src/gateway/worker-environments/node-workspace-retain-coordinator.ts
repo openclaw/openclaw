@@ -88,14 +88,8 @@ function snapshotEntriesForNode(
         return [];
       }
       const sessionId = environment.attachedSessionIds[0]!;
-      let facts = preparedPlacements.get(sessionId);
-      try {
-        facts?.assertCurrent();
-      } catch {
-        // A turn can invalidate prepared pruning facts while the node reconnects.
-        // Preserve every manifest until fresh facts arrive, without losing retention publication.
-        facts = undefined;
-      }
+      const facts = preparedPlacements.get(sessionId);
+      facts?.assertCurrent();
       const placement = facts?.placement;
       const pending = facts?.pendingResult;
       // The base is not a complete reachability set until reconciliation settles. Pending
@@ -162,7 +156,7 @@ export function createNodeWorkspaceRetainCoordinator(
   const publishPreparedSnapshot = async (
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
-    preparedPlacements: PreparedPlacementFacts,
+    preparedPlacements: Map<string, PreparedPlacement>,
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
     // Persistent hosts keep the current build when installed; maintenance never installs it.
@@ -207,6 +201,20 @@ export function createNodeWorkspaceRetainCoordinator(
       }
       if (stopped) {
         return;
+      }
+      // Repository preparation can outlive a turn's placement publication. Refresh once;
+      // discarded manifest proofs preserve all manifests until the next prepared pass.
+      for (const [sessionId, facts] of preparedPlacements) {
+        try {
+          facts.assertCurrent();
+        } catch {
+          const refreshed = await options.placements.prepareRuntimeRefresh(sessionId);
+          preparedPlacements.set(sessionId, refreshed);
+          facts.release();
+          const manifests = preparedManifestRefs.get(sessionId);
+          preparedManifestRefs.delete(sessionId);
+          manifests?.[Symbol.dispose]();
+        }
       }
       const inventory = await options.placements.prepareMaintenancePlacements();
       const placements = (() => {
