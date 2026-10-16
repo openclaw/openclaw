@@ -146,6 +146,42 @@ describe("chat Details presentation", () => {
     expect(conversation.getBoundingClientRect().width).toBe(1320);
   });
 
+  it("insets navigation highlights without shifting neighboring environment rows", async () => {
+    const openFiles = vi.fn();
+    const { element, trigger, panel } = await fixture(props({ onOpenWorkspace: openFiles }));
+    trigger.click();
+    await element.updateComplete;
+    const environment = panel.querySelector(".chat-details__environment")!;
+    const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
+    const heading = environment.querySelector("summary")!;
+    const workspaceIcon = environment.querySelector(".chat-details__row > svg")!;
+    const leadingIcon = navigation.querySelector("svg")!;
+    const trailingIcon = navigation.querySelector("svg:last-child")!;
+    for (const width of [600, 300]) {
+      const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
+      frame.style.width = width + "px";
+      window.dispatchEvent(new Event("resize"));
+      const row = navigation.getBoundingClientRect();
+      expect(leadingIcon.getBoundingClientRect().left - row.left).toBeGreaterThanOrEqual(8);
+      expect(row.right - trailingIcon.getBoundingClientRect().right).toBeGreaterThanOrEqual(8);
+      expect(leadingIcon.getBoundingClientRect().left).toBe(
+        workspaceIcon.getBoundingClientRect().left,
+      );
+      expect(
+        heading.getBoundingClientRect().left +
+          Number.parseFloat(getComputedStyle(heading).paddingLeft),
+      ).toBe(leadingIcon.getBoundingClientRect().left);
+      expect(row.height).toBeGreaterThanOrEqual(36);
+      expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
+    }
+    await page.getByRole("button", { name: "Show session files", exact: true }).hover();
+    const beforeFocus = navigation.getBoundingClientRect();
+    navigation.focus();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeFocus.toJSON());
+    navigation.click();
+    expect(openFiles).toHaveBeenCalledOnce();
+  });
+
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
     const { element, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
