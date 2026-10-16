@@ -9,7 +9,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest, withTestTimeout } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -108,7 +108,7 @@ afterAll(async () => {
   await receipts?.close();
 });
 
-it("cancels a non-OK response body before releasing its guarded transport", async () => {
+it("cancels a non-OK response body before releasing its guarded transport", async ({ signal }) => {
   const requestSocketClosed = deferred();
   await withServer(
     (request, response) => {
@@ -133,13 +133,9 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
         ctx: { Body: `see ${base}/error` },
       });
 
-      const result = await withTestTimeout(
-        resultPromise,
-        1000,
-        "link understanding did not finish",
-      );
+      const result = await withinTest(resultPromise, signal);
       expect(result).toEqual([]);
-      await withTestTimeout(requestSocketClosed.promise, 1000, "loopback socket stayed open");
+      await withinTest(requestSocketClosed.promise, signal);
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
       expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
