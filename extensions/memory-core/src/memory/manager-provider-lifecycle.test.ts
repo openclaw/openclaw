@@ -24,13 +24,10 @@ type LifecycleFields = {
   db: DatabaseSync;
 };
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
 
 describe("memory index", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+  const fixture = createManagerIndexFixture(memoryIndex);
   const { provider: providerFixture } = fixture;
   const {
     createConfig: createCfg,
@@ -176,27 +173,40 @@ describe("memory index", () => {
     });
   });
 
-  it("waits for degraded provider shutdown before fallback initialization", async () => {
-    const { fields } = await syncedManager({ fallback: "fallback-provider" });
-    const releaseProviderClose = holdProviderClose();
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
-    fields.provider.id = "local";
-    fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
-    await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
-
-    const callsBeforeFallback = providerFixture.providerCalls.length;
-    const fallbackPromise = fields.activateFallbackProvider("local worker exited");
-    try {
-      await Promise.resolve();
-      expect(providerFixture.providerCalls).toHaveLength(callsBeforeFallback);
-    } finally {
-      releaseProviderClose();
-      await fallbackPromise;
-    }
-    expect(providersSince(callsBeforeFallback)).toEqual(["fallback-provider"]);
-  });
+  it.each(["degraded fallback", "retry"])(
+    "waits for provider shutdown before %s initialization",
+    async (mode) => {
+      const { manager, fields } = await syncedManager(
+        mode === "retry" ? { provider: "openai" } : { fallback: "fallback-provider" },
+      );
+      const releaseProviderClose = holdProviderClose();
+      if (mode === "retry") {
+        fields.resetProviderInitializationForRetry();
+      } else {
+        if (!fields.provider) {
+          throw new Error("Expected a test embedding provider");
+        }
+        fields.provider.id = "local";
+        fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
+      }
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
+      const callsBefore = providerFixture.providerCalls.length;
+      const initialization =
+        mode === "retry"
+          ? manager.probeEmbeddingAvailability()
+          : fields.activateFallbackProvider("local worker exited");
+      try {
+        await Promise.resolve();
+        expect(providerFixture.providerCalls).toHaveLength(callsBefore);
+      } finally {
+        releaseProviderClose();
+        await initialization;
+      }
+      expect(providersSince(callsBefore)).toEqual([
+        mode === "retry" ? "openai" : "fallback-provider",
+      ]);
+    },
+  );
 
   it("retries failed provider retirement before fallback initialization", async () => {
     const { fields } = await syncedManager({ fallback: "fallback-provider" });
@@ -211,24 +221,6 @@ describe("memory index", () => {
     await expect(fields.activateFallbackProvider("provider failed")).resolves.toBe(true);
     expect(providerFixture.providerCloseCalls).toBe(2);
     expect(providersSince(callsBeforeFallback)).toEqual(["fallback-provider"]);
-  });
-
-  it("waits for provider shutdown before retry initialization", async () => {
-    const { manager, fields } = await syncedManager({ provider: "openai" });
-    const releaseProviderClose = holdProviderClose();
-    fields.resetProviderInitializationForRetry();
-    await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
-
-    const callsBeforeProbe = providerFixture.providerCalls.length;
-    const probePromise = manager.probeEmbeddingAvailability();
-    try {
-      await Promise.resolve();
-      expect(providerFixture.providerCalls).toHaveLength(callsBeforeProbe);
-    } finally {
-      releaseProviderClose();
-      await probePromise;
-    }
-    expect(providersSince(callsBeforeProbe)).toEqual(["openai"]);
   });
 
   it("waits for active provider shutdown before fallback initialization", async () => {
@@ -259,14 +251,10 @@ describe("memory index", () => {
       expect(providerFixture.providerCloseCalls).toBe(1);
       concurrentSearch = manager.search("zebra");
       let concurrentSettled = false;
-      void concurrentSearch.then(
-        () => {
-          concurrentSettled = true;
-        },
-        () => {
-          concurrentSettled = true;
-        },
-      );
+      const settle = () => {
+        concurrentSettled = true;
+      };
+      void concurrentSearch.then(settle, settle);
       await Promise.resolve();
       expect(concurrentSettled).toBe(false);
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeSearch);
@@ -278,11 +266,7 @@ describe("memory index", () => {
 
   it("leases the indexing provider generation through chunk publication", async () => {
     const manager = await getFreshManager(
-      createCfg({
-        provider: "openai",
-        fallback: "fallback-provider",
-        cacheEnabled: true,
-      }),
+      createCfg({ provider: "openai", fallback: "fallback-provider", cacheEnabled: true }),
       "cli",
     );
     const fields = fieldsOf(manager);
@@ -344,11 +328,11 @@ describe("memory index", () => {
     const secondIndexPromise = index("generation-race-second.md", secondContent);
     let fallbackPromise: Promise<boolean> | null = null;
     try {
-      await fields.withTimeout(
-        Promise.all([firstEmbeddingStarted.promise, secondEmbeddingStarted.promise]),
-        5_000,
-        "concurrent embeddings did not start",
-      );
+      const embeddingsStarted = Promise.all([
+        firstEmbeddingStarted.promise,
+        secondEmbeddingStarted.promise,
+      ]);
+      await fields.withTimeout(embeddingsStarted, 5_000, "concurrent embeddings did not start");
       fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");

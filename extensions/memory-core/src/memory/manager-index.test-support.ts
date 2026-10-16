@@ -54,11 +54,7 @@ type ManagerIndexFixtureConfig = {
   minScore?: number;
 };
 
-type ProviderCall = {
-  provider?: string;
-  model?: string;
-  outputDimensionality?: number;
-};
+type ProviderCall = Pick<ManagerIndexFixtureConfig, "provider" | "model" | "outputDimensionality">;
 
 export type ManagerIndexFixture = ReturnType<typeof createManagerIndexFixture>;
 
@@ -119,9 +115,7 @@ const { providerState, resetProviderState } = vi.hoisted(() => {
 
 vi.setConfig({ testTimeout: 240_000 });
 
-afterAll(() => {
-  vi.resetConfig();
-});
+afterAll(() => vi.resetConfig());
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
@@ -323,9 +317,6 @@ export function createManagerIndexFixture(deps: {
   closeAllMemorySearchManagers: typeof import("./index.js").closeAllMemorySearchManagers;
 }) {
   const provider = Object.assign(providerState, { createLocalWorkerExitError });
-  let root = "";
-  let workspace = "";
-  let memory = "";
   let state: OpenClawTestState;
   let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
@@ -379,20 +370,14 @@ export function createManagerIndexFixture(deps: {
             params.rememberAcrossConversations ?? params.sessionMemory ?? false,
         },
       },
-      agents: {
-        defaults: { workspace },
-        entries: { main: {} },
-      },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
     setRuntimeConfigSnapshot(cfg);
     return cfg;
   };
 
-  const requireManager = (
-    result: ManagerResult,
-    missingMessage = "manager missing",
-  ): MemoryIndexManager => {
+  const requireManager = (result: ManagerResult, missingMessage = "manager missing") => {
     if (!result.manager) {
       throw new Error(result.error ?? missingMessage);
     }
@@ -433,19 +418,16 @@ export function createManagerIndexFixture(deps: {
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
     const updatedAt = Date.now();
+    const target = { agentId: "main", sessionKey, storePath };
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
+      ...target,
       entry: { sessionId: params.sessionId, updatedAt },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
+        ...target,
         sessionId: params.sessionId,
-        sessionKey,
-        storePath,
         message: {
           role: message.role,
           timestamp: message.timestamp,
@@ -492,9 +474,7 @@ export function createManagerIndexFixture(deps: {
     managers.clear();
   });
 
-  afterAll(async () => {
-    await workerState?.cleanup();
-  });
+  afterAll(() => workerState?.cleanup());
 
   beforeEach(async () => {
     vi.useRealTimers();
@@ -505,10 +485,8 @@ export function createManagerIndexFixture(deps: {
       prefix: "openclaw-mem-fixtures-",
       layout: "state-only",
     });
-    root = state.root;
-    workspace = state.workspaceDir;
     createConfig({});
-    memory = path.join(workspace, "memory");
+    const memory = path.join(state.workspaceDir, "memory");
     await fs.mkdir(memory, { recursive: true });
     await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
@@ -520,16 +498,16 @@ export function createManagerIndexFixture(deps: {
   return {
     paths: {
       get root() {
-        return root;
+        return state.root;
       },
       get stateDir() {
         return state.stateDir;
       },
       get workspace() {
-        return workspace;
+        return state.workspaceDir;
       },
       get memory() {
-        return memory;
+        return path.join(state.workspaceDir, "memory");
       },
     },
     provider,

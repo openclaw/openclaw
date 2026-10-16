@@ -3,13 +3,10 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
 
 describe("memory index", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+  const fixture = createManagerIndexFixture(memoryIndex);
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
   const fieldsOf = (manager: Awaited<ReturnType<typeof getFreshManager>>) =>
@@ -149,11 +146,9 @@ describe("memory index", () => {
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
 
-    const cfg = createCfg({
-      model: "new-embed",
-      fallback: "fallback-provider",
-    });
-    const manager = await getFreshManager(cfg);
+    const manager = await getFreshManager(
+      createCfg({ model: "new-embed", fallback: "fallback-provider" }),
+    );
     expect(manager.status().dirty).toBe(true);
     const fields = fieldsOf(manager);
     fields.providerInitialized = true;
@@ -313,14 +308,8 @@ describe("memory index", () => {
       backend: "cuda" as const,
       buildType: "prebuilt" as const,
       deviceNames: ["NVIDIA Test GPU"],
-      offload: {
-        supported: true,
-        offloadedLayers: 24,
-        totalLayers: 24,
-      },
-      context: {
-        requestedSize: 4096,
-      },
+      offload: { supported: true, offloadedLayers: 24, totalLayers: 24 },
+      context: { requestedSize: 4096 },
     }));
     const provider: EmbeddingProvider = {
       id: "local",
@@ -339,13 +328,8 @@ describe("memory index", () => {
       state: "ready",
       backend: "cuda",
       deviceNames: ["NVIDIA Test GPU"],
-      offload: {
-        offloadedLayers: 24,
-        totalLayers: 24,
-      },
-      context: {
-        requestedSize: 4096,
-      },
+      offload: { offloadedLayers: 24, totalLayers: 24 },
+      context: { requestedSize: 4096 },
     });
     expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
   });
